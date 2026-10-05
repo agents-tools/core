@@ -333,11 +333,19 @@ public enum RuntimeService {
   ) throws -> [InstalledSkill] {
     let watchLedger = try? WatchLedgerStore.load(environment: environment)
     var managedByPath: [String: InstalledSkill] = [:]
-    if let managed = try? listManaged(scope: scope, agents: agents, environment: environment) {
+    var managedBySharedPath: [String: InstalledSkill] = [:]
+    if let managed = try? listManaged(
+      scope: scope, agents: AgentID.allCases, environment: environment)
+    {
+      let requestedAgents = Set(agents)
       for skill in managed {
-        let key = "\(skill.agent.rawValue)\u{1f}\(URL(fileURLWithPath: skill.path).standardizedFileURL.path)"
-        if managedByPath[key] == nil {
+        let path = URL(fileURLWithPath: skill.path).standardizedFileURL.path
+        let key = "\(skill.agent.rawValue)\u{1f}\(path)"
+        if requestedAgents.contains(skill.agent), managedByPath[key] == nil {
           managedByPath[key] = skill
+        }
+        if managedBySharedPath[path] == nil {
+          managedBySharedPath[path] = skill
         }
       }
     }
@@ -357,6 +365,11 @@ public enum RuntimeService {
           guard seenPaths.insert(seenKey).inserted else { continue }
           if let managed = managedByPath[seenKey] {
             installed.append(managed)
+            continue
+          }
+          if var shared = managedBySharedPath[entry.standardizedFileURL.path] {
+            shared.agent = agent
+            installed.append(shared)
             continue
           }
           let skillFile = entry.appendingPathComponent("SKILL.md")
@@ -481,7 +494,8 @@ public enum RuntimeService {
       managed.map { "\($0.agent.rawValue)\u{1f}\(PathSafety.sanitizeName($0.name))" })
     let installedOnly = try listInstalled(scope: scope, agents: agents, environment: environment)
       .filter {
-        !managedKeys.contains("\($0.agent.rawValue)\u{1f}\(PathSafety.sanitizeName($0.name))")
+        $0.status == .installedOnly
+          && !managedKeys.contains("\($0.agent.rawValue)\u{1f}\(PathSafety.sanitizeName($0.name))")
       }
     for skill in installedOnly {
       checks.append(
@@ -501,8 +515,7 @@ public enum RuntimeService {
     skillNames: [String], scope: InstallScope, agents: [AgentID], environment: RuntimeEnvironment
   ) throws -> [String] {
     if !skillNames.isEmpty {
-      let installed = try listInstalled(scope: scope, agents: agents, environment: environment)
-      let available = Set(installed.map { PathSafety.sanitizeName($0.name) })
+      let available = try removableSkillNames(scope: scope, agents: agents, environment: environment)
       let missing = skillNames.filter { !available.contains(PathSafety.sanitizeName($0)) }
       if let first = missing.first {
         throw CoreError.notFound("skill '\(first)'")
@@ -510,6 +523,14 @@ public enum RuntimeService {
     }
     return try Installer.remove(
       skillNames: skillNames, agents: agents, scope: scope, environment: environment)
+  }
+
+  public static func removableSkillNames(
+    scope: InstallScope, agents: [AgentID], environment: RuntimeEnvironment
+  ) throws -> Set<String> {
+    let onDisk = try listInstalled(scope: scope, agents: agents, environment: environment)
+    let managed = try listManaged(scope: scope, agents: agents, environment: environment)
+    return Set((onDisk + managed).map { PathSafety.sanitizeName($0.name) })
   }
 
   public static func installProjectResolved(environment: RuntimeEnvironment) throws

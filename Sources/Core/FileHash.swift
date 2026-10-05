@@ -11,6 +11,7 @@ public enum FileHash {
   }
 
   public static func folderHash(_ directory: URL) throws -> String {
+    let directory = directory.resolvingSymlinksInPath()
     var hasher = SHA256()
     let files = try filesUnder(directory).sorted { $0.path < $1.path }
     for file in files {

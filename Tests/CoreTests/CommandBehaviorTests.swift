@@ -139,6 +139,28 @@ struct RuntimeServiceWorkflowTests {
     _ = skillDir
   }
 
+  @Test func removesManagedRecordWhoseFilesAreGone() throws {
+    let project = try commandBehaviorTemporaryDirectory()
+    let home = try commandBehaviorTemporaryDirectory()
+    let sourceRoot = try commandBehaviorTemporaryDirectory()
+    _ = try writeCommandBehaviorSkill(root: sourceRoot, path: "skills/gone", name: "gone")
+    let environment = RuntimeEnvironment(
+      projectDirectory: project, homeDirectory: home, environment: [:])
+    _ = try RuntimeService.add(
+      AddOptions(
+        source: sourceRoot.path,
+        agents: [.codex],
+        skillNames: ["gone"],
+        scope: .project,
+        mode: .copy,
+        environment: environment))
+    try FileManager.default.removeItem(at: project.appendingPathComponent(".agents/skills/gone"))
+
+    _ = try RuntimeService.remove(
+      skillNames: ["gone"], scope: .project, agents: [.codex], environment: environment)
+    #expect(try InstallLockStore.load(scope: .project, environment: environment).pins.isEmpty)
+  }
+
   @Test func installsWatchedSkillFromReviewedBaselineAndKeepsDryRunReadOnly() throws {
     let project = try commandBehaviorTemporaryDirectory()
     let home = try commandBehaviorTemporaryDirectory()

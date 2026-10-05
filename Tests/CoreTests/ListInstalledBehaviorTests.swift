@@ -196,6 +196,37 @@ struct InstalledSkillListingTests {
     #expect(report.checks.contains { $0.message.contains("installed-only") })
   }
 
+  @Test func treatsSharedDirectorySkillsAsManagedForEveryAgentReadingIt() throws {
+    let project = try listInstalledTemporaryDirectory()
+    let home = try listInstalledTemporaryDirectory()
+    let sourceRoot = try listInstalledTemporaryDirectory()
+    let environment = RuntimeEnvironment(
+      projectDirectory: project, homeDirectory: home, environment: [:])
+    try writeInstalledSkillFile(
+      sourceRoot.appendingPathComponent("skills/shared/SKILL.md"),
+      contents: """
+        ---
+        name: shared
+        description: Shared skill
+        ---
+        """)
+    _ = try RuntimeService.add(
+      AddOptions(
+        source: sourceRoot.path,
+        agents: [.codex],
+        skillNames: ["shared"],
+        scope: .global,
+        mode: .copy,
+        environment: environment))
+
+    let cursor = try RuntimeService.listInstalled(
+      scope: .global, agents: [.cursor], environment: environment)
+    #expect(cursor.map(\.status) == [.installed])
+    let report = try RuntimeService.doctor(
+      scope: .global, agents: [.codex, .cursor], environment: environment)
+    #expect(!report.checks.contains { $0.message.contains("installed-only") })
+  }
+
 }
 
 private func writeInstalledSkill(
