@@ -3,11 +3,19 @@ import Testing
 
 @Suite("CLI Surface")
 struct CLISurfaceTests {
-  @Test(arguments: [false, true])
-  func removesMissingManagedSkillsByNameOrAll(_ all: Bool) throws {
+  @Test(arguments: [["gone"], ["--skill", "gone"], ["--all"]], ["project", "user"])
+  func removesMissingManagedSkills(_ selection: [String], scope: String) throws {
     let project = try cliTemporaryDirectory()
     let home = try cliTemporaryDirectory()
     let source = try cliTemporaryDirectory()
+    defer {
+      try? FileManager.default.removeItem(at: project)
+      try? FileManager.default.removeItem(at: home)
+      try? FileManager.default.removeItem(at: source)
+    }
+    var environment = isolatedCLIEnvironment(home: home)
+    environment["XDG_STATE_HOME"] = home.appendingPathComponent(".state").path
+    let options = ["--scope", scope, "--agent", "codex"]
     let skillDir = source.appendingPathComponent("skills/gone")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
     try """
@@ -17,26 +25,32 @@ struct CLISurfaceTests {
     ---
     """.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
     let add = try runSkills(
-      ["add", source.path, "--mode", "edit", "--agent", "codex"],
-      currentDirectory: project, environment: ["HOME": home.path])
-    #expect(add.exitCode == 0)
+      ["add", source.path, "--mode", "edit"] + options,
+      currentDirectory: project, environment: environment)
+    try #require(add.exitCode == 0)
     try FileManager.default.removeItem(at: source)
-    try FileManager.default.removeItem(at: project.appendingPathComponent(".agents/skills/gone"))
+    let installRoot = scope == "user" ? home : project
+    try FileManager.default.removeItem(
+      at: installRoot.appendingPathComponent(".agents/skills/gone"))
 
     let before = try runSkills(
-      ["doctor", "--agent", "codex", "--json"],
-      currentDirectory: project, environment: ["HOME": home.path])
-    #expect(before.stdout.contains("source-missing"))
+      ["doctor", "--json"] + options,
+      currentDirectory: project, environment: environment)
+    try #require(before.exitCode == 0)
+    try #require(before.stdout.contains("source-missing"))
     let remove = try runSkills(
-      ["remove", all ? "--all" : "gone", "--agent", "codex"],
-      currentDirectory: project, environment: ["HOME": home.path])
+      ["remove"] + selection + options,
+      currentDirectory: project, environment: environment)
     #expect(remove.exitCode == 0)
     #expect(!remove.stdout.contains("No skills found"))
     #expect(!remove.stdout.contains("No matching skills"))
     let after = try runSkills(
-      ["doctor", "--agent", "codex", "--json"],
-      currentDirectory: project, environment: ["HOME": home.path])
-    #expect(!after.stdout.contains("source-missing"))
+      ["list", "--json"] + options,
+      currentDirectory: project, environment: environment)
+    #expect(after.exitCode == 0)
+    let skills = try #require(
+      JSONSerialization.jsonObject(with: Data(after.stdout.utf8)) as? [[String: Any]])
+    #expect(skills.isEmpty)
   }
 
   @Test func exposesCurrentCommandFamilies() throws {

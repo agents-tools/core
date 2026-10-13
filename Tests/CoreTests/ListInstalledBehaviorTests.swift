@@ -196,10 +196,16 @@ struct InstalledSkillListingTests {
     #expect(report.checks.contains { $0.message.contains("installed-only") })
   }
 
-  @Test func treatsSharedDirectorySkillsAsManagedForEveryAgentReadingIt() throws {
+  @Test(arguments: [InstallScope.project, .global])
+  func treatsSharedDirectorySkillsAsManagedForEveryAgentReadingIt(_ scope: InstallScope) throws {
     let project = try listInstalledTemporaryDirectory()
     let home = try listInstalledTemporaryDirectory()
     let sourceRoot = try listInstalledTemporaryDirectory()
+    defer {
+      try? FileManager.default.removeItem(at: project)
+      try? FileManager.default.removeItem(at: home)
+      try? FileManager.default.removeItem(at: sourceRoot)
+    }
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
     try writeInstalledSkillFile(
@@ -215,16 +221,84 @@ struct InstalledSkillListingTests {
         source: sourceRoot.path,
         agents: [.codex],
         skillNames: ["shared"],
-        scope: .global,
+        scope: scope,
         mode: .copy,
         environment: environment))
 
     let cursor = try RuntimeService.listInstalled(
-      scope: .global, agents: [.cursor], environment: environment)
+      scope: scope, agents: [.cursor], environment: environment)
     #expect(cursor.map(\.status) == [.installed])
+    #expect(cursor.map(\.agent) == [.cursor])
     let report = try RuntimeService.doctor(
-      scope: .global, agents: [.codex, .cursor], environment: environment)
+      scope: scope, agents: [.cursor], environment: environment)
+    #expect(report.checks.contains { $0.id == "skill.cursor.shared" && $0.status == .ok })
+    #expect(!report.checks.contains { $0.id == "managed-installs" })
     #expect(!report.checks.contains { $0.message.contains("installed-only") })
+
+    let canonical = AgentRegistry.canonicalSkillsDirectory(scope: scope, environment: environment)
+    try "changed".write(
+      to: canonical.appendingPathComponent("shared/notes.md"), atomically: true, encoding: .utf8)
+    let drifted = try RuntimeService.doctor(
+      scope: scope, agents: [.cursor], environment: environment)
+    #expect(
+      drifted.checks.contains {
+        $0.message == "shared for cursor: copy-drift" && $0.status == .warning
+      })
+  }
+
+  @Test func diagnosesUnmanagedDirectoryWithTheSameNameAsAManagedSkill() throws {
+    let root = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appendingPathComponent("home")
+    let source = root.appendingPathComponent("source")
+    try writeInstalledSkill(project: source, name: "shared", base: source)
+    let environment = RuntimeEnvironment(
+      projectDirectory: root, homeDirectory: home, environment: [:])
+    _ = try RuntimeService.add(
+      AddOptions(
+        source: source.path, agents: [.cursor], scope: .global, mode: .copy,
+        environment: environment))
+    let native = home.appendingPathComponent(".cursor/skills")
+    try writeInstalledSkill(project: root, name: "shared", base: native)
+
+    let report = try RuntimeService.doctor(
+      scope: .global, agents: [.cursor], environment: environment)
+    #expect(report.checks.contains { $0.id == "skill.cursor.shared" && $0.status == .ok })
+    let warning = try #require(report.checks.first { $0.id == "installed-only.cursor.shared" })
+    let warningPath = try #require(warning.path)
+    #expect(
+      URL(fileURLWithPath: warningPath).resolvingSymlinksInPath().path
+        == native.appendingPathComponent("shared").resolvingSymlinksInPath().path)
+  }
+
+  @Test(arguments: [InstallScope.project, .global])
+  func diagnosesLinkedInstallationsByTheirContent(_ scope: InstallScope) throws {
+    let root = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent("source")
+    try writeInstalledSkill(project: source, name: "linked", base: source)
+    let environment = RuntimeEnvironment(
+      projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
+    let agents: [AgentID] = [.codex, .claudeCode]
+    _ = try RuntimeService.add(
+      AddOptions(
+        source: source.path, agents: agents, scope: scope, mode: .symlink,
+        environment: environment))
+
+    let managed = try RuntimeService.listManaged(
+      scope: scope, agents: agents, environment: environment)
+    #expect(managed.count == 2)
+    #expect(managed.allSatisfy { $0.status == .installed })
+    #expect(try RuntimeService.doctor(scope: scope, agents: agents, environment: environment).ok)
+
+    let canonical = AgentRegistry.canonicalSkillsDirectory(scope: scope, environment: environment)
+    try "changed".write(
+      to: canonical.appendingPathComponent("linked/notes.md"), atomically: true, encoding: .utf8)
+    let drifted = try RuntimeService.listManaged(
+      scope: scope, agents: agents, environment: environment)
+    #expect(drifted.allSatisfy { $0.status == .copyDrift })
+    let report = try RuntimeService.doctor(scope: scope, agents: agents, environment: environment)
+    #expect(report.checks.filter { $0.message.contains("copy-drift") }.count == 2)
   }
 
 }

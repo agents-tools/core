@@ -171,7 +171,10 @@ skill doctor --scope user --agent codex --json
 
 `skill doctor` checks resolved-state readability, managed install health,
 broken links, missing local sources, copy drift, fallback copies, and unmanaged
-installed-only skills.
+installed-only skills. Skills in shared directories are diagnosed as managed
+for each selected agent that reads that directory. A separate untracked
+directory remains installed-only even when its skill name matches a managed
+installation.
 
 Update from resolved state:
 

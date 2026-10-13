@@ -179,6 +179,57 @@ struct RuntimeServiceWorkflowTests {
       try RuntimeService.doctor(scope: .project, agents: [.codex], environment: environment).ok)
   }
 
+  @Test(arguments: [InstallScope.project, .global])
+  func removesMissingRecordsOnlyForSelectedAgentsAndScope(_ scope: InstallScope) throws {
+    let root = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent("source")
+    let sourceSkill = try writeCommandBehaviorSkill(root: source, path: "gone", name: "gone")
+    let environment = RuntimeEnvironment(
+      projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
+    for installScope in [InstallScope.project, .global] {
+      _ = try RuntimeService.add(
+        AddOptions(
+          source: source.path, agents: [.codex, .cursor], scope: installScope, mode: .edit,
+          environment: environment))
+      let canonical = AgentRegistry.canonicalSkillsDirectory(
+        scope: installScope, environment: environment)
+      try FileManager.default.removeItem(at: canonical.appendingPathComponent("gone"))
+    }
+    let otherScope: InstallScope = scope == .project ? .global : .project
+    let otherLockURL = InstallLockStore.lockURL(scope: otherScope, environment: environment)
+    let otherLock = try Data(contentsOf: otherLockURL)
+    let lockURL = InstallLockStore.lockURL(scope: scope, environment: environment)
+    let lockBefore = try Data(contentsOf: lockURL)
+    #expect(
+      try RuntimeService.removableSkillNames(
+        scope: scope, agents: [.codex], environment: environment) == ["gone"])
+    #expect(
+      try RuntimeService.removableSkillNames(
+        scope: scope, agents: [.claudeCode], environment: environment
+      ).isEmpty)
+    #expect(throws: CoreError.self) {
+      try RuntimeService.remove(
+        skillNames: ["gone"], scope: scope, agents: [.claudeCode], environment: environment)
+    }
+    #expect(throws: CoreError.self) {
+      try RuntimeService.remove(
+        skillNames: ["gone", "unknown"], scope: scope, agents: [.codex], environment: environment)
+    }
+    #expect(try Data(contentsOf: lockURL) == lockBefore)
+
+    let removed = try RuntimeService.remove(
+      skillNames: ["gone"], scope: scope, agents: [.codex], environment: environment)
+    #expect(removed.isEmpty)
+    let remaining = try RuntimeService.listManaged(
+      scope: scope, agents: AgentID.allCases, environment: environment)
+    #expect(remaining.map(\.name) == ["gone"])
+    #expect(remaining.map(\.agent) == [.cursor])
+    #expect(try Data(contentsOf: otherLockURL) == otherLock)
+    #expect(
+      FileManager.default.fileExists(atPath: sourceSkill.appendingPathComponent("SKILL.md").path))
+  }
+
   @Test func installsWatchedSkillFromReviewedBaselineAndKeepsDryRunReadOnly() throws {
     let project = try commandBehaviorTemporaryDirectory()
     let home = try commandBehaviorTemporaryDirectory()

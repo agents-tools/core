@@ -468,7 +468,17 @@ public enum RuntimeService {
         path: lockURL.path
       ))
 
-    let managed = try listManaged(scope: scope, agents: agents, environment: environment)
+    var managed = try listManaged(scope: scope, agents: agents, environment: environment)
+    let installed = try listInstalled(scope: scope, agents: agents, environment: environment)
+    let managedPaths = Set(
+      managed.map {
+        "\($0.agent.rawValue)\u{1f}\(URL(fileURLWithPath: $0.path).standardizedFileURL.path)"
+      })
+    managed += installed.filter {
+      $0.status != .installedOnly
+        && !managedPaths.contains(
+          "\($0.agent.rawValue)\u{1f}\(URL(fileURLWithPath: $0.path).standardizedFileURL.path)")
+    }
     if managed.isEmpty {
       checks.append(
         DoctorCheck(
@@ -490,14 +500,7 @@ public enum RuntimeService {
         ))
     }
 
-    let managedKeys = Set(
-      managed.map { "\($0.agent.rawValue)\u{1f}\(PathSafety.sanitizeName($0.name))" })
-    let installedOnly = try listInstalled(scope: scope, agents: agents, environment: environment)
-      .filter {
-        $0.status == .installedOnly
-          && !managedKeys.contains("\($0.agent.rawValue)\u{1f}\(PathSafety.sanitizeName($0.name))")
-      }
-    for skill in installedOnly {
+    for skill in installed where skill.status == .installedOnly {
       checks.append(
         DoctorCheck(
           id: "installed-only.\(skill.agent.rawValue).\(PathSafety.sanitizeName(skill.name))",
