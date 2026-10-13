@@ -515,7 +515,8 @@ public enum RuntimeService {
     skillNames: [String], scope: InstallScope, agents: [AgentID], environment: RuntimeEnvironment
   ) throws -> [String] {
     if !skillNames.isEmpty {
-      let available = try removableSkillNames(scope: scope, agents: agents, environment: environment)
+      let available = try removableSkillNames(
+        scope: scope, agents: agents, environment: environment)
       let missing = skillNames.filter { !available.contains(PathSafety.sanitizeName($0)) }
       if let first = missing.first {
         throw CoreError.notFound("skill '\(first)'")
