@@ -8,16 +8,23 @@ struct WellKnownRemoteSkill: Equatable, Sendable {
   var sourceURL: URL
   var digest: String?
   var files: [String: Data]
+  var artifact: LockedArtifact
+  var payloads: [String: Data]
 
   init(
     installName: String, description: String, sourceURL: URL, digest: String? = nil,
-    files: [String: Data]
+    files: [String: Data], artifact: LockedArtifact? = nil, payloads: [String: Data] = [:]
   ) {
     self.installName = installName
     self.description = description
     self.sourceURL = sourceURL
     self.digest = digest
     self.files = files
+    self.artifact =
+      artifact
+      ?? LockedArtifact(type: .skillMD, url: sourceURL.absoluteString, digest: digest ?? "")
+    self.payloads =
+      payloads.isEmpty && digest != nil ? [digest!: files["SKILL.md"] ?? Data()] : payloads
   }
 }
 
@@ -33,16 +40,6 @@ struct WellKnownProvider: Sendable {
     self.fetch = fetch
   }
 
-  func sourceIdentifier(for rawURL: String) -> String {
-    guard let url = URL(string: rawURL), var host = url.host else {
-      return "unknown"
-    }
-    if host.hasPrefix("www.") {
-      host.removeFirst(4)
-    }
-    return host
-  }
-
   func indexURLCandidates(for rawURL: String) throws -> [(
     index: URL, base: URL, wellKnownPath: String
   )] {
@@ -51,7 +48,7 @@ struct WellKnownProvider: Sendable {
     }
     let basePath = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     let pathPrefix = basePath.isEmpty ? "" : "/" + basePath
-    let root = "\(scheme)://\(host)"
+    let root = "\(scheme)://\(host)" + (url.port.map { ":\($0)" } ?? "")
     let paths = [".well-known/agent-skills", ".well-known/skills"]
     var candidates: [(URL, URL, String)] = []
     for wellKnownPath in paths {
@@ -73,25 +70,24 @@ struct WellKnownProvider: Sendable {
     return candidates
   }
 
-  func fetchAllSkills(from rawURL: String) throws -> [WellKnownRemoteSkill] {
+  func fetchAllSkills(from rawURL: String, names: [String]? = nil, exclude: [String] = []) throws
+    -> [WellKnownRemoteSkill]
+  {
     if let direct = try fetchDirectSkillMD(from: rawURL) {
       return [direct]
     }
     var lastError: Error?
     for candidate in try indexURLCandidates(for: rawURL) {
+      let index: WellKnownIndex
       do {
-        let data = try fetch(candidate.index)
-        let index = try JSONDecoder().decode(WellKnownIndex.self, from: data)
-        let skills = try normalize(
-          index: index, indexURL: candidate.index, baseURL: candidate.base,
-          wellKnownPath: candidate.wellKnownPath)
-        if !skills.isEmpty {
-          return skills
-        }
+        index = try JSONDecoder().decode(WellKnownIndex.self, from: fetch(candidate.index))
       } catch {
         lastError = error
         continue
       }
+      return try normalize(
+        index: index, indexURL: candidate.index, baseURL: candidate.base,
+        wellKnownPath: candidate.wellKnownPath, names: names, exclude: exclude)
     }
     if let lastError {
       throw lastError
@@ -118,77 +114,106 @@ struct WellKnownProvider: Sendable {
     )
   }
 
-  func materialize(_ skills: [WellKnownRemoteSkill], into checkout: URL) throws {
-    if FileManager.default.fileExists(atPath: checkout.path) {
-      try FileManager.default.removeItem(at: checkout)
-    }
-    try FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
-    for skill in skills {
-      let skillRoot = checkout.appendingPathComponent("skills").appendingPathComponent(
-        skill.installName)
-      try FileManager.default.createDirectory(at: skillRoot, withIntermediateDirectories: true)
-      for (relativePath, data) in skill.files {
-        let safe = try PathSafety.sanitizeSubpath(relativePath)
-        let target = skillRoot.appendingPathComponent(safe)
-        guard PathSafety.isContained(target, in: skillRoot) else {
-          throw CoreError.unsafePath("well-known file escapes skill root: \(relativePath)")
-        }
-        try FileManager.default.createDirectory(
-          at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: target)
-      }
-    }
-  }
-
-  private func normalize(index: WellKnownIndex, indexURL: URL, baseURL: URL, wellKnownPath: String)
+  private func normalize(
+    index: WellKnownIndex, indexURL: URL, baseURL: URL, wellKnownPath: String, names: [String]?,
+    exclude: [String]
+  )
     throws -> [WellKnownRemoteSkill]
   {
     switch index {
     case .v1(let entries):
-      return try entries.map { entry in
-        var files: [String: Data] = [:]
-        for file in entry.files {
-          let safe = try PathSafety.sanitizeSubpath(file)
-          let fileURL =
-            baseURL
-            .appendingPathComponent(wellKnownPath)
-            .appendingPathComponent(entry.name)
-            .appendingPathComponent(safe)
-          files[safe] = try fetch(fileURL)
+      return try entries.filter { (names?.contains($0.name) ?? true) && !exclude.contains($0.name) }
+        .map { entry in
+          var files: [String: Data] = [:]
+          var records: [ArtifactFile] = []
+          var payloads: [String: Data] = [:]
+          for file in entry.files {
+            let safe = try PathSafety.sanitizeSubpath(file)
+            let fileURL =
+              baseURL
+              .appendingPathComponent(wellKnownPath)
+              .appendingPathComponent(entry.name)
+              .appendingPathComponent(safe)
+            let data = try fetch(fileURL)
+            files[safe] = data
+            let digest = "sha256:" + FileHash.sha256Hex(data: data)
+            records.append(ArtifactFile(url: fileURL.absoluteString, path: safe, digest: digest))
+            payloads[digest] = data
+          }
+          return WellKnownRemoteSkill(
+            installName: entry.name,
+            description: entry.description,
+            sourceURL: baseURL.appendingPathComponent(wellKnownPath).appendingPathComponent(
+              entry.name
+            ).appendingPathComponent("SKILL.md"),
+            files: files,
+            artifact: LockedArtifact(
+              type: .files, url: indexURL.absoluteString,
+              digest: try LockedArtifact.filesDigest(records), files: records),
+            payloads: payloads
+          )
         }
-        return WellKnownRemoteSkill(
-          installName: entry.name,
-          description: entry.description,
-          sourceURL: baseURL.appendingPathComponent(wellKnownPath).appendingPathComponent(
-            entry.name
-          ).appendingPathComponent("SKILL.md"),
-          files: files
-        )
-      }
     case .v2(let entries):
-      return try entries.map { entry in
-        guard let artifactURL = URL(string: entry.url, relativeTo: indexURL)?.absoluteURL else {
-          throw CoreError.invalidSource("invalid artifact URL: \(entry.url)")
+      return try entries.filter { (names?.contains($0.name) ?? true) && !exclude.contains($0.name) }
+        .map { entry in
+          guard let artifactURL = URL(string: entry.url, relativeTo: indexURL)?.absoluteURL else {
+            throw CoreError.invalidSource("invalid artifact URL: \(entry.url)")
+          }
+          let data = try fetch(artifactURL)
+          try verifyDigest(data: data, expected: entry.digest)
+          let files: [String: Data]
+          switch entry.type {
+          case "skill-md":
+            files = ["SKILL.md": data]
+          case "archive":
+            files = try unpackArchive(data, artifactURL: artifactURL)
+          default:
+            throw CoreError.invalidSource("unsupported well-known artifact type: \(entry.type)")
+          }
+          return WellKnownRemoteSkill(
+            installName: entry.name,
+            description: entry.description,
+            sourceURL: artifactURL,
+            digest: entry.digest,
+            files: files,
+            artifact: LockedArtifact(
+              type: entry.type == "archive" ? .archive : .skillMD, url: artifactURL.absoluteString,
+              digest: entry.digest),
+            payloads: [entry.digest: data]
+          )
         }
-        let data = try fetch(artifactURL)
-        try verifyDigest(data: data, expected: entry.digest)
-        let files: [String: Data]
-        switch entry.type {
-        case "skill-md":
-          files = ["SKILL.md": data]
-        case "archive":
-          files = try unpackArchive(data, artifactURL: artifactURL)
-        default:
-          throw CoreError.invalidSource("unsupported well-known artifact type: \(entry.type)")
-        }
-        return WellKnownRemoteSkill(
-          installName: entry.name,
-          description: entry.description,
-          sourceURL: artifactURL,
-          digest: entry.digest,
-          files: files
-        )
+    }
+  }
+
+  func restore(_ artifact: LockedArtifact, cache: SourceCache) throws -> (
+    files: [String: Data], payloads: [String: Data]
+  ) {
+    try artifact.validate()
+    var payloads: [String: Data] = [:]
+    func download(_ url: String, digest: String) throws -> Data {
+      let cached = try cache.artifactURL(digest: digest)
+      let data =
+        FileManager.default.fileExists(atPath: cached.path)
+        ? try Data(contentsOf: cached) : try fetch(URL(string: url)!)
+      try verifyDigest(data: data, expected: digest)
+      payloads[digest] = data
+      return data
+    }
+    switch artifact.type {
+    case .skillMD:
+      let data = try download(artifact.url, digest: artifact.digest)
+      return (["SKILL.md": data], payloads)
+    case .archive:
+      let data = try download(artifact.url, digest: artifact.digest)
+      return (try unpackArchive(data, artifactURL: URL(string: artifact.url)!), payloads)
+    case .files:
+      let records = artifact.files ?? []
+      guard try LockedArtifact.filesDigest(records) == artifact.digest else {
+        throw CoreError.invalidState("files artifact digest mismatch")
       }
+      var files: [String: Data] = [:]
+      for record in records { files[record.path] = try download(record.url, digest: record.digest) }
+      return (files, payloads)
     }
   }
 
@@ -231,8 +256,7 @@ struct WellKnownProvider: Sendable {
 
   private func unpackTarGz(_ data: Data) throws -> [String: Data] {
     let tempRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("skill-cli-well-known")
-      .appendingPathComponent(UUID().uuidString)
+      .appendingPathComponent("agents-artifact-" + UUID().uuidString)
     let archive = tempRoot.appendingPathComponent("artifact.tar.gz")
     let extract = tempRoot.appendingPathComponent("extract")
     try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)
@@ -272,8 +296,7 @@ struct WellKnownProvider: Sendable {
 
   private func unpackZip(_ data: Data) throws -> [String: Data] {
     let tempRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("skill-cli-well-known")
-      .appendingPathComponent(UUID().uuidString)
+      .appendingPathComponent("agents-artifact-" + UUID().uuidString)
     let archive = tempRoot.appendingPathComponent("artifact.zip")
     let extract = tempRoot.appendingPathComponent("extract")
     try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)
@@ -298,7 +321,7 @@ struct WellKnownProvider: Sendable {
     ).stdout
       .split(separator: "\n")
       .map(String.init)
-      .filter { !$0.isEmpty && !$0.hasSuffix("/") }
+      .filter { !$0.isEmpty && $0 != "." && $0 != "./" }
     guard listing.count <= Self.maxArchiveFiles else {
       throw CoreError.invalidSource("well-known archive has too many files")
     }

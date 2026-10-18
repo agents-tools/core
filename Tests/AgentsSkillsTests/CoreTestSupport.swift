@@ -5,14 +5,14 @@ import Foundation
 
 func temporaryDirectory() throws -> URL {
   let url = FileManager.default.temporaryDirectory
-    .appendingPathComponent("skill-cli-tests")
-    .appendingPathComponent(UUID().uuidString)
+    .appendingPathComponent("agents-tests-" + UUID().uuidString)
   try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
   return url
 }
 
 func initGitRepo(_ repo: URL) throws {
-  try ProcessRunner.run("/usr/bin/env", arguments: ["git", "init", repo.path])
+  try ProcessRunner.run(
+    "/usr/bin/env", arguments: ["git", "init", "--initial-branch=master", repo.path])
   try ProcessRunner.run(
     "/usr/bin/env",
     arguments: ["git", "-C", repo.path, "config", "user.email", "tests@example.com"])

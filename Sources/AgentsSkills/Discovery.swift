@@ -138,6 +138,7 @@ enum Discovery {
     let wanted = Set(names.map { $0.lowercased() })
     return skills.filter {
       wanted.contains($0.name.lowercased())
+        || wanted.contains(PathSafety.sanitizeName($0.name))
         || wanted.contains(URL(fileURLWithPath: $0.path).lastPathComponent.lowercased())
     }
   }
@@ -345,30 +346,8 @@ enum Discovery {
   private static func projectInstalledAgentSkillNames(base: URL) -> Set<String> {
     let environment = RuntimeEnvironment(projectDirectory: base)
     // Source-owned resolved state is only a hint for excluding installed copies.
-    if let lock = try? InstallLockStore.load(scope: .project, environment: environment),
-      !lock.pins.isEmpty
-    {
-      return Set(lock.pins.flatMap(\.skills).map(\.identity))
-    }
-    let legacyURL = base.appendingPathComponent("skills-lock.json")
-    guard let data = try? Data(contentsOf: legacyURL),
-      let legacy = try? JSONDecoder().decode(LegacyDiscoveryLock.self, from: data)
-    else {
-      return []
-    }
-    return Set(legacy.skills.keys.map(PathSafety.sanitizeName))
-  }
-}
-
-private struct LegacyDiscoveryLock: Decodable {
-  var version: Int
-  var skills: [String: LegacyEntry]
-
-  struct LegacyEntry: Decodable {
-    var source: String?
-    var sourceType: String?
-    var skillPath: String?
-    var computedHash: String?
+    let lock = try? StateStore(scope: .project, environment: environment).readResolved()
+    return Set(lock?.skills.keys.map { $0 } ?? [])
   }
 }
 

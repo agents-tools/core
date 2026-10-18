@@ -6,12 +6,18 @@ import Testing
 @Suite("Agent Registry")
 struct AgentRegistryTests {
   @Test func resolvesAgentDirectoriesAndLockLocations() throws {
-    let project = try behaviorTemporaryDirectory()
-    let home = try behaviorTemporaryDirectory()
-    let codexHome = try behaviorTemporaryDirectory()
-    let claudeHome = try behaviorTemporaryDirectory()
-    let xdgConfig = try behaviorTemporaryDirectory()
-    let xdgCache = try behaviorTemporaryDirectory()
+    let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
+    let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let codexHome = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: codexHome) }
+    let claudeHome = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: claudeHome) }
+    let xdgConfig = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: xdgConfig) }
+    let xdgCache = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: xdgCache) }
     let environment = RuntimeEnvironment(
       projectDirectory: project,
       homeDirectory: home,
@@ -23,63 +29,55 @@ struct AgentRegistryTests {
       ])
 
     #expect(
-      InstallLockStore.projectLockURL(environment: environment).standardizedFileURL.path
-        == project.appendingPathComponent(".agent/skills.resolved").standardizedFileURL.path)
+      StateStore(scope: .project, environment: environment).resolvedURL.standardizedFileURL.path
+        == project.appendingPathComponent(".agent/agents.resolved").standardizedFileURL.path)
     #expect(
-      InstallLockStore.globalLockURL(environment: environment).standardizedFileURL.path
-        == home.appendingPathComponent(".agents/skills.resolved").standardizedFileURL.path)
+      StateStore(scope: .user, environment: environment).resolvedURL.standardizedFileURL.path
+        == home.appendingPathComponent(".agents/agents.resolved").standardizedFileURL.path)
     #expect(
-      AgentRegistry.skillsDirectory(for: .codex, scope: .global, environment: environment).path
+      AgentRegistry.skillsDirectory(for: .codex, scope: .user, environment: environment).path
         == codexHome.appendingPathComponent("skills").path)
     #expect(
-      AgentRegistry.skillsDirectory(for: .claudeCode, scope: .global, environment: environment).path
+      AgentRegistry.skillsDirectory(for: .claudeCode, scope: .user, environment: environment).path
         == claudeHome.appendingPathComponent("skills").path)
     #expect(
-      AgentRegistry.skillsDirectory(for: .cursor, scope: .global, environment: environment).path
+      AgentRegistry.skillsDirectory(for: .cursor, scope: .user, environment: environment).path
         == home.appendingPathComponent(".cursor/skills").path)
     #expect(
       AgentRegistry.skillsDirectory(for: .geminiCLI, scope: .project, environment: environment).path
         == project.appendingPathComponent(".agents/skills").path)
     #expect(
-      AgentRegistry.skillsDirectory(for: .geminiCLI, scope: .global, environment: environment).path
+      AgentRegistry.skillsDirectory(for: .geminiCLI, scope: .user, environment: environment).path
         == home.appendingPathComponent(".gemini/skills").path)
     #expect(try AgentID.parse("gemini") == .geminiCLI)
     #expect(try AgentID.parse("gemini-cli") == .geminiCLI)
     #expect(
-      AgentRegistry.skillsDirectory(for: .opencode, scope: .global, environment: environment).path
+      AgentRegistry.skillsDirectory(for: .opencode, scope: .user, environment: environment).path
         == xdgConfig.appendingPathComponent("opencode/skills").path)
     #expect(
-      AgentRegistry.sourceCacheDirectory(scope: .project, environment: environment).path
-        == project.appendingPathComponent(".agent/cache/sources").path)
+      StateStore(scope: .project, environment: environment).cacheDirectory.path
+        == project.appendingPathComponent(".agent/cache").path)
     #expect(
-      AgentRegistry.sourceCacheDirectory(scope: .global, environment: environment).path
-        == xdgCache.appendingPathComponent("skill-cli/sources").path)
+      StateStore(scope: .user, environment: environment).cacheDirectory.path
+        == home.appendingPathComponent(".agents/cache").path)
     #expect(
-      AgentRegistry.canonicalSkillsDirectory(scope: .global, environment: environment).path
+      AgentRegistry.canonicalSkillsDirectory(scope: .user, environment: environment).path
         == home.appendingPathComponent(".agents/skills").path)
     #expect(
       AgentRegistry.usesCanonicalSkillsDirectory(
-        for: .codex, scope: .global, environment: environment))
+        for: .codex, scope: .user, environment: environment))
     #expect(
       AgentRegistry.usesCanonicalSkillsDirectory(
-        for: .cursor, scope: .global, environment: environment))
+        for: .cursor, scope: .user, environment: environment))
     #expect(
       AgentRegistry.usesCanonicalSkillsDirectory(
-        for: .geminiCLI, scope: .global, environment: environment))
+        for: .geminiCLI, scope: .user, environment: environment))
     #expect(
       AgentRegistry.usesCanonicalSkillsDirectory(
-        for: .opencode, scope: .global, environment: environment))
+        for: .opencode, scope: .user, environment: environment))
     #expect(
       !AgentRegistry.usesCanonicalSkillsDirectory(
-        for: .claudeCode, scope: .global, environment: environment))
+        for: .claudeCode, scope: .user, environment: environment))
   }
 
-}
-
-private func behaviorTemporaryDirectory() throws -> URL {
-  let url = FileManager.default.temporaryDirectory
-    .appendingPathComponent("skill-cli-behavior-tests")
-    .appendingPathComponent(UUID().uuidString)
-  try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-  return url
 }

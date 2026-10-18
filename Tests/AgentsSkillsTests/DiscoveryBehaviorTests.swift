@@ -6,31 +6,24 @@ import Testing
 
 @Suite("Skill Discovery")
 struct SkillDiscoveryTests {
-  @Test(arguments: [false, true])
-  func discoversSkillsWithUndecodableResolvedHint(_ hasLegacyDiscoveryLock: Bool) throws {
-    let root = try discoveryTemporaryDirectory()
+  @Test func discoversSkillsWithUndecodableResolvedHint() throws {
+    let root = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
     try writeDiscoverySkill(root.appendingPathComponent("skills/source"), name: "source")
     try writeDiscoverySkill(
       root.appendingPathComponent(".agents/skills/installed"), name: "installed")
-    let url = root.appendingPathComponent(".agent/skills.resolved")
+    let url = root.appendingPathComponent(".agent/agents.resolved")
     try FileManager.default.createDirectory(
       at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     let malformed = Data("{broken".utf8)
     try malformed.write(to: url)
-    if hasLegacyDiscoveryLock {
-      try Data(#"{"version":1,"skills":{"installed":{}}}"#.utf8).write(
-        to: root.appendingPathComponent("skills-lock.json"))
-    }
-
-    #expect(
-      try Discovery.discover(in: root).map(\.name).sorted()
-        == (hasLegacyDiscoveryLock ? ["source"] : ["installed", "source"]))
+    #expect(try Discovery.discover(in: root).map(\.name).sorted() == ["installed", "source"])
     #expect(try Data(contentsOf: url) == malformed)
   }
 
   @Test func discoversNestedSkillsWhenFullDepthIsEnabled() throws {
-    let root = try discoveryTemporaryDirectory()
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try writeDiscoverySkill(root, name: "root-skill")
     try writeDiscoverySkill(
       root.appendingPathComponent("skills/nested-skill"), name: "nested-skill")
@@ -40,14 +33,16 @@ struct SkillDiscoveryTests {
       try Discovery.discover(in: root, options: DiscoveryOptions(fullDepth: true)).map(\.name)
         .sorted() == ["nested-skill", "root-skill"])
 
-    let noRoot = try discoveryTemporaryDirectory()
+    let noRoot = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: noRoot) }
     try writeDiscoverySkill(noRoot.appendingPathComponent("skills/skill-1"), name: "skill-1")
     try writeDiscoverySkill(noRoot.appendingPathComponent("skills/skill-2"), name: "skill-2")
     #expect(try Discovery.discover(in: noRoot).map(\.name).sorted() == ["skill-1", "skill-2"])
   }
 
   @Test func boundsNestedContainerDiscoveryDepth() throws {
-    let root = try discoveryTemporaryDirectory()
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try writeDiscoverySkill(
       root.appendingPathComponent("skills/product-a/skill-one"), name: "skill-one")
     try writeDiscoverySkill(
@@ -61,20 +56,23 @@ struct SkillDiscoveryTests {
       try Discovery.discover(in: root).map(\.name).sorted()
         == ["skill-one", "skill-three", "skill-two"])
 
-    let mixed = try discoveryTemporaryDirectory()
+    let mixed = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: mixed) }
     try writeDiscoverySkill(mixed.appendingPathComponent("skills/flat-skill"), name: "flat-skill")
     try writeDiscoverySkill(
       mixed.appendingPathComponent("skills/category/nested-skill"), name: "nested-skill")
     #expect(
       try Discovery.discover(in: mixed).map(\.name).sorted() == ["flat-skill", "nested-skill"])
 
-    let shadowed = try discoveryTemporaryDirectory()
+    let shadowed = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: shadowed) }
     try writeDiscoverySkill(shadowed.appendingPathComponent("skills/foo"), name: "outer-skill")
     try writeDiscoverySkill(
       shadowed.appendingPathComponent("skills/foo/inner"), name: "inner-skill")
     #expect(try Discovery.discover(in: shadowed).map(\.name) == ["outer-skill"])
 
-    let tooDeep = try discoveryTemporaryDirectory()
+    let tooDeep = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: tooDeep) }
     try writeDiscoverySkill(
       tooDeep.appendingPathComponent("skills/level-1/level-2/deep"), name: "deep")
     try writeDiscoverySkill(tooDeep.appendingPathComponent("skills/shallow"), name: "shallow")
@@ -85,36 +83,36 @@ struct SkillDiscoveryTests {
   }
 
   @Test func suppressesLockedProjectAgentContainersDuringDiscovery() throws {
-    let root = try discoveryTemporaryDirectory()
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try writeDiscoverySkill(
       root.appendingPathComponent(".agents/skills/category/agent-skill"), name: "agent-skill")
     #expect(try Discovery.discover(in: root).map(\.name) == ["agent-skill"])
 
-    let locked = try discoveryTemporaryDirectory()
+    let locked = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: locked) }
     try writeDiscoverySkill(
       locked.appendingPathComponent(".agents/skills/installed-skill"), name: "installed-skill")
     try writeDiscoverySkill(
       locked.appendingPathComponent("skills/source-skill"), name: "source-skill")
-    try """
-    {
-      "version": 1,
-      "skills": {
-        "installed-skill": {
-          "source": "owner/repo",
-          "sourceType": "github",
-          "skillPath": "skills/installed-skill/SKILL.md",
-          "computedHash": "hash"
-        }
-      }
-    }
-    """.write(
-      to: locked.appendingPathComponent("skills-lock.json"), atomically: true, encoding: .utf8)
+    let store = StateStore(
+      scope: .project, environment: RuntimeEnvironment(projectDirectory: locked))
+    let id = "local:" + locked.path
+    try store.save(
+      declaration: Declaration(),
+      resolved: ResolvedState(
+        sources: [id: LockedSource(kind: .local)],
+        skills: [
+          "installed-skill": LockedSkill(
+            source: id, path: ".agents/skills/installed-skill", installs: ["codex": .edit])
+        ]))
 
     #expect(try Discovery.discover(in: locked).map(\.name) == ["source-skill"])
   }
 
   @Test func discoversSkillsFromPluginManifests() throws {
-    let root = try discoveryTemporaryDirectory()
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent(".claude-plugin"), withIntermediateDirectories: true)
     try """
@@ -141,7 +139,8 @@ struct SkillDiscoveryTests {
   }
 
   @Test func rejectsUnsafePluginManifestPathsAndKeepsSafeConventions() throws {
-    let root = try discoveryTemporaryDirectory()
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent(".claude-plugin"), withIntermediateDirectories: true)
     try """
@@ -178,14 +177,6 @@ struct SkillDiscoveryTests {
       try Discovery.discover(in: root).map(\.name).sorted() == ["standard-skill", "valid-skill"])
   }
 
-}
-
-private func discoveryTemporaryDirectory() throws -> URL {
-  let url = FileManager.default.temporaryDirectory
-    .appendingPathComponent("skill-cli-discovery-tests")
-    .appendingPathComponent(UUID().uuidString)
-  try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-  return url
 }
 
 private func writeDiscoverySkill(_ directory: URL, name: String) throws {

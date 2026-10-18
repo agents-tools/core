@@ -1,54 +1,105 @@
 import Foundation
 
-public struct SourceRequirement: Codable, Equatable, Sendable {
-  public var kind: String
-  public var value: String
-  public var upperBound: String?
+/// Git selection intent, encoded using the declaration's requirement keys.
+public enum SourceRequirement: Codable, Equatable, Sendable {
+  case branch(String)
+  case revision(String)
+  case exact(String)
+  case upToNextMajor(from: String)
+  case upToNextMinor(from: String)
+  case range(from: String, to: String)
 
-  public init(kind: String, value: String, upperBound: String? = nil) {
-    self.kind = kind
-    self.value = value
-    self.upperBound = upperBound
-  }
-
-  public static func branch(_ value: String) -> SourceRequirement {
-    SourceRequirement(kind: "branch", value: value)
-  }
-
-  public static func revision(_ value: String) -> SourceRequirement {
-    SourceRequirement(kind: "revision", value: value)
-  }
-
-  public static func exact(_ value: String) -> SourceRequirement {
-    SourceRequirement(kind: "exact", value: value)
-  }
-
-  public static func upToNextMajor(from value: String) -> SourceRequirement {
-    SourceRequirement(kind: "from", value: value)
-  }
-
-  public static func upToNextMinor(from value: String) -> SourceRequirement {
-    SourceRequirement(kind: "minor", value: value)
-  }
-
-  public static func range(from value: String, to upperBound: String) -> SourceRequirement {
-    SourceRequirement(kind: "range", value: value, upperBound: upperBound)
-  }
-
-  public static func ref(_ value: String) -> SourceRequirement {
-    SourceRequirement(kind: "ref", value: value)
-  }
-
-  public var checkoutRef: String? {
-    switch kind {
-    case "branch", "revision", "ref":
-      return value
-    default:
-      return nil
+  package var kind: String {
+    switch self {
+    case .branch: "branch"
+    case .revision: "revision"
+    case .exact: "exact"
+    case .upToNextMajor: "from"
+    case .upToNextMinor: "minor"
+    case .range: "range"
     }
   }
 
-  public var isVersionRequirement: Bool {
+  package var value: String {
+    switch self {
+    case .branch(let value), .revision(let value), .exact(let value),
+      .upToNextMajor(let value), .upToNextMinor(let value), .range(let value, _):
+      value
+    }
+  }
+
+  package var upperBound: String? {
+    if case .range(_, let upper) = self { return upper }
+    return nil
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case branch, revision, exact, from, upToNextMinor, to
+  }
+
+  public init(from decoder: Decoder) throws {
+    guard let requirement = try Self.decodeIfPresent(from: decoder) else {
+      throw CoreError.invalidState("empty requirement")
+    }
+    self = requirement
+  }
+
+  static func decodeIfPresent(from decoder: Decoder) throws -> SourceRequirement? {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let keys: [CodingKeys] = [.branch, .revision, .exact, .from, .upToNextMinor]
+    let present = keys.filter { container.contains($0) }
+    guard present.count <= 1, !container.contains(.to) || container.contains(.from) else {
+      throw CoreError.invalidState("conflicting source requirements")
+    }
+    guard let key = present.first else { return nil }
+    let value = try container.decode(String.self, forKey: key)
+    let upper = try container.decodeIfPresent(String.self, forKey: .to)
+    let requirement: Self
+    switch key {
+    case .branch: requirement = .branch(value)
+    case .revision: requirement = .revision(value)
+    case .exact: requirement = .exact(value)
+    case .upToNextMinor: requirement = .upToNextMinor(from: value)
+    case .from:
+      requirement = upper.map { .range(from: value, to: $0) } ?? .upToNextMajor(from: value)
+    case .to: throw CoreError.invalidState("upper bound needs a lower bound")
+    }
+    try requirement.validate()
+    return requirement
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    let key =
+      kind == "minor"
+      ? CodingKeys.upToNextMinor : kind == "range" ? .from : CodingKeys(rawValue: kind)
+    guard let key else { throw CoreError.invalidState("unsupported requirement: \(kind)") }
+    try container.encode(value, forKey: key)
+    try container.encodeIfPresent(upperBound, forKey: .to)
+  }
+
+  package func validate() throws {
+    guard !value.isEmpty, !value.hasPrefix("-"), !value.contains("\0") else {
+      throw CoreError.invalidState("invalid source requirement")
+    }
+    if isVersionRequirement {
+      guard let lower = SemanticVersion(value) else {
+        throw CoreError.invalidState("invalid version: \(value)")
+      }
+      if (kind == "from" && lower.major == Int.max) || (kind == "minor" && lower.minor == Int.max) {
+        throw CoreError.invalidState("version bound cannot be incremented")
+      }
+      if kind == "range" {
+        guard let upperBound, let upper = SemanticVersion(upperBound), lower < upper else {
+          throw CoreError.invalidState("invalid version range")
+        }
+      }
+    } else if kind != "branch" && kind != "revision" {
+      throw CoreError.invalidState("unsupported requirement: \(kind)")
+    }
+  }
+
+  private var isVersionRequirement: Bool {
     switch kind {
     case "exact", "from", "minor", "range":
       return true

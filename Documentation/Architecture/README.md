@@ -1,7 +1,7 @@
 # Architecture
 
 This directory holds the current truth for `core`, a SwiftPM library package.
-`AgentsCore` owns shared source, registry, lock, and watch behavior;
+`AgentsCore` owns shared sources, declaration and lock storage, cache, and agent locations;
 `AgentsSkills` owns skill discovery and lifecycle operations and depends on
 `AgentsCore` and Yams. `AgentsInstructions` owns pure instruction text
 transformations and depends on `AgentsCore` for hashing and `swift-markdown`
@@ -23,4 +23,5 @@ for CommonMark structure. Tests follow those module boundaries.
 
 ## Current Files
 
-- `Package.md`: library products, module boundaries, and runtime state
+- `Package.md`: library products, module boundaries, and public workflows
+- `State.md`: declaration, resolved state, source cache and installation invariants

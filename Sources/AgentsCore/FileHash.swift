@@ -10,44 +10,40 @@ package enum FileHash {
     try sha256Hex(data: Data(contentsOf: file))
   }
 
+  /// Hashes every tree entry in path order, including hidden files and symlink destinations.
   package static func folderHash(_ directory: URL) throws -> String {
-    let directory = directory.resolvingSymlinksInPath()
-    var hasher = SHA256()
-    let files = try filesUnder(directory).sorted { $0.path < $1.path }
-    for file in files {
-      let relative = file.path.replacingOccurrences(of: directory.path + "/", with: "")
-      hasher.update(data: Data(relative.utf8))
-      hasher.update(data: Data([0]))
-      hasher.update(data: try Data(contentsOf: file))
-      hasher.update(data: Data([0]))
-    }
-    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    try folderHash(DirectoryHandle(at: directory.resolvingSymlinksInPath()))
   }
 
-  private static func filesUnder(_ directory: URL) throws -> [URL] {
-    guard
-      let enumerator = FileManager.default.enumerator(
-        at: directory,
-        includingPropertiesForKeys: [.isRegularFileKey],
-        options: [.skipsPackageDescendants]
-      )
-    else {
-      return []
-    }
-    var files: [URL] = []
-    for case let url as URL in enumerator {
-      let name = url.lastPathComponent
-      if [".git", "node_modules", "__pycache__", "__pypackages__"].contains(name) {
-        enumerator.skipDescendants()
-        continue
-      }
-      if name == "metadata.json" {
-        continue
-      }
-      if (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
-        files.append(url)
+  static func folderHash(_ directory: DirectoryHandle) throws -> String {
+    var entries: [(String, Data)] = []
+    func collect(_ directory: DirectoryHandle, prefix: String) throws {
+      for name in try directory.names() {
+        let path = prefix + name
+        guard let info = try directory.info(name) else { throw CoreError.notFound(path) }
+        switch info.st_mode & 0o170000 {
+        case 0o120000:
+          entries.append((path, Data(("link\0" + (try directory.readLink(name))).utf8)))
+        case 0o040000:
+          entries.append((path, Data("directory".utf8)))
+          try collect(directory.child(name), prefix: path + "/")
+        case 0o100000:
+          entries.append((path, Data("file\0".utf8) + (try directory.read(name))))
+        default: throw CoreError.invalidState("unsupported content entry: \(path)")
+        }
       }
     }
-    return files
+    try collect(directory, prefix: "")
+    var hasher = SHA256()
+    // Each field has a fixed-width byte length, so arbitrary payload bytes cannot
+    // impersonate paths, entry types or record boundaries.
+    for (path, content) in entries.sorted(by: { $0.0 < $1.0 }) {
+      for field in [Data(path.utf8), content] {
+        var length = UInt64(field.count).bigEndian
+        withUnsafeBytes(of: &length) { hasher.update(data: Data($0)) }
+        hasher.update(data: field)
+      }
+    }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
   }
 }

@@ -365,6 +365,7 @@ agents
 in every command except `install`. `--agent` defaults to the declaration's
 `agents`. `skills add` also takes `--mode link|copy|edit`, and `skills add` and
 `skills list <source>` take `--full-depth`.
+For skills, omitting `--agent` makes `remove` act on all recipients and `list` show all recipients; declaration defaults apply only when adding or when a selection has no recipients.
 
 | Command | Behavior |
 | --- | --- |

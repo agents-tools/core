@@ -6,21 +6,15 @@ import Testing
 
 @Suite("Well-Known Sources")
 struct WellKnownSourceTests {
-  @Test func detectsWellKnownURLsAndProviderIdentifiers() throws {
+  @Test func detectsWellKnownURLsAndIndexCandidates() throws {
     let provider = WellKnownProvider()
     #expect(try SourceParser.parse("https://example.com").type == .wellKnown)
     #expect(try SourceParser.parse("https://mintlify.com/docs").type == .wellKnown)
     #expect(try SourceParser.parse("https://docs.example.com/skill.md").type == .wellKnown)
-    #expect(try SourceParser.parse("https://github.com/owner/repo").type == .github)
-    #expect(try SourceParser.parse("https://gitlab.com/owner/repo").type == .gitlab)
+    #expect(try SourceParser.parse("https://github.com/owner/repo").type == .git)
+    #expect(try SourceParser.parse("https://gitlab.com/owner/repo").type == .git)
     #expect(try SourceParser.parse("https://huggingface.co/spaces/owner/repo").type == .git)
     #expect(try SourceParser.parse("https://git.example.com/owner/repo.git").type == .git)
-
-    #expect(provider.sourceIdentifier(for: "https://example.com") == "example.com")
-    #expect(provider.sourceIdentifier(for: "https://example.com/docs") == "example.com")
-    #expect(provider.sourceIdentifier(for: "https://docs.example.com") == "docs.example.com")
-    #expect(provider.sourceIdentifier(for: "https://www.mintlify.com/docs") == "mintlify.com")
-    #expect(provider.sourceIdentifier(for: "not-a-url") == "unknown")
 
     let candidates = try provider.indexURLCandidates(for: "https://code.claude.com/docs")
     #expect(
