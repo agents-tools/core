@@ -74,11 +74,7 @@ package struct SourceCache {
         ref = "refs/tags/" + selected.0
         version = selected.1.description
       }
-    } else if let selected = tags.last(where: { $0.1.prerelease.isEmpty }) {
-      ref = "refs/tags/" + selected.0
-      version = selected.1.description
-    } else if !tags.isEmpty {
-      guard let selected = tags.last else { throw CoreError.notFound("version tag") }
+    } else if let selected = tags.last {
       ref = "refs/tags/" + selected.0
       version = selected.1.description
     } else {
@@ -89,13 +85,17 @@ package struct SourceCache {
   }
 
   package func materialize(sourceID: String, source: LockedSource, revision: String) throws -> URL {
-    let destination = materializedURL(sourceID: sourceID, revision: revision)
-    if FileManager.default.fileExists(atPath: destination.path) { return destination }
-    return try withSnapshot(sourceID: sourceID, source: source, revision: revision) { snapshot in
-      try FileManager.default.createDirectory(
-        at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-      try FileManager.default.moveItem(at: snapshot, to: destination)
-      return destination
+    try FileLock.withLock(
+      at: store.cacheDirectory.appendingPathComponent("locks/\(key(sourceID))-\(revision).lock")
+    ) {
+      let destination = materializedURL(sourceID: sourceID, revision: revision)
+      if FileManager.default.fileExists(atPath: destination.path) { return destination }
+      return try withSnapshot(sourceID: sourceID, source: source, revision: revision) { snapshot in
+        try FileManager.default.createDirectory(
+          at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: snapshot, to: destination)
+        return destination
+      }
     }
   }
 
@@ -196,6 +196,13 @@ package struct SourceCache {
   }
 
   private func fetch(_ source: SourceDeclaration, id: String) throws -> URL {
+    try FileLock.withLock(at: store.cacheDirectory.appendingPathComponent("locks/\(key(id)).lock"))
+    {
+      try fetchMirror(source, id: id)
+    }
+  }
+
+  private func fetchMirror(_ source: SourceDeclaration, id: String) throws -> URL {
     guard source.kind != .wellKnown else {
       throw CoreError.invalidSource("well-known sources have no Git mirror")
     }

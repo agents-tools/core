@@ -40,16 +40,6 @@ struct WellKnownProvider: Sendable {
     self.fetch = fetch
   }
 
-  func sourceIdentifier(for rawURL: String) -> String {
-    guard let url = URL(string: rawURL), var host = url.host else {
-      return "unknown"
-    }
-    if host.hasPrefix("www.") {
-      host.removeFirst(4)
-    }
-    return host
-  }
-
   func indexURLCandidates(for rawURL: String) throws -> [(
     index: URL, base: URL, wellKnownPath: String
   )] {
@@ -123,28 +113,6 @@ struct WellKnownProvider: Sendable {
       digest: "sha256:" + FileHash.sha256Hex(data: data),
       files: ["SKILL.md": data]
     )
-  }
-
-  func materialize(_ skills: [WellKnownRemoteSkill], into checkout: URL) throws {
-    if FileManager.default.fileExists(atPath: checkout.path) {
-      try FileManager.default.removeItem(at: checkout)
-    }
-    try FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
-    for skill in skills {
-      let skillRoot = checkout.appendingPathComponent("skills").appendingPathComponent(
-        skill.installName)
-      try FileManager.default.createDirectory(at: skillRoot, withIntermediateDirectories: true)
-      for (relativePath, data) in skill.files {
-        let safe = try PathSafety.sanitizeSubpath(relativePath)
-        let target = skillRoot.appendingPathComponent(safe)
-        guard PathSafety.isContained(target, in: skillRoot) else {
-          throw CoreError.unsafePath("well-known file escapes skill root: \(relativePath)")
-        }
-        try FileManager.default.createDirectory(
-          at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: target)
-      }
-    }
   }
 
   private func normalize(index: WellKnownIndex, indexURL: URL, baseURL: URL, wellKnownPath: String)
@@ -284,8 +252,7 @@ struct WellKnownProvider: Sendable {
 
   private func unpackTarGz(_ data: Data) throws -> [String: Data] {
     let tempRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("skill-cli-well-known")
-      .appendingPathComponent(UUID().uuidString)
+      .appendingPathComponent("agents-artifact-" + UUID().uuidString)
     let archive = tempRoot.appendingPathComponent("artifact.tar.gz")
     let extract = tempRoot.appendingPathComponent("extract")
     try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)
@@ -325,8 +292,7 @@ struct WellKnownProvider: Sendable {
 
   private func unpackZip(_ data: Data) throws -> [String: Data] {
     let tempRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("skill-cli-well-known")
-      .appendingPathComponent(UUID().uuidString)
+      .appendingPathComponent("agents-artifact-" + UUID().uuidString)
     let archive = tempRoot.appendingPathComponent("artifact.zip")
     let extract = tempRoot.appendingPathComponent("extract")
     try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)

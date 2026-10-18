@@ -1,42 +1,36 @@
 import Foundation
 
-public struct SourceRequirement: Codable, Equatable, Sendable {
-  public var kind: String
-  public var value: String
-  public var upperBound: String?
+/// Git selection intent, encoded using the declaration's requirement keys.
+public enum SourceRequirement: Codable, Equatable, Sendable {
+  case branch(String)
+  case revision(String)
+  case exact(String)
+  case upToNextMajor(from: String)
+  case upToNextMinor(from: String)
+  case range(from: String, to: String)
 
-  public init(kind: String, value: String, upperBound: String? = nil) {
-    self.kind = kind
-    self.value = value
-    self.upperBound = upperBound
+  package var kind: String {
+    switch self {
+    case .branch: "branch"
+    case .revision: "revision"
+    case .exact: "exact"
+    case .upToNextMajor: "from"
+    case .upToNextMinor: "minor"
+    case .range: "range"
+    }
   }
 
-  public static func branch(_ value: String) -> SourceRequirement {
-    SourceRequirement(kind: "branch", value: value)
+  package var value: String {
+    switch self {
+    case .branch(let value), .revision(let value), .exact(let value),
+      .upToNextMajor(let value), .upToNextMinor(let value), .range(let value, _):
+      value
+    }
   }
 
-  public static func revision(_ value: String) -> SourceRequirement {
-    SourceRequirement(kind: "revision", value: value)
-  }
-
-  public static func exact(_ value: String) -> SourceRequirement {
-    SourceRequirement(kind: "exact", value: value)
-  }
-
-  public static func upToNextMajor(from value: String) -> SourceRequirement {
-    SourceRequirement(kind: "from", value: value)
-  }
-
-  public static func upToNextMinor(from value: String) -> SourceRequirement {
-    SourceRequirement(kind: "minor", value: value)
-  }
-
-  public static func range(from value: String, to upperBound: String) -> SourceRequirement {
-    SourceRequirement(kind: "range", value: value, upperBound: upperBound)
-  }
-
-  public static func ref(_ value: String) -> SourceRequirement {
-    SourceRequirement(kind: "ref", value: value)
+  package var upperBound: String? {
+    if case .range(_, let upper) = self { return upper }
+    return nil
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -60,8 +54,16 @@ public struct SourceRequirement: Codable, Equatable, Sendable {
     guard let key = present.first else { return nil }
     let value = try container.decode(String.self, forKey: key)
     let upper = try container.decodeIfPresent(String.self, forKey: .to)
-    let kind = key == .upToNextMinor ? "minor" : (upper == nil ? key.rawValue : "range")
-    let requirement = Self(kind: kind, value: value, upperBound: upper)
+    let requirement: Self
+    switch key {
+    case .branch: requirement = .branch(value)
+    case .revision: requirement = .revision(value)
+    case .exact: requirement = .exact(value)
+    case .upToNextMinor: requirement = .upToNextMinor(from: value)
+    case .from:
+      requirement = upper.map { .range(from: value, to: $0) } ?? .upToNextMajor(from: value)
+    case .to: throw CoreError.invalidState("upper bound needs a lower bound")
+    }
     try requirement.validate()
     return requirement
   }
@@ -94,16 +96,7 @@ public struct SourceRequirement: Codable, Equatable, Sendable {
     }
   }
 
-  public var checkoutRef: String? {
-    switch kind {
-    case "branch", "revision", "ref":
-      return value
-    default:
-      return nil
-    }
-  }
-
-  public var isVersionRequirement: Bool {
+  private var isVersionRequirement: Bool {
     switch kind {
     case "exact", "from", "minor", "range":
       return true

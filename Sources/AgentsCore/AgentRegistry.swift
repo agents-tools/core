@@ -52,13 +52,6 @@ public enum InstallMode: String, Codable, Sendable {
   case edit
 }
 
-public enum InstallMaterialization: String, Codable, Equatable, Sendable {
-  case copyInstalled = "copy-installed"
-  case linkInstalled = "link-installed"
-  case editInstalled = "edit-installed"
-  case copyFallback = "copy-fallback"
-}
-
 public struct RuntimeEnvironment: Sendable {
   public var projectDirectory: URL
   public var homeDirectory: URL
@@ -80,36 +73,6 @@ public struct RuntimeEnvironment: Sendable {
 }
 
 package enum AgentRegistry {
-  package static func cacheDirectory(scope: InstallScope, environment: RuntimeEnvironment) -> URL {
-    switch scope {
-    case .project:
-      return environment.projectDirectory.appendingPathComponent(".agent/cache")
-    case .user:
-      if let cacheHome = environment.environment["XDG_CACHE_HOME"].flatMap({
-        $0.isEmpty ? nil : $0
-      }) {
-        return URL(fileURLWithPath: cacheHome).appendingPathComponent("skill-cli")
-      }
-      #if os(macOS)
-        return environment.homeDirectory.appendingPathComponent("Library/Caches/skill-cli")
-      #else
-        return environment.homeDirectory.appendingPathComponent(".cache/skill-cli")
-      #endif
-    }
-  }
-
-  package static func sourceCacheDirectory(scope: InstallScope, environment: RuntimeEnvironment)
-    -> URL
-  {
-    cacheDirectory(scope: scope, environment: environment).appendingPathComponent("sources")
-  }
-
-  package static func wellKnownCacheDirectory(scope: InstallScope, environment: RuntimeEnvironment)
-    -> URL
-  {
-    cacheDirectory(scope: scope, environment: environment).appendingPathComponent("well-known")
-  }
-
   package static func canonicalSkillsDirectory(
     scope: InstallScope, environment: RuntimeEnvironment
   ) -> URL {

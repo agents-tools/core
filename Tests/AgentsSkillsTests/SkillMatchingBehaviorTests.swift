@@ -44,7 +44,7 @@ struct SkillMatchingTests {
     ]
 
     for (directoryName, frontmatter, shouldParse) in cases {
-      let root = try matchingTemporaryDirectory()
+      let root = try temporaryDirectory()
       defer { try? FileManager.default.removeItem(at: root) }
       let skill = root.appendingPathComponent(directoryName)
       try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
@@ -65,12 +65,4 @@ struct SkillMatchingTests {
 
 private func matchingSkill(_ name: String) -> Skill {
   Skill(name: name, description: "desc", path: "/tmp/\(name)", skillFile: "/tmp/\(name)/SKILL.md")
-}
-
-private func matchingTemporaryDirectory() throws -> URL {
-  let url = FileManager.default.temporaryDirectory
-    .appendingPathComponent("skill-cli-matching-tests")
-    .appendingPathComponent(UUID().uuidString)
-  try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-  return url
 }

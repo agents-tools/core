@@ -1,11 +1,5 @@
 import Foundation
 
-#if canImport(Darwin)
-  import Darwin
-#else
-  import Glibc
-#endif
-
 /// Scope-owned state locations. User state always belongs to the supplied home directory.
 public struct StateStore: Sendable {
   public let scope: InstallScope
@@ -47,30 +41,16 @@ public struct StateStore: Sendable {
     try withLock {
       _ = try loadDeclaration()
       _ = try loadResolved()
-      let oldDeclaration = try existingData(declarationURL)
-      let oldResolved = try existingData(resolvedURL)
-      do {
-        try Self.encode(declaration.normalized).write(to: declarationURL, options: .atomic)
-        try Self.encode(resolved.normalized).write(to: resolvedURL, options: .atomic)
-      } catch {
-        try restore(oldDeclaration, at: declarationURL)
-        try restore(oldResolved, at: resolvedURL)
-        throw error
-      }
+      let transaction = FileTransaction()
+      try transaction.replace(
+        declarationURL, content: nil, data: Self.encode(declaration.normalized))
+      try transaction.replace(resolvedURL, content: nil, data: Self.encode(resolved.normalized))
+      try transaction.commit()
     }
   }
 
   package func withLock<T>(_ body: () throws -> T) throws -> T {
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let path = directory.appendingPathComponent(".agents.lock").path
-    let descriptor = open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-    guard descriptor >= 0 else { throw CoreError.invalidState("cannot open state lock: \(path)") }
-    defer { close(descriptor) }
-    guard flock(descriptor, LOCK_EX) == 0 else {
-      throw CoreError.invalidState("cannot lock state: \(path)")
-    }
-    defer { flock(descriptor, LOCK_UN) }
-    return try body()
+    try FileLock.withLock(at: directory.appendingPathComponent(".agents.lock"), body)
   }
 
   package static func encode<T: Encodable>(_ value: T) throws -> Data {
@@ -93,11 +73,4 @@ public struct StateStore: Sendable {
     return try Data(contentsOf: url)
   }
 
-  private func restore(_ data: Data?, at url: URL) throws {
-    if let data {
-      try data.write(to: url, options: .atomic)
-    } else if FileManager.default.fileExists(atPath: url.path) {
-      try FileManager.default.removeItem(at: url)
-    }
-  }
 }

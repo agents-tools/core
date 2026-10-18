@@ -409,7 +409,8 @@ public enum SkillOperations {
       source = existing
     } else {
       let parsed = try SourceParser.parse(
-        options.source, currentDirectory: options.environment.projectDirectory)
+        options.source, currentDirectory: options.environment.projectDirectory,
+        homeDirectory: options.environment.homeDirectory)
       source = SourceDeclaration(
         kind: parsed.type == .local ? .local : parsed.type == .wellKnown ? .wellKnown : .git,
         location: parsed.localPath ?? parsed.url, requirement: parsed.requirement,

@@ -4,8 +4,7 @@ import Foundation
 
 func temporaryDirectory() throws -> URL {
   let url = FileManager.default.temporaryDirectory
-    .appendingPathComponent("skill-cli-tests")
-    .appendingPathComponent(UUID().uuidString)
+    .appendingPathComponent("agents-tests-" + UUID().uuidString)
   try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
   return url
 }
