@@ -111,9 +111,9 @@ let skills = try SkillOperations.listManaged(
 
 ```bash
 swift build
-env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME swift test
+swift test
 swift build -c release
-xcrun swift-format lint --configuration .swift-format --recursive Package.swift Sources Tests
+xcrun swift-format lint --strict --configuration .swift-format --recursive Package.swift Sources Tests
 git diff --check origin/master
 ```
 

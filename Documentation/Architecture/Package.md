@@ -19,8 +19,9 @@ AgentsInstructions ──> AgentsCore
          │
          └───────> Markdown (swift-markdown) ──> cmark-gfm
 
-AgentsCoreTests ──> AgentsCore
-AgentsSkillsTests ──> AgentsSkills, AgentsCore, Yams
+StateTestProcess ──> AgentsCore
+AgentsCoreTests ──> AgentsCore, StateTestProcess
+AgentsSkillsTests ──> AgentsSkills, AgentsCore, Yams, StateTestProcess
 AgentsInstructionsTests ──> AgentsInstructions
 ```
 
@@ -40,9 +41,10 @@ this dependency graph.
 - `Declaration` and `ResolvedState` define intent and resolved version 1 state,
   including the complete instruction section, prompt and physical-target models.
 - `StateStore` owns scope paths, validation, deterministic encoding and state
-  persistence. `FileLock` serializes writers; `FileTransaction` stages
-  replacements and rolls them back on operation errors. State files are
-  replaced with an atomic rename.
+  persistence. `FileLock` serializes state access; `FileTransaction` durably
+  journals replacements across installations, state and cache. State access
+  recovers interrupted transactions before proceeding, as described in
+  [State and cache](State.md).
 - `SourceCache` owns bare Git mirrors, requirement resolution, exact snapshots,
   digest-addressed downloads and pruning across skill and instruction pins.
   `ProcessRunner` executes subprocesses.
@@ -90,8 +92,18 @@ reads file-list indexes, skill Markdown and digest-verified archives. It records
 immutable artifact coordinates; restoration uses those coordinates directly.
 Yams is confined to skill metadata parsing in this module.
 
-## AgentsInstructions
+Inventory reads and lifecycle writes hold the scope lock and recover abandoned
+transactions before accessing state. `listManaged` includes missing records for
+diagnosis; `listInstalled` returns present skills with valid frontmatter, including
+unmanaged candidates from each agent's scan roots. Omitted agent filters list or
+remove all recipients. Declaration defaults supply recipients for additions and
+selections that have no explicit recipients.
 
+Update previews use the same physical target mapping as application. Each change
+contains typed entry snapshots, so deletions, empty directories, symbolic link
+destinations and file contents can all be presented before applying.
+
+## AgentsInstructions
 
 `Instructions` validates source bytes into immutable `InstructionSection`
 values, assembles or removes managed blocks, detects drift, renders ChatGPT
@@ -179,8 +191,9 @@ code, HTML, headings, containers, and inline formatting cannot establish
 forwarding. This verifies context for multiline constructs without using
 inline source coordinates or treating an inline-node boundary as a path end.
 The probe is never emitted. Malformed managed markers still produce errors.
-Callers own ancestor-file warnings, actual filesystem access, declaration and lock updates, and deletion decisions using
-the lock's `created` flag. This target performs no I/O.
+Callers own ancestor-file warnings, actual filesystem access, declaration and
+lock updates, and deletion decisions using the lock's `created` flag. This target
+performs no I/O and does not invoke the state or cache lifecycle.
 
 ## Validation and Documentation
 
@@ -196,14 +209,3 @@ rendering through public APIs with in-memory fixtures.
 [State and cache](State.md) describes persisted data and lifecycle invariants.
 `../Proposals/` holds design work; `../Decisions/`, `../Migrations/` and
 `../Archive/` retain historical records with their original scope.
-
-Inventory reads and lifecycle writes hold the scope lock and recover abandoned
-transactions before accessing state. `listManaged` includes missing records for
-diagnosis; `listInstalled` returns present skills with valid frontmatter, including
-unmanaged candidates from each agent's scan roots. Omitted agent filters list or
-remove all recipients. Declaration defaults supply recipients for additions and
-selections that have no explicit recipients.
-
-Update previews use the same physical target mapping as application. Each change
-contains typed entry snapshots, so deletions, empty directories, symbolic link
-destinations and file contents can all be presented before applying.
