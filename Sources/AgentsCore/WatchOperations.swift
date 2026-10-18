@@ -4,13 +4,23 @@ import Foundation
 public struct WatchOperations: Sendable {
   private let discoverSkills: @Sendable (URL) throws -> [WatchSkill]
   private let fetchArtifacts: @Sendable (String) throws -> [WatchArtifact]
+  private let checkpoint: @Sendable (String) throws -> Void
 
   public init(
     discoverSkills: @escaping @Sendable (URL) throws -> [WatchSkill],
     fetchArtifacts: @escaping @Sendable (String) throws -> [WatchArtifact]
   ) {
+    self.init(discoverSkills: discoverSkills, fetchArtifacts: fetchArtifacts, checkpoint: { _ in })
+  }
+
+  package init(
+    discoverSkills: @escaping @Sendable (URL) throws -> [WatchSkill],
+    fetchArtifacts: @escaping @Sendable (String) throws -> [WatchArtifact],
+    checkpoint: @escaping @Sendable (String) throws -> Void
+  ) {
     self.discoverSkills = discoverSkills
     self.fetchArtifacts = fetchArtifacts
+    self.checkpoint = checkpoint
   }
 
   /// Declares a source when needed and acknowledges its current content without installing it.
@@ -157,7 +167,7 @@ public struct WatchOperations: Sendable {
     declaration: Declaration?, watch: WatchState, lock: ResolvedState, store: StateStore
   ) throws {
     try watch.validate()
-    let transaction = FileTransaction(store: store)
+    let transaction = FileTransaction(store: store, checkpoint: checkpoint)
     if let declaration {
       try transaction.replace(
         store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
@@ -170,10 +180,11 @@ public struct WatchOperations: Sendable {
   private func acknowledge(
     _ source: SourceDeclaration, revision: String?, store: StateStore
   ) throws -> WatchSeen {
-    let cache = SourceCache(store: store)
+    let cache = SourceCache(store: store, checkpoint: checkpoint)
     let id = try source.identity(environment: store.environment)
     if source.kind != .wellKnown {
       let head = try cache.watchRevision(source, revision: revision)
+      try checkpoint("watch.mirror.fetched")
       try cache.retainWatchRevision(sourceID: id, revision: head)
       return .revision(head)
     }

@@ -61,8 +61,10 @@ Git subscriptions follow the declared branch when present, otherwise the
 source's default branch. Installation version and revision requirements do not
 select the watched head. Commit count is the number of commits reachable from
 the current head but not the seen revision, including after divergent history.
-Acknowledged commits remain reachable through mirror refs so force-pushes and
-Git garbage collection cannot discard seen content. Mirrors remain available
+Acknowledged commits and their mirror refs are made durable before watch state
+is committed. Mirror-local Git fsync settings cover objects and references;
+explicit barriers also flush existing objects and parent directory entries.
+Force-pushes and Git garbage collection cannot discard seen content. Mirrors remain available
 for source history and future resolution.
 
 Well-known baselines map artifact names to digests. Files artifacts use the

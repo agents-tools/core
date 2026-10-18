@@ -74,10 +74,52 @@ package struct SourceCache {
     return result
   }
 
-  /// Keep acknowledged history reachable even after an upstream force-push or branch deletion.
+  /// Publish objects and their retention ref durably before the scope journal can name them.
   func retainWatchRevision(sourceID: String, revision: String) throws {
-    _ = try git(
-      mirrorURL(sourceID: sourceID), ["update-ref", "refs/agents-watch/" + revision, revision])
+    let url = mirrorURL(sourceID: sourceID)
+    try validatePath(url)
+    _ = try git(url, ["config", "--local", "core.fsync", "objects,reference,pack-metadata"])
+    _ = try git(url, ["config", "--local", "core.fsyncMethod", "fsync"])
+    let mirror = try DirectoryHandle(at: url)
+    let objects = try mirror.child("objects")
+    if try objects.info("info") != nil {
+      let info = try objects.child("info")
+      if try info.info("alternates") != nil, try !info.read("alternates").isEmpty {
+        throw CoreError.invalidState("watch requires self-contained mirror objects")
+      }
+    }
+    // Fetches and local clones can have populated this mirror before its durability policy
+    // was configured. Flush existing object bytes as well as newly written Git objects.
+    func syncObjects(_ directory: DirectoryHandle) throws {
+      for name in try directory.names() {
+        if try (directory.info(name)?.st_mode ?? 0) & 0o170000 == 0o040000 {
+          try syncObjects(directory.child(name))
+        } else {
+          try directory.syncFile(name)
+        }
+      }
+      try directory.sync()
+    }
+    try syncObjects(objects)
+    try checkpoint("watch.objects.synced")
+    let refs = try mirror.child("refs")
+    if try refs.info("agents-watch") == nil { try refs.makeDirectory("agents-watch") }
+    let retained = try refs.child("agents-watch")
+    _ = try git(url, ["update-ref", "--no-deref", "refs/agents-watch/" + revision, revision])
+    try checkpoint("watch.ref.updated")
+    // Updating an already packed ref to the same commit can leave it packed.
+    if try retained.info(revision) != nil { try retained.syncFile(revision) }
+    if try mirror.info("packed-refs") != nil { try mirror.syncFile("packed-refs") }
+    try retained.sync()
+    try checkpoint("watch.ref.synced")
+    try refs.sync()
+    try mirror.syncFile("config")
+    try mirror.syncFile("HEAD")
+    let mirrors = try DirectoryHandle(at: url.deletingLastPathComponent())
+    try mirrors.sync()
+    try DirectoryHandle(at: store.cacheDirectory).sync()
+    try store.openDirectoryIfPresent()?.sync()
+    try checkpoint("watch.mirror.synced")
   }
 
   package func materialize(sourceID: String, source: LockedSource, revision: String) throws -> URL {
@@ -314,7 +356,7 @@ package struct SourceCache {
       defer { try? FileManager.default.removeItem(at: staging) }
       try ProcessRunner.run(
         "/usr/bin/env",
-        arguments: ["git", "clone", "--mirror", "--no-hardlinks", "--", url, staging.path])
+        arguments: ["git", "clone", "--mirror", "--no-local", "--", url, staging.path])
       try FileManager.default.moveItem(at: staging, to: mirror)
     }
     // A remote can change its default branch after the initial clone.

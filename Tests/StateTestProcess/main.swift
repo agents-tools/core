@@ -13,11 +13,22 @@ let store = StateStore(
     environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path]))
 func stop(_ step: String, marker: String = "ready") throws {
   if step == arguments[3] {
-    try Data(step.utf8).write(to: root.appendingPathComponent(marker))
+    try Data(step.utf8).write(to: root.appendingPathComponent(marker), options: .atomic)
     raise(SIGSTOP)
   }
 }
-if arguments[2] == "recover" {
+if arguments[2] == "watch-add" || arguments[2] == "watch-seen" {
+  let watch = WatchOperations(
+    discoverSkills: { _ in [] },
+    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+    checkpoint: { try stop($0) })
+  if arguments[2] == "watch-add" {
+    try watch.add(
+      root.appendingPathComponent("source").path, alias: "source", environment: store.environment)
+  } else {
+    try watch.seen("source", environment: store.environment)
+  }
+} else if arguments[2] == "recover" {
   try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
     _ = try FileTransaction.recover(store: store) { try stop($0, marker: "recovery-ready") }
   }
