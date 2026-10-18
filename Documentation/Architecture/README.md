@@ -1,6 +1,9 @@
 # Architecture
 
-This directory holds the current truth for `skill-cli`.
+This directory holds the current truth for `core`, a SwiftPM library package.
+`AgentsCore` owns shared source, registry, lock, and watch behavior;
+`AgentsSkills` owns skill discovery and lifecycle operations and depends on
+`AgentsCore` and Yams. Tests follow those module boundaries.
 
 ## Belongs Here
 
@@ -18,4 +21,4 @@ This directory holds the current truth for `skill-cli`.
 
 ## Current Files
 
-- `Package.md`: package structure, boundaries, and known gaps
+- `Package.md`: library products, module boundaries, and runtime state

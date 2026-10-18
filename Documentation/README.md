@@ -1,6 +1,6 @@
 # Documentation
 
-This directory indexes repository-native documentation for `skill-cli`.
+This directory indexes repository-native documentation for `core`.
 
 ## Areas
 
