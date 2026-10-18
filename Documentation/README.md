@@ -4,6 +4,7 @@ This directory indexes repository-native documentation for `core`.
 
 ## Areas
 
+- `Assets/`: generated logo files; the source of truth is the `core` entry in `agents-tools/.github` DESIGN.md.
 - `Architecture/`: current truth for package structure and documentation
   placement
 - `Proposals/`: design-in-progress and open alternatives
@@ -24,4 +25,5 @@ default.
 - Put historical records in `Decisions/`, `Migrations/`, and `Archive/`.
 - Put supporting reference material in `Reference/`.
 - Keep DocC catalogs with their SwiftPM targets.
-- Keep GitHub-facing governance in `.github/`, not here.
+- Keep GitHub-facing workflow metadata in `.github/`; community files and
+  templates use the organization defaults in `agents-tools/.github`.

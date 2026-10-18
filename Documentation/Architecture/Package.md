@@ -3,9 +3,9 @@
 ## Purpose and Consumers
 
 `core` supplies skill and instruction management and instruction text
-transformations for `agents-tools/cli` and `skill-cli/cli`.
-Those repositories own command trees, argument parsing, terminal presentation,
-and executable distribution. The package uses Swift 6.3, Swift 6 language mode,
+transformations for `agents-tools/cli`; `skill-cli/cli` is moving from its own
+`Core` target onto this package. Consumers own command trees, argument parsing,
+terminal presentation, and executable distribution. The package uses Swift 6.3, Swift 6 language mode,
 and a macOS 13 minimum deployment platform.
 
 ## Products and Dependencies

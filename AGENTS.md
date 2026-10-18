@@ -21,8 +21,9 @@ entry points.
 - For migration notes, use `Documentation/Migrations/*`.
 - For retired material, use `Documentation/Archive/*`.
 - For supporting details and examples, use `Documentation/Reference/*`.
-- For GitHub-facing collaboration files, use `.github/` and root governance
-  files.
+- Community files and templates are organization defaults in
+  `agents-tools/.github`; this repository keeps only `CODEOWNERS` and workflows
+  under `.github/`.
 
 ## Authority
 
@@ -32,7 +33,7 @@ entry points.
 - `Documentation/Proposals/*` is design-in-progress.
 - `Documentation/Decisions/*`, `Documentation/Migrations/*`, and
   `Documentation/Archive/*` are history.
-- `.github/*` is GitHub-facing governance and workflow metadata.
+- `.github/*` is GitHub-facing workflow metadata.
 
 ## Boundary Guardrails
 
@@ -45,6 +46,17 @@ entry points.
 - Keep shared source, registry, lock, and watch behavior in `AgentsCore`; skill
   discovery and lifecycle behavior belongs in `AgentsSkills`.
 - `AgentsCore` must not depend on `AgentsSkills`. Yams belongs to `AgentsSkills`.
+
+## Tests
+
+- Pass an explicit initial branch when creating Git fixtures.
+- Disable automatic maintenance and gc in fixture Git repositories.
+- Each test that creates a temporary directory removes it.
+- Run tests with agent configuration variables unset:
+
+  ```bash
+  env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME swift test
+  ```
 
 ## Operating Notes
 

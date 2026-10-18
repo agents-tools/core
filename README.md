@@ -1,9 +1,13 @@
-# core
+<p align="center">
+  <img src="Documentation/Assets/Logo.svg" width="160" alt="core logo">
+</p>
+
+<h1 align="center">core</h1>
 
 Swift libraries for managing agent skills and instructions from declared
 sources. The package provides the engine for `agents` in
-`agents-tools/cli` and `skill` in `skill-cli/cli`. Those consumers own command
-parsing, terminal output and executable distribution.
+`agents-tools/cli`; `skill` in `skill-cli/cli` is moving onto it. Consumers own
+command parsing, terminal output and executable distribution.
 
 ## Modules
 
@@ -151,23 +155,18 @@ let watch = SkillOperations.watchOperations()
 let changes = try watch.status(scope: .project, environment: environment)
 ```
 
+See [package architecture](Documentation/Architecture/Package.md),
+[state and cache](Documentation/Architecture/State.md), the
+[watch API](Documentation/Architecture/Watch.md), and the
+[documentation index](Documentation/README.md).
+
 ## Development
+
+Run the package's build, test, release and formatting checks:
 
 ```bash
 swift build
 swift test
 swift build -c release
 xcrun swift-format lint --strict --configuration .swift-format --recursive Package.swift Sources Tests
-git diff --check origin/master
 ```
-
-Tests are organized in `Tests/AgentsCoreTests`, `Tests/AgentsSkillsTests`, and
-`Tests/AgentsInstructionsTests`. Filesystem tests use isolated runtime homes and
-disposable local Git fixtures with explicit initial branches. Instruction text
-tests use in-memory fixtures; lifecycle tests use isolated homes and Git
-repositories. Public API tests import the libraries normally.
-
-See [package architecture](Documentation/Architecture/Package.md),
-[state and cache](Documentation/Architecture/State.md), the
-[watch API](Documentation/Architecture/Watch.md), and the
-[documentation index](Documentation/README.md).
