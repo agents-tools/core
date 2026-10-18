@@ -4,23 +4,23 @@ import Foundation
 /// The scope writer lock must be held through planning, commit and recovery.
 package final class FileTransaction {
   private struct Entry: Codable {
-    var parent: URL
-    var name: String
+    var path: String
     var existed: Bool
     var replacement: Bool
+    var name: String { String(path.split(separator: "/").last!) }
   }
   private struct Journal: Codable {
     var id: UUID
+    var scope: String
+    var roots: [String: String]
     var phase: Phase
     var entries: [Entry]
-    var directories: [URL]
   }
   private enum Phase: String, Codable { case preparing, applying, committed, rolledBack }
   private struct Content {
     var url: URL?
     var link: Bool
     var data: Data?
-    var parent: DirectoryHandle?
   }
   private let store: StateStore
   private let checkpoint: (String) throws -> Void
@@ -35,58 +35,53 @@ package final class FileTransaction {
   package func replace(_ destination: URL, content: URL?, link: Bool = false, data: Data? = nil)
     throws
   {
-    try plan(destination, content: content, link: link, data: data, parent: nil)
+    let path = try TransactionPaths(store: store).path(for: destination)
+    guard !entries.contains(where: { $0.path == path }) else {
+      throw CoreError.invalidState("duplicate transaction destination")
+    }
+    entries.append(Entry(path: path, existed: false, replacement: content != nil || data != nil))
+    contents.append(Content(url: content, link: link, data: data))
   }
 
   func remove(_ name: String, from parent: DirectoryHandle) throws {
-    try plan(
-      parent.url.appendingPathComponent(name), content: nil, link: false, data: nil, parent: parent)
-  }
-
-  private func plan(
-    _ destination: URL, content: URL?, link: Bool, data: Data?, parent: DirectoryHandle?
-  ) throws {
-    let directory = parent?.url ?? destination.deletingLastPathComponent().resolvingSymlinksInPath()
-    let name = destination.lastPathComponent
-    guard !entries.contains(where: { $0.parent == directory && $0.name == name }) else {
-      throw CoreError.invalidState("duplicate transaction destination: \(destination.path)")
-    }
-    let existed =
-      (try? FileManager.default.attributesOfItem(
-        atPath: directory.appendingPathComponent(name).path)) != nil
-    entries.append(
-      Entry(
-        parent: directory, name: name, existed: existed, replacement: content != nil || data != nil)
-    )
-    contents.append(Content(url: content, link: link, data: data, parent: parent))
+    try replace(parent.url.appendingPathComponent(name), content: nil)
   }
 
   package func commit() throws {
-    let journalURL = Self.journalURL(store)
-    guard !FileManager.default.fileExists(atPath: journalURL.path) else {
+    guard let directory = try store.openDirectoryIfPresent(),
+      try directory.info("transaction.json") == nil
+    else {
       throw CoreError.invalidState("transaction recovery is required")
     }
-    var missing = Set<URL>()
+    let paths = TransactionPaths(store: store)
+    var roots: [String: DirectoryHandle] = [:]
     for entry in entries {
-      var directory = entry.parent
-      while !FileManager.default.fileExists(atPath: directory.path) {
-        missing.insert(directory)
-        directory.deleteLastPathComponent()
+      let key = try paths.components(entry.path).root
+      if roots[key] == nil {
+        roots[key] = try paths.root(key, create: true, checkpoint: checkpoint)
       }
     }
-    var journal = Journal(
-      id: UUID(), phase: .preparing, entries: entries,
-      directories: missing.sorted { $0.pathComponents.count < $1.pathComponents.count })
-    try Self.persist(journal, store: store)
-    do {
-      try checkpoint("journal.preparing")
-      for (index, directory) in journal.directories.enumerated() {
-        let parent = try DirectoryHandle(at: directory.deletingLastPathComponent())
-        try parent.makeDirectory(directory.lastPathComponent)
-        try checkpoint("directory.\(index)")
+    let parents = try entries.map {
+      try paths.parent(for: $0.path, roots: roots, create: true, checkpoint: checkpoint)
+    }
+    var physical = Set<String>()
+    for index in entries.indices {
+      guard
+        physical.insert(parents[index].url.appendingPathComponent(entries[index].name).path)
+          .inserted
+      else {
+        throw CoreError.invalidState("duplicate physical transaction destination")
       }
+      entries[index].existed = try parents[index].info(entries[index].name) != nil
+    }
+    var journal = Journal(
+      id: UUID(), scope: try directory.identity,
+      roots: try roots.mapValues { try $0.identity }, phase: .preparing, entries: entries)
+    do {
+      try Self.persist(journal, directory: directory, checkpoint: checkpoint)
+      try checkpoint("journal.preparing")
       for (index, entry) in entries.enumerated() {
-        let parent = try contents[index].parent ?? DirectoryHandle(at: entry.parent)
+        let parent = parents[index]
         let backup = Self.temporaryName(journal, index, "old")
         let staged = Self.temporaryName(journal, index, "new")
         if entry.existed { try parent.copy(backup, from: parent, named: entry.name) }
@@ -97,115 +92,129 @@ package final class FileTransaction {
         } else if let source = content.url {
           if content.link {
             try parent.link(
-              staged, destination: Self.linkDestination(source, parent: entry.parent, store: store))
+              staged, destination: Self.linkDestination(source, parent: parent.url, store: store))
           } else {
             try Self.validateCopy(source)
             let origin = source.resolvingSymlinksInPath()
-            let sourceParent = try DirectoryHandle(at: origin.deletingLastPathComponent())
-            try parent.copy(staged, from: sourceParent, named: origin.lastPathComponent)
+            try parent.copy(
+              staged, from: DirectoryHandle(at: origin.deletingLastPathComponent()),
+              named: origin.lastPathComponent)
           }
         }
         try checkpoint("stage.\(index)")
       }
       journal.phase = .applying
-      try Self.persist(journal, store: store)
+      try Self.persist(journal, directory: directory, checkpoint: checkpoint)
       try checkpoint("journal.applying")
       for (index, entry) in entries.enumerated() {
-        let parent = try contents[index].parent ?? DirectoryHandle(at: entry.parent)
+        let parent = parents[index]
         if entry.replacement {
           try parent.rename(
-            Self.temporaryName(journal, index, "new"), to: entry.name,
-            swap: entry.existed)
-        } else {
-          // An atomic rename keeps the removed tree available until the commit point.
-          if entry.existed {
-            try parent.rename(entry.name, to: Self.temporaryName(journal, index, "removed"))
+            Self.temporaryName(journal, index, "new"), to: entry.name, swap: entry.existed
+          ) {
+            try checkpoint("replace.\(index).renamed")
+          }
+        } else if entry.existed {
+          try parent.rename(entry.name, to: Self.temporaryName(journal, index, "removed")) {
+            try checkpoint("replace.\(index).renamed")
           }
         }
         try checkpoint("replace.\(index)")
       }
       journal.phase = .committed
-      try Self.persist(journal, store: store)
+      try Self.persist(journal, directory: directory, checkpoint: checkpoint)
       try checkpoint("journal.committed")
-      try Self.cleanup(journal, store: store, checkpoint: checkpoint)
+      try Self.cleanup(journal, directory: directory, parents: parents, checkpoint: checkpoint)
     } catch {
       _ = try Self.recover(store: store)
       throw error
     }
   }
 
-  /// Returns true only after an abandoned journal has been recovered completely.
-  package static func recover(store: StateStore) throws -> Bool {
-    let url = journalURL(store)
-    guard (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil else {
-      let staging = store.directory.appendingPathComponent("transaction.new")
-      guard (try? FileManager.default.attributesOfItem(atPath: staging.path)) != nil else {
-        return false
-      }
-      guard let directory = try store.openDirectoryIfPresent() else {
-        throw CoreError.invalidState("missing transaction directory")
-      }
-      try directory.remove(staging.lastPathComponent)
+  /// Recovers only after validating and pinning every parent in the journal.
+  package static func recover(store: StateStore, checkpoint: (String) throws -> Void = { _ in })
+    throws -> Bool
+  {
+    guard let directory = try store.openDirectoryIfPresent() else { return false }
+    guard try directory.info("transaction.json") != nil else {
+      guard try directory.info("transaction.new") != nil else { return false }
+      _ = try directory.read("transaction.new")
+      try directory.remove("transaction.new")
       return true
     }
-    let data = try Data(contentsOf: url)
-    var journal = try StateStore.decode(data, as: Journal.self)
-    guard
-      journal.entries.allSatisfy({
-        !$0.name.isEmpty && $0.name != "." && $0.name != ".." && !$0.name.contains("/")
-          && $0.parent.isFileURL
-      })
-    else {
-      throw CoreError.invalidState("invalid transaction journal")
+    var journal = try StateStore.decode(directory.read("transaction.json"), as: Journal.self)
+    guard journal.scope == (try directory.identity) else {
+      throw CoreError.invalidState("transaction journal belongs to another scope location")
     }
+    let paths = TransactionPaths(store: store)
+    var roots: [String: DirectoryHandle] = [:]
+    let keys = try Set(journal.entries.map { try paths.components($0.path).root })
+    guard keys == Set(journal.roots.keys) else {
+      throw CoreError.invalidState("invalid transaction roots")
+    }
+    for key in keys {
+      let root = try paths.root(key)
+      guard try root.identity == journal.roots[key] else {
+        throw CoreError.invalidState("transaction root identity changed")
+      }
+      roots[key] = root
+    }
+    let parents = try journal.entries.map { try paths.parent(for: $0.path, roots: roots) }
+    var destinations = Set<String>()
+    for (index, entry) in journal.entries.enumerated() {
+      guard destinations.insert(parents[index].url.appendingPathComponent(entry.name).path).inserted
+      else {
+        throw CoreError.invalidState("duplicate transaction destination")
+      }
+      if journal.phase == .applying, entry.existed,
+        try parents[index].info(temporaryName(journal, index, "old")) == nil
+      {
+        throw CoreError.invalidState("missing transaction backup")
+      }
+    }
+    // Validate the journal's scratch file before any recovery mutation as well.
+    if try directory.info("transaction.new") != nil { _ = try directory.read("transaction.new") }
     if journal.phase == .applying {
       for (index, entry) in journal.entries.enumerated().reversed() {
-        let parent = try DirectoryHandle(at: entry.parent)
+        let parent = parents[index]
         if entry.existed {
           let restore = temporaryName(journal, index, "restore")
           try parent.remove(restore)
           try parent.copy(restore, from: parent, named: temporaryName(journal, index, "old"))
-          try parent.rename(restore, to: entry.name, swap: try parent.info(entry.name) != nil)
+          try parent.rename(restore, to: entry.name, swap: try parent.info(entry.name) != nil) {
+            try checkpoint("restore.\(index).renamed")
+          }
           try parent.remove(restore)
         } else {
           try parent.remove(entry.name)
         }
+        try checkpoint("restore.\(index)")
       }
-      journal.phase = .rolledBack
-      try persist(journal, store: store)
     }
-    try cleanup(journal, store: store)
+    if journal.phase == .applying || journal.phase == .preparing {
+      journal.phase = .rolledBack
+      try persist(journal, directory: directory, checkpoint: checkpoint)
+    }
+    try cleanup(journal, directory: directory, parents: parents, checkpoint: checkpoint)
     return true
   }
 
   private static func cleanup(
-    _ journal: Journal, store: StateStore, checkpoint: (String) throws -> Void = { _ in }
+    _ journal: Journal, directory: DirectoryHandle, parents: [DirectoryHandle],
+    checkpoint: (String) throws -> Void
   ) throws {
-    for (index, entry) in journal.entries.enumerated() {
-      if FileManager.default.fileExists(atPath: entry.parent.path) {
-        let parent = try DirectoryHandle(at: entry.parent)
-        for suffix in ["old", "new", "removed", "restore"] {
-          try parent.remove(temporaryName(journal, index, suffix))
-        }
+    // A visible terminal phase may have been renamed but not synced by a killed
+    // writer. Make that observed generation durable before deleting any backup.
+    try directory.syncFile("transaction.json")
+    try checkpoint("journal.terminalSynced")
+    for (index, _) in journal.entries.enumerated() {
+      for suffix in ["old", "new", "removed", "restore"] {
+        try parents[index].remove(temporaryName(journal, index, suffix))
       }
       try checkpoint("cleanup.\(index)")
     }
-    if journal.phase != .committed {
-      for directory in journal.directories.reversed() {
-        if FileManager.default.fileExists(atPath: directory.path) {
-          let handle = try DirectoryHandle(at: directory)
-          if try handle.names().isEmpty {
-            try DirectoryHandle(at: directory.deletingLastPathComponent()).remove(
-              directory.lastPathComponent)
-          }
-        }
-      }
-    }
-    guard let directory = try store.openDirectoryIfPresent() else {
-      throw CoreError.invalidState("missing transaction directory")
-    }
     try directory.remove("transaction.new")
-    try directory.remove(journalURL(store).lastPathComponent)
+    try directory.remove("transaction.json")
     try checkpoint("journal.removed")
   }
 
@@ -213,18 +222,15 @@ package final class FileTransaction {
     ".agents-\(journal.id.uuidString)-\(index).\(suffix)"
   }
 
-  private static func journalURL(_ store: StateStore) -> URL {
-    store.directory.appendingPathComponent("transaction.json")
-  }
-
-  private static func persist(_ journal: Journal, store: StateStore) throws {
-    guard let directory = try store.openDirectoryIfPresent() else {
-      throw CoreError.invalidState("missing transaction directory")
+  private static func persist(
+    _ journal: Journal, directory: DirectoryHandle,
+    checkpoint: (String) throws -> Void
+  ) throws {
+    try directory.remove("transaction.new")
+    try directory.write("transaction.new", data: StateStore.encode(journal))
+    try directory.rename("transaction.new", to: "transaction.json") {
+      try checkpoint("journal.\(journal.phase.rawValue).renamed")
     }
-    let staging = "transaction.new"
-    try directory.remove(staging)
-    try directory.write(staging, data: StateStore.encode(journal))
-    try directory.rename(staging, to: journalURL(store).lastPathComponent)
   }
 
   package static func linkDestination(_ source: URL, parent: URL, store: StateStore) -> String {

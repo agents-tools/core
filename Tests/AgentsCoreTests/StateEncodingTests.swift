@@ -19,8 +19,12 @@ struct StateEncodingTests {
       json = #"{"sources":{"same":{"local":"/a"},"same":{"local":"/b"}}}"#
     case "agents.resolved": json = String(decoding: resolved, as: UTF8.self)
     default:
-      json =
-        #"{"id":"00000000-0000-0000-0000-000000000000","phase":"committed","entries":[],"directories":[]}"#
+      let directory = try #require(try store.openDirectoryIfPresent())
+      let object: [String: Any] = [
+        "id": UUID().uuidString, "scope": try directory.identity,
+        "roots": [:] as [String: String], "phase": "committed", "entries": [] as [String],
+      ]
+      json = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
     }
     let encodings = [
       Data([0xEF, 0xBB, 0xBF]) + Data(json.utf8),

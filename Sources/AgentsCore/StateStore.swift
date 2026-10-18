@@ -67,7 +67,10 @@ public struct StateStore: Sendable {
       _ = try readDeclaration()
       _ = try readResolved()
     }
-    return try FileLock.withLock(at: directory.appendingPathComponent(".agents.lock")) {
+    let base = scope == .project ? environment.projectDirectory : environment.homeDirectory
+    let physicalDirectory = base.resolvingSymlinksInPath().appendingPathComponent(
+      directory.lastPathComponent)
+    return try FileLock.withLock(at: physicalDirectory.appendingPathComponent(".agents.lock")) {
       if try FileTransaction.recover(store: self) {
         throw CoreError.transactionRecovered(directory.path)
       }
@@ -127,8 +130,10 @@ public struct StateStore: Sendable {
   }
 
   private func existingData(_ url: URL) throws -> Data? {
-    guard (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil else { return nil }
-    return try Data(contentsOf: url)
+    guard let directory = try openDirectoryIfPresent(),
+      try directory.info(url.lastPathComponent) != nil
+    else { return nil }
+    return try directory.read(url.lastPathComponent)
   }
 
 }

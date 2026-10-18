@@ -86,22 +86,46 @@ fields that would be discarded by decoding cause an error. Tree hashes use
 length-prefixed paths and typed entry payloads, including empty
 directories and symbolic link destinations.
 
-Readers and writers serialize through `.agents.lock`. A durable
-`transaction.json` in the scope state directory records every target, state
-file and pruning replacement, its backup and staging paths, and created
-parent directories before mutation. Backups and staged data are synced before
-applying changes. macOS `renameatx_np(RENAME_SWAP)` atomically exchanges existing
-directories, files and links with their replacements; installations are never
-moved away before a replacement is present.
+Readers and writers serialize through `.agents.lock`. Missing scope and target
+ancestry is created with descriptor-relative operations; each parent directory
+is fsynced before target mutation, including when an interrupted creator left a
+visible directory entry. Empty managed containers can remain after a failed
+operation.
 
+A durable `transaction.json` in the scope state directory records target, state
+file and pruning replacements before mutation. Paths are relative to named
+roots in that scope: `state` and registered agent installation directories. The
+journal binds the state directory and each used root to its physical location
+and filesystem identity. Configured agent containers are resolved at the
+registry boundary; recovery opens journal descendants without following links.
+Symlinked journals, symlinked descendants, unregistered destinations and journals
+copied or moved from another scope location are rejected before replay. All
+parents are validated and their directory descriptors retained throughout
+recovery. Backup and staging basenames are derived from the transaction ID,
+never accepted as arbitrary journal paths.
+
+Backups and staged data are fsynced before applying changes. macOS `fcopyfile`
+preserves original bytes, permissions, ACLs and extended attributes in backups
+and restores; final modes are applied explicitly rather than through the umask.
+`renameatx_np(RENAME_SWAP)` atomically exchanges existing directories, files and
+links with their replacements; installations always retain a directory entry.
+
+After a process kill or power loss at any point, the next state access recovers
+one consistent generation of targets, declaration, lock and cache references.
 Each state operation first checks for an abandoned journal under the scope
-lock. Before the journal's durable commit point, recovery restores all backups;
-after it, recovery finishes cleanup. Backups remain available until rollback
-or commit is durable, so recovery itself can be interrupted and repeated.
+lock. An applying journal rolls back every replacement; a committed journal
+finishes cleanup. Recovery is repeatable if interrupted. Before deleting any
+recovery material, both the terminal journal file and its parent directory are
+fsynced, even when that phase was already visible on entry. State and backup
+files and their parent directories are synced before publishing the terminal
+phase. On macOS these barriers also use `F_FULLFSYNC` to request a storage flush.
+
 Recovery throws `CoreError.transactionRecovered` after completing, reporting
 the scope and asking the caller to retry against the recovered generation.
 This also applies to inventory, previews and doctor. Corrupt journals stop the
-operation without guessing a recovery plan.
+operation without guessing a recovery plan. Tests interrupt writers between
+rename and parent fsync, interrupt rollback and terminal cleanup, and verify
+that a competing reader waits for the recovering process's lock.
 
 ## Materialization and Installation
 
