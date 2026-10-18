@@ -54,6 +54,17 @@ if arguments[2] == "recover" {
       } else {
         throw CoreError.invalidState("missing fixture pin")
       }
+    } else if arguments[2] == "watch-crash" {
+      var declaration = try store.readDeclaration()
+      declaration.watch = ["source"]
+      let watch = WatchState(sources: [
+        "local:/source": WatchSourceState(seen: .revision(String(repeating: "b", count: 40)))
+      ])
+      let transaction = FileTransaction(store: store) { try stop($0) }
+      try transaction.replace(
+        store.declarationURL, content: nil, data: StateStore.encode(declaration))
+      try transaction.replace(store.watchURL, content: nil, data: StateStore.encode(watch))
+      try transaction.commit()
     } else if arguments[2] == "writer" {
       for index in 0..<5 {
         var declaration = try store.readDeclaration()

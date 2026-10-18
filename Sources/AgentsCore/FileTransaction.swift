@@ -1,6 +1,6 @@
 import Foundation
 
-/// A durable undo journal covers targets, both state files and cache pruning.
+/// A durable undo journal covers targets, scope state files and cache pruning.
 /// The scope writer lock must be held through planning, commit and recovery.
 package final class FileTransaction {
   private struct Entry: Codable {

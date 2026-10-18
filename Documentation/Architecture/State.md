@@ -2,14 +2,14 @@
 
 ## Scope Locations
 
-| Scope | Declaration | Lock | Watch path | Cache |
+| Scope | Declaration | Lock | Watch state | Cache |
 | --- | --- | --- | --- | --- |
 | Project | `.agent/agents.json` | `.agent/agents.resolved` | `.agent/agents.watch` | `.agent/cache/` |
 | User | `~/.agents/agents.json` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | `~/.agents/cache/` |
 
 User paths are relative to `RuntimeEnvironment.homeDirectory`. State files belong
-to their scope and are local state. Watch subscriptions have a declaration field
-and reserved file path; subscription operations are implemented separately.
+to their scope and are local state. `agents.watch` stores subscription baselines
+independently of installed pins; [Watch](Watch.md) describes the operations.
 
 ## Declaration
 
@@ -53,7 +53,8 @@ its scheme. Declaring two aliases for one normalized ID is an error.
 
 `instructions` holds recipients, ordered `source:name` section references, and
 named `chatgpt` prompts with ordered sections and optional relative `append`
-paths. `watch` is an alias array. Skill operations preserve both fields.
+paths. `watch` is a unique alias array. Skill operations preserve both fields
+and existing watch-state bytes.
 
 ## Lock
 
@@ -122,9 +123,10 @@ the metadata of the installed or restored tree, nor of a backup still needed
 for rollback; symbolic links are unlinked without following their destinations.
 
 After a process kill or power loss at any point, the next state access recovers
-one consistent generation of targets, declaration, lock and cache references.
+one consistent generation of targets, declaration, lock, watch state and cache references.
 Each state operation first checks for an abandoned journal under the scope
-lock. An applying journal rolls back every replacement; a committed journal
+lock, then validates watch state before proceeding. An applying journal rolls
+back every replacement, including watch baselines; a committed journal
 finishes cleanup. Recovery is repeatable if interrupted. Before deleting any
 recovery material, both the terminal journal file and its parent directory are
 fsynced, even when that phase was already visible on entry. State and backup
@@ -187,8 +189,9 @@ Inspection snapshots are disposable and do not move an installed tree or write
 state or targets. Applying prepares all selected content, computes differences,
 stages replacements, and commits target changes and state under the scope lock.
 Pruning participates in that transaction. Pins referenced by skills, instruction
-sections or prompt sections remain cached, as do trees containing live edit
-sources. Pruning opens directory ancestry without following symlinks and uses
+sections or prompt sections remain cached, as do artifact contents referenced
+by watch state and trees containing live edit sources. Pruning opens directory
+ancestry without following symlinks and uses
 directory-relative enumeration, rename and deletion. It rejects symlinked cache
 containers and never recursively follows a link during cleanup.
 Mirrors remain available for source

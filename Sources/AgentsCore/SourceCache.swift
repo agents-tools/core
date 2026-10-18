@@ -49,6 +49,37 @@ package struct SourceCache {
     return SourceRevision(revision: revision, version: ref.version)
   }
 
+  /// Subscriptions follow branches even when installations select a tag or version range.
+  func watchRevision(_ source: SourceDeclaration, revision: String? = nil) throws -> String {
+    let id = try source.identity(environment: store.environment)
+    let mirror = try fetch(source, id: id)
+    let ref: String
+    if let revision {
+      guard !revision.isEmpty, !revision.hasPrefix("-"), !revision.contains("\0") else {
+        throw CoreError.invalidSource("invalid watch revision")
+      }
+      ref = revision
+    } else if case .branch(let branch) = source.requirement {
+      ref = "refs/heads/" + branch
+    } else {
+      ref = "HEAD"
+    }
+    return try git(mirror, ["rev-parse", "--verify", "--end-of-options", ref + "^{commit}"])
+  }
+
+  func watchCommitCount(sourceID: String, seen: String, current: String) throws -> Int {
+    let count = try git(
+      mirrorURL(sourceID: sourceID), ["rev-list", "--count", seen + ".." + current])
+    guard let result = Int(count) else { throw CoreError.invalidState("invalid Git commit count") }
+    return result
+  }
+
+  /// Keep acknowledged history reachable even after an upstream force-push or branch deletion.
+  func retainWatchRevision(sourceID: String, revision: String) throws {
+    _ = try git(
+      mirrorURL(sourceID: sourceID), ["update-ref", "refs/agents-watch/" + revision, revision])
+  }
+
   package func materialize(sourceID: String, source: LockedSource, revision: String) throws -> URL {
     guard revision.range(of: #"^[0-9a-f]{40}([0-9a-f]{24})?$"#, options: .regularExpression) != nil
     else {
@@ -148,7 +179,11 @@ package struct SourceCache {
 
   /// Retains pins and any cache tree containing a live edit source.
   /// The caller holds the scope lock, including during failure cleanup.
-  package func prune(referencedBy lock: ResolvedState, transaction: FileTransaction? = nil) throws {
+  package func prune(
+    referencedBy lock: ResolvedState, watch: WatchState? = nil,
+    transaction: FileTransaction? = nil
+  ) throws {
+    let watch = try watch ?? store.readWatch()
     guard let scope = try store.openDirectoryIfPresent(), try scope.info("cache") != nil else {
       return
     }
@@ -156,6 +191,11 @@ package struct SourceCache {
     let transactionToUse = transaction ?? FileTransaction(store: store)
     var paths = Set<String>()
     var digests = Set<String>()
+    for state in watch.sources.values {
+      if case .artifacts(let artifacts) = state.seen {
+        digests.formUnion(artifacts.values.map { String($0.dropFirst(7)) })
+      }
+    }
     var edits: [URL] = []
     func retain(source: String, revision: String?, artifact: LockedArtifact?) {
       if let revision {

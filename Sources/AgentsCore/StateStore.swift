@@ -40,17 +40,33 @@ public struct StateStore: Sendable {
     return lock
   }
 
-  /// Commits both state files through the scope's durable transaction journal.
-  public func save(declaration: Declaration, resolved: ResolvedState) throws {
+  public func loadWatch() throws -> WatchState {
+    try withLock(createIfMissing: false) { try readWatch() }
+  }
+
+  package func readWatch() throws -> WatchState {
+    let watch: WatchState = try load(watchURL) ?? WatchState()
+    try watch.validate()
+    return watch
+  }
+
+  /// Commits state through the scope journal. Omitting watch preserves its existing bytes.
+  public func save(
+    declaration: Declaration, resolved: ResolvedState, watch: WatchState? = nil
+  ) throws {
     try withLock {
       try declaration.validate(environment: environment)
       try resolved.validate()
+      try watch?.validate()
       _ = try readDeclaration()
       _ = try readResolved()
       let transaction = FileTransaction(store: self)
       try transaction.replace(
         declarationURL, content: nil, data: Self.encode(declaration.normalized))
       try transaction.replace(resolvedURL, content: nil, data: Self.encode(resolved.normalized))
+      if let watch {
+        try transaction.replace(watchURL, content: nil, data: Self.encode(watch))
+      }
       try transaction.commit()
     }
   }
@@ -66,6 +82,7 @@ public struct StateStore: Sendable {
     {
       _ = try readDeclaration()
       _ = try readResolved()
+      _ = try readWatch()
     }
     let base = scope == .project ? environment.projectDirectory : environment.homeDirectory
     let physicalDirectory = base.resolvingSymlinksInPath().appendingPathComponent(
@@ -74,6 +91,7 @@ public struct StateStore: Sendable {
       if try FileTransaction.recover(store: self) {
         throw CoreError.transactionRecovered(directory.path)
       }
+      _ = try readWatch()
       return try body()
     }
   }

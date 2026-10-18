@@ -46,8 +46,12 @@ this dependency graph.
   recovers interrupted transactions before proceeding, as described in
   [State and cache](State.md).
 - `SourceCache` owns bare Git mirrors, requirement resolution, exact snapshots,
-  digest-addressed downloads and pruning across skill and instruction pins.
+  digest-addressed downloads and pruning across skill, instruction and watch pins.
   `ProcessRunner` executes subprocesses.
+- `WatchOperations` owns source subscriptions, seen baselines, branch tracking
+  and file comparisons. `WatchState` defines version 1 of `agents.watch`.
+  Skill discovery and artifact loading are injected by `AgentsSkills` through
+  `SkillOperations.watchOperations()`. See [Watch](Watch.md) for the public API.
 - `AgentRegistry` owns agent skill locations. `RuntimeEnvironment` supplies the
   project root, home directory and environment. Universal agent skill locations
   can be shared, so recipients sharing one directory must agree on install mode.
@@ -57,8 +61,7 @@ this dependency graph.
 Core has no dependency on skill discovery, frontmatter, Yams or Markdown.
 `AgentsInstructions` owns instruction text transformations and lifecycle.
 `InstructionLocations` supplies fixed target locations to lifecycle and journal
-validation. Watch subscriptions are separate work; the state model defines
-their declaration fields and watch-state path.
+validation.
 
 ## AgentsSkills
 
@@ -76,7 +79,7 @@ their declaration fields and watch-state path.
 | Diagnose a scope | `doctor(scope:agents:environment:)` |
 
 `SkillLifecycle` coordinates discovery, temporary preparation, verified cache
-content and transactions. Before a mutation, both state files are validated.
+content and transactions. Before a mutation, declaration, lock and watch state are validated.
 Preparation completes before installed paths are replaced; every item in a
 restoration must be available and verified. Installation has no agent or mode
 argument because those choices belong to the lock.
