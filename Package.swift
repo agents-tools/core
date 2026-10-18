@@ -31,7 +31,9 @@ let package = Package(
     .testTarget(name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions"]),
     .testTarget(
       name: "AgentsSkillsTests",
-      dependencies: ["AgentsSkills", "AgentsCore", "Yams", "StateTestProcess"]),
+      dependencies: [
+        "AgentsSkills", "AgentsCore", "AgentsInstructions", "Yams", "StateTestProcess",
+      ]),
   ],
   swiftLanguageModes: [.v6]
 )

@@ -369,68 +369,85 @@ public enum SkillOperations {
     }
   }
 
+  /// Audits state and upstream refs without fetching, creating locks or recovering transactions.
   public static func doctor(
     scope: InstallScope = .project, agents: [AgentID]? = nil,
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> DoctorReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: false) { declaration, lock in
-      var checks = try managedInventory(store: store, lock: lock, agents: agents).filter {
-        $0.status != .installed && $0.status != .editLinked
-      }.map {
-        DoctorCheck(
-          id: $0.status.rawValue, status: .warning, message: "\($0.name): \($0.status.rawValue)",
-          path: $0.path)
-      }
-      let cache = SourceCache(store: store)
-      for (alias, source) in declaration.sources.sorted(by: { $0.key < $1.key }) {
-        let id = try source.identity(environment: environment)
-        let skills = lock.skills.values.filter { $0.source == id }
-        guard !skills.isEmpty else { continue }
-        if source.kind == .local {
-          let paths = skills.compactMap(\.path)
-          let output = try? ProcessRunner.run(
-            "/usr/bin/env",
-            arguments: [
-              "git", "-C", source.localURL(environment: environment).path, "status", "--porcelain",
-              "--",
-            ] + paths
-          ).stdout
-          if let output, !output.isEmpty {
-            checks.append(
-              DoctorCheck(
-                id: "uncommitted-source", status: .warning,
-                message: "\(alias) has uncommitted changes in selected paths",
-                path: source.localURL(environment: environment).path))
-          }
+    return try store.withReadLock(
+      onPendingRecovery: {
+        DoctorReport(checks: [
+          DoctorCheck(
+            id: "pending-recovery", status: .warning,
+            message:
+              "Transaction recovery is pending; the next command that changes this scope will recover it.",
+            path: store.directory.path)
+        ])
+      },
+      {
+        let declaration = try store.readDeclaration()
+        let lock = try store.readResolved()
+        var checks = try managedInventory(store: store, lock: lock, agents: agents).filter {
+          $0.status != .installed && $0.status != .editLinked
+        }.map {
+          DoctorCheck(
+            id: $0.status.rawValue, status: .warning, message: "\($0.name): \($0.status.rawValue)",
+            path: $0.path)
         }
-        if source.kind != .wellKnown, skills.contains(where: { $0.revision != nil }) {
-          do {
-            let current = try cache.resolve(source)
-            if skills.contains(where: { $0.revision != nil && $0.revision != current.revision }) {
+        let cache = SourceCache(store: store)
+        for (alias, source) in declaration.sources.sorted(by: { $0.key < $1.key }) {
+          let id = try source.identity(environment: environment)
+          let skills = lock.skills.values.filter { $0.source == id }
+          guard !skills.isEmpty else { continue }
+          if source.kind == .local {
+            let paths = skills.compactMap(\.path)
+            let output = try? ProcessRunner.run(
+              "/usr/bin/env",
+              arguments: [
+                "git", "--no-optional-locks", "-C", source.localURL(environment: environment).path,
+                "status", "--porcelain",
+                "--",
+              ] + paths
+            ).stdout
+            if let output, !output.isEmpty {
               checks.append(
                 DoctorCheck(
-                  id: "source-update", status: .warning,
-                  message:
-                    "\(alias) has a newer matching revision\(current.version.map { " (\($0))" } ?? "")",
-                  path: nil))
+                  id: "uncommitted-source", status: .warning,
+                  message: "\(alias) has uncommitted changes in selected paths",
+                  path: source.localURL(environment: environment).path))
             }
-          } catch {
-            checks.append(
-              DoctorCheck(
-                id: "source-unavailable", status: .warning, message: "\(alias): \(error)", path: nil
-              ))
+          }
+          if source.kind != .wellKnown, skills.contains(where: { $0.revision != nil }) {
+            do {
+              let current = try cache.inspectRevision(source)
+              if skills.contains(where: { $0.revision != nil && $0.revision != current.revision }) {
+                checks.append(
+                  DoctorCheck(
+                    id: "source-update", status: .warning,
+                    message:
+                      "\(alias) has a newer matching revision\(current.version.map { " (\($0))" } ?? "")",
+                    path: nil))
+              }
+            } catch {
+              checks.append(
+                DoctorCheck(
+                  id: "source-unavailable", status: .warning, message: "\(alias): \(error)",
+                  path: nil
+                ))
+            }
           }
         }
-      }
-      return DoctorReport(checks: checks)
-    }
+        return DoctorReport(checks: checks)
+      })
   }
 
   public static func initializeSkill(named name: String?, directory: URL) throws -> URL {
     let store = StateStore(
       scope: .project, environment: RuntimeEnvironment(projectDirectory: directory))
-    return try operate(store, apply: false) { _, _ in
+    return try store.withLock(createIfMissing: false) {
+      _ = try store.readDeclaration()
+      _ = try store.readResolved()
       let name = name.map(PathSafety.sanitizeName)
       let root = name.map { directory.appendingPathComponent($0) } ?? directory
       let file = root.appendingPathComponent("SKILL.md")
@@ -449,9 +466,10 @@ public enum SkillOperations {
   private static func operate<T>(
     _ store: StateStore, apply: Bool, _ body: (Declaration, ResolvedState) throws -> T
   ) throws -> T {
-    try store.withLock(createIfMissing: apply) {
-      try body(store.readDeclaration(), store.readResolved())
+    if apply {
+      return try store.withLock { try body(store.readDeclaration(), store.readResolved()) }
     }
+    return try store.withReadLock { try body(store.readDeclaration(), store.readResolved()) }
   }
 
   private static func sourceDeclaration(_ options: AddOptions, declaration: Declaration) throws

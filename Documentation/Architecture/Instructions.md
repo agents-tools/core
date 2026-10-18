@@ -71,8 +71,17 @@ those sections from prompts as well. Empty prompts are removed. Other source
 declarations and skill records remain available to their owners.
 
 Planning validates required content before applying. Reports include old and
-new section records, target before/after bytes, drift, custom-section adoptions
-and conflicts, block differences, missing-lock status and changed prompt names.
+new section records, target before/after bytes and recipients, drift, custom-section
+adoptions and conflicts, block differences, missing-lock status and changed prompt names.
+`InstructionTargetChange.beforeAgents` is nil when the previous lock has no target
+entry; `afterAgents` is empty when the target is no longer managed. Both recipient
+arrays are sorted by agent raw value. `agentsChanged` compares those recipients,
+while `changed` compares file bytes. `InstructionUpdateReport.hasChanges` is the
+consumer's update predicate: it compares the planned declaration and lock, target
+bytes, and a missing lock with targets. This includes section ordering and pins,
+target recipients and prompt pins even when rendered bytes are identical.
+A recipient change such as Codex to Cursor is reported even when both use the
+same unchanged `AGENTS.md`.
 The optional throwing `beforeApply` callback runs before replacements so a
 consumer can show differences or cancel. Target bytes are checked again after
 the callback; intervening edits stop the commit. Add throws conflict differences
@@ -88,8 +97,12 @@ Markdown files. Initialization uses a project state lock and journal in the
 supplied directory without creating a declaration or resolved file.
 
 Read operations take an existing shared scope lock without creating one or
-replaying recovery. Pending recovery stops inspection; a mutating state
-operation recovers it and asks the caller to retry. Source inspection and update
+replaying recovery. Pending recovery stops listings and previews. Doctor reports
+one `pendingRecovery` diagnostic per affected scope, explains that the next command
+changing that scope will recover it, and skips checks requiring consistent state
+from that scope. A pending other scope suppresses cross-scope comparisons while
+the current scope can still be audited. A mutating state operation recovers the
+transaction and asks the caller to retry. Source inspection and update
 preview may fetch mirror objects and use disposable snapshots, but never
 publish materializations, declaration, lock or targets. Doctor reads remote ref
 advertisements but does not fetch objects or create files, including in projects
@@ -131,8 +144,10 @@ it does not imply that section bytes have changed. Local Git reads and remote
 selection policy, including annotated tags. No mirror or snapshot is written.
 Unresolvable sources produce `sourceResolutionFailed`, including remote revision
 expressions not present in advertised refs. Full object IDs are resolved through
-`^{commit}` in the existing mirror. Without a cached object, an advertised tag's
-peeled target must be verifiable as a cached commit or an advertised branch head;
+`^{commit}` in the existing mirror under an existing mirror lock. When the mirror
+or its lock is missing, inspection uses advertised refs without creating either.
+Without a cached object, an advertised tag's peeled target must be verifiable as
+a cached commit or an advertised branch head;
 otherwise inspection reports an unresolved source. Doctor does not fetch to
 resolve missing objects or validate upstream content.
 

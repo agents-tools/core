@@ -9,8 +9,8 @@ public enum InstructionOperations {
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionAddOutcome {
     let store = StateStore(scope: options.scope, environment: options.environment)
-    return try operate(store, apply: !options.listOnly) { declaration, previous in
-      var declaration = declaration
+    return try operate(store, apply: !options.listOnly) { previousDeclaration, previous in
+      var declaration = previousDeclaration
       let source = try sourceDeclaration(options, declaration: declaration)
       let id = try source.identity(environment: options.environment)
       let existing = try declaration.sources.keys.sorted().first {
@@ -52,7 +52,8 @@ public enum InstructionOperations {
       let prepared = try prepare(
         declaration: declaration, previous: previous, sources: sources, resolving: Set(references))
       let plan = try plan(
-        declaration: declaration, previous: previous, prepared: prepared, store: store,
+        declaration: declaration, previousDeclaration: previousDeclaration,
+        previous: previous, prepared: prepared, store: store,
         replace: options.replace)
       try beforeApply?(plan.report)
       try apply(declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
@@ -88,8 +89,8 @@ public enum InstructionOperations {
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: apply) { declaration, previous in
-      var declaration = declaration
+    return try operate(store, apply: apply) { previousDeclaration, previous in
+      var declaration = previousDeclaration
       if let agents {
         var instructions = declaration.instructions ?? InstructionsDeclaration()
         instructions.agents = agents
@@ -98,7 +99,8 @@ public enum InstructionOperations {
       let sources = InstructionSources(store: store)
       let prepared = try prepare(declaration: declaration, previous: previous, sources: sources)
       let plan = try plan(
-        declaration: declaration, previous: previous, prepared: prepared, store: store,
+        declaration: declaration, previousDeclaration: previousDeclaration,
+        previous: previous, prepared: prepared, store: store,
         replace: true)
       if apply {
         try beforeApply?(plan.report)
@@ -126,7 +128,8 @@ public enum InstructionOperations {
         restoring: true)
       let report = InstructionUpdateReport(
         sections: [], targets: targets.changes, changedPrompts: [],
-        lockMissing: !FileManager.default.fileExists(atPath: store.resolvedURL.path))
+        lockMissing: !FileManager.default.fileExists(atPath: store.resolvedURL.path),
+        hasChanges: targets.changes.contains(where: \.changed))
       try apply(
         declaration: declaration, next: lock, report: report, sources: sources, writeState: false)
       return report
@@ -141,8 +144,8 @@ public enum InstructionOperations {
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: true) { declaration, previous in
-      var declaration = declaration
+    return try operate(store, apply: true) { previousDeclaration, previous in
+      var declaration = previousDeclaration
       var instructions = declaration.instructions ?? InstructionsDeclaration()
       let references = Set(
         instructions.sections + (instructions.chatgpt ?? [:]).values.flatMap(\.sections))
@@ -169,7 +172,8 @@ public enum InstructionOperations {
       let prepared = try prepare(
         declaration: declaration, previous: previous, sources: sources, resolving: [])
       let plan = try plan(
-        declaration: declaration, previous: previous, prepared: prepared, store: store,
+        declaration: declaration, previousDeclaration: previousDeclaration,
+        previous: previous, prepared: prepared, store: store,
         replace: false)
       try beforeApply?(plan.report)
       try apply(declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
@@ -261,7 +265,7 @@ public enum InstructionOperations {
   }
 
   private static func plan(
-    declaration: Declaration, previous: ResolvedState,
+    declaration: Declaration, previousDeclaration: Declaration, previous: ResolvedState,
     prepared: (lock: ResolvedState, sections: [InstructionSection]), store: StateStore,
     replace: Bool
   ) throws -> (lock: ResolvedState, report: InstructionUpdateReport) {
@@ -292,11 +296,16 @@ public enum InstructionOperations {
           || old?.sections.map { InstructionSources.identity($0) + $0.hash }
             != new?.sections.map { InstructionSources.identity($0) + $0.hash }
       }
+    let lockMissing = !FileManager.default.fileExists(atPath: store.resolvedURL.path)
+    let hasChanges =
+      declaration.normalized != previousDeclaration.normalized
+      || next.normalized != previous.normalized || targets.changes.contains(where: \.changed)
+      || (lockMissing && !targets.changes.isEmpty)
     return (
       next,
       InstructionUpdateReport(
         sections: changes, targets: targets.changes, changedPrompts: prompts,
-        lockMissing: !FileManager.default.fileExists(atPath: store.resolvedURL.path))
+        lockMissing: lockMissing, hasChanges: hasChanges)
     )
   }
 

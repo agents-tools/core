@@ -11,92 +11,119 @@ extension InstructionOperations {
   ) throws -> InstructionDoctorReport {
     let store = StateStore(scope: scope, environment: environment)
     let other = StateStore(scope: scope == .project ? .user : .project, environment: environment)
-    let otherSections = try operate(other, apply: false) { _, lock in lock.instructions.sections }
-    return try operate(store, apply: false) { declaration, lock in
-      var diagnostics: [InstructionDiagnostic] = []
-      func report(_ kind: InstructionDiagnostic.Kind, _ message: String, _ path: URL? = nil) {
-        diagnostics.append(InstructionDiagnostic(kind: kind, message: message, path: path))
-      }
-      if !FileManager.default.fileExists(atPath: store.resolvedURL.path),
-        !(declaration.instructions?.sections.isEmpty ?? true)
-          || !(declaration.instructions?.chatgpt?.isEmpty ?? true)
+    func pendingRecovery(_ store: StateStore) -> InstructionDiagnostic {
+      InstructionDiagnostic(
+        kind: .pendingRecovery,
+        message:
+          "Transaction recovery is pending; the next command that changes this scope will recover it.",
+        path: store.directory)
+    }
+    let otherSections: [LockedSection]? = try other.withReadLock(
+      onPendingRecovery: { nil },
       {
-        report(
-          .missingLock, "Instruction declaration has no lock; update can reconstruct it.",
-          store.resolvedURL)
-      }
-      let sources = InstructionSources(store: store)
-      for (key, target) in lock.instructions.targets.sorted(by: { $0.key < $1.key }) {
-        do {
-          let file = try InstructionLocations.file(for: key, store: store)
-          let bytes = try InstructionTargets.read(file) ?? Data()
-          let drift = try Instructions.detectDrift(in: bytes, lockedBlockHash: target.blockHash)
-          switch drift {
-          case .clean: break
-          case .missingBlock: report(.missingBlock, "Managed instruction block is missing.", file)
-          case .drifted: report(.drift, "Managed instruction block differs from its lock.", file)
-          }
-          if target.import == nil {
-            let sections = try sources.restore(
-              lock.instructions.sections, sources: lock.sources, cachedOnly: true)
-            let assembly = try Instructions.assemble(
-              bytes, sections: sections.map(\.section),
-              options: InstructionOptions(
-                headingOffset: target.headingOffset, replaceConflicts: true))
-            for section in assembly.adoptedSections {
-              report(.adoption, "Custom section can be adopted: \(section)", file)
-            }
-            for conflict in assembly.conflicts {
-              report(.conflict, "\(conflict.sectionID):\n\(conflict.difference)", file)
-            }
-          }
-        } catch {
-          report(.invalidTarget, "\(key): \(error)")
+        _ = try other.readDeclaration()
+        return try other.readResolved().instructions.sections
+      })
+    let otherDiagnostics = otherSections == nil ? [pendingRecovery(other)] : []
+    let root = scope == .project ? environment.projectDirectory : environment.homeDirectory
+    return try store.withReadLock(
+      onPendingRecovery: {
+        InstructionDoctorReport(
+          root: root, diagnostics: otherDiagnostics + [pendingRecovery(store)])
+      },
+      {
+        let declaration = try store.readDeclaration()
+        let lock = try store.readResolved()
+        var diagnostics = otherDiagnostics
+        func report(_ kind: InstructionDiagnostic.Kind, _ message: String, _ path: URL? = nil) {
+          diagnostics.append(InstructionDiagnostic(kind: kind, message: message, path: path))
         }
-      }
-      let duplicates = Instructions.sectionsInBothScopes(
-        user: (scope == .user ? lock.instructions.sections : otherSections).map(
-          InstructionSources.identity),
-        project: (scope == .project ? lock.instructions.sections : otherSections).map(
-          InstructionSources.identity))
-      for id in duplicates { report(.duplicateScope, "Section is installed at both scopes: \(id)") }
-      let agents = Set(lock.instructions.targets.values.flatMap(\.agents))
-        .union(declaration.instructions?.agents ?? declaration.defaultAgents)
-      if scope == .project, agents.contains(.claudeCode) {
-        do {
-          if case .needsImport(let path) = try ClaudeForwarding.classify(
-            InstructionTargets(store: store).claudeFiles())
-          {
-            report(
-              .claudeForwarding, "Claude file does not forward to the project's AGENTS.md.",
-              environment.projectDirectory.appendingPathComponent(path.rawValue))
+        if !FileManager.default.fileExists(atPath: store.resolvedURL.path),
+          !(declaration.instructions?.sections.isEmpty ?? true)
+            || !(declaration.instructions?.chatgpt?.isEmpty ?? true)
+        {
+          report(
+            .missingLock, "Instruction declaration has no lock; update can reconstruct it.",
+            store.resolvedURL)
+        }
+        let sources = InstructionSources(store: store)
+        for (key, target) in lock.instructions.targets.sorted(by: { $0.key < $1.key }) {
+          do {
+            let file = try InstructionLocations.file(for: key, store: store)
+            let bytes = try InstructionTargets.read(file) ?? Data()
+            let drift = try Instructions.detectDrift(in: bytes, lockedBlockHash: target.blockHash)
+            switch drift {
+            case .clean: break
+            case .missingBlock: report(.missingBlock, "Managed instruction block is missing.", file)
+            case .drifted: report(.drift, "Managed instruction block differs from its lock.", file)
+            }
+            if target.import == nil {
+              let sections = try sources.restore(
+                lock.instructions.sections, sources: lock.sources, cachedOnly: true)
+              let assembly = try Instructions.assemble(
+                bytes, sections: sections.map(\.section),
+                options: InstructionOptions(
+                  headingOffset: target.headingOffset, replaceConflicts: true))
+              for section in assembly.adoptedSections {
+                report(.adoption, "Custom section can be adopted: \(section)", file)
+              }
+              for conflict in assembly.conflicts {
+                report(.conflict, "\(conflict.sectionID):\n\(conflict.difference)", file)
+              }
+            }
+          } catch {
+            report(.invalidTarget, "\(key): \(error)")
           }
-        } catch { report(.claudeForwarding, "Cannot inspect Claude forwarding: \(error)") }
-        let userClaude = InstructionLocations.file(
-          for: .claudeCode, scope: .user, environment: environment)?.resolvingSymlinksInPath()
-        for directory in InstructionDoctor.ancestors(of: environment.projectDirectory) {
-          for path in ClaudeInstructionPath.allCases {
-            let file = directory.appendingPathComponent(path.rawValue)
-            if file.resolvingSymlinksInPath() != userClaude,
-              FileManager.default.fileExists(atPath: file.path)
+        }
+        if let otherSections {
+          let duplicates = Instructions.sectionsInBothScopes(
+            user: (scope == .user ? lock.instructions.sections : otherSections).map(
+              InstructionSources.identity),
+            project: (scope == .project ? lock.instructions.sections : otherSections).map(
+              InstructionSources.identity))
+          for id in duplicates {
+            report(.duplicateScope, "Section is installed at both scopes: \(id)")
+          }
+        }
+        let agents = Set(lock.instructions.targets.values.flatMap(\.agents))
+          .union(declaration.instructions?.agents ?? declaration.defaultAgents)
+        if scope == .project, agents.contains(.claudeCode) {
+          do {
+            if case .needsImport(let path) = try ClaudeForwarding.classify(
+              InstructionTargets(store: store).claudeFiles())
             {
               report(
-                .claudeAncestor,
-                "Ancestor Claude file can hide project AGENTS.md; it is outside this scope.", file)
+                .claudeForwarding, "Claude file does not forward to the project's AGENTS.md.",
+                environment.projectDirectory.appendingPathComponent(path.rawValue))
+            }
+          } catch { report(.claudeForwarding, "Cannot inspect Claude forwarding: \(error)") }
+          let userClaude = InstructionLocations.file(
+            for: .claudeCode, scope: .user, environment: environment)?.resolvingSymlinksInPath()
+          for directory in InstructionDoctor.ancestors(of: environment.projectDirectory)
+          where otherSections != nil {
+            for path in ClaudeInstructionPath.allCases {
+              let file = directory.appendingPathComponent(path.rawValue)
+              if file.resolvingSymlinksInPath() != userClaude,
+                FileManager.default.fileExists(atPath: file.path)
+              {
+                report(
+                  .claudeAncestor,
+                  "Ancestor Claude file can hide project AGENTS.md; it is outside this scope.", file
+                )
+              }
             }
           }
         }
-      }
-      if agents.contains(.codex) {
-        diagnostics += InstructionDoctor.codex(
-          scope: scope, environment: environment, lock: lock, configuration: codexConfiguration)
-      }
-      diagnostics += InstructionSourceDiagnostics.inspect(
-        store: store, declaration: declaration, lock: lock)
-      return InstructionDoctorReport(
-        root: scope == .project ? environment.projectDirectory : environment.homeDirectory,
-        diagnostics: diagnostics)
-    }
+        if agents.contains(.codex), scope == .user || otherSections != nil {
+          diagnostics += InstructionDoctor.codex(
+            scope: scope, environment: environment, lock: lock, configuration: codexConfiguration)
+        }
+        diagnostics += InstructionSourceDiagnostics.inspect(
+          store: store, declaration: declaration, lock: lock)
+        return InstructionDoctorReport(
+          root: root,
+          diagnostics: diagnostics)
+      })
   }
 
   /// Audits explicit project roots independently. An unreadable scope becomes a diagnostic;

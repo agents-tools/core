@@ -136,6 +136,23 @@ if arguments[2] == "locked-git" {
       } else {
         throw CoreError.invalidState("missing fixture pin")
       }
+    } else if arguments[2] == "inspection-transaction" {
+      let transaction = FileTransaction(store: store) { try stop($0) }
+      try transaction.replace(
+        AgentRegistry.installSkillsDirectory(
+          for: .codex, scope: scope, environment: store.environment
+        ).appendingPathComponent("target"), content: root.appendingPathComponent("new"))
+      try transaction.replace(
+        InstructionLocations.file(for: .codex, scope: scope, environment: store.environment)!,
+        content: nil)
+      try transaction.replace(
+        InstructionLocations.file(for: .geminiCLI, scope: scope, environment: store.environment)!,
+        content: nil, data: Data("New instructions\n".utf8))
+      try transaction.replace(
+        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.cursor])))
+      try transaction.replace(
+        store.resolvedURL, content: nil, data: StateStore.encode(ResolvedState()))
+      try transaction.commit()
     } else if arguments[2] == "watch-crash" {
       var declaration = try store.readDeclaration()
       declaration.watch = ["source"]

@@ -534,6 +534,22 @@ package struct SourceCache {
     }
   }
 
+  func inspectCommit(_ object: String, sourceID: String) throws -> String? {
+    let mirror = mirrorURL(sourceID: sourceID)
+    try validatePath(mirror)
+    guard FileManager.default.fileExists(atPath: mirror.path) else { return nil }
+    let locks = store.cacheDirectory.appendingPathComponent("locks")
+    try validatePath(locks)
+    let lock = locks.appendingPathComponent(
+      mirror.deletingPathExtension().lastPathComponent + ".lock")
+    return try FileLock.withExistingDescriptor(at: lock) { descriptor in
+      try validatePath(mirror)
+      return try git(
+        mirror, ["--no-optional-locks", "rev-parse", "--verify", object + "^{commit}"],
+        lock: descriptor)
+    }
+  }
+
   private func git(_ repository: URL, _ arguments: [String], lock: Int32) throws -> String {
     let mirror = try DirectoryHandle(at: repository)
     guard let config = try mirror.info("config"), config.st_mode & 0o170000 == 0o100000 else {

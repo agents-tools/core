@@ -42,8 +42,8 @@ this dependency graph.
   including the complete instruction section, prompt and physical-target models.
 - `StateStore` owns scope paths, validation, deterministic encoding and state
   persistence. `FileLock` serializes state access; `FileTransaction` durably
-  journals replacements across installations, state and cache. State access
-  recovers interrupted transactions before proceeding, as described in
+  journals replacements across installations, state and cache. Mutating state
+  access recovers interrupted transactions before proceeding, as described in
   [State and cache](State.md).
 - `SourceCache` owns bare Git mirrors, requirement resolution, exact snapshots,
   digest-addressed downloads and pruning across skill, instruction and watch pins.
@@ -96,12 +96,19 @@ reads file-list indexes, skill Markdown and digest-verified archives. It records
 immutable artifact coordinates; restoration uses those coordinates directly.
 Yams is confined to skill metadata parsing in this module.
 
-Inventory reads and lifecycle writes hold the scope lock and recover abandoned
-transactions before accessing state. `listManaged` includes missing records for
-diagnosis; `listInstalled` returns present skills with valid frontmatter, including
+Non-applying skill operations use an existing shared scope lock without creating
+state files or replaying recovery. Listings and previews fail when a transaction
+is pending; doctor reports one `pending-recovery` warning and skips that scope's
+state-dependent checks. Doctor compares upstream revisions without fetching or
+populating caches. Applying lifecycle operations hold the writer lock and recover
+abandoned transactions before accessing state. `listManaged` includes missing
+records for diagnosis; `listInstalled` returns present skills with valid frontmatter, including
 unmanaged candidates from each agent's scan roots. Omitted agent filters list or
 remove all recipients. Declaration defaults supply recipients for additions and
 selections that have no explicit recipients.
+
+Skill initialization is an authoring write: it takes the writer path and recovers
+pending transactions when scope state exists, without creating absent scope state.
 
 Update previews use the same physical target mapping as application. Each change
 contains typed entry snapshots, so deletions, empty directories, symbolic link

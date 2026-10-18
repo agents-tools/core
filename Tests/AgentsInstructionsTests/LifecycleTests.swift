@@ -5,6 +5,112 @@ import Testing
 
 @Suite("Instruction lifecycle")
 struct InstructionLifecycleTests {
+  @Test func recipientOnlyUpdateReportsAndAppliesLockChanges() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    try fixture.add(agents: [.codex])
+    let bytes = try fixture.bytes()
+    let lock = try Data(contentsOf: fixture.store().resolvedURL)
+    let declaration = try Data(contentsOf: fixture.store().declarationURL)
+    let preview = try InstructionOperations.updateInstalled(
+      agents: [.cursor], environment: fixture.environment)
+    let target = try #require(preview.targets.first)
+    #expect(preview.targets.count == 1)
+    #expect(target.target == "AGENTS.md")
+    #expect(target.beforeAgents == [.codex])
+    #expect(target.afterAgents == [.cursor])
+    #expect(target.agentsChanged)
+    #expect(!target.changed)
+    #expect(preview.sections.isEmpty && preview.changedPrompts.isEmpty && !preview.lockMissing)
+    #expect(preview.hasChanges)
+    #expect(try Data(contentsOf: fixture.store().resolvedURL) == lock)
+    #expect(try Data(contentsOf: fixture.store().declarationURL) == declaration)
+    _ = try InstructionOperations.updateInstalled(
+      agents: [.cursor], environment: fixture.environment, apply: true
+    ) { report in
+      #expect(report == preview)
+    }
+    #expect(try fixture.bytes() == bytes)
+    #expect(
+      try fixture.store().loadResolved().instructions.targets["AGENTS.md"]?.agents == [.cursor])
+    #expect(try fixture.store().loadDeclaration().instructions?.agents == [.cursor])
+    let unchanged = try InstructionOperations.updateInstalled(environment: fixture.environment)
+    #expect(!unchanged.hasChanges)
+    #expect(unchanged.targets.allSatisfy { !$0.changed && !$0.agentsChanged })
+  }
+
+  @Test func recipientOrderDoesNotReportChanges() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    try fixture.add(agents: [.opencode, .cursor, .codex])
+    let report = try InstructionOperations.updateInstalled(
+      agents: [.cursor, .codex, .opencode], environment: fixture.environment)
+    let target = try #require(report.targets.first)
+    #expect(target.beforeAgents == [.codex, .cursor, .opencode])
+    #expect(target.afterAgents == [.codex, .cursor, .opencode])
+    #expect(!target.agentsChanged)
+    #expect(!report.hasChanges)
+  }
+
+  @Test func sectionOrderChangesAreReportedWithoutPhysicalTargets() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("one")
+    try fixture.section("two")
+    try fixture.commit()
+    try fixture.add(names: ["one", "two"], scope: .user, agents: [.cursor])
+    let store = fixture.store(.user)
+    var declaration = try store.loadDeclaration()
+    declaration.instructions?.sections.reverse()
+    try store.save(declaration: declaration, resolved: store.loadResolved())
+    let report = try InstructionOperations.updateInstalled(
+      scope: .user, environment: fixture.environment)
+    #expect(report.sections.isEmpty && report.targets.isEmpty && report.changedPrompts.isEmpty)
+    #expect(report.hasChanges)
+    _ = try InstructionOperations.updateInstalled(
+      scope: .user, environment: fixture.environment, apply: true)
+    #expect(try store.loadResolved().instructions.sections.map(\.name) == ["two", "one"])
+    #expect(
+      try !InstructionOperations.updateInstalled(scope: .user, environment: fixture.environment)
+        .hasChanges)
+  }
+
+  @Test func promptPinChangesAreReportedWhenRenderedBytesAreIdentical() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    let store = fixture.store()
+    try store.save(
+      declaration: Declaration(
+        sources: ["rules": SourceDeclaration(kind: .local, location: fixture.repo.path)],
+        instructions: InstructionsDeclaration(
+          chatgpt: ["daily": PromptDeclaration(sections: ["rules:rules"])])),
+      resolved: ResolvedState())
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+    let original = try InstructionOperations.renderChatGPT(
+      prompt: "daily", environment: fixture.environment)
+    try fixture.git(["-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "new revision"])
+    let report = try InstructionOperations.updateInstalled(environment: fixture.environment)
+    #expect(report.sections.isEmpty && report.targets.isEmpty && report.changedPrompts.isEmpty)
+    #expect(report.hasChanges)
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+    #expect(
+      try store.loadResolved().instructions.chatgpt["daily"]?.sections.first?.revision
+        == fixture.git(["rev-parse", "HEAD"]))
+    #expect(
+      try InstructionOperations.renderChatGPT(prompt: "daily", environment: fixture.environment)
+        == original)
+    #expect(try !InstructionOperations.updateInstalled(environment: fixture.environment).hasChanges)
+  }
+
+  @Test func emptyScopeHasNoUpdateChanges() throws {
+    let fixture = try InstructionFixture()
+    let report = try InstructionOperations.updateInstalled(environment: fixture.environment)
+    #expect(report.lockMissing)
+    #expect(!report.hasChanges)
+  }
+
   @Test func orderedBlocksPreserveCustomBytesAndRestoreLockedContent() throws {
     let fixture = try InstructionFixture()
     try fixture.section("one")
@@ -121,6 +227,7 @@ struct InstructionLifecycleTests {
     try fixture.commit()
     let preview = try InstructionOperations.updateInstalled(environment: fixture.environment)
     #expect(preview.changedPrompts == ["daily"])
+    #expect(preview.hasChanges)
     #expect(preview.targets.count == 2 && preview.targets.allSatisfy(\.changed))
     #expect(try fixture.snapshot(fixture.project, excludingCache: true) == old)
     struct Cancelled: Error {}
@@ -162,6 +269,8 @@ struct InstructionLifecycleTests {
     try FileManager.default.removeItem(at: fixture.store().resolvedURL)
     let preview = try InstructionOperations.updateInstalled(environment: fixture.environment)
     #expect(preview.lockMissing)
+    #expect(preview.hasChanges)
+    #expect(preview.targets.allSatisfy { $0.beforeAgents == nil && $0.agentsChanged })
     #expect(preview.targets.allSatisfy { !$0.changed })
     #expect(!FileManager.default.fileExists(atPath: fixture.store().resolvedURL.path))
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)

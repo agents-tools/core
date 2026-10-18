@@ -90,7 +90,9 @@ struct InstructionTargets {
       let after = delete || (before == nil && targets[key] == nil) ? nil : assembly.bytes
       changes.append(
         InstructionTargetChange(
-          target: key, url: file, before: before, after: after, assembly: assembly, drift: drift))
+          target: key, url: file, before: before, after: after,
+          beforeAgents: old?.agents.sorted { $0.rawValue < $1.rawValue },
+          afterAgents: targets[key]?.agents ?? [], assembly: assembly, drift: drift))
     }
     return (targets, changes)
   }

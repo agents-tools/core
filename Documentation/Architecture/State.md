@@ -122,8 +122,9 @@ descriptors so read-only backups and staging can be removed. This never changes
 the metadata of the installed or restored tree, nor of a backup still needed
 for rollback; symbolic links are unlinked without following their destinations.
 
-After a process kill or power loss at any point, the next state access recovers
-one consistent generation of targets, declaration, lock, watch state and cache references.
+After a process kill or power loss at any point, the next mutating state access
+recovers one consistent generation of targets, declaration, lock, watch state and
+cache references.
 Mirror Git invocations pass `-c core.fsync=objects,reference,pack-metadata` and
 `-c core.fsyncMethod=fsync`; durability settings never rewrite configuration.
 Mirror configuration must be a regular file, checked before invoking Git.
@@ -147,8 +148,9 @@ refs needed for rollback remain until that state is durable.
 Mirrors are exclusively owned by agents. Each mirror has a per-source lock at
 `cache/locks/<source-key>.lock`, created before cloning or first access. All
 mirror reads and writes take this lock, including instruction listings and
-cached revision inspection. Scope mutations take the scope lock first, then
-the mirror lock; mirror access never acquires the scope lock in reverse order.
+cached revision inspection. Doctor uses only existing mirror locks; when one is
+absent, cached revision inspection falls back to remote refs without creating it.
+Scope mutations take the scope lock first, then the mirror lock; mirror access never acquires the scope lock in reverse order.
 An instruction listing can therefore populate a mirror before `.agents.lock`
 exists while still excluding concurrent recovery and watch mutations.
 
@@ -170,8 +172,8 @@ deletions before retrying Git; the pending marker also covers interruption of
 this cleanup. Live mirror users and surviving Git children block recovery, so
 their Git locks and refs cannot be removed or recreated beneath them.
 
-Each state operation first checks for an abandoned journal under the scope
-lock, then validates watch state and finishes pending ref cleanup before
+Each mutating state operation first checks for an abandoned journal under the
+scope lock, then validates watch state and finishes pending ref cleanup before
 proceeding. An applying journal rolls back every replacement, including watch
 baselines; a committed journal
 finishes cleanup. Recovery is repeatable if interrupted. Before deleting any
@@ -186,11 +188,14 @@ storage flush.
 Recovery throws `CoreError.transactionRecovered` after completing, reporting
 the scope and asking the caller to retry against the recovered generation.
 This includes recovery of pending watch refs even when no journal remains.
-Skill inventory, previews and doctor also recover. Instruction read operations
-instead take an existing shared lock and report pending recovery without
-replaying it, so explicit multi-root instruction audits never write. Corrupt
-journals stop the operation without guessing a recovery plan. Tests interrupt writers between
-rename and parent fsync, interrupt rollback and terminal cleanup, and verify
+Non-applying skill and instruction operations take an existing shared lock without
+creating scope state files or replaying recovery. Listings and previews fail with
+`CoreError.invalidState` when a transaction journal is pending. Each doctor instead
+reports one pending-recovery diagnostic per affected scope and skips checks that
+require that scope's consistent state. The diagnostic explains that the next
+command changing the scope will recover it. Explicit multi-root instruction audits
+never write. Corrupt journals stop mutations without guessing a recovery plan.
+Tests interrupt writers between rename and parent fsync, interrupt rollback and terminal cleanup, and verify
 that a competing reader waits for the recovering process's lock.
 
 ## Materialization and Installation
@@ -232,7 +237,7 @@ without pin or hash and requires a source without a requirement. Local
 non-Git directories support edit mode. Git-backed link and copy operations read
 committed trees, including when the source has uncommitted changes.
 
-An update preview, source inspection or diagnostic can fetch into a mirror.
+An update preview or source listing can fetch into a mirror.
 Inspection snapshots are disposable and do not move an installed tree or write
 state or targets. Applying prepares all selected content, computes differences,
 stages replacements, and commits target changes and state under the scope lock.
@@ -246,7 +251,10 @@ Mirrors remain available for source history and future resolution. Watch-owned
 Git refs retain only revisions still referenced by watch state or installed
 pins; obsolete histories can be collected by Git after those refs are released.
 
-Doctor reports missing installs, changed content and broken links, newer
-matching Git resolutions, and uncommitted changes in selected local source
+Both doctors inspect cached objects, local Git refs or remote ref advertisements
+without fetching or populating caches. Local Git status disables optional locks
+to avoid index refresh writes. Skill doctor reports pending recovery as a
+`DoctorCheck` with ID `pending-recovery` and warning status. It also reports
+missing installs, changed content and broken links, newer matching Git resolutions, and uncommitted changes in selected local source
 paths. `install` restores all recorded recipients and modes without changing
 lock bytes. The consuming CLI controls presentation and user interaction.
