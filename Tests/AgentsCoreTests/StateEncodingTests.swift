@@ -8,7 +8,7 @@ struct StateEncodingTests {
   @Test(arguments: ["agents.json", "agents.resolved", "transaction.json"])
   func rejectsEncodedDocumentsWithoutChangingFiles(_ name: String) throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     try store.save(declaration: Declaration(), resolved: ResolvedState())
     let declaration = try Data(contentsOf: store.declarationURL)

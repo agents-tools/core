@@ -1,6 +1,7 @@
 import AgentsCore
 import AgentsInstructions
 import Foundation
+import Testing
 
 final class InstructionFixture {
   let root: URL
@@ -22,12 +23,12 @@ final class InstructionFixture {
       try git(["config", "user.name", "Fixture"])
       try git(["config", "user.email", "fixture@example.invalid"])
     } catch {
-      try? FileManager.default.removeItem(at: root)
+      removeTemporaryDirectory(root)
       throw error
     }
   }
 
-  deinit { try? FileManager.default.removeItem(at: root) }
+  deinit { removeTemporaryDirectory(root) }
 
   var environment: RuntimeEnvironment {
     RuntimeEnvironment(projectDirectory: project, homeDirectory: home, environment: [:])
@@ -52,7 +53,11 @@ final class InstructionFixture {
 
   @discardableResult
   func git(_ arguments: [String]) throws -> String {
-    try ProcessRunner.run("/usr/bin/env", arguments: ["git", "-C", repo.path] + arguments).stdout
+    try ProcessRunner.run(
+      "/usr/bin/env",
+      arguments: ["git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", repo.path]
+        + arguments
+    ).stdout
       .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
@@ -101,5 +106,14 @@ final class InstructionFixture {
       }
     }
     return result
+  }
+}
+
+private func removeTemporaryDirectory(_ directory: URL) {
+  do {
+    try FileManager.default.removeItem(at: directory)
+  } catch let error as CocoaError where error.code == .fileNoSuchFile {
+  } catch {
+    Issue.record(error)
   }
 }

@@ -7,17 +7,17 @@ import Testing
 struct AgentRegistryTests {
   @Test func resolvesAgentDirectoriesAndLockLocations() throws {
     let project = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: project) }
+    defer { removeTemporaryDirectory(project) }
     let home = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: home) }
+    defer { removeTemporaryDirectory(home) }
     let codexHome = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: codexHome) }
+    defer { removeTemporaryDirectory(codexHome) }
     let claudeHome = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: claudeHome) }
+    defer { removeTemporaryDirectory(claudeHome) }
     let xdgConfig = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: xdgConfig) }
+    defer { removeTemporaryDirectory(xdgConfig) }
     let xdgCache = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: xdgCache) }
+    defer { removeTemporaryDirectory(xdgCache) }
     let environment = RuntimeEnvironment(
       projectDirectory: project,
       homeDirectory: home,

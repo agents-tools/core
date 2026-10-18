@@ -8,7 +8,7 @@ struct InstructionTransactionTests {
   @Test(arguments: [InstallScope.project, .user])
   func instructionFilesAndStateRollBackTogether(_ scope: InstallScope) throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let environment = RuntimeEnvironment(
       projectDirectory: root, homeDirectory: root, environment: [:])
     let store = StateStore(scope: scope, environment: environment)
@@ -49,7 +49,7 @@ struct InstructionTransactionTests {
 
   @Test func journalRejectsUnregisteredInstructionPathsAndLinkedDescendants() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let environment = RuntimeEnvironment(
       projectDirectory: root, homeDirectory: root, environment: [:])
     let store = StateStore(scope: .project, environment: environment)

@@ -78,7 +78,7 @@ extension WellKnownSourceTests {
 
   @Test func fetchesDigestVerifiedTarArchives() throws {
     let archiveRoot = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: archiveRoot) }
+    defer { removeTemporaryDirectory(archiveRoot) }
     try """
     ---
     name: archive-skill
@@ -92,7 +92,7 @@ extension WellKnownSourceTests {
       to: archiveRoot.appendingPathComponent("references/README.md"), atomically: true,
       encoding: .utf8)
     let outputRoot = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: outputRoot) }
+    defer { removeTemporaryDirectory(outputRoot) }
     let archive = outputRoot.appendingPathComponent("skill.tar.gz")
     try ProcessRunner.run(
       "/usr/bin/env", arguments: ["tar", "-czf", archive.path, "-C", archiveRoot.path, "."])
@@ -132,7 +132,7 @@ extension WellKnownSourceTests {
 
   @Test func fetchesDigestVerifiedZipArchives() throws {
     let archiveRoot = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: archiveRoot) }
+    defer { removeTemporaryDirectory(archiveRoot) }
     try """
     ---
     name: zip-skill
@@ -146,7 +146,7 @@ extension WellKnownSourceTests {
       to: archiveRoot.appendingPathComponent("references/README.md"), atomically: true,
       encoding: .utf8)
     let outputRoot = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: outputRoot) }
+    defer { removeTemporaryDirectory(outputRoot) }
     let archive = outputRoot.appendingPathComponent("skill.zip")
     try ProcessRunner.run(
       "/usr/bin/env", arguments: ["zip", "-qr", archive.path, "."], workingDirectory: archiveRoot)
@@ -186,7 +186,7 @@ extension WellKnownSourceTests {
 
   @Test func rejectsSymlinkEntriesInWellKnownArchives() throws {
     let archiveRoot = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: archiveRoot) }
+    defer { removeTemporaryDirectory(archiveRoot) }
     try "target".write(
       to: archiveRoot.appendingPathComponent("target.txt"), atomically: true, encoding: .utf8)
     try FileManager.default.createSymbolicLink(
@@ -194,7 +194,7 @@ extension WellKnownSourceTests {
       withDestinationPath: "target.txt"
     )
     let outputRoot = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: outputRoot) }
+    defer { removeTemporaryDirectory(outputRoot) }
     let archive = outputRoot.appendingPathComponent("unsafe.tar.gz")
     try ProcessRunner.run(
       "/usr/bin/env", arguments: ["tar", "-czf", archive.path, "-C", archiveRoot.path, "."])

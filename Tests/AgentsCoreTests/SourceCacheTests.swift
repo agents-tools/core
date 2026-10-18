@@ -7,7 +7,7 @@ import Testing
 struct SourceCacheTests {
   @Test func sharesExactTreesAndPrunesOnlyUnreferencedPins() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let repo = root.appendingPathComponent("upstream")
     try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
     try Data("A".utf8).write(to: repo.appendingPathComponent("content"))
@@ -51,7 +51,7 @@ struct SourceCacheTests {
 
   @Test func resolvesBoundsAndIgnoresWorkingTreeChanges() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let repo = root.appendingPathComponent("repo")
     try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
     try Data("committed".utf8).write(to: repo.appendingPathComponent("content"))
@@ -81,18 +81,23 @@ struct SourceCacheTests {
 
   @Test func fixturesIgnoreConfiguredDefaultBranch() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let config = root.appendingPathComponent("gitconfig")
     try Data("[init]\n defaultBranch = main\n".utf8).write(to: config)
     let repo = root.appendingPathComponent("repo")
     try ProcessRunner.run(
       "/usr/bin/env",
       arguments: [
-        "GIT_CONFIG_GLOBAL=" + config.path, "git", "init", "--initial-branch=fixture", repo.path,
+        "GIT_CONFIG_GLOBAL=" + config.path, "git", "-c", "maintenance.auto=false", "-c",
+        "gc.auto=0", "init", "--initial-branch=fixture", repo.path,
       ])
     #expect(
       try ProcessRunner.run(
-        "/usr/bin/env", arguments: ["git", "-C", repo.path, "symbolic-ref", "--short", "HEAD"]
+        "/usr/bin/env",
+        arguments: [
+          "git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", repo.path,
+          "symbolic-ref", "--short", "HEAD",
+        ]
       ).stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "fixture")
   }
 }
@@ -101,7 +106,7 @@ extension SourceCacheTests {
   @Test(arguments: ["state", "cache", "materialized", "source", "pin"])
   func rejectsSymlinkedCacheAncestryWithoutDeletingExternalFiles(_ level: String) throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     try store.save(declaration: Declaration(), resolved: ResolvedState())
     let cache = SourceCache(store: store)
@@ -142,7 +147,7 @@ extension SourceCacheTests {
 
   @Test func retainsArtifactContentContainingLiveEditSources() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     try store.save(declaration: Declaration(), resolved: ResolvedState())
     let content = store.cacheDirectory.appendingPathComponent(

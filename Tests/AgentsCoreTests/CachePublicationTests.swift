@@ -196,11 +196,11 @@ private final class CacheFixture {
         resolved: ResolvedState(sources: [sourceID: source], skills: ["demo": skill]))
       lockBytes = try Data(contentsOf: store.resolvedURL)
     } catch {
-      try? FileManager.default.removeItem(at: root)
+      removeTemporaryDirectory(root)
       throw error
     }
   }
-  deinit { try? FileManager.default.removeItem(at: root) }
+  deinit { removeTemporaryDirectory(root) }
 
   func publish() throws {
     let cache = SourceCache(store: store)
