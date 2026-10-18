@@ -30,7 +30,7 @@ package enum ProcessRunner {
 
   @discardableResult
   package static func git(
-    _ arguments: [String], operation: String, source: String,
+    _ arguments: [String], operation: GitError.Operation, source: String,
     replacingPaths paths: [URL] = [], inheritingLock descriptor: Int32? = nil
   ) throws -> ProcessOutput {
     var environment = ProcessInfo.processInfo.environment

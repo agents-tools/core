@@ -2,18 +2,60 @@ import Foundation
 
 /// A failed Git operation. Consumers can display the description and supply their own remedy.
 public struct GitError: Error, CustomStringConvertible, Equatable, Sendable {
-  /// The user-facing action, including any preposition connecting it to the source.
-  public let operation: String
+  /// The kind of Git work that failed, for consumers to select an appropriate remedy.
+  public enum Operation: CustomStringConvertible, Equatable, Sendable {
+    case clone
+    case fetch
+    case listRemoteReferences
+    case listTags
+    /// Resolves a requested reference or object ID to a commit, before Git's commit peeling suffix.
+    case resolveRevision(revision: String)
+    case countCommits
+    case listReferences
+    /// Retains a revision through a reference owned by core.
+    case updateReference
+    /// Releases a revision retained by a reference owned by core.
+    case deleteReference
+    case extractRevision
+    case updateDefaultBranch
+    case readOrigin
+    case findRepositoryRoot
+    case readStatus
+
+    /// The user-facing phrase, including the preposition connecting it to the source.
+    public var description: String {
+      switch self {
+      case .clone: "clone"
+      case .fetch: "fetch"
+      case .listRemoteReferences: "list remote refs for"
+      case .listTags: "list tags for"
+      case .resolveRevision: "read a revision from"
+      case .countCommits: "count commits in"
+      case .listReferences: "list references for"
+      case .updateReference: "retain a revision for"
+      case .deleteReference: "release a revision for"
+      case .extractRevision: "extract a revision from"
+      case .updateDefaultBranch: "update the default branch for"
+      case .readOrigin: "read the origin of"
+      case .findRepositoryRoot: "find the repository root for"
+      case .readStatus: "read the status of"
+      }
+    }
+  }
+
+  /// The typed action consumers use to classify the failure.
+  public let operation: Operation
   /// The source location or URL, independent of its cached representation.
   public let source: String
   /// Git's diagnostic lines with progress removed and internal paths replaced by the source.
   public let stderr: String
-  /// The executable and each argument, unmodified, for debugging rather than user presentation.
+  /// The executable and each argument, unmodified, for debugging only. Classify with `operation`.
   public let command: [String]
+  /// Git's exit status, for debugging only. Classify with `operation`.
   public let exitCode: Int32
 
   init(
-    operation: String, source: String, stderr: String, command: [String], exitCode: Int32,
+    operation: Operation, source: String, stderr: String, command: [String], exitCode: Int32,
     replacingPaths paths: [URL] = []
   ) {
     self.operation = operation
@@ -37,7 +79,7 @@ public struct GitError: Error, CustomStringConvertible, Equatable, Sendable {
   }
 
   public var description: String {
-    let summary = "Git could not \(operation) \(source)."
+    let summary = "Git could not \(operation.description) \(source)."
     return stderr.isEmpty ? summary : summary + "\n" + stderr
   }
 

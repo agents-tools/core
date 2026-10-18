@@ -447,7 +447,7 @@ public enum SkillOperations {
                 "--no-optional-locks", "-C", source.localURL(environment: environment).path,
                 "status", "--porcelain",
                 "--",
-              ] + paths, operation: "read the status of", source: source.location
+              ] + paths, operation: .readStatus, source: source.location
             ).stdout
             if let output, !output.isEmpty {
               checks.append(

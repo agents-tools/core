@@ -72,18 +72,24 @@ credential helpers that provide credentials without prompting remain available.
 The same policy applies to ordinary subprocesses and Git children inheriting
 mirror locks.
 
-A nonzero Git exit throws public `GitError`. Its `operation` describes the action
-in user terms, `source` identifies the source location or URL, and `stderr`
-contains diagnostic lines with progress removed and internal cache or extraction
-paths replaced by that source. `description` combines these into a user-facing
-message. `command` retains the executable and argument array unchanged for
-debugging, and `exitCode` records Git's status. Source context is supplied by the
-operation; orphaned mirror cleanup reads the clone's origin URL.
+A nonzero Git exit throws public `GitError`. Its `operation` is a public
+`GitError.Operation` enum identifying the kind of Git work, with a `description`
+that supplies the user-facing action phrase. `source` identifies the source
+location or URL, and `stderr` contains diagnostic lines with progress removed and
+internal cache or extraction paths replaced by that source. `description`
+combines these into a user-facing message. Source context is supplied at each
+call site; orphaned mirror cleanup reads the clone's origin URL.
 
 Consumers should display `description` and supply any remedy appropriate to their
-workflow. The full command belongs in explicit debug output. Non-Git process
-failures continue to use `CoreError.commandFailed`; process launch errors retain
-their underlying platform error.
+workflow by matching `operation`. For example, `case .resolveRevision(let revision)`
+identifies a failed commit lookup and carries the requested reference or object ID
+before Git's commit peeling suffix. A `watch seen` request for `missing-revision`
+therefore carries `.resolveRevision(revision: "missing-revision")`. `command`
+retains the executable and argument array unchanged, and `exitCode` records Git's
+status; both are for debugging only. Consumers must not classify failures by
+inspecting arguments, exit codes, or diagnostic text. Non-Git process failures
+continue to use `CoreError.commandFailed`; process launch errors retain their
+underlying platform error.
 
 ## AgentsSkills
 

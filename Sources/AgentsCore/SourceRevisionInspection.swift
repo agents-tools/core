@@ -11,18 +11,19 @@ extension SourceCache {
     }
     if source.kind == .local {
       let root = source.localURL(environment: store.environment)
-      func git(_ arguments: [String], operation: String) throws -> String {
+      func git(_ arguments: [String], operation: GitError.Operation) throws -> String {
         try ProcessRunner.git(
           ["--no-optional-locks", "-C", root.path] + arguments,
           operation: operation, source: source.location
         ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
       }
-      let tags = try git(["tag", "--list"], operation: "list tags for").split(separator: "\n").map(
+      let tags = try git(["tag", "--list"], operation: .listTags).split(separator: "\n").map(
         String.init)
       let ref = try SourceReference(requirement: source.requirement, tags: tags)
       return try SourceRevision(
         revision: git(
-          ["rev-parse", "--verify", ref.name + "^{commit}"], operation: "read a revision from"),
+          ["rev-parse", "--verify", ref.name + "^{commit}"],
+          operation: .resolveRevision(revision: ref.name)),
         version: ref.version)
     }
     func cachedCommit(_ object: String) throws -> String? {
@@ -35,7 +36,7 @@ extension SourceCache {
     }
     let output = try ProcessRunner.git(
       ["--no-optional-locks", "ls-remote", "--", source.gitURL],
-      operation: "list remote refs for", source: source.location
+      operation: .listRemoteReferences, source: source.location
     ).stdout
     var refs: [String: String] = [:]
     for line in output.split(separator: "\n") {

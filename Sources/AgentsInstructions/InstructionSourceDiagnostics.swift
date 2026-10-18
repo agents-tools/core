@@ -57,7 +57,7 @@ enum InstructionSourceDiagnostics {
             [
               "--no-optional-locks", "-C", root.path, "status", "--porcelain",
               "--untracked-files=all", "--",
-            ] + paths, operation: "read the status of", source: root.path
+            ] + paths, operation: .readStatus, source: root.path
           ).stdout
           if !output.isEmpty {
             diagnostics.append(

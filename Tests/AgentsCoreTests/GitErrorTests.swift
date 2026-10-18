@@ -5,6 +5,35 @@ import Testing
 
 @Suite("Git failures")
 struct GitErrorTests {
+  @Test func operationDescriptionsPreserveUserFacingPhrases() {
+    let operations: [(GitError.Operation, String)] = [
+      (.clone, "clone"),
+      (.fetch, "fetch"),
+      (.listRemoteReferences, "list remote refs for"),
+      (.listTags, "list tags for"),
+      (.resolveRevision(revision: "missing"), "read a revision from"),
+      (.countCommits, "count commits in"),
+      (.listReferences, "list references for"),
+      (.updateReference, "retain a revision for"),
+      (.deleteReference, "release a revision for"),
+      (.extractRevision, "extract a revision from"),
+      (.updateDefaultBranch, "update the default branch for"),
+      (.readOrigin, "read the origin of"),
+      (.findRepositoryRoot, "find the repository root for"),
+      (.readStatus, "read the status of"),
+    ]
+    for (operation, phrase) in operations {
+      let error = GitError(
+        operation: operation, source: "https://example.com/source.git",
+        stderr: "fatal: failed\n", command: [], exitCode: 128)
+
+      #expect(operation.description == phrase)
+      #expect(
+        error.description
+          == "Git could not \(phrase) https://example.com/source.git.\nfatal: failed")
+    }
+  }
+
   @Test func missingFileRepositoryIdentifiesCloneAndSource() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
@@ -17,7 +46,7 @@ struct GitErrorTests {
 
     let error = try #require(throws: GitError.self) { try cache.resolve(source) }
 
-    expectConcise(error, operation: "clone", source: source.location, cache: cache)
+    expectConcise(error, operation: .clone, source: source.location, cache: cache)
     #expect(error.stderr.contains("does not appear to be a git repository"))
     #expect(error.command.contains("clone"))
     #expect(error.command.contains("-c"))
@@ -33,9 +62,9 @@ struct GitErrorTests {
     let source = SourceDeclaration(kind: .git, location: "http://127.0.0.1:1/unreachable.git")
 
     let clone = try #require(throws: GitError.self) { try cache.resolve(source) }
-    expectConcise(clone, operation: "clone", source: source.location, cache: cache)
+    expectConcise(clone, operation: .clone, source: source.location, cache: cache)
     let refs = try #require(throws: GitError.self) { try cache.inspectRevision(source) }
-    expectConcise(refs, operation: "list remote refs for", source: source.location, cache: cache)
+    expectConcise(refs, operation: .listRemoteReferences, source: source.location, cache: cache)
   }
 
   @Test func unavailableUpstreamIdentifiesFetchAndOriginalSource() throws {
@@ -56,11 +85,12 @@ struct GitErrorTests {
 
     let error = try #require(throws: GitError.self) { try cache.resolve(source) }
 
-    expectConcise(error, operation: "fetch", source: source.location, cache: cache)
+    expectConcise(error, operation: .fetch, source: source.location, cache: cache)
     #expect(error.command.contains("fetch"))
   }
 
-  @Test func missingRevisionIdentifiesSource() throws {
+  @Test(arguments: [false, true])
+  func missingRevisionIdentifiesSource(_ inspect: Bool) throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
     let upstream = root.appendingPathComponent("upstream")
@@ -72,10 +102,37 @@ struct GitErrorTests {
     let source = SourceDeclaration(
       kind: .local, location: upstream.path, requirement: .branch("missing"))
 
-    let error = try #require(throws: GitError.self) { try cache.resolve(source) }
+    let error = try #require(throws: GitError.self) {
+      try inspect ? cache.inspectRevision(source) : cache.resolve(source)
+    }
 
-    expectConcise(error, operation: "read a revision from", source: source.location, cache: cache)
-    #expect(error.command.contains("rev-parse"))
+    expectConcise(
+      error, operation: .resolveRevision(revision: "refs/heads/missing"), source: source.location,
+      cache: cache)
+  }
+
+  @Test func watchSeenFailureCarriesRequestedRevision() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let upstream = root.appendingPathComponent("upstream")
+    try FileManager.default.createDirectory(at: upstream, withIntermediateDirectories: true)
+    try Data("content".utf8).write(to: upstream.appendingPathComponent("content"))
+    try initGitRepo(upstream)
+    let environment = RuntimeEnvironment(projectDirectory: root)
+    let watch = WatchOperations(discoverSkills: { _ in [] }, fetchArtifacts: { _ in [] })
+    try watch.add(upstream.path, alias: "source", environment: environment)
+
+    let error = try #require(throws: GitError.self) {
+      try watch.seen("source", revision: "missing-revision", environment: environment)
+    }
+
+    guard case .resolveRevision(let revision) = error.operation else {
+      Issue.record("Expected a revision resolution failure, got \(error.operation)")
+      return
+    }
+    #expect(revision == "missing-revision")
+    #expect(error.source == upstream.path)
+    #expect(error.description.hasPrefix("Git could not read a revision from \(upstream.path).\n"))
   }
 
   @Test func recoveryPreservesKnownSourceAndGitConfigurationFailure() throws {
@@ -96,7 +153,7 @@ struct GitErrorTests {
 
     let error = try #require(throws: GitError.self) { try cache.recoverWatchReferences() }
 
-    expectConcise(error, operation: "list references for", source: source.location, cache: cache)
+    expectConcise(error, operation: .listReferences, source: source.location, cache: cache)
     #expect(error.stderr.contains("bad config"))
   }
 
@@ -120,7 +177,7 @@ struct GitErrorTests {
 
     let error = try #require(throws: GitError.self) { try cache.recoverWatchReferences() }
 
-    expectConcise(error, operation: "release a revision for", source: source.location, cache: cache)
+    expectConcise(error, operation: .deleteReference, source: source.location, cache: cache)
     #expect(error.stderr.contains("ref update rejected"))
   }
 
@@ -145,7 +202,7 @@ struct GitErrorTests {
       """
     let command = ["/usr/bin/env", "git", "clone", source, mirror.path]
     let error = GitError(
-      operation: "clone", source: source, stderr: stderr, command: command, exitCode: 128,
+      operation: .clone, source: source, stderr: stderr, command: command, exitCode: 128,
       replacingPaths: [root, mirror])
 
     #expect(
@@ -171,7 +228,7 @@ struct GitErrorTests {
   func preservesExplanatoryProgressSuffixes(_ diagnostic: String, _ prefix: String) {
     let source = "https://example.com/source.git"
     let error = GitError(
-      operation: "fetch", source: source, stderr: prefix + diagnostic + "\n",
+      operation: .fetch, source: source, stderr: prefix + diagnostic + "\n",
       command: [], exitCode: 128)
 
     #expect(error.stderr == prefix + diagnostic)
@@ -189,7 +246,7 @@ struct GitErrorTests {
     ], ["", "remote: "])
   func removesCompleteProgressLines(_ progress: String, _ prefix: String) {
     let error = GitError(
-      operation: "fetch", source: "https://example.com/source.git",
+      operation: .fetch, source: "https://example.com/source.git",
       stderr: prefix + progress + "\n", command: [], exitCode: 128)
 
     #expect(error.stderr.isEmpty)
@@ -209,7 +266,7 @@ struct GitErrorTests {
     ]
 
     let error = try #require(throws: GitError.self) {
-      try ProcessRunner.git(arguments, operation: "list remote refs for", source: source)
+      try ProcessRunner.git(arguments, operation: .listRemoteReferences, source: source)
     }
 
     #expect(error.stderr.contains(diagnostic))
@@ -228,7 +285,7 @@ struct GitErrorTests {
     let source = "https://example.com/source.git"
     let command = ["/usr/bin/env", "git", "clone", source, mirror.path]
     let error = GitError(
-      operation: "clone", source: source,
+      operation: .clone, source: source,
       stderr:
         "Cloning into bare repository '\(emittedPath)'...\nfatal: cannot write '\(emittedPath)/config'\n",
       command: command, exitCode: 128, replacingPaths: [parent, mirror])
@@ -249,7 +306,8 @@ struct GitErrorTests {
 
     let error = try #require(throws: GitError.self) {
       try ProcessRunner.git(
-        arguments, operation: "read a revision from", source: source, replacingPaths: [mirror])
+        arguments, operation: .resolveRevision(revision: "HEAD"), source: source,
+        replacingPaths: [mirror])
     }
 
     #expect(error.stderr.contains(source))
@@ -262,7 +320,7 @@ struct GitErrorTests {
 
   @Test func emptyDiagnosticHasOnlyTheSummary() {
     let error = GitError(
-      operation: "clone", source: "https://example.com/source.git",
+      operation: .clone, source: "https://example.com/source.git",
       stderr: "Cloning into bare repository 'cache.git'...\r\n", command: [], exitCode: 1)
     #expect(error.stderr.isEmpty)
     #expect(error.description == "Git could not clone https://example.com/source.git.")
@@ -306,7 +364,7 @@ struct GitErrorTests {
   }
 
   private func expectConcise(
-    _ error: GitError, operation: String, source: String, cache: SourceCache
+    _ error: GitError, operation: GitError.Operation, source: String, cache: SourceCache
   ) {
     #expect(error.operation == operation)
     #expect(error.source == source)
