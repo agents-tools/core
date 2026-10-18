@@ -217,6 +217,49 @@ struct GitErrorTests {
     #expect(error.command == ["/usr/bin/env", "git"] + arguments)
   }
 
+  @Test(arguments: ["\n", "\r"], [false, true])
+  func redactsMultilinePathsBeforeFilteringProgress(_ lineBreak: String, _ resolved: Bool) throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let parent = root.appendingPathComponent("project" + lineBreak + "private")
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    let mirror = parent.appendingPathComponent(".agent/cache/mirrors/source.git.staging-review")
+    let emittedPath = resolved ? mirror.resolvingSymlinksInPath().path : mirror.path
+    let source = "https://example.com/source.git"
+    let command = ["/usr/bin/env", "git", "clone", source, mirror.path]
+    let error = GitError(
+      operation: "clone", source: source,
+      stderr:
+        "Cloning into bare repository '\(emittedPath)'...\nfatal: cannot write '\(emittedPath)/config'\n",
+      command: command, exitCode: 128, replacingPaths: [parent, mirror])
+
+    #expect(error.stderr == "fatal: cannot write '\(source)/config'")
+    #expect(error.description == "Git could not clone \(source).\n" + error.stderr)
+    #expect(error.command == command)
+  }
+
+  @Test(arguments: ["\n", "\r"])
+  func redactsMultilineCachePathsEmittedByGit(_ lineBreak: String) throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let mirror = root.appendingPathComponent("project" + lineBreak + "private")
+      .appendingPathComponent(".agent/cache/mirrors/source.git.staging-review")
+    let source = "https://example.com/source.git"
+    let arguments = ["-C", mirror.path, "rev-parse", "--verify", "HEAD"]
+
+    let error = try #require(throws: GitError.self) {
+      try ProcessRunner.git(
+        arguments, operation: "read a revision from", source: source, replacingPaths: [mirror])
+    }
+
+    #expect(error.stderr.contains(source))
+    #expect(!error.stderr.contains("project"))
+    #expect(!error.stderr.contains("private"))
+    #expect(!error.stderr.contains(".agent/cache"))
+    #expect(!error.stderr.contains(".staging-"))
+    #expect(error.command == ["/usr/bin/env", "git"] + arguments)
+  }
+
   @Test func emptyDiagnosticHasOnlyTheSummary() {
     let error = GitError(
       operation: "clone", source: "https://example.com/source.git",

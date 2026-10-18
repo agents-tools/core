@@ -20,15 +20,18 @@ public struct GitError: Error, CustomStringConvertible, Equatable, Sendable {
     self.source = source
     self.command = command
     self.exitCode = exitCode
+    // Git renders carriage returns as question marks in some diagnostics.
     let replacements = Set(
       paths.flatMap { [$0.path, $0.resolvingSymlinksInPath().path] }
+        .flatMap { [$0, $0.replacingOccurrences(of: "\r", with: "?")] }
     ).filter { !$0.isEmpty }.sorted { $0.count > $1.count }
-    self.stderr = stderr.components(separatedBy: .newlines).compactMap { line -> String? in
-      var line = line.trimmingCharacters(in: .whitespaces)
+    var diagnostic = stderr
+    for path in replacements {
+      diagnostic = diagnostic.replacingOccurrences(of: path, with: source)
+    }
+    self.stderr = diagnostic.components(separatedBy: .newlines).compactMap { line -> String? in
+      let line = line.trimmingCharacters(in: .whitespaces)
       guard !line.isEmpty, !Self.isProgress(line) else { return nil }
-      for path in replacements {
-        line = line.replacingOccurrences(of: path, with: source)
-      }
       return line
     }.joined(separator: "\n")
   }
