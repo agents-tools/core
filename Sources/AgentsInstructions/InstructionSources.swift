@@ -18,7 +18,7 @@ final class InstructionSources {
       requirement: source.requirement, path: source.path)
   }
 
-  func discover(_ source: SourceDeclaration) throws -> [InstructionUnit] {
+  func discover(_ source: SourceDeclaration, cacheSource: Bool = true) throws -> [InstructionUnit] {
     let id = try source.identity(environment: store.environment)
     if let units = discovered[id] { return units }
     guard source.kind != .wellKnown else {
@@ -33,10 +33,7 @@ final class InstructionSources {
         URL(fileURLWithPath: root).resolvingSymlinksInPath() == directory.resolvingSymlinksInPath()
       else { throw CoreError.invalidSource("use the local Git root and a search path") }
     }
-    let pin = try cache.resolve(source)
-    let units = try cache.withSnapshot(
-      sourceID: id, source: lockedSource(source), revision: pin.revision
-    ) { tree in
+    let units = try cache.withResolvedSnapshot(source, cacheSource: cacheSource) { pin, tree in
       let root = try PathSafety.resolvedChild(base: tree, subpath: source.path ?? ".")
       var units: [InstructionUnit] = []
       var names = Set<String>()

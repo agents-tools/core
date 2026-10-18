@@ -41,7 +41,7 @@ final class SkillLifecycle {
 
   func discover(
     _ source: SourceDeclaration, live: Bool, fullDepth: Bool, names: [String]? = nil,
-    exclude: [String] = []
+    exclude: [String] = [], cacheSource: Bool = true
   ) throws -> DiscoveredSource {
     let id = try source.identity(environment: store.environment)
     let root: URL
@@ -65,12 +65,9 @@ final class SkillLifecycle {
       }
       root = source.localURL(environment: store.environment)
     } else {
-      let resolved = try cache.resolve(source)
-      pin = resolved
       root = workspace.appendingPathComponent(UUID().uuidString)
-      try cache.withSnapshot(
-        sourceID: id, source: lockedSource(source), revision: resolved.revision
-      ) { snapshot in
+      try cache.withResolvedSnapshot(source, cacheSource: cacheSource) { resolved, snapshot in
+        pin = resolved
         try FileManager.default.copyItem(at: snapshot, to: root)
       }
     }

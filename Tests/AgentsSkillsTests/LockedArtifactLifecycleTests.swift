@@ -7,6 +7,28 @@ import Testing
 
 @Suite("Locked artifacts")
 struct LockedArtifactLifecycleTests {
+  @Test func automaticSelectionRediscoversContentUnderTheWriterLock() throws {
+    let fixture = try SkillFixture()
+    let store = fixture.store()
+    let lock = store.directory.appendingPathComponent(".agents.lock")
+    let observations = fixture.root.appendingPathComponent("discovery-phases")
+    let content = "---\nname: demo\ndescription: Test skill\n---\n"
+    let provider = WellKnownProvider { _ in
+      let applying = FileManager.default.fileExists(atPath: lock.path)
+      let before = (try? Data(contentsOf: observations)) ?? Data()
+      try (before + Data((applying ? "apply\n" : "inspect\n").utf8)).write(to: observations)
+      return Data((content + (applying ? "Current\n" : "Previous\n")).utf8)
+    }
+    let outcome = try SkillOperations.add(
+      AddOptions(
+        source: "https://example.test/demo/SKILL.md", agents: [.codex], mode: .copy,
+        environment: fixture.environment), provider: provider)
+    #expect(outcome.installed.map(\.skill) == ["demo"])
+    #expect(try Data(contentsOf: observations) == Data("inspect\napply\n".utf8))
+    #expect(try fixture.body(fixture.target("demo")) == content + "Current\n")
+    #expect(try store.loadResolved().skills["demo"]?.artifact != nil)
+  }
+
   @Test(arguments: [false, true])
   func restoresWithoutIndexAndVerifiesDigests(_ filesArtifact: Bool) throws {
     let fixture = try SkillFixture()

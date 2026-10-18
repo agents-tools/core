@@ -1,5 +1,6 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsSkills
 import Darwin
 import Foundation
 
@@ -59,6 +60,22 @@ if arguments[2] == "locked-git" {
     try Data(output.stdout.utf8).write(to: root.appendingPathComponent("stdout"))
     try Data(output.stderr.utf8).write(to: root.appendingPathComponent("stderr"))
   }
+} else if arguments[2] == "automatic-add" {
+  let result: String
+  do {
+    if arguments[3] == "skill" {
+      _ = try SkillOperations.add(
+        AddOptions(
+          source: "source", agents: [.codex], mode: .copy, environment: store.environment))
+    } else {
+      _ = try InstructionOperations.add(
+        InstructionAddOptions(source: "source", agents: [.codex], environment: store.environment))
+    }
+    result = "applied"
+  } catch {
+    result = String(describing: error)
+  }
+  try Data(result.utf8).write(to: root.appendingPathComponent("add-result"))
 } else if arguments[2] == "instruction-list" {
   let units = try InstructionOperations.list(
     source: SourceDeclaration(kind: .local, location: root.appendingPathComponent("source").path),
@@ -136,6 +153,23 @@ if arguments[2] == "locked-git" {
       } else {
         throw CoreError.invalidState("missing fixture pin")
       }
+    } else if arguments[2] == "inspection-transaction" {
+      let transaction = FileTransaction(store: store) { try stop($0) }
+      try transaction.replace(
+        AgentRegistry.installSkillsDirectory(
+          for: .codex, scope: scope, environment: store.environment
+        ).appendingPathComponent("target"), content: root.appendingPathComponent("new"))
+      try transaction.replace(
+        InstructionLocations.file(for: .codex, scope: scope, environment: store.environment)!,
+        content: nil)
+      try transaction.replace(
+        InstructionLocations.file(for: .geminiCLI, scope: scope, environment: store.environment)!,
+        content: nil, data: Data("New instructions\n".utf8))
+      try transaction.replace(
+        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.cursor])))
+      try transaction.replace(
+        store.resolvedURL, content: nil, data: StateStore.encode(ResolvedState()))
+      try transaction.commit()
     } else if arguments[2] == "watch-crash" {
       var declaration = try store.readDeclaration()
       declaration.watch = ["source"]

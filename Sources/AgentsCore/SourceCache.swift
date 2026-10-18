@@ -291,6 +291,54 @@ package struct SourceCache {
   }
 
   /// Inspection extracts to disposable storage; only applied operations retain materializations.
+  /// With `cacheSource: false`, existing exact pins are read without mutation;
+  /// new mirrors and their locks live in disposable storage.
+  package func withResolvedSnapshot<T>(
+    _ source: SourceDeclaration, cacheSource: Bool = true,
+    _ body: (SourceRevision, URL) throws -> T
+  ) throws -> T {
+    if !cacheSource {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "agents-discovery-" + UUID().uuidString)
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      if case .revision(let object) = source.requirement, Self.isObjectID(object),
+        let cached = try withExistingMirror(
+          sourceID: source.identity(environment: store.environment),
+          { mirror, descriptor -> (SourceRevision, URL)? in
+            guard
+              let revision = try? git(
+                mirror, ["--no-optional-locks", "rev-parse", "--verify", object + "^{commit}"],
+                lock: descriptor)
+            else { return nil }
+            return try (
+              SourceRevision(revision: revision),
+              extract(revision: revision, mirror: mirror, root: root, lock: descriptor)
+            )
+          }) ?? nil
+      {
+        return try body(cached.0, cached.1)
+      }
+      var source = source
+      if source.kind == .local {
+        source.location = source.localURL(environment: store.environment).path
+      }
+      var environment = store.environment
+      environment.projectDirectory = root
+      let cache = SourceCache(store: StateStore(scope: .project, environment: environment))
+      return try cache.withResolvedSnapshot(source, body)
+    }
+    let pin = try resolve(source)
+    let locked = LockedSource(
+      kind: source.kind, url: source.kind == .git ? source.gitURL : nil,
+      requirement: source.requirement, path: source.path)
+    return try withSnapshot(
+      sourceID: source.identity(environment: store.environment), source: locked,
+      revision: pin.revision
+    ) { try body(pin, $0) }
+  }
+
+  /// Inspection extracts to disposable storage; only applied operations retain materializations.
   package func withSnapshot<T>(
     sourceID: String, source: LockedSource, revision: String, _ body: (URL) throws -> T
   ) throws -> T {
@@ -319,11 +367,18 @@ package struct SourceCache {
     return mirror
   }
 
-  private func extract(revision: String, mirror: URL, root: URL) throws -> URL {
+  private func extract(revision: String, mirror: URL, root: URL, lock: Int32? = nil) throws -> URL {
     let archive = root.appendingPathComponent("tree.tar")
     let tree = root.appendingPathComponent("tree")
     try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
-    _ = try git(mirror, ["archive", "--format=tar", "--output=" + archive.path, revision])
+    let arguments = [
+      "--no-optional-locks", "archive", "--format=tar", "--output=" + archive.path, revision,
+    ]
+    if let lock {
+      _ = try git(mirror, arguments, lock: lock)
+    } else {
+      _ = try git(mirror, arguments)
+    }
     try ProcessRunner.run("/usr/bin/env", arguments: ["tar", "-xf", archive.path, "-C", tree.path])
     try validateTree(tree)
     return tree
@@ -531,6 +586,30 @@ package struct SourceCache {
   func git(_ repository: URL, _ arguments: [String]) throws -> String {
     try withMirrorLock(at: repository) { descriptor in
       try git(repository, arguments, lock: descriptor)
+    }
+  }
+
+  func inspectCommit(_ object: String, sourceID: String) throws -> String? {
+    try withExistingMirror(sourceID: sourceID) { mirror, descriptor in
+      try git(
+        mirror, ["--no-optional-locks", "rev-parse", "--verify", object + "^{commit}"],
+        lock: descriptor)
+    }
+  }
+
+  private func withExistingMirror<T>(
+    sourceID: String, _ body: (URL, Int32) throws -> T
+  ) throws -> T? {
+    let mirror = mirrorURL(sourceID: sourceID)
+    try validatePath(mirror)
+    guard FileManager.default.fileExists(atPath: mirror.path) else { return nil }
+    let locks = store.cacheDirectory.appendingPathComponent("locks")
+    try validatePath(locks)
+    let lock = locks.appendingPathComponent(
+      mirror.deletingPathExtension().lastPathComponent + ".lock")
+    return try FileLock.withExistingDescriptor(at: lock) { descriptor in
+      try validatePath(mirror)
+      return try body(mirror, descriptor)
     }
   }
 

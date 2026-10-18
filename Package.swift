@@ -25,13 +25,15 @@ let package = Package(
     ),
     .target(name: "AgentsSkills", dependencies: ["AgentsCore", "Yams"]),
     .executableTarget(
-      name: "StateTestProcess", dependencies: ["AgentsCore", "AgentsInstructions"],
+      name: "StateTestProcess", dependencies: ["AgentsCore", "AgentsInstructions", "AgentsSkills"],
       path: "Tests/StateTestProcess"),
     .testTarget(name: "AgentsCoreTests", dependencies: ["AgentsCore", "StateTestProcess"]),
     .testTarget(name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions"]),
     .testTarget(
       name: "AgentsSkillsTests",
-      dependencies: ["AgentsSkills", "AgentsCore", "Yams", "StateTestProcess"]),
+      dependencies: [
+        "AgentsSkills", "AgentsCore", "AgentsInstructions", "Yams", "StateTestProcess",
+      ]),
   ],
   swiftLanguageModes: [.v6]
 )

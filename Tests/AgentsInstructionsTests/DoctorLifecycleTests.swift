@@ -5,6 +5,35 @@ import Testing
 
 @Suite("Instruction diagnostics")
 struct InstructionDoctorTests {
+  @Test(arguments: [InstallScope.project, .user], ["transaction.json", "transaction.new"])
+  func pendingScopeSkipsInconsistentStateAndCrossScopeChecks(
+    _ pendingScope: InstallScope, _ journal: String
+  ) throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    let healthyScope: InstallScope = pendingScope == .project ? .user : .project
+    try fixture.add(scope: healthyScope, agents: [.codex])
+    let healthyFile = InstructionLocations.file(
+      for: .codex, scope: healthyScope, environment: fixture.environment)!
+    try FileManager.default.removeItem(at: healthyFile)
+    let pending = fixture.store(pendingScope)
+    try fixture.write("{}", to: pending.directory.appendingPathComponent(journal))
+    try fixture.write("incomplete declaration", to: pending.declarationURL)
+    try fixture.write("incomplete lock", to: pending.resolvedURL)
+    let before = try fixture.snapshot()
+    let report = try InstructionOperations.doctor(
+      scope: pendingScope, environment: fixture.environment)
+    #expect(report.diagnostics.map(\.kind) == [.pendingRecovery])
+    #expect(report.diagnostics.first?.path == pending.directory)
+    let healthy = try InstructionOperations.doctor(
+      scope: healthyScope, environment: fixture.environment)
+    #expect(healthy.diagnostics.filter { $0.kind == .pendingRecovery }.count == 1)
+    #expect(healthy.diagnostics.contains { $0.kind == .missingBlock && $0.path == healthyFile })
+    #expect(!healthy.diagnostics.contains { $0.kind == .duplicateScope })
+    #expect(try fixture.snapshot() == before)
+  }
+
   @Test(arguments: [true, false])
   func trustedProjectConfigurationOverridesUserByteLimit(_ trusted: Bool) throws {
     let fixture = try InstructionFixture()
@@ -151,7 +180,7 @@ struct InstructionDoctorTests {
       projectRoots: [fixture.project, empty, pending], environment: fixture.environment)
     #expect(reports.count == 3)
     #expect(reports[0].diagnostics.contains { $0.kind == .missingBlock })
-    #expect(reports[2].diagnostics.contains { $0.kind == .stateUnavailable })
+    #expect(reports[2].diagnostics.map(\.kind) == [.pendingRecovery])
     #expect(try fixture.snapshot() == before)
     #expect(!FileManager.default.fileExists(atPath: empty.appendingPathComponent(".agent").path))
     #expect(

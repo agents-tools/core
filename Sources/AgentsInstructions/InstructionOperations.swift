@@ -8,11 +8,36 @@ public enum InstructionOperations {
     _ options: InstructionAddOptions,
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionAddOutcome {
+    var automaticSelection: (sourceID: String, name: String)?
+    if options.listOnly || (options.names.isEmpty && !options.all) {
+      let outcome = try add(options, apply: false, beforeApply: nil)
+      if options.listOnly || outcome.available.count > 1 { return outcome }
+      automaticSelection = outcome.available.first.map { (outcome.sourceID, $0.record.name) }
+    }
+    return try add(
+      options, apply: true, automaticSelection: automaticSelection, beforeApply: beforeApply)
+  }
+
+  private static func add(
+    _ options: InstructionAddOptions, apply: Bool,
+    automaticSelection: (sourceID: String, name: String)? = nil,
+    beforeApply: ((InstructionUpdateReport) throws -> Void)?
+  ) throws -> InstructionAddOutcome {
     let store = StateStore(scope: options.scope, environment: options.environment)
-    return try operate(store, apply: !options.listOnly) { declaration, previous in
-      var declaration = declaration
-      let source = try sourceDeclaration(options, declaration: declaration)
-      let id = try source.identity(environment: options.environment)
+    return try operate(store, apply: apply) { previousDeclaration, previous in
+      var declaration = previousDeclaration
+      let selectionChanged = CoreError.invalidState(
+        "automatic instruction selection changed during discovery; retry the command")
+      let source: SourceDeclaration
+      let id: String
+      do {
+        source = try sourceDeclaration(options, declaration: declaration)
+        id = try source.identity(environment: options.environment)
+      } catch {
+        if automaticSelection != nil { throw selectionChanged }
+        throw error
+      }
+      if let automaticSelection, automaticSelection.sourceID != id { throw selectionChanged }
       let existing = try declaration.sources.keys.sorted().first {
         try declaration.sources[$0]?.identity(environment: options.environment) == id
       }
@@ -28,19 +53,28 @@ public enum InstructionOperations {
       declaration.sources[alias] = source
       try declaration.validate(environment: options.environment)
       let sources = InstructionSources(store: store)
-      let available = try sources.discover(source)
-      if options.listOnly || (options.names.isEmpty && available.count > 1 && !options.all) {
+      let available = try sources.discover(source, cacheSource: apply)
+      guard options.listOnly || automaticSelection != nil || !available.isEmpty else {
+        throw CoreError.notFound("source provides no instructions")
+      }
+      if !apply {
         return InstructionAddOutcome(sourceID: id, available: available, result: nil)
       }
-      let selected =
-        try options.names.isEmpty
-        ? available
-        : options.names.map { name in
+      let selected: [InstructionUnit]
+      if let automaticSelection {
+        guard let unit = available.first(where: { $0.record.name == automaticSelection.name })
+        else { throw selectionChanged }
+        selected = [unit]
+      } else if options.names.isEmpty {
+        selected = available
+      } else {
+        selected = try options.names.map { name in
           guard let unit = available.first(where: { $0.record.name == name }) else {
             throw CoreError.notFound("instruction section: \(name)")
           }
           return unit
         }
+      }
       guard !selected.isEmpty else { throw CoreError.notFound("source provides no instructions") }
       var instructions = declaration.instructions ?? InstructionsDeclaration()
       if let agents = options.agents { instructions.agents = agents }
@@ -52,10 +86,12 @@ public enum InstructionOperations {
       let prepared = try prepare(
         declaration: declaration, previous: previous, sources: sources, resolving: Set(references))
       let plan = try plan(
-        declaration: declaration, previous: previous, prepared: prepared, store: store,
+        declaration: declaration, previousDeclaration: previousDeclaration,
+        previous: previous, prepared: prepared, store: store,
         replace: options.replace)
       try beforeApply?(plan.report)
-      try apply(declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
+      try Self.apply(
+        declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
       return InstructionAddOutcome(sourceID: id, available: available, result: plan.report)
     }
   }
@@ -88,8 +124,8 @@ public enum InstructionOperations {
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: apply) { declaration, previous in
-      var declaration = declaration
+    return try operate(store, apply: apply) { previousDeclaration, previous in
+      var declaration = previousDeclaration
       if let agents {
         var instructions = declaration.instructions ?? InstructionsDeclaration()
         instructions.agents = agents
@@ -98,7 +134,8 @@ public enum InstructionOperations {
       let sources = InstructionSources(store: store)
       let prepared = try prepare(declaration: declaration, previous: previous, sources: sources)
       let plan = try plan(
-        declaration: declaration, previous: previous, prepared: prepared, store: store,
+        declaration: declaration, previousDeclaration: previousDeclaration,
+        previous: previous, prepared: prepared, store: store,
         replace: true)
       if apply {
         try beforeApply?(plan.report)
@@ -126,7 +163,8 @@ public enum InstructionOperations {
         restoring: true)
       let report = InstructionUpdateReport(
         sections: [], targets: targets.changes, changedPrompts: [],
-        lockMissing: !FileManager.default.fileExists(atPath: store.resolvedURL.path))
+        lockMissing: !FileManager.default.fileExists(atPath: store.resolvedURL.path),
+        hasChanges: targets.changes.contains(where: \.changed))
       try apply(
         declaration: declaration, next: lock, report: report, sources: sources, writeState: false)
       return report
@@ -141,8 +179,8 @@ public enum InstructionOperations {
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: true) { declaration, previous in
-      var declaration = declaration
+    return try operate(store, apply: true) { previousDeclaration, previous in
+      var declaration = previousDeclaration
       var instructions = declaration.instructions ?? InstructionsDeclaration()
       let references = Set(
         instructions.sections + (instructions.chatgpt ?? [:]).values.flatMap(\.sections))
@@ -169,7 +207,8 @@ public enum InstructionOperations {
       let prepared = try prepare(
         declaration: declaration, previous: previous, sources: sources, resolving: [])
       let plan = try plan(
-        declaration: declaration, previous: previous, prepared: prepared, store: store,
+        declaration: declaration, previousDeclaration: previousDeclaration,
+        previous: previous, prepared: prepared, store: store,
         replace: false)
       try beforeApply?(plan.report)
       try apply(declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
@@ -261,7 +300,7 @@ public enum InstructionOperations {
   }
 
   private static func plan(
-    declaration: Declaration, previous: ResolvedState,
+    declaration: Declaration, previousDeclaration: Declaration, previous: ResolvedState,
     prepared: (lock: ResolvedState, sections: [InstructionSection]), store: StateStore,
     replace: Bool
   ) throws -> (lock: ResolvedState, report: InstructionUpdateReport) {
@@ -292,11 +331,16 @@ public enum InstructionOperations {
           || old?.sections.map { InstructionSources.identity($0) + $0.hash }
             != new?.sections.map { InstructionSources.identity($0) + $0.hash }
       }
+    let lockMissing = !FileManager.default.fileExists(atPath: store.resolvedURL.path)
+    let hasChanges =
+      declaration.normalized != previousDeclaration.normalized
+      || next.normalized != previous.normalized || targets.changes.contains(where: \.changed)
+      || (lockMissing && !targets.changes.isEmpty)
     return (
       next,
       InstructionUpdateReport(
         sections: changes, targets: targets.changes, changedPrompts: prompts,
-        lockMissing: !FileManager.default.fileExists(atPath: store.resolvedURL.path))
+        lockMissing: lockMissing, hasChanges: hasChanges)
     )
   }
 

@@ -22,11 +22,7 @@ extension SourceCache {
         revision: git(["rev-parse", "--verify", ref.name + "^{commit}"]), version: ref.version)
     }
     func cachedCommit(_ object: String) throws -> String? {
-      let mirror = mirrorURL(sourceID: id)
-      try validatePath(mirror)
-      guard FileManager.default.fileExists(atPath: mirror.path) else { return nil }
-      return try? git(
-        mirror, ["--no-optional-locks", "rev-parse", "--verify", object + "^{commit}"])
+      try? inspectCommit(object, sourceID: id)
     }
     if case .revision(let object) = source.requirement, Self.isObjectID(object),
       let commit = try cachedCommit(object)
@@ -69,7 +65,7 @@ extension SourceCache {
     throw CoreError.notFound("source reference cannot be resolved without fetching: \(ref.name)")
   }
 
-  private static func isObjectID(_ value: String) -> Bool {
+  static func isObjectID(_ value: String) -> Bool {
     value.range(of: #"^[0-9a-f]{40}([0-9a-f]{24})?$"#, options: .regularExpression) != nil
   }
 }

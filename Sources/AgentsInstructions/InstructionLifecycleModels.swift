@@ -60,10 +60,20 @@ public struct InstructionTargetChange: Sendable, Equatable {
   public let before: Data?
   /// Nil deletes the file, subject to the previous lock's ownership record.
   public let after: Data?
+  /// Previous lock recipients in raw-value order, or nil when the target had no lock entry.
+  public let beforeAgents: [AgentID]?
+  /// Planned recipients in raw-value order; empty when the target is no longer managed.
+  public let afterAgents: [AgentID]
   public let assembly: InstructionAssembly
   /// Nil when no previous lock entry exists. Missing files report `missingBlock`.
   public let drift: InstructionDrift?
+  /// Whether the file bytes differ; recipient-only changes do not affect this value.
+  /// Use `InstructionUpdateReport.hasChanges` to detect any update in the report.
   public var changed: Bool { before != after }
+  /// Whether the planned recipients differ from the previous lock's recipients.
+  /// A missing previous entry (`beforeAgents == nil`) differs from any planned list.
+  /// Use `InstructionUpdateReport.hasChanges` to detect any update in the report.
+  public var agentsChanged: Bool { beforeAgents != afterAgents }
 }
 
 public struct InstructionUpdateReport: Sendable, Equatable {
@@ -73,6 +83,11 @@ public struct InstructionUpdateReport: Sendable, Equatable {
   /// Prompts whose section bytes, order, membership or append path changed.
   public let changedPrompts: [String]
   public let lockMissing: Bool
+
+  /// Whether applying changes the declaration, locked state (including section order and pins,
+  /// target recipients, and prompts), target bytes, or reconstructs a missing lock with targets.
+  /// Consumers should use this property to detect updates, including changes with identical bytes.
+  public let hasChanges: Bool
 }
 
 public struct InstructionDiagnostic: Sendable, Equatable {
@@ -93,6 +108,7 @@ public struct InstructionDiagnostic: Sendable, Equatable {
     case sourceResolutionFailed
     case invalidConfiguration
     case stateUnavailable
+    case pendingRecovery
   }
 
   public let kind: Kind

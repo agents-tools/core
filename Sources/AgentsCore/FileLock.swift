@@ -26,6 +26,28 @@ package enum FileLock {
     guard descriptor >= 0 else {
       throw CoreError.invalidState("cannot open writer lock: \(url.path)")
     }
+    return try withDescriptor(descriptor, at: url, checkpoint: checkpoint, body)
+  }
+
+  /// Returns nil when no lock exists. Cached inspection must not create one or read unlocked.
+  static func withExistingDescriptor<T>(at url: URL, _ body: (Int32) throws -> T) throws -> T? {
+    guard FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) else {
+      return nil
+    }
+    let parent = try DirectoryHandle(at: url.deletingLastPathComponent())
+    let descriptor = openat(
+      parent.descriptor, url.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    if descriptor < 0, errno == ENOENT { return nil }
+    guard descriptor >= 0 else {
+      throw CoreError.invalidState("cannot open existing lock: \(url.path)")
+    }
+    return try withDescriptor(descriptor, at: url, checkpoint: { _ in }, body)
+  }
+
+  private static func withDescriptor<T>(
+    _ descriptor: Int32, at url: URL, checkpoint: (String) throws -> Void,
+    _ body: (Int32) throws -> T
+  ) throws -> T {
     defer { close(descriptor) }
     var info = stat()
     guard fstat(descriptor, &info) == 0, info.st_mode & 0o170000 == 0o100000 else {
