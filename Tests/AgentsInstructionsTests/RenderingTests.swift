@@ -133,7 +133,7 @@ struct ClaudeForwardingTests {
     #expect(try ClaudeForwarding.containsImport(in: Data(rendered.utf8), at: path))
   }
 
-  @Test(arguments: ["@AGENTS.md", "@./AGENTS.md", "@rules/../AGENTS.md", "See @AGENTS.md"])
+  @Test(arguments: ["@AGENTS.md", "@./AGENTS.md", "@rules/../AGENTS.md"])
   func recognizesEquivalentImport(_ line: String) throws {
     #expect(
       try ClaudeForwarding.containsImport(in: Data(("# Guide\n\n" + line + "\n").utf8), at: .root))

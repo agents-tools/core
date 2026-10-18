@@ -52,15 +52,16 @@ public enum Instructions {
     for (section, content) in zip(sections, rendered) {
       let identity = HeadingIdentity(level: 1 + offset, text: section.heading)
       let matches = (document.sections[identity] ?? []).filter {
-        !(oldBlock?.contains($0.lowerBound) ?? false)
+        !(oldBlock?.contains($0.headingLine) ?? false)
       }
       if matches.count > 1 {
         throw InstructionError.ambiguousMatch(
-          sectionID: section.id, lines: matches.map { $0.lowerBound + 1 })
+          sectionID: section.id, lines: matches.map { $0.headingLine + 1 })
       }
-      if let range = matches.first {
-        let existing = MarkdownDocument.content(document.lines[range])
-        removals.append(range)
+      if let match = matches.first {
+        let existing = MarkdownDocument.content(
+          match.contentRanges.flatMap { document.lines[$0] }[...])
+        removals.append(contentsOf: match.contentRanges)
         if existing.utf8.elementsEqual(content.utf8) {
           adopted.append(section.id)
         } else {

@@ -196,18 +196,18 @@ struct ClaudeImportSyntaxTests {
         == .needsImport(.root))
   }
 
-  @Test func proseImportForwards() throws {
+  @Test func proseImportNeedsManagedImport() throws {
     #expect(
       try ClaudeForwarding.classify([.init(path: .root, bytes: Data("See @AGENTS.md".utf8))])
-        == .forwarding(.root))
+        == .needsImport(.root))
   }
 
   @Test(arguments: [
     "See @../AGENTS.md", "@../AGENTS.md other", "- Read @.././AGENTS.md",
     "See @../Design\\ Docs/../AGENTS.md",
   ])
-  func recognizesDirectoryRelativeTokensInProse(_ content: String) throws {
-    #expect(try ClaudeForwarding.containsImport(in: Data(content.utf8), at: .directory))
+  func proseDirectoryRelativeTokensNeedManagedImport(_ content: String) throws {
+    #expect(try !ClaudeForwarding.containsImport(in: Data(content.utf8), at: .directory))
   }
 
   @Test(arguments: [
@@ -219,13 +219,13 @@ struct ClaudeImportSyntaxTests {
     #expect(try !ClaudeForwarding.containsImport(in: Data(content.utf8), at: .root))
   }
 
-  @Test func recognizesImportAfterCodeSpanAndMixedLineEndings() throws {
+  @Test func inlineImportAfterCodeSpanNeedsManagedImport() throws {
     let content = "Rüles\r\n`@wrong.md` then @AGENTS.md\r"
-    #expect(try ClaudeForwarding.containsImport(in: Data(content.utf8), at: .root))
+    #expect(try !ClaudeForwarding.containsImport(in: Data(content.utf8), at: .root))
   }
 
-  @Test func unterminatedBacktickIsProse() throws {
+  @Test func proseWithUnterminatedBacktickNeedsManagedImport() throws {
     #expect(
-      try ClaudeForwarding.containsImport(in: Data("See `literal and @AGENTS.md".utf8), at: .root))
+      try !ClaudeForwarding.containsImport(in: Data("See `literal and @AGENTS.md".utf8), at: .root))
   }
 }

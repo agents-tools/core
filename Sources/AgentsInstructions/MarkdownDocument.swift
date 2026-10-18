@@ -48,6 +48,12 @@ struct HeadingIdentity: Hashable, Sendable {
   let text: String
 }
 
+struct MarkdownSection: Sendable, Equatable {
+  let headingLine: Int
+  /// Physical ranges omit reference definitions consumed before Setext headings.
+  let contentRanges: [Range<Int>]
+}
+
 struct MarkdownDocument: Sendable, Equatable {
   static let begin =
     "<!-- BEGIN managed by agents: do not edit this block. Edit its sources and run `agents update`. -->"
@@ -58,8 +64,8 @@ struct MarkdownDocument: Sendable, Equatable {
   var headings: [MarkdownHeading] = []
   var topLevelHeadings: [MarkdownHeading] = []
   var markers: [Int] = []
-  var sections: [HeadingIdentity: [Range<Int>]] = [:]
-  var inlineText: [String] = []
+  var sections: [HeadingIdentity: [MarkdownSection]] = [:]
+  private var referenceDefinitionLines: Set<Int> = []
   var endsInCode = false
   var endsInHTML = false
 
@@ -79,12 +85,16 @@ struct MarkdownDocument: Sendable, Equatable {
     var pending: [(Markup, Bool)] = [(parsed, false)]
     while let (node, topLevel) = pending.popLast() {
       if let range = node.range, let heading = node as? Heading {
-        let first = range.lowerBound.line - 1
+        var first = range.lowerBound.line - 1
         let opening = Self.atxOpening(in: lines[first].text, inContainer: !topLevel)
         let end: Int
         if opening != nil {
           end = first + 1
         } else if topLevel {
+          let contentStart = firstContentLine(
+            afterDefinitionsAt: first, before: min(range.upperBound.line, lines.count))
+          referenceDefinitionLines.formUnion(first..<contentStart)
+          first = contentStart
           // A Setext range can extend into the following block. Verify the physical underline.
           end =
             ((first + 1)..<lines.count).first {
@@ -105,8 +115,6 @@ struct MarkdownDocument: Sendable, Equatable {
         if literal.count == 1, lines[first].text == Self.begin || lines[first].text == Self.end {
           markers.append(first)
         }
-      } else if let text = node as? Text {
-        inlineText.append(text.string)
       }
       if node is CodeBlock || node is InlineCode || node is HTMLBlock || node is InlineHTML {
         continue
@@ -196,6 +204,23 @@ struct MarkdownDocument: Sendable, Equatable {
     return run > 0 && bytes.dropFirst(indentation + run).allSatisfy { $0 == 32 || $0 == 9 }
   }
 
+  private func firstContentLine(afterDefinitionsAt first: Int, before end: Int) -> Int {
+    guard lines[first].text.trimmingCharacters(in: .whitespaces).hasPrefix("[") else {
+      return first
+    }
+    // Complete definition-only prefixes produce no AST blocks. Testing physical prefixes also
+    // handles destinations and titles on later lines, without relying on logical inline ranges.
+    var prefix = ""
+    var contentStart = first
+    for line in first..<end {
+      prefix += lines[line].raw
+      if Document(parsing: prefix, options: [.disableSmartOpts]).childCount == 0 {
+        contentStart = line + 1
+      }
+    }
+    return contentStart
+  }
+
   private mutating func indexSections() {
     var nextAtLevel = Array(repeating: lines.count, count: 7)
     var markerIndex = markers.count
@@ -211,7 +236,15 @@ struct MarkdownDocument: Sendable, Equatable {
       nextAtLevel[heading.level] = heading.lines.lowerBound
     }
     for (heading, range) in zip(topLevelHeadings, ranges.reversed()) {
-      sections[HeadingIdentity(level: heading.level, text: heading.key), default: []].append(range)
+      var contentRanges: [Range<Int>] = []
+      var start = range.lowerBound
+      for line in range where referenceDefinitionLines.contains(line) {
+        if start < line { contentRanges.append(start..<line) }
+        start = line + 1
+      }
+      if start < range.upperBound { contentRanges.append(start..<range.upperBound) }
+      sections[HeadingIdentity(level: heading.level, text: heading.key), default: []].append(
+        MarkdownSection(headingLine: heading.lines.lowerBound, contentRanges: contentRanges))
     }
   }
 

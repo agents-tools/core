@@ -93,8 +93,8 @@ struct InstructionSemanticTextTests {
   }
 }
 
-@Suite("Claude semantic inline text")
-struct ClaudeSemanticTextTests {
+@Suite("Claude import examples")
+struct ClaudeImportExampleTests {
   @Test(arguments: [
     "[ref]: /url\n`@AGENTS.md`\n",
     "P\n            `@AGENTS.md`\n",
@@ -115,8 +115,11 @@ struct ClaudeSemanticTextTests {
     "P\r\n            `example` and @AGENTS.md\r",
     "**See @AGENTS.md**", "> Read @AGENTS.md", "- Read @AGENTS.md",
   ])
-  func proseTextForwards(_ content: String) throws {
-    #expect(try ClaudeForwarding.containsImport(in: Data(content.utf8), at: .root))
+  func proseTextNeedsManagedImport(_ content: String) throws {
+    #expect(try !ClaudeForwarding.containsImport(in: Data(content.utf8), at: .root))
+    #expect(
+      try ClaudeForwarding.classify([.init(path: .root, bytes: Data(content.utf8))])
+        == .needsImport(.root))
   }
 
   @Test(arguments: [
@@ -183,7 +186,7 @@ struct InstructionByteOrderMarkTests {
   }
 
   @Test func importParsingAcceptsByteOrderMark() throws {
-    #expect(try ClaudeForwarding.containsImport(in: bom + Data("See @AGENTS.md\n".utf8), at: .root))
+    #expect(try ClaudeForwarding.containsImport(in: bom + Data("@AGENTS.md\n".utf8), at: .root))
     #expect(try !ClaudeForwarding.containsImport(in: bom + Data("`@AGENTS.md`\n".utf8), at: .root))
   }
 }
