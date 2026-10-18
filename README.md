@@ -1,8 +1,8 @@
 # core
 
-Shared Swift libraries for managing agent skills and their sources. The package
-provides the engine for `agents` in `agents-tools/cli` and for `skill` in
-`skill-cli/cli`. The consumers own command parsing, terminal output, and their
+Shared Swift libraries for managing agent skills, instructions, and their
+sources. The package provides the engine for `agents` in `agents-tools/cli` and
+for `skill` in `skill-cli/cli`. The consumers own command parsing, terminal output, and their
 executable releases; integration with these libraries happens in those
 repositories.
 
@@ -14,6 +14,15 @@ repositories.
 - **AgentsSkills**: `SKILL.md` discovery and frontmatter, well-known skill
   sources, installation, listing, removal, updates, restoration, initialization,
   and diagnostics. It depends on `AgentsCore` and Yams.
+- **AgentsInstructions**: in-memory validation and rendering of instruction
+  sources, managed Markdown blocks, drift reports, Claude forwarding, and
+  ChatGPT prompts. It uses `AgentsCore` for hashing and `swift-markdown` for
+  CommonMark structure; callers own files and instruction lifecycle state.
+
+Claude forwarding recognizes standalone, unquoted and unformatted imports of
+that project's `AGENTS.md` outside code and HTML, including managed import
+blocks. Inline mentions do not suppress the caller's managed import block;
+a duplicate import is acceptable to ensure the instructions load.
 
 `SkillOperations` exposes skill workflows. `SkillOperations.watches` supplies
 watch operations with support for both the current JSON ledger and legacy YAML
@@ -67,9 +76,9 @@ xcrun swift-format lint --configuration .swift-format --recursive Package.swift 
 git diff --check
 ```
 
-Tests are organized by the module they exercise in `Tests/AgentsCoreTests` and
-`Tests/AgentsSkillsTests`. Public workflow tests import the libraries normally
-to check the API available to consumers.
+Tests are organized by the module they exercise in `Tests/AgentsCoreTests`,
+`Tests/AgentsSkillsTests`, and `Tests/AgentsInstructionsTests`. Public workflow
+tests import the libraries normally to check the API available to consumers.
 
 See [package architecture](Documentation/Architecture/Package.md) for module
 ownership, API entry points, and persisted-state behavior, and the

@@ -2,7 +2,8 @@
 
 ## Purpose and Consumers
 
-The SwiftPM package `core` provides the shared engine for agent skill management.
+The SwiftPM package `core` provides shared libraries for agent skill management
+and instruction text transformations.
 Its consumers are `agents` in `agents-tools/cli` and `skill` in `skill-cli/cli`.
 Those repositories own their command trees, argument parsing, terminal output,
 and executable distribution. Their dependency integration is separate work.
@@ -17,13 +18,18 @@ AgentsSkills ──> AgentsCore
       │
       └───────> Yams
 
+AgentsInstructions ──> AgentsCore
+         │
+         └───────> Markdown (swift-markdown) ──> cmark-gfm
+
 AgentsCoreTests ──> AgentsCore
 AgentsSkillsTests ──> AgentsSkills, AgentsCore, Yams
+AgentsInstructionsTests ──> AgentsInstructions
 ```
 
-Both `AgentsCore` and `AgentsSkills` are library products with matching targets
-under `Sources/`. Each has a test target under `Tests/`. Package-private helpers
-use Swift's `package` access level when needed across targets; other
+`AgentsCore`, `AgentsSkills`, and `AgentsInstructions` are library products with
+matching targets under `Sources/`. Each has a test target under `Tests/`.
+Package-private helpers use Swift's `package` access level when needed across targets; other
 implementation details are internal or private.
 
 ## AgentsCore
@@ -79,6 +85,97 @@ Consumers use that configured watch service for skill workflows. A standalone
 `WatchService()` reads the current JSON ledger. Both use the same core watch
 bookkeeping and JSON writer.
 
+## AgentsInstructions
+
+`Instructions` validates source bytes into immutable `InstructionSection`
+values, assembles or removes managed blocks, detects drift, renders ChatGPT
+prompts, and compares source-qualified identities across scopes. The `Markdown`
+product from [swift-markdown](https://github.com/swiftlang/swift-markdown)
+provides CommonMark structure, semantic inline text, and block line ranges through cmark-gfm.
+Only `AgentsInstructions` depends on that product. The adapter retains original
+line bytes for splicing; it does not format the parsed tree.
+
+Only top-level headings are target titles or section boundaries. Headings
+inside lists and block quotes belong to their containing section. Every source
+heading, including container headings, shifts by the target offset and is
+checked for level-6 overflow. A source starts with a top-level ATX H1, has no
+other H1 anywhere, uses no Setext headings, and cannot end inside a code or HTML
+block. Heading identity is the AST heading's `plainText`, trimmed with whitespace
+collapsed. Emphasis delimiters and link destinations are absent, entities are
+decoded, and code spans retain the backticks supplied by `plainText`. This same
+identity controls matching, title detection, and duplicate selection checks;
+rendering retains the original source syntax.
+Markers count only as top-level, single-line HTML blocks whose complete source
+line equals the fixed marker text; indented, quoted, or padded examples are not
+markers.
+
+The parser supplies heading levels, start lines, and container ownership.
+Splicing uses physical line boundaries. The adapter verifies ATX syntax on the
+start line: one through six hashes followed by a space, tab, or end of line,
+with at most three leading spaces at the top level. Within AST-confirmed
+containers, a small prefix scan locates the opening run after list and quote
+prefixes. A top-level Setext span starts after any leading link reference
+definitions consumed from its paragraph block. Because those definitions have
+no AST nodes, the adapter reparses original physical prefixes and identifies
+complete definition-only prefixes by their empty document trees. This also
+handles multiline labels, destinations, and titles. Definition lines remain
+custom bytes and are excluded from section comparisons and replacement ranges,
+including when a selected parent section contains the Setext heading.
+A top-level Setext span ends at a physically verified underline:
+up to three leading spaces, a nonempty run of the appropriate `=` or `-`, and
+optional trailing spaces or tabs. Inline source coordinates are not physical
+positions and are never used to slice target bytes. Setext end coordinates are
+also unsuitable because they can extend into the next block. Prefix verification
+is limited to Setext paragraph blocks that could begin with a reference
+definition; CommonMark remains responsible for recognizing the definitions.
+
+Because the AST does not expose fence or HTML closure state, source validation
+reparses a continuation token in the terminal block's container and checks
+whether it becomes code or HTML. Physical list prefixes become continuation
+indentation and quote prefixes remain intact. The token is never emitted.
+Final assembly is reparsed and must contain exactly the expected managed block.
+
+A leading UTF-8 BOM is kept separately as file metadata before parsing. Target
+assembly and removal restore those bytes at the start, including when the block
+is prepended or no custom content remains. The BOM does not count as custom
+content or enter the managed block hash. Source hashes include it, while source
+rendering omits it. ChatGPT custom content is UTF-8 validated and appended as
+original bytes, including any BOM and line endings.
+
+Selected headings are grouped once. Target headings and section boundaries
+are indexed in one traversal, with a reverse pass across the six heading
+levels. Removal ranges are sorted and applied in a single pass over target
+lines; assembly does not scan all headings for each selected section.
+
+Assembly returns bytes, heading offset, the rendered block and its hash,
+adoptions, conflicts, a block difference, and whether custom content remains.
+The caller chooses whether to replace conflicting custom sections and supplies
+the locked heading offset for installation. Existing managed content is
+rendered anew; lifecycle callers check drift before deciding to persist it.
+Source hashes cover original bytes. Block hashes cover LF-normalized marker
+and content lines, including the final LF. Drift detection accepts an optional
+reconstructed locked block for a textual difference; a hash alone establishes
+drift but cannot recover the old text.
+
+`ClaudeForwarding` renders import blocks and classifies existing project Claude
+files from caller-supplied bytes and symbolic-link metadata. Forwarding requires
+a standalone, unquoted and unformatted line containing only an equivalent
+import of the project's `AGENTS.md` outside code and HTML, with optional
+surrounding whitespace, or the tool's managed import block. Paths resolve
+relative to the containing file; backslash-escaped spaces are supported.
+Inline prose, formatting, and quoted tokens do not suppress the caller's
+managed import. A duplicate import is acceptable to ensure loading.
+
+Recognition starts with complete physical lines. Candidate lines are replaced
+in memory with unique plain-text tokens, preserving their whitespace and line
+endings. A token must parse as direct text in a top-level paragraph to qualify;
+code, HTML, headings, containers, and inline formatting cannot establish
+forwarding. This verifies context for multiline constructs without using
+inline source coordinates or treating an inline-node boundary as a path end.
+The probe is never emitted. Malformed managed markers still produce errors.
+Callers own ancestor-file warnings, actual filesystem access, declaration and lock updates, and deletion decisions using
+the lock's `created` flag. This target performs no I/O.
+
 ## Runtime State
 
 Operations take `RuntimeEnvironment` explicitly. The default environment uses
@@ -111,7 +208,9 @@ Core tests cover source parsing and resolution, semantic versions, paths,
 hashing, lock persistence, agent locations, and watch bookkeeping. Skill tests
 cover discovery, frontmatter, providers, installation workflows, diagnostics,
 and legacy YAML integration. Public workflow tests use ordinary imports to
-exercise consumer-visible operations.
+exercise consumer-visible operations. Instruction tests cover source validation,
+managed-block assembly and removal, byte preservation, drift, Claude forwarding,
+and ChatGPT rendering through public APIs with in-memory fixtures.
 
 Current architecture lives here. `../Proposals/` contains design work;
 `../Decisions/`, `../Migrations/`, and `../Archive/` retain historical records

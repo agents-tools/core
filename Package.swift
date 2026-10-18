@@ -11,14 +11,21 @@ let package = Package(
   products: [
     .library(name: "AgentsCore", targets: ["AgentsCore"]),
     .library(name: "AgentsSkills", targets: ["AgentsSkills"]),
+    .library(name: "AgentsInstructions", targets: ["AgentsInstructions"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/jpsim/Yams", from: "6.0.0")
+    .package(url: "https://github.com/jpsim/Yams", from: "6.0.0"),
+    .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.9.0"),
   ],
   targets: [
     .target(name: "AgentsCore"),
+    .target(
+      name: "AgentsInstructions",
+      dependencies: ["AgentsCore", .product(name: "Markdown", package: "swift-markdown")]
+    ),
     .target(name: "AgentsSkills", dependencies: ["AgentsCore", "Yams"]),
     .testTarget(name: "AgentsCoreTests", dependencies: ["AgentsCore"]),
+    .testTarget(name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions"]),
     .testTarget(name: "AgentsSkillsTests", dependencies: ["AgentsSkills", "AgentsCore", "Yams"]),
   ],
   swiftLanguageModes: [.v6]
