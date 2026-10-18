@@ -91,7 +91,7 @@ bookkeeping and JSON writer.
 values, assembles or removes managed blocks, detects drift, renders ChatGPT
 prompts, and compares source-qualified identities across scopes. The `Markdown`
 product from [swift-markdown](https://github.com/swiftlang/swift-markdown)
-provides CommonMark block structure and UTF-8 source ranges through cmark-gfm.
+provides CommonMark structure, semantic inline text, and block line ranges through cmark-gfm.
 Only `AgentsInstructions` depends on that product. The adapter retains original
 line bytes for splicing; it does not format the parsed tree.
 
@@ -100,20 +100,38 @@ inside lists and block quotes belong to their containing section. Every source
 heading, including container headings, shifts by the target offset and is
 checked for level-6 overflow. A source starts with a top-level ATX H1, has no
 other H1 anywhere, uses no Setext headings, and cannot end inside a code or HTML
-block. Heading identity retains source inline syntax with whitespace collapsed.
+block. Heading identity is the AST heading's `plainText`, trimmed with whitespace
+collapsed. Emphasis delimiters and link destinations are absent, entities are
+decoded, and code spans retain the backticks supplied by `plainText`. This same
+identity controls matching, title detection, and duplicate selection checks;
+rendering retains the original source syntax.
 Markers count only as top-level, single-line HTML blocks whose complete source
 line equals the fixed marker text; indented, quoted, or padded examples are not
 markers.
 
-The parser supplies heading levels and container ownership. The adapter checks
-the heading's opening byte for ATX syntax and derives a Setext span from its
-inline content plus the following underline line. Code exclusions are bounded
-by their enclosing container. These adjustments accommodate source ranges that
-can include a line from the next block. Because the AST does not expose fence
-or HTML closure state, source validation reparses a continuation token in the
-terminal block's container and checks whether it becomes code or HTML. The
-token is never emitted. Final assembly is reparsed and must contain exactly the
-expected managed block.
+The parser supplies heading levels, start lines, and container ownership.
+Splicing uses physical line boundaries. The adapter verifies ATX syntax on the
+start line: one through six hashes followed by a space, tab, or end of line,
+with at most three leading spaces at the top level. Within AST-confirmed
+containers, a small prefix scan locates the opening run after list and quote
+prefixes. A top-level Setext span ends at a physically verified underline:
+up to three leading spaces, a nonempty run of the appropriate `=` or `-`, and
+optional trailing spaces or tabs. Inline source coordinates are not physical
+positions and are never used to slice target bytes. Setext end coordinates are
+also unsuitable because they can extend into the next block.
+
+Because the AST does not expose fence or HTML closure state, source validation
+reparses a continuation token in the terminal block's container and checks
+whether it becomes code or HTML. Physical list prefixes become continuation
+indentation and quote prefixes remain intact. The token is never emitted.
+Final assembly is reparsed and must contain exactly the expected managed block.
+
+A leading UTF-8 BOM is kept separately as file metadata before parsing. Target
+assembly and removal restore those bytes at the start, including when the block
+is prepended or no custom content remains. The BOM does not count as custom
+content or enter the managed block hash. Source hashes include it, while source
+rendering omits it. ChatGPT custom content is UTF-8 validated and appended as
+original bytes, including any BOM and line endings.
 
 Selected headings are grouped once. Target headings and section boundaries
 are indexed in one traversal, with a reverse pass across the six heading
@@ -131,9 +149,9 @@ reconstructed locked block for a textual difference; a hash alone establishes
 drift but cannot recover the old text.
 
 `ClaudeForwarding` renders import blocks, recognizes equivalent unquoted
-`@path` tokens anywhere in prose outside code spans and code blocks, and
-classifies existing project Claude files from caller-supplied bytes and
-symbolic-link metadata. Imports resolve relative to the containing file;
+`@path` tokens in AST text-node strings, skipping code spans, code blocks, and
+HTML nodes. It classifies existing project Claude files from caller-supplied
+bytes and symbolic-link metadata. Imports resolve relative to the containing file;
 backslash-escaped spaces are supported and quoted paths are not imports, as
 specified by [Claude Code's import syntax](https://code.claude.com/docs/en/memory#import-additional-files).
 Callers own ancestor-file warnings, actual filesystem access, declaration and lock updates, and deletion decisions using
