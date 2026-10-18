@@ -22,13 +22,13 @@ package enum ProcessRunner {
     process.standardError = stderr
 
     try process.run()
+    let stdoutReader = PipeReader(stdout.fileHandleForReading)
+    let stderrReader = PipeReader(stderr.fileHandleForReading)
     process.waitUntilExit()
 
     let output = ProcessOutput(
-      stdout: String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
-        ?? "",
-      stderr: String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
-        ?? "",
+      stdout: String(data: stdoutReader.waitForOutput(), encoding: .utf8) ?? "",
+      stderr: String(data: stderrReader.waitForOutput(), encoding: .utf8) ?? "",
       exitCode: process.terminationStatus
     )
 
@@ -37,5 +37,21 @@ package enum ProcessRunner {
         ([executable] + arguments).joined(separator: " ") + "\n" + output.stderr)
     }
     return output
+  }
+}
+
+// Each reader drains independently; its queue serializes all access to the captured data.
+private final class PipeReader: @unchecked Sendable {
+  private let queue = DispatchQueue(label: "ProcessRunner.PipeReader")
+  private var data = Data()
+
+  init(_ handle: FileHandle) {
+    queue.async {
+      self.data = handle.readDataToEndOfFile()
+    }
+  }
+
+  func waitForOutput() -> Data {
+    queue.sync { data }
   }
 }
