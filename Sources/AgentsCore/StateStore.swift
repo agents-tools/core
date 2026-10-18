@@ -64,6 +64,7 @@ public struct StateStore: Sendable {
   private func load<T: Codable>(_ url: URL) throws -> T? {
     guard let data = try existingData(url) else { return nil }
     do {
+      try JSONKeys.validate(data)
       let value = try JSONDecoder().decode(T.self, from: data)
       try rejectDiscardedFields(
         JSONSerialization.jsonObject(with: data),

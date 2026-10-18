@@ -104,6 +104,36 @@ struct StateModelTests {
 }
 
 extension StateModelTests {
+  @Test(arguments: [
+    #"{"sources":{"same":{"local":"/a"},"same":{"local":"/b"}}}"#,
+    #"{"sources":{"same":{"local":"/a"},"sa\u006de":{"local":"/b"}}}"#,
+    #"{"sources":{},"skills":{"demo":{"select":"all"},"demo":{"select":[]}}}"#,
+    #"{"version":1,"sources":{},"skills":{"demo":{},"demo":{}},"instructions":{"sections":[],"chatgpt":{},"targets":{}}}"#,
+    #"{"version":1,"sources":{},"skills":{"demo":{"source":"local:/a","installs":{"codex":"link","codex":"copy"}}},"instructions":{"sections":[],"chatgpt":{},"targets":{}}}"#,
+  ])
+  func duplicateKeysRejectReadsAndWrites(_ json: String) throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
+    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    let url = json.contains("version") ? store.resolvedURL : store.declarationURL
+    try Data(json.utf8).write(to: url)
+    let beforeDeclaration = try Data(contentsOf: store.declarationURL)
+    let beforeLock = try Data(contentsOf: store.resolvedURL)
+    #expect(throws: CoreError.self) {
+      if url == store.resolvedURL {
+        _ = try store.loadResolved()
+      } else {
+        _ = try store.loadDeclaration()
+      }
+    }
+    #expect(throws: CoreError.self) {
+      try store.save(declaration: Declaration(), resolved: ResolvedState())
+    }
+    #expect(try Data(contentsOf: store.declarationURL) == beforeDeclaration)
+    #expect(try Data(contentsOf: store.resolvedURL) == beforeLock)
+  }
+
   @Test func rejectsUnknownFieldsInsteadOfDiscardingIntent() throws {
     let root = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }

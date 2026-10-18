@@ -433,7 +433,7 @@ public enum SkillOperations {
         options.source, currentDirectory: options.environment.projectDirectory,
         homeDirectory: options.environment.homeDirectory)
       source = SourceDeclaration(
-        kind: parsed.type == .local ? .local : parsed.type == .wellKnown ? .wellKnown : .git,
+        kind: parsed.type,
         location: parsed.localPath ?? parsed.url, requirement: parsed.requirement,
         path: parsed.subpath)
     }

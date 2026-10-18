@@ -5,6 +5,18 @@ import Testing
 
 @Suite("File hashes")
 struct FileHashTests {
+  @Test func arbitraryBytesCannotImpersonateTreeEntries() throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("same skill".utf8).write(to: root.appendingPathComponent("SKILL.md"))
+    try Data("x".utf8).write(to: root.appendingPathComponent("a"))
+    try Data("y".utf8).write(to: root.appendingPathComponent("b"))
+    let twoFiles = try FileHash.folderHash(root)
+    try FileManager.default.removeItem(at: root.appendingPathComponent("b"))
+    try Data("x\0b\0file\0y".utf8).write(to: root.appendingPathComponent("a"))
+    #expect(try FileHash.folderHash(root) != twoFiles)
+  }
+
   @Test func hashesEveryContentEntryDeterministically() throws {
     let root = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }

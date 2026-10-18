@@ -1,20 +1,14 @@
 import Foundation
 
-public enum SourceType: String, Codable, Sendable {
-  case local
-  case git
-  case wellKnown = "well-known"
-}
-
 public struct ParsedSource: Equatable, Sendable {
-  public var type: SourceType
+  public var type: SourceKind
   public var url: String
   public var localPath: String?
   public var requirement: SourceRequirement?
   public var subpath: String?
 
   public init(
-    type: SourceType, url: String, localPath: String? = nil, requirement: SourceRequirement? = nil,
+    type: SourceKind, url: String, localPath: String? = nil, requirement: SourceRequirement? = nil,
     subpath: String? = nil
   ) {
     self.type = type
@@ -87,7 +81,7 @@ public enum SourceParser {
         type: .git, url: components.string!, requirement: .branch(parts[marker + 1]),
         subpath: path.isEmpty ? nil : try PathSafety.sanitizeSubpath(path))
     }
-    let kind: SourceType =
+    let kind: SourceKind =
       ["github.com", "gitlab.com", "huggingface.co", "raw.githubusercontent.com"].contains(
         host.lowercased()) || url.path.hasSuffix(".git")
       ? .git : .wellKnown
@@ -96,7 +90,7 @@ public enum SourceParser {
 
   public static func identity(for source: ParsedSource) throws -> String {
     try SourceDeclaration(
-      kind: source.type == .local ? .local : source.type == .git ? .git : .wellKnown,
+      kind: source.type,
       location: source.localPath ?? source.url
     ).identity(environment: RuntimeEnvironment())
   }

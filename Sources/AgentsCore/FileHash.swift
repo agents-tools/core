@@ -44,11 +44,14 @@ package enum FileHash {
       }
     }
     var hasher = SHA256()
+    // Each field has a fixed-width byte length, so arbitrary payload bytes cannot
+    // impersonate paths, entry types or record boundaries.
     for (path, content) in entries.sorted(by: { $0.0 < $1.0 }) {
-      hasher.update(data: Data(path.utf8))
-      hasher.update(data: Data([0]))
-      hasher.update(data: content)
-      hasher.update(data: Data([0]))
+      for field in [Data(path.utf8), content] {
+        var length = UInt64(field.count).bigEndian
+        withUnsafeBytes(of: &length) { hasher.update(data: Data($0)) }
+        hasher.update(data: field)
+      }
     }
     return hasher.finalize().map { String(format: "%02x", $0) }.joined()
   }
