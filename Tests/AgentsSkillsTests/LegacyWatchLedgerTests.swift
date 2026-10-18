@@ -8,7 +8,9 @@ import Testing
 struct LegacyWatchLedgerTests {
   @Test func loadsLegacyWatchLedgerButSavesStateFile() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
     let agentDirectory = project.appendingPathComponent(".agent")

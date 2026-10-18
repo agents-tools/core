@@ -8,8 +8,11 @@ import Testing
 struct InstallerTests {
   @Test func installsProjectSkillsAsRealDirectories() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     let skillDir = try writeBehaviorSkill(
       root: sourceRoot, path: "skills/self-loop", name: "self-loop")
     let environment = RuntimeEnvironment(
@@ -34,8 +37,11 @@ struct InstallerTests {
 
   @Test func removesPreexistingSelfLoopBeforeInstall() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     _ = try writeBehaviorSkill(root: sourceRoot, path: "skills/self-loop", name: "self-loop")
     let canonicalBase = project.appendingPathComponent(".agents/skills")
     let canonical = canonicalBase.appendingPathComponent("self-loop")
@@ -59,8 +65,11 @@ struct InstallerTests {
 
   @Test func avoidsSelfLoopWhenClaudeDirectoryIsSymlinked() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     _ = try writeBehaviorSkill(root: sourceRoot, path: "skills/claude", name: "claude")
     let canonicalBase = project.appendingPathComponent(".agents/skills")
     let claudeBase = project.appendingPathComponent(".claude/skills")
@@ -92,8 +101,11 @@ struct InstallerTests {
 
   @Test func preservesCanonicalSharedStorageWhileOtherAgentsReferenceIt() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     _ = try writeBehaviorSkill(root: sourceRoot, path: "skills/shared", name: "shared")
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
@@ -120,10 +132,15 @@ struct InstallerTests {
 
   @Test func installsUserScopedUniversalAgentsInCanonicalDirectory() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let codexHome = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: codexHome) }
     let xdgConfig = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: xdgConfig) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     _ = try writeBehaviorSkill(root: sourceRoot, path: "skills/native", name: "native")
     let environment = RuntimeEnvironment(
       projectDirectory: project,
@@ -144,7 +161,7 @@ struct InstallerTests {
         source: sourceRoot.path,
         agents: [.codex, .cursor, .geminiCLI, .opencode],
         skillNames: ["native"],
-        scope: .global,
+        scope: .user,
         mode: .copy,
         environment: environment))
 
@@ -167,10 +184,15 @@ struct InstallerTests {
 
   @Test func userScopedGitInstallsUseUserCache() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let codexHome = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: codexHome) }
     let xdgCache = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: xdgCache) }
     let repo = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: repo) }
     _ = try writeBehaviorSkill(root: repo, path: "skills/remote", name: "remote")
     try initGitRepo(repo)
     let revision = try gitHead(repo)
@@ -189,8 +211,8 @@ struct InstallerTests {
         source: "\(repo.path)@revision:\(revision)",
         agents: [.codex],
         skillNames: ["remote"],
-        scope: .global,
-        mode: .symlink,
+        scope: .user,
+        mode: .link,
         environment: environment))
 
     let userCache = xdgCache.appendingPathComponent("skill-cli/sources").standardizedFileURL
@@ -209,7 +231,7 @@ struct InstallerTests {
 
     try FileManager.default.removeItem(at: installed)
     let restored = try SkillOperations.installResolvedReport(
-      scope: .global, environment: environment
+      scope: .user, environment: environment
     ).installed
     #expect(restored.map(\.skill) == ["remote"])
     #expect(
@@ -218,9 +240,13 @@ struct InstallerTests {
 
   @Test func userScopedNativeOnlyAgentsLinkToCanonicalInstall() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let claudeHome = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: claudeHome) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     _ = try writeBehaviorSkill(root: sourceRoot, path: "skills/claude", name: "claude")
     let environment = RuntimeEnvironment(
       projectDirectory: project,
@@ -232,8 +258,8 @@ struct InstallerTests {
         source: sourceRoot.path,
         agents: [.claudeCode],
         skillNames: ["claude"],
-        scope: .global,
-        mode: .symlink,
+        scope: .user,
+        mode: .link,
         environment: environment))
 
     let canonical = home.appendingPathComponent(".agents/skills/claude")
@@ -252,8 +278,11 @@ struct InstallerTests {
 
   @Test func installResolvedKeepsNativeOnlyProjectionForSharedUserSkill() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     _ = try writeBehaviorSkill(root: sourceRoot, path: "skills/shared-user", name: "shared-user")
     let environment = RuntimeEnvironment(
       projectDirectory: project,
@@ -265,10 +294,10 @@ struct InstallerTests {
         source: sourceRoot.path,
         agents: [.claudeCode, .codex, .cursor],
         skillNames: ["shared-user"],
-        scope: .global,
-        mode: .symlink,
+        scope: .user,
+        mode: .link,
         environment: environment))
-    _ = try SkillOperations.installResolvedReport(scope: .global, environment: environment)
+    _ = try SkillOperations.installResolvedReport(scope: .user, environment: environment)
       .installed
 
     let canonical = home.appendingPathComponent(".agents/skills/shared-user")
@@ -284,9 +313,13 @@ struct InstallerTests {
 
   @Test func installResolvedSkipsMissingUserLocalSourceAndContinues() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let missingSource = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: missingSource) }
     let keepSource = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: keepSource) }
     _ = try writeBehaviorSkill(
       root: missingSource, path: "skills/missing-local", name: "missing-local")
     _ = try writeBehaviorSkill(root: keepSource, path: "skills/keep-local", name: "keep-local")
@@ -300,22 +333,22 @@ struct InstallerTests {
         source: missingSource.path,
         agents: [.codex],
         skillNames: ["missing-local"],
-        scope: .global,
-        mode: .symlink,
+        scope: .user,
+        mode: .link,
         environment: environment))
     _ = try SkillOperations.add(
       AddOptions(
         source: keepSource.path,
         agents: [.codex],
         skillNames: ["keep-local"],
-        scope: .global,
-        mode: .symlink,
+        scope: .user,
+        mode: .link,
         environment: environment))
 
     try FileManager.default.removeItem(at: missingSource)
     try FileManager.default.removeItem(at: home.appendingPathComponent(".agents/skills"))
 
-    let report = try SkillOperations.installResolvedReport(scope: .global, environment: environment)
+    let report = try SkillOperations.installResolvedReport(scope: .user, environment: environment)
 
     #expect(report.installed.map(\.skill) == ["keep-local"])
     #expect(report.skipped.count == 1)
@@ -332,8 +365,11 @@ struct InstallerTests {
 
   @Test func editModeLinksCanonicalToLocalSourceAndProjectsAgentsThroughCanonical() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     let skillDir = try writeBehaviorSkill(
       root: sourceRoot, path: "skills/editable", name: "editable")
     let environment = RuntimeEnvironment(
@@ -394,8 +430,11 @@ struct InstallerTests {
 
   @Test func editModeRejectsNonEditableSourcesAndWatchFlows() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     _ = try writeBehaviorSkill(root: sourceRoot, path: "skills/editable", name: "editable")
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
@@ -442,8 +481,11 @@ struct InstallerTests {
 
   @Test func installResolvedRestoresEditSymlinkWithoutCopying() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     let skillDir = try writeBehaviorSkill(
       root: sourceRoot, path: "skills/restored", name: "restored")
     let environment = RuntimeEnvironment(
@@ -472,9 +514,13 @@ struct InstallerTests {
 
   @Test func removesUserCanonicalInstallAfterLastReference() throws {
     let project = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let claudeHome = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: claudeHome) }
     let sourceRoot = try behaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     _ = try writeBehaviorSkill(
       root: sourceRoot, path: "skills/shared-global", name: "shared-global")
     let environment = RuntimeEnvironment(
@@ -487,20 +533,20 @@ struct InstallerTests {
         source: sourceRoot.path,
         agents: [.codex, .claudeCode],
         skillNames: ["shared-global"],
-        scope: .global,
-        mode: .symlink,
+        scope: .user,
+        mode: .link,
         environment: environment))
 
     let canonical = home.appendingPathComponent(".agents/skills/shared-global")
     let claude = claudeHome.appendingPathComponent("skills/shared-global")
     _ = try SkillOperations.remove(
-      skillNames: ["shared-global"], scope: .global, agents: [.codex], environment: environment)
+      skillNames: ["shared-global"], scope: .user, agents: [.codex], environment: environment)
     #expect(
       FileManager.default.fileExists(atPath: canonical.appendingPathComponent("SKILL.md").path))
     #expect(FileManager.default.fileExists(atPath: claude.path))
 
     _ = try SkillOperations.remove(
-      skillNames: ["shared-global"], scope: .global, agents: [.claudeCode], environment: environment
+      skillNames: ["shared-global"], scope: .user, agents: [.claudeCode], environment: environment
     )
     #expect(!FileManager.default.fileExists(atPath: claude.path))
     #expect(!FileManager.default.fileExists(atPath: canonical.path))

@@ -7,7 +7,9 @@ import Testing
 struct WatchLifecycleTests {
   @Test func managesWatchPathsAndReviewCursors() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let repo = project.appendingPathComponent("repo")
     for name in ["demo", "extra"] {
       let directory = repo.appendingPathComponent("skills/\(name)")

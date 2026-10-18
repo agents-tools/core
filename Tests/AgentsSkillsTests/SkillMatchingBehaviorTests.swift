@@ -45,6 +45,7 @@ struct SkillMatchingTests {
 
     for (directoryName, frontmatter, shouldParse) in cases {
       let root = try matchingTemporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: root) }
       let skill = root.appendingPathComponent(directoryName)
       try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
       try """

@@ -7,6 +7,7 @@ import Testing
 extension SkillDiscoveryTests {
   @Test func discoversSkillsFromFrontmatterAndPluginManifest() throws {
     let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     let skill = root.appendingPathComponent("plugin/skills/write")
     try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
     try """
@@ -39,6 +40,7 @@ extension SkillDiscoveryTests {
 
   @Test func respectsFullDepthAndInternalSkillFiltering() throws {
     let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent("nested/public"), withIntermediateDirectories: true)
     try FileManager.default.createDirectory(
@@ -82,6 +84,7 @@ extension SkillDiscoveryTests {
 
   @Test func skipsInvalidFrontmatterValues() throws {
     let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     let invalidName = root.appendingPathComponent("skills/invalid-name")
     let invalidDescription = root.appendingPathComponent("skills/invalid-description")
     try FileManager.default.createDirectory(at: invalidName, withIntermediateDirectories: true)
@@ -107,6 +110,7 @@ extension SkillDiscoveryTests {
 
   @Test func skipsMalformedFrontmatterAndKeepsValidSkills() throws {
     let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     let malformed = root.appendingPathComponent("skills/malformed")
     let valid = root.appendingPathComponent("skills/valid")
     try FileManager.default.createDirectory(at: malformed, withIntermediateDirectories: true)

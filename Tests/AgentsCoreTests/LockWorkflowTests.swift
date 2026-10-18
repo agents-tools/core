@@ -6,8 +6,10 @@ import Testing
 extension InstallLockTests {
   @Test func migratesLocalLockEntriesFromCompatibilityFormat() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let environment = RuntimeEnvironment(
-      projectDirectory: project, homeDirectory: try temporaryDirectory(), environment: [:])
+      projectDirectory: project, homeDirectory: project.appendingPathComponent("home"),
+      environment: [:])
     try FileManager.default.createDirectory(
       at: InstallLockStore.projectLockURL(environment: environment).deletingLastPathComponent(),
       withIntermediateDirectories: true)

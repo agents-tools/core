@@ -7,7 +7,9 @@ import Testing
 struct WatchReviewReceiptTests {
   @Test func recordsWatchReviewCloseoutReceiptFields() throws {
     let project = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let repo = project.appendingPathComponent("repo")
     _ = try writeCommandBehaviorSkill(root: repo, path: "skills/demo", name: "demo")
     try commandBehaviorInitGitRepo(repo)
@@ -64,7 +66,8 @@ private func writeCommandBehaviorSkill(root: URL, path: String, name: String) th
 }
 
 private func commandBehaviorInitGitRepo(_ repo: URL) throws {
-  try ProcessRunner.run("/usr/bin/env", arguments: ["git", "init", repo.path])
+  try ProcessRunner.run(
+    "/usr/bin/env", arguments: ["git", "init", "--initial-branch=master", repo.path])
   try ProcessRunner.run(
     "/usr/bin/env",
     arguments: ["git", "-C", repo.path, "config", "user.email", "tests@example.com"])

@@ -107,7 +107,7 @@ package enum InstallLockStore {
     environment.projectDirectory.appendingPathComponent(".agent/skills.resolved")
   }
 
-  package static func globalResolvedURL(environment: RuntimeEnvironment) -> URL {
+  package static func userResolvedURL(environment: RuntimeEnvironment) -> URL {
     if let stateHome = environment.environment["XDG_STATE_HOME"].flatMap({ $0.isEmpty ? nil : $0 })
     {
       return URL(fileURLWithPath: stateHome).appendingPathComponent("skills/skills.resolved")
@@ -119,13 +119,13 @@ package enum InstallLockStore {
     projectResolvedURL(environment: environment)
   }
 
-  package static func globalLockURL(environment: RuntimeEnvironment) -> URL {
-    globalResolvedURL(environment: environment)
+  package static func userLockURL(environment: RuntimeEnvironment) -> URL {
+    userResolvedURL(environment: environment)
   }
 
   package static func lockURL(scope: InstallScope, environment: RuntimeEnvironment) -> URL {
     scope == .project
-      ? projectResolvedURL(environment: environment) : globalResolvedURL(environment: environment)
+      ? projectResolvedURL(environment: environment) : userResolvedURL(environment: environment)
   }
 
   package static func load(scope: InstallScope, environment: RuntimeEnvironment) throws
@@ -250,7 +250,7 @@ package enum InstallLockStore {
     switch scope {
     case .project:
       return environment.projectDirectory.appendingPathComponent(".agent/skills-lock.json")
-    case .global:
+    case .user:
       if let stateHome = environment.environment["XDG_STATE_HOME"].flatMap({ $0.isEmpty ? nil : $0 }
       ) {
         return URL(fileURLWithPath: stateHome).appendingPathComponent("skills/.skill-lock.json")
@@ -299,7 +299,7 @@ private struct LegacyLocalLockFile: Decodable {
             InstallationPin(
               scope: .project,
               agent: .codex,
-              mode: .symlink,
+              mode: .link,
               path: ".agents/skills/\(PathSafety.sanitizeName(name))"
             )
           ]

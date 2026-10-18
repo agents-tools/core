@@ -6,7 +6,7 @@ import Testing
 
 @Suite("Skill Operations")
 struct SkillOperationsWorkflowTests {
-  @Test(arguments: ["add", "watch", "watch-only"], [InstallScope.project, .global])
+  @Test(arguments: ["add", "watch", "watch-only"], [InstallScope.project, .user])
   func rejectsAddBeforeResolvingSource(_ command: String, scope: InstallScope) throws {
     let root = try commandBehaviorTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -30,7 +30,7 @@ struct SkillOperationsWorkflowTests {
         atPath: WatchLedgerStore.ledgerURL(environment: environment).path))
   }
 
-  @Test(arguments: [InstallMode.copy, .symlink, .edit], [InstallScope.project, .global])
+  @Test(arguments: [InstallMode.copy, .link, .edit], [InstallScope.project, .user])
   func rejectsAddBeforeCreatingInstallDirectories(_ mode: InstallMode, scope: InstallScope) throws {
     let root = try commandBehaviorTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -120,7 +120,7 @@ struct SkillOperationsWorkflowTests {
     }
   }
 
-  @Test(arguments: [InstallScope.project, .global])
+  @Test(arguments: [InstallScope.project, .user])
   func watchedUpdateRejectsMalformedStateBeforeInstallingInEitherScope(
     _ malformedScope: InstallScope
   ) throws {
@@ -132,7 +132,7 @@ struct SkillOperationsWorkflowTests {
       projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
     var installed: [InstallResult] = []
     var watchID = ""
-    let scopes = [InstallScope.project, .global]
+    let scopes = [InstallScope.project, .user]
     for scope in scopes {
       let outcome = try SkillOperations.add(
         AddOptions(
@@ -185,8 +185,11 @@ struct SkillOperationsWorkflowTests {
 
   @Test func installsAllSkillsAndPreservesLockSourceIdentity() throws {
     let project = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     _ = try writeCommandBehaviorSkill(root: sourceRoot, path: "skills/one", name: "one")
     _ = try writeCommandBehaviorSkill(root: sourceRoot, path: "skills/two", name: "two")
     let environment = RuntimeEnvironment(
@@ -251,6 +254,7 @@ struct SkillOperationsWorkflowTests {
 
   @Test func createsSkillSkeletonInCurrentOrNamedDirectory() throws {
     let project = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
 
     let cwdSkill = try SkillOperations.initializeSkill(named: nil, directory: project)
     #expect(cwdSkill.standardizedFileURL.path == project.standardizedFileURL.path)
@@ -271,8 +275,11 @@ struct SkillOperationsWorkflowTests {
 
   @Test func listsRemovesAndSkipsDeletedSourceSkillsOnUpdate() throws {
     let project = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     let skillDir = try writeCommandBehaviorSkill(
       root: sourceRoot, path: "skills/remove-me", name: "remove-me")
     _ = try writeCommandBehaviorSkill(root: sourceRoot, path: "skills/keep-me", name: "keep-me")
@@ -320,8 +327,11 @@ struct SkillOperationsWorkflowTests {
   @Test(arguments: [InstallMode.copy, .edit])
   func removesManagedRecordsWithMissingInstallationsOrSources(_ mode: InstallMode) throws {
     let project = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     _ = try writeCommandBehaviorSkill(root: sourceRoot, path: "skills/gone", name: "gone")
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
@@ -357,7 +367,7 @@ struct SkillOperationsWorkflowTests {
       try SkillOperations.doctor(scope: .project, agents: [.codex], environment: environment).ok)
   }
 
-  @Test(arguments: [InstallScope.project, .global])
+  @Test(arguments: [InstallScope.project, .user])
   func removesMissingRecordsOnlyForSelectedAgentsAndScope(_ scope: InstallScope) throws {
     let root = try commandBehaviorTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -365,7 +375,7 @@ struct SkillOperationsWorkflowTests {
     let sourceSkill = try writeCommandBehaviorSkill(root: source, path: "gone", name: "gone")
     let environment = RuntimeEnvironment(
       projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
-    for installScope in [InstallScope.project, .global] {
+    for installScope in [InstallScope.project, .user] {
       _ = try SkillOperations.add(
         AddOptions(
           source: source.path, agents: [.codex, .cursor], scope: installScope, mode: .edit,
@@ -374,7 +384,7 @@ struct SkillOperationsWorkflowTests {
         scope: installScope, environment: environment)
       try FileManager.default.removeItem(at: canonical.appendingPathComponent("gone"))
     }
-    let otherScope: InstallScope = scope == .project ? .global : .project
+    let otherScope: InstallScope = scope == .project ? .user : .project
     let otherLockURL = InstallLockStore.lockURL(scope: otherScope, environment: environment)
     let otherLock = try Data(contentsOf: otherLockURL)
     let lockURL = InstallLockStore.lockURL(scope: scope, environment: environment)
@@ -410,7 +420,9 @@ struct SkillOperationsWorkflowTests {
 
   @Test func installsWatchedSkillFromReviewedBaselineAndKeepsDryRunReadOnly() throws {
     let project = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let repo = project.appendingPathComponent("repo")
     let skillDir = repo.appendingPathComponent("skills/demo")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
@@ -461,6 +473,7 @@ struct SkillOperationsWorkflowTests {
     #expect(ledger.watches[0].watchedPaths[0].reviewCoverage.reviewedCommit == nil)
 
     let remoteProject = try commandBehaviorTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: remoteProject) }
     let checkout = remoteProject.appendingPathComponent(".agent/cache/sources/remote")
     let remoteEnvironment = RuntimeEnvironment(
       projectDirectory: remoteProject, homeDirectory: home, environment: [:])
@@ -510,7 +523,8 @@ private func writeCommandBehaviorSkill(root: URL, path: String, name: String) th
 }
 
 private func commandBehaviorInitGitRepo(_ repo: URL) throws {
-  try ProcessRunner.run("/usr/bin/env", arguments: ["git", "init", repo.path])
+  try ProcessRunner.run(
+    "/usr/bin/env", arguments: ["git", "init", "--initial-branch=master", repo.path])
   try ProcessRunner.run(
     "/usr/bin/env",
     arguments: ["git", "-C", repo.path, "config", "user.email", "tests@example.com"])

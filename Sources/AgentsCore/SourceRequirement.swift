@@ -39,6 +39,61 @@ public struct SourceRequirement: Codable, Equatable, Sendable {
     SourceRequirement(kind: "ref", value: value)
   }
 
+  private enum CodingKeys: String, CodingKey {
+    case branch, revision, exact, from, upToNextMinor, to
+  }
+
+  public init(from decoder: Decoder) throws {
+    guard let requirement = try Self.decodeIfPresent(from: decoder) else {
+      throw CoreError.invalidState("empty requirement")
+    }
+    self = requirement
+  }
+
+  static func decodeIfPresent(from decoder: Decoder) throws -> SourceRequirement? {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let keys: [CodingKeys] = [.branch, .revision, .exact, .from, .upToNextMinor]
+    let present = keys.filter { container.contains($0) }
+    guard present.count <= 1, !container.contains(.to) || container.contains(.from) else {
+      throw CoreError.invalidState("conflicting source requirements")
+    }
+    guard let key = present.first else { return nil }
+    let value = try container.decode(String.self, forKey: key)
+    let upper = try container.decodeIfPresent(String.self, forKey: .to)
+    let kind = key == .upToNextMinor ? "minor" : (upper == nil ? key.rawValue : "range")
+    let requirement = Self(kind: kind, value: value, upperBound: upper)
+    try requirement.validate()
+    return requirement
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    let key =
+      kind == "minor"
+      ? CodingKeys.upToNextMinor : kind == "range" ? .from : CodingKeys(rawValue: kind)
+    guard let key else { throw CoreError.invalidState("unsupported requirement: \(kind)") }
+    try container.encode(value, forKey: key)
+    try container.encodeIfPresent(upperBound, forKey: .to)
+  }
+
+  package func validate() throws {
+    guard !value.isEmpty, !value.hasPrefix("-"), !value.contains("\0") else {
+      throw CoreError.invalidState("invalid source requirement")
+    }
+    if isVersionRequirement {
+      guard let lower = SemanticVersion(value) else {
+        throw CoreError.invalidState("invalid version: \(value)")
+      }
+      if kind == "range" {
+        guard let upperBound, let upper = SemanticVersion(upperBound), lower < upper else {
+          throw CoreError.invalidState("invalid version range")
+        }
+      }
+    } else if kind != "branch" && kind != "revision" {
+      throw CoreError.invalidState("unsupported requirement: \(kind)")
+    }
+  }
+
   public var checkoutRef: String? {
     switch kind {
     case "branch", "revision", "ref":

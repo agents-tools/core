@@ -8,7 +8,9 @@ import Testing
 struct InstalledSkillListingTests {
   @Test func listsInstalledSkillsFromFilesystemShapes() throws {
     let project = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
 
@@ -33,7 +35,9 @@ struct InstalledSkillListingTests {
 
   @Test func ignoresDanglingAndFileSymlinksWhenListingInstalledSkills() throws {
     let project = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
     let skills = project.appendingPathComponent(".agents/skills")
@@ -55,7 +59,9 @@ struct InstalledSkillListingTests {
 
   @Test func listsDirectorySymlinksAndAgentSpecificDirectories() throws {
     let project = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
 
@@ -88,7 +94,9 @@ struct InstalledSkillListingTests {
 
   @Test func listsManagedSkillsFromResolvedStateAndChecksFilesystemPresence() throws {
     let project = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = project.appendingPathComponent("source")
     let skillDir = sourceRoot.appendingPathComponent("skills/managed")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
@@ -130,7 +138,9 @@ struct InstalledSkillListingTests {
 
   @Test func reportsEditSourceMissingCopyDriftAndInstalledOnlyStatuses() throws {
     let project = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = project.appendingPathComponent("source")
     let skillDir = sourceRoot.appendingPathComponent("skills/editable")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
@@ -198,11 +208,13 @@ struct InstalledSkillListingTests {
     #expect(report.checks.contains { $0.message.contains("installed-only") })
   }
 
-  @Test(arguments: [InstallScope.project, .global])
+  @Test(arguments: [InstallScope.project, .user])
   func treatsSharedDirectorySkillsAsManagedForEveryAgentReadingIt(_ scope: InstallScope) throws {
     let project = try listInstalledTemporaryDirectory()
     let home = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = try listInstalledTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: sourceRoot) }
     defer {
       try? FileManager.default.removeItem(at: project)
       try? FileManager.default.removeItem(at: home)
@@ -258,13 +270,13 @@ struct InstalledSkillListingTests {
       projectDirectory: root, homeDirectory: home, environment: [:])
     _ = try SkillOperations.add(
       AddOptions(
-        source: source.path, agents: [.cursor], scope: .global, mode: .copy,
+        source: source.path, agents: [.cursor], scope: .user, mode: .copy,
         environment: environment))
     let native = home.appendingPathComponent(".cursor/skills")
     try writeInstalledSkill(project: root, name: "shared", base: native)
 
     let report = try SkillOperations.doctor(
-      scope: .global, agents: [.cursor], environment: environment)
+      scope: .user, agents: [.cursor], environment: environment)
     #expect(report.checks.contains { $0.id == "skill.cursor.shared" && $0.status == .ok })
     let warning = try #require(report.checks.first { $0.id == "installed-only.cursor.shared" })
     let warningPath = try #require(warning.path)
@@ -273,7 +285,7 @@ struct InstalledSkillListingTests {
         == native.appendingPathComponent("shared").resolvingSymlinksInPath().path)
   }
 
-  @Test(arguments: [InstallScope.project, .global])
+  @Test(arguments: [InstallScope.project, .user])
   func diagnosesLinkedInstallationsByTheirContent(_ scope: InstallScope) throws {
     let root = try listInstalledTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -284,7 +296,7 @@ struct InstalledSkillListingTests {
     let agents: [AgentID] = [.codex, .claudeCode]
     _ = try SkillOperations.add(
       AddOptions(
-        source: source.path, agents: agents, scope: scope, mode: .symlink,
+        source: source.path, agents: agents, scope: scope, mode: .link,
         environment: environment))
 
     let managed = try SkillOperations.listManaged(

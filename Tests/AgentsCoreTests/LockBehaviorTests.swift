@@ -76,7 +76,9 @@ struct InstallLockTests {
 
   @Test func savesLocksDeterministicallyWithTrailingNewline() throws {
     let project = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
     let lock = LockFile(pins: [
@@ -142,7 +144,9 @@ struct InstallLockTests {
 
   @Test func loadsLegacyProjectLockButSavesProjectResolvedFile() throws {
     let project = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
     let agentDirectory = project.appendingPathComponent(".agent")
@@ -199,8 +203,11 @@ struct InstallLockTests {
 
   @Test func loadsLegacyGlobalLocksButSavesGlobalResolvedFile() throws {
     let project = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let xdgState = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: xdgState) }
     let environment = RuntimeEnvironment(
       projectDirectory: project,
       homeDirectory: home,
@@ -225,10 +232,10 @@ struct InstallLockTests {
       atomically: true,
       encoding: .utf8)
 
-    let lock = try InstallLockStore.load(scope: .global, environment: environment)
+    let lock = try InstallLockStore.load(scope: .user, environment: environment)
     #expect(lock.pins.flatMap(\.skills).map(\.identity) == ["legacy-skill"])
 
-    try InstallLockStore.save(lock, scope: .global, environment: environment)
+    try InstallLockStore.save(lock, scope: .user, environment: environment)
     #expect(
       FileManager.default.fileExists(
         atPath: xdgState.appendingPathComponent("skills/skills.resolved").path))
@@ -236,6 +243,7 @@ struct InstallLockTests {
 
   @Test func hashesFoldersDeterministicallyIgnoringMetadata() throws {
     let root = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try "one".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent("nested"), withIntermediateDirectories: true)
@@ -261,6 +269,7 @@ struct InstallLockTests {
 
   @Test func hashesSymlinkedFolderLikeItsTarget() throws {
     let root = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     let target = root.appendingPathComponent("target")
     try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
     try "one".write(to: target.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
@@ -272,7 +281,9 @@ struct InstallLockTests {
 
   @Test func mergesUpdatesRemovesAndHashesLocalLockEntries() throws {
     let project = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try lockTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let environment = RuntimeEnvironment(
       projectDirectory: project, homeDirectory: home, environment: [:])
     let source = SourcePin(

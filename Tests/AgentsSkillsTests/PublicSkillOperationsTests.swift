@@ -120,6 +120,7 @@ struct PublicSkillOperationsTests {
 
   @Test func appliesDiscoveryOptionsThroughPublicAPI() throws {
     let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     let source = root.appendingPathComponent("source")
     let environment = RuntimeEnvironment(
       projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
@@ -182,6 +183,7 @@ struct PublicSkillOperationsTests {
 
   @Test func initializesUpdatesRestoresAndRemovesSkillsThroughPublicAPI() throws {
     let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     let source = root.appendingPathComponent("source")
     let skill = try SkillOperations.initializeSkill(named: "updatable", directory: source)
     let environment = RuntimeEnvironment(
@@ -217,6 +219,7 @@ struct PublicSkillOperationsTests {
 
   @Test func removesUnmanagedSkillsByNameAgentAndScope() throws {
     let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     let environment = RuntimeEnvironment(
       projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
     let base = root.appendingPathComponent(".agents/skills")
@@ -229,7 +232,7 @@ struct PublicSkillOperationsTests {
     #expect(FileManager.default.fileExists(atPath: base.appendingPathComponent("skill-two").path))
     #expect(throws: CoreError.self) {
       try SkillOperations.remove(
-        skillNames: ["skill-two"], scope: .global, agents: [.codex], environment: environment)
+        skillNames: ["skill-two"], scope: .user, agents: [.codex], environment: environment)
     }
     #expect(FileManager.default.fileExists(atPath: base.appendingPathComponent("skill-two").path))
     _ = try SkillOperations.remove(
@@ -269,12 +272,12 @@ struct PublicSkillOperationsTests {
       projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
     let projectInstall = try SkillOperations.add(
       AddOptions(
-        source: repo.path, agents: [.claudeCode], scope: .project, mode: .symlink, watch: true,
+        source: repo.path, agents: [.claudeCode], scope: .project, mode: .link, watch: true,
         environment: environment))
     let watchID = try #require(projectInstall.watched.first?.watchID)
     let globalInstall = try SkillOperations.add(
       AddOptions(
-        source: watchID, agents: [.codex], scope: .global, mode: .copy,
+        source: watchID, agents: [.codex], scope: .user, mode: .copy,
         environment: environment))
     let originalTargets = projectInstall.installed + globalInstall.installed
     #expect(originalTargets.count == 2)
@@ -322,7 +325,7 @@ struct PublicSkillOperationsTests {
     }
   }
 
-  @Test(arguments: [InstallScope.project, .global])
+  @Test(arguments: [InstallScope.project, .user])
   func removesAllSkillsOnlyForSelectedAgentAndScope(_ scope: InstallScope) throws {
     let root = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -332,15 +335,15 @@ struct PublicSkillOperationsTests {
     }
     let environment = RuntimeEnvironment(
       projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
-    for installScope in [InstallScope.project, .global] {
+    for installScope in [InstallScope.project, .user] {
       _ = try SkillOperations.add(
         AddOptions(
           source: source.path, agents: [.claudeCode, .codex], skillNames: ["shared"],
-          scope: installScope, mode: .symlink, environment: environment))
+          scope: installScope, mode: .link, environment: environment))
       _ = try SkillOperations.add(
         AddOptions(
           source: source.path, agents: [.claudeCode], skillNames: ["orphan", "missing"],
-          scope: installScope, mode: .symlink, environment: environment))
+          scope: installScope, mode: .link, environment: environment))
       let base = installScope == .project ? root : environment.homeDirectory
       for name in ["unmanaged-one", "unmanaged-two"] {
         _ = try SkillOperations.initializeSkill(
@@ -352,7 +355,7 @@ struct PublicSkillOperationsTests {
       try FileManager.default.removeItem(at: base.appendingPathComponent(".claude/skills/\(name)"))
     }
     try FileManager.default.removeItem(at: base.appendingPathComponent(".agents/skills/missing"))
-    let otherScope: InstallScope = scope == .project ? .global : .project
+    let otherScope: InstallScope = scope == .project ? .user : .project
     let otherLockURL =
       otherScope == .project
       ? root.appendingPathComponent(".agent/skills.resolved")

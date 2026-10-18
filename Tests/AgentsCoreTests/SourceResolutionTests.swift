@@ -83,7 +83,9 @@ struct SourceResolutionTests {
 
   @Test func resolvesSemanticVersionRequirementsFromTags() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let repo = project.appendingPathComponent("repo")
     let skillDir = repo.appendingPathComponent("skills/demo")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)

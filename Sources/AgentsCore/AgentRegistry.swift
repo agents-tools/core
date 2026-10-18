@@ -43,11 +43,11 @@ public enum AgentID: String, Codable, CaseIterable, Sendable {
 
 public enum InstallScope: String, Codable, Sendable {
   case project
-  case global
+  case user
 }
 
 public enum InstallMode: String, Codable, Sendable {
-  case symlink
+  case link
   case copy
   case edit
 }
@@ -84,7 +84,7 @@ package enum AgentRegistry {
     switch scope {
     case .project:
       return environment.projectDirectory.appendingPathComponent(".agent/cache")
-    case .global:
+    case .user:
       if let cacheHome = environment.environment["XDG_CACHE_HOME"].flatMap({
         $0.isEmpty ? nil : $0
       }) {
@@ -116,7 +116,7 @@ package enum AgentRegistry {
     switch scope {
     case .project:
       return environment.projectDirectory.appendingPathComponent(".agents/skills")
-    case .global:
+    case .user:
       return environment.homeDirectory.appendingPathComponent(".agents/skills")
     }
   }
@@ -130,7 +130,7 @@ package enum AgentRegistry {
         .standardizedFileURL.path
       return projectSkillsDirectory(for: agent, environment: environment).standardizedFileURL.path
         == canonical
-    case .global:
+    case .user:
       return usesUniversalProjectSkillsDirectory(for: agent, environment: environment)
     }
   }
@@ -159,7 +159,7 @@ package enum AgentRegistry {
     }
   }
 
-  package static func globalSkillsDirectory(for agent: AgentID, environment: RuntimeEnvironment)
+  package static func userSkillsDirectory(for agent: AgentID, environment: RuntimeEnvironment)
     -> URL
   {
     switch agent {
@@ -188,17 +188,17 @@ package enum AgentRegistry {
     }
   }
 
-  package static func nativeGlobalScanDirectories(
+  package static func nativeUserScanDirectories(
     for agent: AgentID, environment: RuntimeEnvironment
   ) -> [URL] {
     switch agent {
     case .codex, .cursor, .geminiCLI, .opencode:
       return [
-        globalSkillsDirectory(for: agent, environment: environment),
+        userSkillsDirectory(for: agent, environment: environment),
         environment.homeDirectory.appendingPathComponent(".agents/skills"),
       ]
     case .claudeCode:
-      return [globalSkillsDirectory(for: agent, environment: environment)]
+      return [userSkillsDirectory(for: agent, environment: environment)]
     }
   }
 
@@ -222,8 +222,8 @@ package enum AgentRegistry {
     switch scope {
     case .project:
       return projectScanDirectories(for: agent, environment: environment)
-    case .global:
-      var directories = [globalSkillsDirectory(for: agent, environment: environment)]
+    case .user:
+      var directories = [userSkillsDirectory(for: agent, environment: environment)]
       if usesCanonicalSkillsDirectory(for: agent, scope: scope, environment: environment) {
         directories.append(canonicalSkillsDirectory(scope: scope, environment: environment))
       }
@@ -237,8 +237,8 @@ package enum AgentRegistry {
     switch scope {
     case .project:
       return projectSkillsDirectory(for: agent, environment: environment)
-    case .global:
-      return globalSkillsDirectory(for: agent, environment: environment)
+    case .user:
+      return userSkillsDirectory(for: agent, environment: environment)
     }
   }
 

@@ -34,6 +34,7 @@ extension SourceParserTests {
 extension SourceResolutionTests {
   @Test func branchRequirementsCheckoutFetchedRemoteBranchHead() throws {
     let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     let source = root.appendingPathComponent("source")
     let skill = source.appendingPathComponent("skills/demo")
     try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)

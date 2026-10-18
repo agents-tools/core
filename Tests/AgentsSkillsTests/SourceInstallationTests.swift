@@ -8,7 +8,9 @@ import Testing
 struct SourceInstallationTests {
   @Test func installsExactPrereleaseInsteadOfAnEarlierTagWithoutTheSkill() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let repo = project.appendingPathComponent("repo")
     try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
     try "Skills repository".write(
@@ -47,12 +49,12 @@ struct SourceInstallationTests {
     let outcome = try SkillOperations.add(
       AddOptions(
         source: repo.path, agents: [.codex], skillNames: ["reminder-creator"],
-        scope: .global, mode: .copy, path: "skills",
+        scope: .user, mode: .copy, path: "skills",
         sourceRequirement: .exact("0.1.0-alpha.4"), environment: environment))
     #expect(outcome.installed.map(\.skill) == ["reminder-creator"])
     #expect(outcome.source.revision == prereleaseRevision)
     #expect(outcome.source.resolvedVersion == "0.1.0-alpha.4")
-    let lock = try InstallLockStore.load(scope: .global, environment: environment)
+    let lock = try InstallLockStore.load(scope: .user, environment: environment)
     #expect(lock.pins.first?.state.version == "0.1.0-alpha.4")
     #expect(lock.pins.first?.state.revision == prereleaseRevision)
 

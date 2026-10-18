@@ -7,6 +7,7 @@ import Testing
 extension SkillOperationsWorkflowTests {
   @Test func initializesSkillSkeletonsAndRejectsOverwrites() throws {
     let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     let created = try SkillOperations.initializeSkill(named: "My Skill", directory: root)
     let skillFile = created.appendingPathComponent("SKILL.md")
     #expect(created.lastPathComponent == "my-skill")
@@ -21,7 +22,9 @@ extension SkillOperationsWorkflowTests {
 
   @Test func installsCopiedSkillsAndUpdatesProjectLock() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = project.appendingPathComponent("source")
     let skillDir = sourceRoot.appendingPathComponent("skills/example")
     try FileManager.default.createDirectory(
@@ -95,7 +98,9 @@ extension SkillOperationsWorkflowTests {
 
   @Test func cleansRemovedFilesAndPreservesDotfilesOnReinstall() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = project.appendingPathComponent("source")
     let skillDir = sourceRoot.appendingPathComponent("skills/clean")
     try FileManager.default.createDirectory(
@@ -142,7 +147,9 @@ extension SkillOperationsWorkflowTests {
 extension InstalledSkillListingTests {
   @Test func listsDefaultSymlinkInstallations() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = project.appendingPathComponent("source")
     let skillDir = sourceRoot.appendingPathComponent("skills/linked")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
@@ -167,8 +174,11 @@ extension InstalledSkillListingTests {
 
   @Test func scansCodexUserDirectoryForGlobalList() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let codexHome = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: codexHome) }
     let skillDir = codexHome.appendingPathComponent("skills/native")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
     try """
@@ -184,7 +194,7 @@ extension InstalledSkillListingTests {
       environment: ["CODEX_HOME": codexHome.path]
     )
     let installed = try SkillOperations.listInstalled(
-      scope: .global, agents: [.codex], environment: environment)
+      scope: .user, agents: [.codex], environment: environment)
     #expect(
       installed.contains {
         $0.name == "native"
@@ -195,9 +205,13 @@ extension InstalledSkillListingTests {
 
   @Test func usesXDGStateForGlobalLockAndXDGConfigForOpenCodeListing() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let xdgState = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: xdgState) }
     let xdgConfig = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: xdgConfig) }
     let environment = RuntimeEnvironment(
       projectDirectory: project,
       homeDirectory: home,
@@ -208,7 +222,7 @@ extension InstalledSkillListingTests {
     )
 
     #expect(
-      InstallLockStore.globalLockURL(environment: environment).standardizedFileURL.path
+      InstallLockStore.userLockURL(environment: environment).standardizedFileURL.path
         == xdgState.appendingPathComponent("skills/skills.resolved").standardizedFileURL.path)
 
     let skillDir = xdgConfig.appendingPathComponent("opencode/skills/native-open")
@@ -221,7 +235,7 @@ extension InstalledSkillListingTests {
     """.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
     let installed = try SkillOperations.listInstalled(
-      scope: .global, agents: [.opencode], environment: environment)
+      scope: .user, agents: [.opencode], environment: environment)
     #expect(installed.contains { $0.name == "native-open" })
   }
 }
@@ -229,7 +243,9 @@ extension InstalledSkillListingTests {
 extension InstallerTests {
   @Test func linksClaudeProjectInstallThroughCanonicalDirectory() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = project.appendingPathComponent("source")
     let skillDir = sourceRoot.appendingPathComponent("skills/claude")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)

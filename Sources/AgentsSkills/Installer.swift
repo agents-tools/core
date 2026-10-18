@@ -67,7 +67,7 @@ enum Installer {
         scope: request.scope, environment: request.environment
       ).appendingPathComponent(installName)
       let needsCanonical =
-        request.mode == .symlink
+        request.mode == .link
         || request.mode == .edit
         || (request.mode == .copy
           && agents.contains {
@@ -227,7 +227,7 @@ enum Installer {
     switch mode {
     case .copy:
       try copyDirectory(source: source, destination: destination)
-    case .symlink:
+    case .link:
       do {
         let relativeTarget = relative(source.path, to: destination.deletingLastPathComponent().path)
         try FileManager.default.createSymbolicLink(
@@ -289,7 +289,7 @@ enum Installer {
         return (.editInstalled, sourceURL.path, false)
       }
       return (.editInstalled, canonical.path, false)
-    case .symlink:
+    case .link:
       if needsCanonical && sameResolvedLocation(canonical, destination) {
         return (.copyInstalled, nil, false)
       }
@@ -424,7 +424,7 @@ enum Installer {
     scope: InstallScope,
     environment: RuntimeEnvironment
   ) throws {
-    guard scope == .global else { return }
+    guard scope == .user else { return }
     let native = AgentRegistry.skillsDirectory(
       for: agent, scope: scope, environment: environment
     ).appendingPathComponent(installName)

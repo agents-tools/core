@@ -24,7 +24,7 @@ public struct AddOptions: Sendable {
     agents: [AgentID] = [.codex],
     skillNames: [String] = [],
     scope: InstallScope = .project,
-    mode: InstallMode = .symlink,
+    mode: InstallMode = .link,
     listOnly: Bool = false,
     all: Bool = false,
     allowMultipleSkills: Bool? = nil,
@@ -691,7 +691,7 @@ public enum SkillOperations {
     all: Bool = false,
     agents: [AgentID]? = nil,
     scope: InstallScope = .project,
-    mode: InstallMode = .symlink,
+    mode: InstallMode = .link,
     environment: RuntimeEnvironment,
     apply: Bool
   ) throws -> [InstallResult] {
@@ -792,7 +792,7 @@ public enum SkillOperations {
     environment: RuntimeEnvironment
   ) throws -> [InstallationPin] {
     var targets: [InstallationPin] = []
-    for scope in [InstallScope.project, .global] {
+    for scope in [InstallScope.project, .user] {
       let lock = try InstallLockStore.load(scope: scope, environment: environment)
       for source in lock.pins where source.identity == sourceIdentity {
         for skill in source.skills where skillDirectoryPath(from: skill.path) == watchedPath {
@@ -846,7 +846,7 @@ public enum SkillOperations {
     var seen = Set<String>()
     return
       ([AgentRegistry.skillsDirectory(for: agent, scope: scope, environment: environment)]
-      + AgentRegistry.nativeGlobalScanDirectories(for: agent, environment: environment))
+      + AgentRegistry.nativeUserScanDirectories(for: agent, environment: environment))
       .filter { seen.insert($0.standardizedFileURL.path).inserted }
   }
 
@@ -860,7 +860,7 @@ public enum SkillOperations {
     case .project:
       return environment.projectDirectory.appendingPathComponent(installation.path)
         .standardizedFileURL
-    case .global:
+    case .user:
       return environment.homeDirectory.appendingPathComponent(installation.path)
         .standardizedFileURL
     }

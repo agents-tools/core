@@ -31,6 +31,7 @@ struct SkillDiscoveryTests {
 
   @Test func discoversNestedSkillsWhenFullDepthIsEnabled() throws {
     let root = try discoveryTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try writeDiscoverySkill(root, name: "root-skill")
     try writeDiscoverySkill(
       root.appendingPathComponent("skills/nested-skill"), name: "nested-skill")
@@ -41,6 +42,7 @@ struct SkillDiscoveryTests {
         .sorted() == ["nested-skill", "root-skill"])
 
     let noRoot = try discoveryTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: noRoot) }
     try writeDiscoverySkill(noRoot.appendingPathComponent("skills/skill-1"), name: "skill-1")
     try writeDiscoverySkill(noRoot.appendingPathComponent("skills/skill-2"), name: "skill-2")
     #expect(try Discovery.discover(in: noRoot).map(\.name).sorted() == ["skill-1", "skill-2"])
@@ -48,6 +50,7 @@ struct SkillDiscoveryTests {
 
   @Test func boundsNestedContainerDiscoveryDepth() throws {
     let root = try discoveryTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try writeDiscoverySkill(
       root.appendingPathComponent("skills/product-a/skill-one"), name: "skill-one")
     try writeDiscoverySkill(
@@ -62,6 +65,7 @@ struct SkillDiscoveryTests {
         == ["skill-one", "skill-three", "skill-two"])
 
     let mixed = try discoveryTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: mixed) }
     try writeDiscoverySkill(mixed.appendingPathComponent("skills/flat-skill"), name: "flat-skill")
     try writeDiscoverySkill(
       mixed.appendingPathComponent("skills/category/nested-skill"), name: "nested-skill")
@@ -69,12 +73,14 @@ struct SkillDiscoveryTests {
       try Discovery.discover(in: mixed).map(\.name).sorted() == ["flat-skill", "nested-skill"])
 
     let shadowed = try discoveryTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: shadowed) }
     try writeDiscoverySkill(shadowed.appendingPathComponent("skills/foo"), name: "outer-skill")
     try writeDiscoverySkill(
       shadowed.appendingPathComponent("skills/foo/inner"), name: "inner-skill")
     #expect(try Discovery.discover(in: shadowed).map(\.name) == ["outer-skill"])
 
     let tooDeep = try discoveryTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: tooDeep) }
     try writeDiscoverySkill(
       tooDeep.appendingPathComponent("skills/level-1/level-2/deep"), name: "deep")
     try writeDiscoverySkill(tooDeep.appendingPathComponent("skills/shallow"), name: "shallow")
@@ -86,11 +92,13 @@ struct SkillDiscoveryTests {
 
   @Test func suppressesLockedProjectAgentContainersDuringDiscovery() throws {
     let root = try discoveryTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try writeDiscoverySkill(
       root.appendingPathComponent(".agents/skills/category/agent-skill"), name: "agent-skill")
     #expect(try Discovery.discover(in: root).map(\.name) == ["agent-skill"])
 
     let locked = try discoveryTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: locked) }
     try writeDiscoverySkill(
       locked.appendingPathComponent(".agents/skills/installed-skill"), name: "installed-skill")
     try writeDiscoverySkill(
@@ -115,6 +123,7 @@ struct SkillDiscoveryTests {
 
   @Test func discoversSkillsFromPluginManifests() throws {
     let root = try discoveryTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent(".claude-plugin"), withIntermediateDirectories: true)
     try """
@@ -142,6 +151,7 @@ struct SkillDiscoveryTests {
 
   @Test func rejectsUnsafePluginManifestPathsAndKeepsSafeConventions() throws {
     let root = try discoveryTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent(".claude-plugin"), withIntermediateDirectories: true)
     try """

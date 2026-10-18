@@ -12,7 +12,8 @@ func temporaryDirectory() throws -> URL {
 }
 
 func initGitRepo(_ repo: URL) throws {
-  try ProcessRunner.run("/usr/bin/env", arguments: ["git", "init", repo.path])
+  try ProcessRunner.run(
+    "/usr/bin/env", arguments: ["git", "init", "--initial-branch=master", repo.path])
   try ProcessRunner.run(
     "/usr/bin/env",
     arguments: ["git", "-C", repo.path, "config", "user.email", "tests@example.com"])

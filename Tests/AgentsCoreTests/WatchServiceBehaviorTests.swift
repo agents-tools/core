@@ -7,7 +7,9 @@ import Testing
 struct WatchServiceTests {
   @Test func refreshWatchedHeadDoesNotAdvanceReviewCursors() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let repo = project.appendingPathComponent("repo")
     let skillDir = repo.appendingPathComponent("skills/sample")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
@@ -68,7 +70,9 @@ struct WatchServiceTests {
 
   @Test func requiresCheckedCommitForWatchDoneUnlessExplicit() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let repo = project.appendingPathComponent("repo")
     let skillDir = repo.appendingPathComponent("skills/sample")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
@@ -102,7 +106,9 @@ struct WatchServiceTests {
 
   @Test func appliesAllWatchOperationsOnlyToEligiblePaths() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let repo = project.appendingPathComponent("repo")
     for name in ["a", "b"] {
       let skillDir = repo.appendingPathComponent("skills/\(name)")
@@ -151,8 +157,11 @@ struct WatchServiceTests {
 
   @Test func refreshesRemoteWatchedHeadCheckout() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let remoteRepo = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: remoteRepo) }
     let skillDir = remoteRepo.appendingPathComponent("skills/remote")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
     try """
@@ -202,7 +211,9 @@ struct WatchServiceTests {
 
   @Test func mergesWatchPathsAndRequiresExplicitRequirementReplacement() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let repo = project.appendingPathComponent("repo")
     for name in ["a", "b"] {
       let skillDir = repo.appendingPathComponent("skills/\(name)")

@@ -8,7 +8,9 @@ import Testing
 struct WatchInstallWorkflowTests {
   @Test func installsSingleWatchedPathAndReportsReviewStateInList() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let sourceRoot = project.appendingPathComponent("source")
     for name in ["alpha", "beta"] {
       let skillDir = sourceRoot.appendingPathComponent("skills/\(name)")
@@ -52,7 +54,9 @@ struct WatchInstallWorkflowTests {
 
   @Test func watchOnlyWritesLedgerAndWatchInstallUsesReviewedBaseline() throws {
     let project = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: project) }
     let home = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: home) }
     let repo = project.appendingPathComponent("repo")
     let skillDir = repo.appendingPathComponent("skills/demo")
     try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
