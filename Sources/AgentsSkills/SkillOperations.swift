@@ -107,30 +107,51 @@ public enum SkillOperations {
         else { continue }
         let id = try source.identity(environment: environment)
         let requestedHere = requested.filter { name in
-          if previous.skills[name]?.source == id { return true }
+          if let installed = previous.skills[name] { return installed.source == id }
           if case .names(let names) = selection.select { return names.contains(name) }
-          return false
+          return !(selection.exclude ?? []).contains(name)
         }
         if !requested.isEmpty && requestedHere.isEmpty { continue }
-        let live =
-          selection.mode == .edit
-          && (selection.overrides ?? [:]).values.allSatisfy { $0.mode == nil || $0.mode == .edit }
-        let discovered = try lifecycle.discover(
-          source, live: live, fullDepth: !requested.isEmpty || selection.hasNamedSelection)
-        let selectedNames: [String]
-        if !requested.isEmpty {
-          selectedNames = requestedHere.sorted()
-        } else if case .names(let names) = selection.select {
-          selectedNames = names
-        } else {
-          selectedNames = discovered.skills.map { PathSafety.sanitizeName($0.name) }.filter {
-            !(selection.exclude ?? []).contains($0)
-          }
+        if case .names(let names) = selection.select, names.isEmpty { continue }
+        func mode(_ name: String) -> InstallMode {
+          selection.overrides?[name]?.mode ?? selection.mode ?? .link
         }
-        let selected =
-          selectedNames.isEmpty ? [] : try lifecycle.select(discovered.skills, names: selectedNames)
-        for skill in selected {
-          let name = PathSafety.sanitizeName(skill.name)
+        let explicit: [String]?
+        if !requested.isEmpty {
+          explicit = requestedHere.sorted()
+        } else if case .names(let names) = selection.select {
+          explicit = names
+        } else {
+          explicit = nil
+        }
+        let primaryLive =
+          explicit.map { $0.allSatisfy { mode($0) == .edit } } ?? (selection.mode == .edit)
+        var liveSource: DiscoveredSource?
+        var pinnedSource: DiscoveredSource?
+        func discover(live: Bool) throws -> DiscoveredSource {
+          if live, let liveSource { return liveSource }
+          if !live, let pinnedSource { return pinnedSource }
+          let result = try lifecycle.discover(
+            source, live: live, fullDepth: explicit != nil, names: explicit,
+            exclude: selection.exclude ?? [])
+          if live { liveSource = result } else { pinnedSource = result }
+          return result
+        }
+        let primary = try discover(live: primaryLive)
+        var names = explicit ?? primary.skills.map { PathSafety.sanitizeName($0.name) }
+        if explicit == nil {
+          names += (selection.overrides ?? [:]).keys.filter { mode($0) == .edit }
+          names = Array(Set(names)).filter { !(selection.exclude ?? []).contains($0) }.sorted()
+        }
+        for name in names {
+          let discovered = try discover(live: mode(name) == .edit)
+          let matches = Discovery.filter(discovered.skills, names: [name])
+          if matches.isEmpty, previous.skills[name] == nil, !requested.isEmpty,
+            !selection.hasNamedSelection
+          {
+            continue
+          }
+          let skill = try lifecycle.select(discovered.skills, names: [name])[0]
           if let current = prepared[name], current.lock.source != id {
             throw CoreError.invalidSkill("duplicate skill name: \(name)")
           }

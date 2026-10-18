@@ -80,3 +80,40 @@ struct LockedArtifactLifecycleTests {
     #expect(try fixture.stateAndTargetBytes() == before)
   }
 }
+
+extension LockedArtifactLifecycleTests {
+  @Test func namedUpdateFetchesOnlySelectedArtifactAndAllFollowsEmptyIndex() throws {
+    let fixture = try SkillFixture()
+    let first = Data("---\nname: one\ndescription: Test\n---\nA\n".utf8)
+    let second = Data("---\nname: two\ndescription: Test\n---\nA\n".utf8)
+    let index = Data(
+      #"{"skills":[{"name":"one","description":"Test","files":["SKILL.md"]},{"name":"two","description":"Test","files":["SKILL.md"]}]}"#
+        .utf8)
+    let provider = WellKnownProvider { url in
+      if url.path.hasSuffix("index.json") { return index }
+      return url.path.contains("/one/") ? first : second
+    }
+    _ = try SkillOperations.add(
+      AddOptions(
+        source: "https://example.test", agents: [.codex], all: true,
+        environment: fixture.environment), provider: provider)
+    let old = try fixture.store().loadResolved().skills["two"]
+    let changed = Data("---\nname: one\ndescription: Test\n---\nB\n".utf8)
+    let selectedOnly = WellKnownProvider { url in
+      if url.path.hasSuffix("index.json") { return index }
+      guard url.path.contains("/one/") else {
+        throw CoreError.invalidState("unselected artifact fetched")
+      }
+      return changed
+    }
+    _ = try SkillOperations.update(
+      scope: .project, environment: fixture.environment, skillNames: ["one"], apply: true,
+      provider: selectedOnly)
+    #expect(try fixture.store().loadResolved().skills["two"] == old)
+    let empty = WellKnownProvider { _ in Data(#"{"skills":[]}"#.utf8) }
+    _ = try SkillOperations.update(
+      scope: .project, environment: fixture.environment, skillNames: [], apply: true,
+      provider: empty)
+    #expect(try fixture.store().loadResolved().skills.isEmpty)
+  }
+}

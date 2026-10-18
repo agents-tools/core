@@ -1,11 +1,11 @@
 import Foundation
 
 /// A resolved commit, independent of other items from the same source.
-public struct SourceRevision: Equatable, Sendable {
-  public var revision: String
-  public var version: String?
+package struct SourceRevision: Equatable, Sendable {
+  package var revision: String
+  package var version: String?
 
-  public init(revision: String, version: String? = nil) {
+  package init(revision: String, version: String? = nil) {
     self.revision = revision
     self.version = version
   }
@@ -85,7 +85,11 @@ package struct SourceCache {
   }
 
   package func materialize(sourceID: String, source: LockedSource, revision: String) throws -> URL {
-    try FileLock.withLock(
+    guard revision.range(of: #"^[0-9a-f]{40}([0-9a-f]{24})?$"#, options: .regularExpression) != nil
+    else {
+      throw CoreError.invalidState("materialization requires an exact commit")
+    }
+    return try FileLock.withLock(
       at: store.cacheDirectory.appendingPathComponent("locks/\(key(sourceID))-\(revision).lock")
     ) {
       let destination = materializedURL(sourceID: sourceID, revision: revision)
@@ -145,7 +149,7 @@ package struct SourceCache {
   }
 
   /// Keep every pin referenced by either kind, including named prompts.
-  package func prune(referencedBy lock: ResolvedState) throws {
+  package func prune(referencedBy lock: ResolvedState, transaction: FileTransaction? = nil) throws {
     var paths = Set<String>()
     var digests = Set<String>()
     func retain(source: String, revision: String?, artifact: LockedArtifact?) {
@@ -165,20 +169,30 @@ package struct SourceCache {
     {
       retain(source: section.source, revision: section.revision, artifact: section.artifact)
     }
-    let materialized = store.cacheDirectory.appendingPathComponent("materialized")
-    for source in children(materialized) {
-      for pin in children(source) where !paths.contains(pin.resolvingSymlinksInPath().path) {
-        try FileManager.default.removeItem(at: pin)
+    func remove(_ url: URL) throws {
+      if let transaction {
+        try transaction.replace(url, content: nil)
+      } else {
+        try FileManager.default.removeItem(at: url)
       }
-      if children(source).isEmpty { try FileManager.default.removeItem(at: source) }
     }
-    for artifact in children(store.cacheDirectory.appendingPathComponent("artifacts"))
+    let materialized = store.cacheDirectory.appendingPathComponent("materialized")
+    for source in try children(materialized) {
+      let pins = try children(source)
+      let unused = pins.filter { !paths.contains($0.resolvingSymlinksInPath().path) }
+      if unused.count == pins.count {
+        try remove(source)
+      } else {
+        for pin in unused { try remove(pin) }
+      }
+    }
+    for artifact in try children(store.cacheDirectory.appendingPathComponent("artifacts"))
     where !digests.contains(artifact.lastPathComponent) {
-      try FileManager.default.removeItem(at: artifact)
+      try remove(artifact)
     }
-    let content = store.cacheDirectory.appendingPathComponent("artifact-content")
-    for artifact in children(content) where !digests.contains(artifact.lastPathComponent) {
-      try FileManager.default.removeItem(at: artifact)
+    for artifact in try children(store.cacheDirectory.appendingPathComponent("artifact-content"))
+    where !digests.contains(artifact.lastPathComponent) {
+      try remove(artifact)
     }
   }
 
@@ -196,8 +210,9 @@ package struct SourceCache {
   }
 
   private func fetch(_ source: SourceDeclaration, id: String) throws -> URL {
-    try FileLock.withLock(at: store.cacheDirectory.appendingPathComponent("locks/\(key(id)).lock"))
-    {
+    return try FileLock.withLock(
+      at: store.cacheDirectory.appendingPathComponent("locks/\(key(id)).lock")
+    ) {
       try fetchMirror(source, id: id)
     }
   }
@@ -245,9 +260,10 @@ package struct SourceCache {
       + FileHash.sha256Hex(data: Data(sourceID.utf8))
   }
 
-  private func children(_ directory: URL) -> [URL] {
-    (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil))
-      ?? []
+  private func children(_ directory: URL) throws -> [URL] {
+    guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+    return try FileManager.default.contentsOfDirectory(
+      at: directory, includingPropertiesForKeys: nil)
   }
 
   private func validateTree(_ tree: URL) throws {

@@ -86,6 +86,9 @@ public enum SourceRequirement: Codable, Equatable, Sendable {
       guard let lower = SemanticVersion(value) else {
         throw CoreError.invalidState("invalid version: \(value)")
       }
+      if (kind == "from" && lower.major == Int.max) || (kind == "minor" && lower.minor == Int.max) {
+        throw CoreError.invalidState("version bound cannot be incremented")
+      }
       if kind == "range" {
         guard let upperBound, let upper = SemanticVersion(upperBound), lower < upper else {
           throw CoreError.invalidState("invalid version range")

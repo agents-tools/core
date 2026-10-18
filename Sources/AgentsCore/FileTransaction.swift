@@ -1,5 +1,11 @@
 import Foundation
 
+#if canImport(Darwin)
+  import Darwin
+#else
+  import Glibc
+#endif
+
 /// Stages complete replacements, then restores originals if a write fails.
 /// Callers hold their scope's writer lock across planning and commit.
 package final class FileTransaction {
@@ -7,6 +13,7 @@ package final class FileTransaction {
     var destination: URL
     var staged: URL?
     var backup: URL
+    var atomicFile: Bool
   }
   private var replacements: [Replacement] = []
   private var directories: [URL] = []
@@ -35,7 +42,8 @@ package final class FileTransaction {
       ".agents-" + UUID().uuidString)
     let staged = base.appendingPathExtension("new")
     let backup = base.appendingPathExtension("old")
-    var replacement = Replacement(destination: destination, staged: nil, backup: backup)
+    var replacement = Replacement(
+      destination: destination, staged: nil, backup: backup, atomicFile: data != nil)
     replacement.staged = content != nil || data != nil ? staged : nil
     replacements.append(replacement)
     if let data {
@@ -57,11 +65,21 @@ package final class FileTransaction {
     do {
       for entry in replacements {
         if exists(entry.destination) {
-          try FileManager.default.moveItem(at: entry.destination, to: entry.backup)
+          if entry.atomicFile {
+            try FileManager.default.copyItem(at: entry.destination, to: entry.backup)
+          } else {
+            try FileManager.default.moveItem(at: entry.destination, to: entry.backup)
+          }
         }
         moved.append(entry)
         if let staged = entry.staged {
-          try FileManager.default.moveItem(at: staged, to: entry.destination)
+          if entry.atomicFile {
+            guard rename(staged.path, entry.destination.path) == 0 else {
+              throw CoreError.invalidState("cannot replace state file: \(entry.destination.path)")
+            }
+          } else {
+            try FileManager.default.moveItem(at: staged, to: entry.destination)
+          }
         }
       }
     } catch {
@@ -74,7 +92,7 @@ package final class FileTransaction {
       throw error
     }
     for entry in moved where exists(entry.backup) {
-      try FileManager.default.removeItem(at: entry.backup)
+      try? FileManager.default.removeItem(at: entry.backup)
     }
   }
 

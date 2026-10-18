@@ -102,3 +102,16 @@ struct StateModelTests {
     }
   }
 }
+
+extension StateModelTests {
+  @Test func rejectsUnknownFieldsInsteadOfDiscardingIntent() throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
+    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    let bytes = Data(#"{"sources":{},"unexpected":{"intent":true}}"#.utf8)
+    try bytes.write(to: store.declarationURL)
+    #expect(throws: CoreError.self) { try store.loadDeclaration() }
+    #expect(try Data(contentsOf: store.declarationURL) == bytes)
+  }
+}

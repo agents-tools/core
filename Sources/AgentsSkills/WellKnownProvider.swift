@@ -70,25 +70,24 @@ struct WellKnownProvider: Sendable {
     return candidates
   }
 
-  func fetchAllSkills(from rawURL: String) throws -> [WellKnownRemoteSkill] {
+  func fetchAllSkills(from rawURL: String, names: [String]? = nil, exclude: [String] = []) throws
+    -> [WellKnownRemoteSkill]
+  {
     if let direct = try fetchDirectSkillMD(from: rawURL) {
       return [direct]
     }
     var lastError: Error?
     for candidate in try indexURLCandidates(for: rawURL) {
+      let index: WellKnownIndex
       do {
-        let data = try fetch(candidate.index)
-        let index = try JSONDecoder().decode(WellKnownIndex.self, from: data)
-        let skills = try normalize(
-          index: index, indexURL: candidate.index, baseURL: candidate.base,
-          wellKnownPath: candidate.wellKnownPath)
-        if !skills.isEmpty {
-          return skills
-        }
+        index = try JSONDecoder().decode(WellKnownIndex.self, from: fetch(candidate.index))
       } catch {
         lastError = error
         continue
       }
+      return try normalize(
+        index: index, indexURL: candidate.index, baseURL: candidate.base,
+        wellKnownPath: candidate.wellKnownPath, names: names, exclude: exclude)
     }
     if let lastError {
       throw lastError
@@ -115,69 +114,74 @@ struct WellKnownProvider: Sendable {
     )
   }
 
-  private func normalize(index: WellKnownIndex, indexURL: URL, baseURL: URL, wellKnownPath: String)
+  private func normalize(
+    index: WellKnownIndex, indexURL: URL, baseURL: URL, wellKnownPath: String, names: [String]?,
+    exclude: [String]
+  )
     throws -> [WellKnownRemoteSkill]
   {
     switch index {
     case .v1(let entries):
-      return try entries.map { entry in
-        var files: [String: Data] = [:]
-        var records: [ArtifactFile] = []
-        var payloads: [String: Data] = [:]
-        for file in entry.files {
-          let safe = try PathSafety.sanitizeSubpath(file)
-          let fileURL =
-            baseURL
-            .appendingPathComponent(wellKnownPath)
-            .appendingPathComponent(entry.name)
-            .appendingPathComponent(safe)
-          let data = try fetch(fileURL)
-          files[safe] = data
-          let digest = "sha256:" + FileHash.sha256Hex(data: data)
-          records.append(ArtifactFile(url: fileURL.absoluteString, path: safe, digest: digest))
-          payloads[digest] = data
+      return try entries.filter { (names?.contains($0.name) ?? true) && !exclude.contains($0.name) }
+        .map { entry in
+          var files: [String: Data] = [:]
+          var records: [ArtifactFile] = []
+          var payloads: [String: Data] = [:]
+          for file in entry.files {
+            let safe = try PathSafety.sanitizeSubpath(file)
+            let fileURL =
+              baseURL
+              .appendingPathComponent(wellKnownPath)
+              .appendingPathComponent(entry.name)
+              .appendingPathComponent(safe)
+            let data = try fetch(fileURL)
+            files[safe] = data
+            let digest = "sha256:" + FileHash.sha256Hex(data: data)
+            records.append(ArtifactFile(url: fileURL.absoluteString, path: safe, digest: digest))
+            payloads[digest] = data
+          }
+          return WellKnownRemoteSkill(
+            installName: entry.name,
+            description: entry.description,
+            sourceURL: baseURL.appendingPathComponent(wellKnownPath).appendingPathComponent(
+              entry.name
+            ).appendingPathComponent("SKILL.md"),
+            files: files,
+            artifact: LockedArtifact(
+              type: .files, url: indexURL.absoluteString,
+              digest: try LockedArtifact.filesDigest(records), files: records),
+            payloads: payloads
+          )
         }
-        return WellKnownRemoteSkill(
-          installName: entry.name,
-          description: entry.description,
-          sourceURL: baseURL.appendingPathComponent(wellKnownPath).appendingPathComponent(
-            entry.name
-          ).appendingPathComponent("SKILL.md"),
-          files: files,
-          artifact: LockedArtifact(
-            type: .files, url: indexURL.absoluteString,
-            digest: try LockedArtifact.filesDigest(records), files: records),
-          payloads: payloads
-        )
-      }
     case .v2(let entries):
-      return try entries.map { entry in
-        guard let artifactURL = URL(string: entry.url, relativeTo: indexURL)?.absoluteURL else {
-          throw CoreError.invalidSource("invalid artifact URL: \(entry.url)")
+      return try entries.filter { (names?.contains($0.name) ?? true) && !exclude.contains($0.name) }
+        .map { entry in
+          guard let artifactURL = URL(string: entry.url, relativeTo: indexURL)?.absoluteURL else {
+            throw CoreError.invalidSource("invalid artifact URL: \(entry.url)")
+          }
+          let data = try fetch(artifactURL)
+          try verifyDigest(data: data, expected: entry.digest)
+          let files: [String: Data]
+          switch entry.type {
+          case "skill-md":
+            files = ["SKILL.md": data]
+          case "archive":
+            files = try unpackArchive(data, artifactURL: artifactURL)
+          default:
+            throw CoreError.invalidSource("unsupported well-known artifact type: \(entry.type)")
+          }
+          return WellKnownRemoteSkill(
+            installName: entry.name,
+            description: entry.description,
+            sourceURL: artifactURL,
+            digest: entry.digest,
+            files: files,
+            artifact: LockedArtifact(
+              type: entry.type == "archive" ? .archive : .skillMD, url: artifactURL.absoluteString,
+              digest: entry.digest),
+            payloads: [entry.digest: data]
+          )
         }
-        let data = try fetch(artifactURL)
-        try verifyDigest(data: data, expected: entry.digest)
-        let files: [String: Data]
-        switch entry.type {
-        case "skill-md":
-          files = ["SKILL.md": data]
-        case "archive":
-          files = try unpackArchive(data, artifactURL: artifactURL)
-        default:
-          throw CoreError.invalidSource("unsupported well-known artifact type: \(entry.type)")
-        }
-        return WellKnownRemoteSkill(
-          installName: entry.name,
-          description: entry.description,
-          sourceURL: artifactURL,
-          digest: entry.digest,
-          files: files,
-          artifact: LockedArtifact(
-            type: entry.type == "archive" ? .archive : .skillMD, url: artifactURL.absoluteString,
-            digest: entry.digest),
-          payloads: [entry.digest: data]
-        )
-      }
     }
   }
 

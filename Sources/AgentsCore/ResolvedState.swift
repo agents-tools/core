@@ -192,6 +192,17 @@ public struct ResolvedState: Codable, Equatable, Sendable {
       if source.kind == .local, !id.hasPrefix("local:/") {
         throw CoreError.invalidState("local source needs an absolute ID")
       }
+      let location =
+        source.kind == .git
+        ? source.url! : source.kind == .local ? String(id.dropFirst("local:".count)) : id
+      let normalized = try SourceDeclaration(kind: source.kind, location: location).identity(
+        environment: RuntimeEnvironment())
+      guard normalized == id else {
+        throw CoreError.invalidState("source ID does not match its location")
+      }
+      if source.kind == .wellKnown, source.requirement != nil {
+        throw CoreError.invalidState("well-known sources take no Git requirement")
+      }
       try source.requirement?.validate()
       if let path = source.path { _ = try PathSafety.sanitizeSubpath(path) }
     }
@@ -260,6 +271,16 @@ public struct ResolvedState: Codable, Equatable, Sendable {
     var result = self
     for name in result.skills.keys {
       result.skills[name]?.artifact?.files?.sort { $0.path < $1.path }
+    }
+    for index in result.instructions.sections.indices {
+      result.instructions.sections[index].artifact?.files?.sort { $0.path < $1.path }
+    }
+    for name in result.instructions.chatgpt.keys {
+      guard var prompt = result.instructions.chatgpt[name] else { continue }
+      for index in prompt.sections.indices {
+        prompt.sections[index].artifact?.files?.sort { $0.path < $1.path }
+      }
+      result.instructions.chatgpt[name] = prompt
     }
     for path in result.instructions.targets.keys {
       result.instructions.targets[path]?.agents.sort { $0.rawValue < $1.rawValue }

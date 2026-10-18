@@ -61,15 +61,36 @@ public struct StateStore: Sendable {
     return data
   }
 
-  private func load<T: Decodable>(_ url: URL) throws -> T? {
+  private func load<T: Codable>(_ url: URL) throws -> T? {
     guard let data = try existingData(url) else { return nil }
-    do { return try JSONDecoder().decode(T.self, from: data) } catch {
+    do {
+      let value = try JSONDecoder().decode(T.self, from: data)
+      try rejectDiscardedFields(
+        JSONSerialization.jsonObject(with: data),
+        encoded: JSONSerialization.jsonObject(with: Self.encode(value)))
+      return value
+    } catch {
       throw CoreError.invalidState("state file \(url.path) could not be decoded: \(error)")
     }
   }
 
+  private func rejectDiscardedFields(_ input: Any, encoded: Any) throws {
+    if let input = input as? [String: Any], let encoded = encoded as? [String: Any] {
+      for (key, value) in input where !(value is NSNull) {
+        guard let counterpart = encoded[key] else {
+          throw CoreError.invalidState("unknown state field: \(key)")
+        }
+        try rejectDiscardedFields(value, encoded: counterpart)
+      }
+    } else if let input = input as? [Any], let encoded = encoded as? [Any] {
+      for (value, counterpart) in zip(input, encoded) {
+        try rejectDiscardedFields(value, encoded: counterpart)
+      }
+    }
+  }
+
   private func existingData(_ url: URL) throws -> Data? {
-    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    guard (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil else { return nil }
     return try Data(contentsOf: url)
   }
 

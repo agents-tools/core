@@ -5,7 +5,7 @@ import Testing
 
 @Suite("File hashes")
 struct FileHashTests {
-  @Test func hashesFoldersDeterministicallyIgnoringMetadata() throws {
+  @Test func hashesEveryContentEntryDeterministically() throws {
     let root = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
     try "one".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
@@ -18,13 +18,13 @@ struct FileHashTests {
     let second = try FileHash.folderHash(root)
     #expect(first == second)
 
-    try "ignored".write(
+    try "included".write(
       to: root.appendingPathComponent("metadata.json"), atomically: true, encoding: .utf8)
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent(".git"), withIntermediateDirectories: true)
-    try "ignored".write(
+    try "included".write(
       to: root.appendingPathComponent(".git/config"), atomically: true, encoding: .utf8)
-    #expect(try FileHash.folderHash(root) == first)
+    #expect(try FileHash.folderHash(root) != first)
 
     try "changed".write(
       to: root.appendingPathComponent("nested/b.txt"), atomically: true, encoding: .utf8)

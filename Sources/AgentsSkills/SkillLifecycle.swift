@@ -39,15 +39,18 @@ final class SkillLifecycle {
       requirement: source.requirement, path: source.path)
   }
 
-  func discover(_ source: SourceDeclaration, live: Bool, fullDepth: Bool) throws -> DiscoveredSource
-  {
+  func discover(
+    _ source: SourceDeclaration, live: Bool, fullDepth: Bool, names: [String]? = nil,
+    exclude: [String] = []
+  ) throws -> DiscoveredSource {
     let id = try source.identity(environment: store.environment)
     let root: URL
     var pin: SourceRevision?
     var artifacts: [String: WellKnownRemoteSkill] = [:]
     if source.kind == .wellKnown {
       root = workspace.appendingPathComponent(UUID().uuidString)
-      let remote = try provider.fetchAllSkills(from: source.location)
+      let remote = try provider.fetchAllSkills(
+        from: source.location, names: names, exclude: exclude)
       for skill in remote {
         guard artifacts[skill.installName] == nil else {
           throw CoreError.invalidSkill("duplicate upstream skill: \(skill.installName)")
@@ -163,10 +166,16 @@ final class SkillLifecycle {
       guard let revision = skill.revision, let path = skill.path else {
         throw CoreError.invalidState("missing locked revision or path")
       }
-      let root = workspace.appendingPathComponent(UUID().uuidString)
-      try cache.withSnapshot(sourceID: skill.source, source: source, revision: revision) {
-        snapshot in
-        try FileManager.default.copyItem(at: snapshot, to: root)
+      let cached = cache.materializedURL(sourceID: skill.source, revision: revision)
+      let root: URL
+      if FileManager.default.fileExists(atPath: cached.path) {
+        root = cached
+      } else {
+        root = workspace.appendingPathComponent(UUID().uuidString)
+        try cache.withSnapshot(sourceID: skill.source, source: source, revision: revision) {
+          snapshot in
+          try FileManager.default.copyItem(at: snapshot, to: root)
+        }
       }
       directory = try PathSafety.resolvedChild(base: root, subpath: path)
     }
@@ -244,12 +253,12 @@ final class SkillLifecycle {
         try transaction.replace(
           store.resolvedURL, content: nil, data: StateStore.encode(next.normalized))
       }
+      try cache.prune(referencedBy: next, transaction: transaction)
       try transaction.commit()
     } catch {
-      try cache.prune(referencedBy: previous)
+      try? cache.prune(referencedBy: previous)
       throw error
     }
-    try cache.prune(referencedBy: next)
     for name in names.sorted() {
       guard let skill = next.skills[name], prepared[name] != nil else { continue }
       for (raw, mode) in skill.installs.sorted(by: { $0.key < $1.key }) {

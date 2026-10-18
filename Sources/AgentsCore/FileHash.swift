@@ -10,44 +10,46 @@ package enum FileHash {
     try sha256Hex(data: Data(contentsOf: file))
   }
 
+  /// Hashes every tree entry in path order, including hidden files and symlink destinations.
   package static func folderHash(_ directory: URL) throws -> String {
     let directory = directory.resolvingSymlinksInPath()
-    var hasher = SHA256()
-    let files = try filesUnder(directory).sorted { $0.path < $1.path }
-    for file in files {
-      let relative = file.path.replacingOccurrences(of: directory.path + "/", with: "")
-      hasher.update(data: Data(relative.utf8))
-      hasher.update(data: Data([0]))
-      hasher.update(data: try Data(contentsOf: file))
-      hasher.update(data: Data([0]))
-    }
-    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-  }
-
-  private static func filesUnder(_ directory: URL) throws -> [URL] {
     guard
       let enumerator = FileManager.default.enumerator(
         at: directory,
-        includingPropertiesForKeys: [.isRegularFileKey],
-        options: [.skipsPackageDescendants]
-      )
+        includingPropertiesForKeys: [.isSymbolicLinkKey, .isDirectoryKey, .isRegularFileKey])
     else {
-      return []
+      throw CoreError.notFound("content directory: \(directory.path)")
     }
-    var files: [URL] = []
+    var entries: [(String, Data)] = []
     for case let url as URL in enumerator {
-      let name = url.lastPathComponent
-      if [".git", "node_modules", "__pycache__", "__pypackages__"].contains(name) {
+      let relative = PathSafety.relativePath(url.path, to: directory.path)
+      let values = try url.resourceValues(forKeys: [
+        .isSymbolicLinkKey, .isDirectoryKey, .isRegularFileKey,
+      ])
+      if values.isSymbolicLink == true {
         enumerator.skipDescendants()
-        continue
-      }
-      if name == "metadata.json" {
-        continue
-      }
-      if (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
-        files.append(url)
+        entries.append(
+          (
+            relative,
+            Data(
+              ("link\0" + (try FileManager.default.destinationOfSymbolicLink(atPath: url.path)))
+                .utf8)
+          ))
+      } else if values.isDirectory == true {
+        entries.append((relative, Data("directory".utf8)))
+      } else if values.isRegularFile == true {
+        entries.append((relative, Data("file\0".utf8) + (try Data(contentsOf: url))))
+      } else {
+        throw CoreError.invalidState("unsupported content entry: \(relative)")
       }
     }
-    return files
+    var hasher = SHA256()
+    for (path, content) in entries.sorted(by: { $0.0 < $1.0 }) {
+      hasher.update(data: Data(path.utf8))
+      hasher.update(data: Data([0]))
+      hasher.update(data: content)
+      hasher.update(data: Data([0]))
+    }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
   }
 }
