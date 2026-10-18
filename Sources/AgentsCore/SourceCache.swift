@@ -79,8 +79,6 @@ package struct SourceCache {
     let url = mirrorURL(sourceID: sourceID)
     try validatePath(url)
     try beginWatchReferenceUpdate()
-    _ = try git(url, ["config", "--local", "core.fsync", "objects,reference,pack-metadata"])
-    _ = try git(url, ["config", "--local", "core.fsyncMethod", "fsync"])
     let mirror = try DirectoryHandle(at: url)
     let objects = try mirror.child("objects")
     if try objects.info("info") != nil {
@@ -89,8 +87,7 @@ package struct SourceCache {
         throw CoreError.invalidState("watch requires self-contained mirror objects")
       }
     }
-    // Fetches and local clones can have populated this mirror before its durability policy
-    // was configured. Flush existing object bytes as well as newly written Git objects.
+    // Explicit barriers cover pre-existing objects as well as newly fetched objects.
     func syncObjects(_ directory: DirectoryHandle) throws {
       for name in try directory.names() {
         if try (directory.info(name)?.st_mode ?? 0) & 0o170000 == 0o040000 {
@@ -443,7 +440,8 @@ package struct SourceCache {
       defer { try? FileManager.default.removeItem(at: staging) }
       try ProcessRunner.run(
         "/usr/bin/env",
-        arguments: ["git", "clone", "--mirror", "--no-local", "--", url, staging.path])
+        arguments: ["git"] + Self.gitOptions
+          + ["clone", "--mirror", "--no-local", "--", url, staging.path])
       try FileManager.default.moveItem(at: staging, to: mirror)
     }
     // A remote can change its default branch after the initial clone.
@@ -459,9 +457,19 @@ package struct SourceCache {
   }
 
   private func git(_ repository: URL, _ arguments: [String]) throws -> String {
-    try ProcessRunner.run("/usr/bin/env", arguments: ["git", "-C", repository.path] + arguments)
-      .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    let mirror = try DirectoryHandle(at: repository)
+    guard let config = try mirror.info("config"), config.st_mode & 0o170000 == 0o100000 else {
+      throw CoreError.unsafePath("mirror configuration must be a regular file")
+    }
+    return try ProcessRunner.run(
+      "/usr/bin/env", arguments: ["git"] + Self.gitOptions + ["-C", repository.path] + arguments
+    )
+    .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
   }
+
+  private static let gitOptions = [
+    "-c", "core.fsync=objects,reference,pack-metadata", "-c", "core.fsyncMethod=fsync",
+  ]
 
   private func key(_ sourceID: String) -> String {
     String(PathSafety.sanitizeName(sourceID).prefix(60)) + "-"

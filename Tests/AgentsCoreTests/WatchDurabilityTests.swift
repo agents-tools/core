@@ -42,12 +42,6 @@ struct WatchDurabilityTests {
       let content = try fixture.cachedInstruction(expected)
       #expect(content.contains(expected == first ? "initial" : "replacement"))
     }
-    if !["watch.mirror.fetched", "watch.references.pending"].contains(step) {
-      #expect(
-        try fixture.mirrorGit(["config", "--local", "--get", "core.fsync"])
-          == "objects,reference,pack-metadata")
-      #expect(try fixture.mirrorGit(["config", "--local", "--get", "core.fsyncMethod"]) == "fsync")
-    }
     #expect(
       !FileManager.default.fileExists(
         atPath: fixture.store.directory.appendingPathComponent("transaction.json").path))
@@ -60,15 +54,51 @@ struct WatchDurabilityTests {
     _ = try fixture.store.withLock { try cache.resolve(source) }
     try fixture.mirrorGit(["config", "--local", "core.fsync", "none"])
     try fixture.mirrorGit(["config", "--local", "core.fsyncMethod", "writeout-only"])
+    let configURL = fixture.mirror.appendingPathComponent("config")
+    let config = try Data(contentsOf: configURL)
     let revision = try fixture.head()
     try fixture.watch.add("source", environment: fixture.environment)
-    #expect(try fixture.mirrorGit(["config", "--local", "--get", "core.fsyncMethod"]) == "fsync")
+    #expect(try Data(contentsOf: configURL) == config)
     #expect(try fixture.store.loadWatch().sources[fixture.id]?.seen == .revision(revision))
     try fixture.mirrorGit(["pack-refs", "--all"])
     // Acknowledging an already packed ref still flushes its durable representation.
     try fixture.watch.seen("source", revision: revision, environment: fixture.environment)
     try FileManager.default.removeItem(at: fixture.repo)
     #expect(try fixture.cachedInstruction(revision).contains("initial"))
+    try fixture.watch.remove("source", environment: fixture.environment)
+    #expect(try Data(contentsOf: configURL) == config)
+  }
+
+  @Test(arguments: [false, true])
+  func rejectsEscapingConfigurationBeforeAcknowledgment(_ subscribed: Bool) throws {
+    let fixture = try WatchGitFixture()
+    if subscribed {
+      try fixture.watch.add("source", environment: fixture.environment)
+    } else {
+      _ = try fixture.store.withLock {
+        try SourceCache(store: fixture.store).resolve(
+          SourceDeclaration(kind: .local, location: fixture.repo.path))
+      }
+    }
+    let config = fixture.mirror.appendingPathComponent("config")
+    let external = fixture.root.appendingPathComponent("external-config")
+    let original = try Data(contentsOf: config)
+    try original.write(to: external)
+    try FileManager.default.removeItem(at: config)
+    try FileManager.default.createSymbolicLink(at: config, withDestinationURL: external)
+    let state = try fixture.stateBytes()
+    let tree = try FileHash.folderHash(fixture.store.directory)
+    #expect(throws: CoreError.self) {
+      if subscribed {
+        try fixture.watch.seen("source", environment: fixture.environment)
+      } else {
+        try fixture.watch.add("source", environment: fixture.environment)
+      }
+    }
+    #expect(try Data(contentsOf: external) == original)
+    #expect(try fixture.stateBytes() == state)
+    #expect(try FileHash.folderHash(fixture.store.directory) == tree)
+    #expect(try FileManager.default.destinationOfSymbolicLink(atPath: config.path) == external.path)
   }
 
   @Test func durabilityFailurePreventsWatchPublication() throws {

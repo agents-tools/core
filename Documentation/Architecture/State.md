@@ -124,10 +124,11 @@ for rollback; symbolic links are unlinked without following their destinations.
 
 After a process kill or power loss at any point, the next state access recovers
 one consistent generation of targets, declaration, lock, watch state and cache references.
-Before a Git acknowledgment publishes watch state, the mirror's local config
-sets `core.fsync=objects,reference,pack-metadata` and `core.fsyncMethod=fsync`.
-Existing object bytes and object directory entries are flushed as well, including
-content fetched before this policy was configured. The retained ref, its parent,
+Mirror Git invocations pass `-c core.fsync=objects,reference,pack-metadata` and
+`-c core.fsyncMethod=fsync`; durability settings never rewrite configuration.
+Mirror configuration must be a regular file, checked before invoking Git.
+Before a Git acknowledgment publishes watch state, existing object bytes and
+object directory entries are flushed as well. The retained ref, its parent,
 Git config and HEAD, and mirror/cache directory entries are synced before the
 scope journal can commit the baseline. This orders durable Git content before
 the durable watch reference; power loss cannot publish a baseline ahead of its

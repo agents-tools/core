@@ -62,8 +62,10 @@ source's default branch. Installation version and revision requirements do not
 select the watched head. Commit count is the number of commits reachable from
 the current head but not the seen revision, including after divergent history.
 Acknowledged commits and their mirror refs are made durable before watch state
-is committed. Mirror-local Git fsync settings cover objects and references;
-explicit barriers also flush existing objects and parent directory entries.
+is committed. Per-invocation Git fsync options cover objects and references
+without rewriting configuration; symlinked mirror configurations are rejected
+before invoking Git. Explicit barriers also flush existing objects and parent
+directory entries.
 Force-pushes and Git garbage collection cannot discard seen content. After a
 durable acknowledgment or removal, obsolete watch-owned refs are released unless
 an installed skill, instruction section or prompt section still pins that
