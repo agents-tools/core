@@ -109,6 +109,10 @@ preserves original bytes, permissions, ACLs and extended attributes in backups
 and restores; final modes are applied explicitly rather than through the umask.
 `renameatx_np(RENAME_SWAP)` atomically exchanges existing directories, files and
 links with their replacements; installations always retain a directory entry.
+Discarding transaction-owned trees grants owner access through pinned directory
+descriptors so read-only backups and staging can be removed. This never changes
+the metadata of the installed or restored tree, nor of a backup still needed
+for rollback; symbolic links are unlinked without following their destinations.
 
 After a process kill or power loss at any point, the next state access recovers
 one consistent generation of targets, declaration, lock and cache references.

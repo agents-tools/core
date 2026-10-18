@@ -83,10 +83,16 @@ final class DirectoryHandle {
     return names.sorted()
   }
 
+  /// Deletes an owned subtree, granting owner access only to directories being discarded.
   func remove(_ name: String, checkpoint: (String) throws -> Void = { _ in }) throws {
     if let info = try info(name) {
       if info.st_mode & S_IFMT == S_IFDIR {
         let directory = try child(name)
+        if info.st_mode & S_IRWXU != S_IRWXU {
+          guard fchmod(directory.descriptor, (info.st_mode & 0o7777) | S_IRWXU) == 0 else {
+            throw CoreError.unsafePath("cannot make discarded directory writable: \(name)")
+          }
+        }
         for entry in try directory.names() { try directory.remove(entry) }
         guard unlinkat(descriptor, name, AT_REMOVEDIR) == 0 else {
           throw CoreError.unsafePath("cannot remove directory: \(name)")
