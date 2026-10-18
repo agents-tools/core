@@ -91,9 +91,18 @@ struct ReadOnlyInspectionTests {
     #expect(throws: pending) {
       try SkillOperations.removableSkillNames(scope: scope, environment: environment)
     }
-    #expect(throws: pending) {
-      try SkillOperations.add(
-        AddOptions(source: new.path, scope: scope, listOnly: true, environment: environment))
+    for listOnly in [false, true] {
+      #expect(throws: pending) {
+        try SkillOperations.add(
+          AddOptions(source: new.path, scope: scope, listOnly: listOnly, environment: environment))
+      }
+      #expect(try snapshot(root) == before)
+      #expect(throws: pending) {
+        try InstructionOperations.add(
+          InstructionAddOptions(
+            source: new.path, listOnly: listOnly, scope: scope, environment: environment))
+      }
+      #expect(try snapshot(root) == before)
     }
     #expect(throws: pending) {
       try SkillOperations.updateInstalled(scope: scope, environment: environment)
@@ -115,6 +124,111 @@ struct ReadOnlyInspectionTests {
     #expect(try Data(contentsOf: instructions) == Data("Original instructions\n".utf8))
     #expect(!FileManager.default.fileExists(atPath: created.path))
     #expect(try Data(contentsOf: target.appendingPathComponent("SKILL.md")) == Data("target".utf8))
+  }
+
+  @Test(arguments: [InstallScope.project, .user], [true, false])
+  func addSelectionLeavesStateAndSourcesUnchanged(
+    _ scope: InstallScope, _ existingDirectory: Bool
+  ) throws {
+    let fixture = try SkillFixture()
+    try fixture.skill("one", body: "A")
+    try fixture.skill("two", body: "B")
+    let instructions = fixture.repo.appendingPathComponent("instructions")
+    try FileManager.default.createDirectory(at: instructions, withIntermediateDirectories: true)
+    for name in ["one", "two"] {
+      try Data("# \(name)\n\nInstructions\n".utf8).write(
+        to: instructions.appendingPathComponent(name + ".md"))
+    }
+    try fixture.commit()
+    for directory in [fixture.environment.projectDirectory, fixture.environment.homeDirectory] {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+    let store = fixture.store(scope)
+    if existingDirectory {
+      try FileManager.default.createDirectory(
+        at: store.directory, withIntermediateDirectories: true)
+      try StateStore.encode(
+        Declaration(sources: [
+          "relative": SourceDeclaration(kind: .local, location: "../source"),
+          "remote": SourceDeclaration(kind: .git, location: "file://localhost" + fixture.repo.path),
+        ])
+      ).write(to: store.declarationURL)
+    }
+    let before = try snapshot(fixture.root)
+    let sources =
+      ["../source", "~/../source"] + (existingDirectory ? ["relative", "remote"] : [])
+    for source in sources {
+      for listOnly in [false, true] {
+        let skills = try SkillOperations.add(
+          AddOptions(
+            source: source, scope: scope, listOnly: listOnly,
+            sourceRequirement: .branch("master"), environment: fixture.environment))
+        #expect(skills.availableSkills.map(\.name) == ["one", "two"])
+        #expect(skills.installed.isEmpty)
+        #expect(try snapshot(fixture.root) == before)
+        let report = try InstructionOperations.add(
+          InstructionAddOptions(
+            source: source, listOnly: listOnly, scope: scope,
+            sourceRequirement: .branch("master"), environment: fixture.environment))
+        #expect(report.available.map(\.record.name) == ["one", "two"])
+        #expect(report.result == nil)
+        #expect(try snapshot(fixture.root) == before)
+      }
+    }
+  }
+
+  @Test func emptyAddSelectionDoesNotCreateState() throws {
+    let fixture = try SkillFixture()
+    try FileManager.default.createDirectory(at: fixture.repo, withIntermediateDirectories: true)
+    try Data("Empty source\n".utf8).write(to: fixture.repo.appendingPathComponent("README.md"))
+    try fixture.commit()
+    let before = try snapshot(fixture.root)
+    #expect(throws: CoreError.notFound("no skills found in \(fixture.repo.path)")) {
+      try SkillOperations.add(
+        AddOptions(source: fixture.repo.path, environment: fixture.environment))
+    }
+    #expect(try snapshot(fixture.root) == before)
+    #expect(throws: CoreError.notFound("source provides no instructions")) {
+      try InstructionOperations.add(
+        InstructionAddOptions(source: fixture.repo.path, environment: fixture.environment))
+    }
+    #expect(try snapshot(fixture.root) == before)
+  }
+
+  @Test func addSelectionCanReadACachedHistoricalCommitWithoutChangingTheMirror() throws {
+    let fixture = try SkillFixture()
+    try fixture.skill("one", body: "A")
+    try fixture.skill("two", body: "B")
+    let instructions = fixture.repo.appendingPathComponent("instructions")
+    try FileManager.default.createDirectory(at: instructions, withIntermediateDirectories: true)
+    for name in ["one", "two"] {
+      try Data("# \(name)\n\nInstructions\n".utf8).write(
+        to: instructions.appendingPathComponent(name + ".md"))
+    }
+    try fixture.commit()
+    let revision = try fixture.head()
+    let source = "fixture"
+    try fixture.store().save(
+      declaration: Declaration(sources: [
+        source: SourceDeclaration(kind: .git, location: "file://localhost" + fixture.repo.path)
+      ]), resolved: ResolvedState())
+    _ = try SkillOperations.add(
+      AddOptions(source: source, agents: [.codex], all: true, environment: fixture.environment))
+    // A cached immutable pin remains inspectable when upstream no longer provides it.
+    try FileManager.default.removeItem(at: fixture.repo)
+    let before = try snapshot(fixture.root)
+    let skills = try SkillOperations.add(
+      AddOptions(
+        source: source, sourceRequirement: .revision(revision), environment: fixture.environment))
+    #expect(skills.availableSkills.map(\.name) == ["one", "two"])
+    #expect(skills.installed.isEmpty)
+    let report = try InstructionOperations.add(
+      InstructionAddOptions(
+        source: source, sourceRequirement: .revision(revision), environment: fixture.environment))
+    #expect(report.available.map(\.record.name) == ["one", "two"])
+    #expect(report.available.allSatisfy { $0.record.revision == revision })
+    #expect(report.result == nil)
+    #expect(try snapshot(fixture.root) == before)
   }
 
   @Test(arguments: [SourceKind.local, .git], [true, false])

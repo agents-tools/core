@@ -20,7 +20,11 @@ path and original-byte hash. Source instruction directories cannot be targets.
 `add(InstructionAddOptions, beforeApply:)` accepts a source alias or string,
 optional alias, requirement, search path, ordered names and recipients. With
 several units and neither names nor `all`, it returns the units without changing
-intent or targets. `listOnly` always inspects. Explicit order is preserved;
+the scope, including its cache and lock files. This selection discovery takes the
+read path and stops if recovery is pending. `listOnly` always uses that path.
+A single discovered unit is selected automatically, then rediscovered and
+revalidated under the writer lock before applying. Explicit names and `all`
+enter the writer path directly. Explicit order is preserved;
 `all` adds current units in name order. Add preserves unrelated section and
 skill pins. Source aliases remain shared across kinds.
 

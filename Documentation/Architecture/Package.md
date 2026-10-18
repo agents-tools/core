@@ -107,6 +107,12 @@ unmanaged candidates from each agent's scan roots. Omitted agent filters list or
 remove all recipients. Declaration defaults supply recipients for additions and
 selections that have no explicit recipients.
 
+`add` discovers choices through the read path for `listOnly` and when neither
+names nor `all` are supplied. Selection discovery leaves the scope, caches and
+lock files unchanged and stops when recovery is pending. An automatic single-item
+addition rediscovers and revalidates its selected name under the writer lock.
+Explicit names and `all` use the writer path directly.
+
 Skill initialization is an authoring write: it takes the writer path and recovers
 pending transactions when scope state exists, without creating absent scope state.
 

@@ -91,14 +91,32 @@ struct InstructionLifecycleSafetyTests {
     try fixture.section("one")
     try fixture.section("two")
     try fixture.commit()
+    let before = try fixture.snapshot()
     let outcome = try InstructionOperations.add(
       InstructionAddOptions(source: fixture.repo.path, environment: fixture.environment))
     #expect(outcome.result == nil)
     #expect(outcome.available.map(\.record.name) == ["one", "two"])
+    #expect(try fixture.snapshot() == before)
     #expect(!FileManager.default.fileExists(atPath: fixture.store().declarationURL.path))
     #expect(
       !FileManager.default.fileExists(
         atPath: fixture.project.appendingPathComponent("AGENTS.md").path))
+  }
+
+  @Test func automaticSelectionAppliesCommittedInstructions() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    let revision = try fixture.git(["rev-parse", "HEAD"])
+    try fixture.section("rules", body: "Uncommitted")
+    let outcome = try InstructionOperations.add(
+      InstructionAddOptions(
+        source: fixture.repo.path, agents: [.codex], environment: fixture.environment))
+    #expect(outcome.result?.hasChanges == true)
+    #expect(outcome.available.map(\.record.name) == ["rules"])
+    #expect(try fixture.store().loadResolved().instructions.sections.first?.revision == revision)
+    #expect(try fixture.text().contains("Original"))
+    #expect(try !fixture.text().contains("Uncommitted"))
   }
 
   @Test func invalidSourceAndDuplicateNamesNeverPublishTargets() throws {

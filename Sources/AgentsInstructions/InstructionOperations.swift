@@ -8,8 +8,21 @@ public enum InstructionOperations {
     _ options: InstructionAddOptions,
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionAddOutcome {
+    var applying = options
+    if options.listOnly || (options.names.isEmpty && !options.all) {
+      let outcome = try add(options, apply: false, beforeApply: nil)
+      if options.listOnly || outcome.available.count > 1 { return outcome }
+      applying.names = outcome.available.map(\.record.name)
+    }
+    return try add(applying, apply: true, beforeApply: beforeApply)
+  }
+
+  private static func add(
+    _ options: InstructionAddOptions, apply: Bool,
+    beforeApply: ((InstructionUpdateReport) throws -> Void)?
+  ) throws -> InstructionAddOutcome {
     let store = StateStore(scope: options.scope, environment: options.environment)
-    return try operate(store, apply: !options.listOnly) { previousDeclaration, previous in
+    return try operate(store, apply: apply) { previousDeclaration, previous in
       var declaration = previousDeclaration
       let source = try sourceDeclaration(options, declaration: declaration)
       let id = try source.identity(environment: options.environment)
@@ -28,8 +41,11 @@ public enum InstructionOperations {
       declaration.sources[alias] = source
       try declaration.validate(environment: options.environment)
       let sources = InstructionSources(store: store)
-      let available = try sources.discover(source)
-      if options.listOnly || (options.names.isEmpty && available.count > 1 && !options.all) {
+      let available = try sources.discover(source, cacheSource: apply)
+      guard options.listOnly || !available.isEmpty else {
+        throw CoreError.notFound("source provides no instructions")
+      }
+      if !apply {
         return InstructionAddOutcome(sourceID: id, available: available, result: nil)
       }
       let selected =
@@ -56,7 +72,8 @@ public enum InstructionOperations {
         previous: previous, prepared: prepared, store: store,
         replace: options.replace)
       try beforeApply?(plan.report)
-      try apply(declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
+      try Self.apply(
+        declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
       return InstructionAddOutcome(sourceID: id, available: available, result: plan.report)
     }
   }

@@ -239,7 +239,14 @@ committed trees, including when the source has uncommitted changes.
 
 An update preview or source listing can fetch into a mirror.
 Inspection snapshots are disposable and do not move an installed tree or write
-state or targets. Applying prepares all selected content, computes differences,
+state or targets. Skill and instruction `add` discover choices through the read
+path when no names or `all` are supplied, and for `listOnly`. Their discovery
+uses disposable mirrors and locks, leaving the scope unchanged. Exact cached
+commits can be extracted under an existing mirror lock without fetching. Pending
+recovery stops selection discovery before source access. An automatic single-item
+addition carries the selected name into the writer path and rediscovers and
+revalidates it there; explicit names and `all` enter the writer path directly.
+Applying prepares all selected content, computes differences,
 stages replacements, and commits target changes and state under the scope lock.
 Pruning participates in that transaction. Pins referenced by skills, instruction
 sections or prompt sections remain cached, as do artifact contents referenced

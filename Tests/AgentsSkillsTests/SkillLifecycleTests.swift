@@ -240,9 +240,11 @@ struct SkillLifecycleTests {
     try fixture.skill("one", body: "A")
     try fixture.skill("two", body: "A")
     try fixture.commit()
+    let before = try FileHash.folderHash(fixture.root)
     let outcome = try SkillOperations.add(
       AddOptions(source: fixture.repo.path, environment: fixture.environment))
     #expect(outcome.availableSkills.count == 2 && outcome.installed.isEmpty)
+    #expect(try FileHash.folderHash(fixture.root) == before)
     #expect(!FileManager.default.fileExists(atPath: fixture.store().resolvedURL.path))
   }
 

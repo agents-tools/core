@@ -7,8 +7,20 @@ public enum SkillOperations {
   }
 
   static func add(_ options: AddOptions, provider: WellKnownProvider) throws -> AddOutcome {
+    var applying = options
+    if options.listOnly || (options.skillNames.isEmpty && !options.all) {
+      let outcome = try add(options, provider: provider, apply: false)
+      if options.listOnly || outcome.availableSkills.count > 1 { return outcome }
+      applying.skillNames = outcome.availableSkills.map(\.name)
+    }
+    return try add(applying, provider: provider, apply: true)
+  }
+
+  private static func add(_ options: AddOptions, provider: WellKnownProvider, apply: Bool) throws
+    -> AddOutcome
+  {
     let store = StateStore(scope: options.scope, environment: options.environment)
-    return try operate(store, apply: !options.listOnly) { declaration, lock in
+    return try operate(store, apply: apply) { declaration, lock in
       let lifecycle = try SkillLifecycle(store: store, provider: provider)
       var declaration = declaration
       let source = try sourceDeclaration(options, declaration: declaration)
@@ -31,13 +43,13 @@ public enum SkillOperations {
         source,
         live: options.mode == .edit
           || (options.listOnly && source.kind == .local && source.requirement == nil),
-        fullDepth: options.fullDepth)
+        fullDepth: options.fullDepth, cacheSource: apply)
       let selected = try lifecycle.select(available.skills, names: options.skillNames)
-      if options.listOnly || (selected.count > 1 && options.skillNames.isEmpty && !options.all) {
-        return AddOutcome(source: source, sourceID: id, availableSkills: selected, installed: [])
-      }
-      guard !selected.isEmpty else {
+      guard options.listOnly || !selected.isEmpty else {
         throw CoreError.notFound("no skills found in \(options.source)")
+      }
+      if !apply {
+        return AddOutcome(source: source, sourceID: id, availableSkills: selected, installed: [])
       }
       var selection = declaration.skills?[alias] ?? SkillDeclaration(select: .names([]))
       let names = selected.map { PathSafety.sanitizeName($0.name) }
