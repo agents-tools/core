@@ -30,7 +30,8 @@ struct FileLockProcessTests {
         Thread.sleep(forTimeInterval: 0.01)
       }
       let identifier = Int32(try String(contentsOf: ready, encoding: .utf8))
-      child = try #require(identifier)
+      let pid: Int32 = try #require(identifier)
+      child = pid
       #expect(fcntl(descriptor, F_GETFD) & FD_CLOEXEC != 0)
     }
     let contender = open(lock.path, O_RDWR | O_CLOEXEC)

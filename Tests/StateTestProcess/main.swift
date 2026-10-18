@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsInstructions
 import Darwin
 import Foundation
 
@@ -17,7 +18,32 @@ func stop(_ step: String, marker: String = "ready") throws {
     raise(SIGSTOP)
   }
 }
-if ["watch-add", "watch-seen", "watch-remove"].contains(arguments[2]) {
+if arguments[2] == "instruction-list" {
+  let units = try InstructionOperations.list(
+    source: SourceDeclaration(kind: .local, location: root.appendingPathComponent("source").path),
+    environment: store.environment)
+  try Data(units.map(\.record.name).joined(separator: "\n").utf8).write(
+    to: root.appendingPathComponent("listing-finished"))
+} else if ["watch-subscribe", "watch-acknowledge"].contains(arguments[2]) {
+  let watch = WatchOperations(
+    discoverSkills: { _ in [] },
+    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+    checkpoint: { step in
+      if step == "mirror.lock.waiting" {
+        try Data().write(to: root.appendingPathComponent("writer-waiting"))
+      }
+    })
+  func acknowledge() throws {
+    if arguments[2] == "watch-subscribe" {
+      try watch.add(
+        root.appendingPathComponent("source").path, alias: "source", environment: store.environment)
+    } else {
+      try watch.seen("source", revision: arguments[3], environment: store.environment)
+    }
+  }
+  do { try acknowledge() } catch CoreError.transactionRecovered { try acknowledge() }
+  try Data().write(to: root.appendingPathComponent("writer-finished"))
+} else if ["watch-add", "watch-seen", "watch-remove"].contains(arguments[2]) {
   let watch = WatchOperations(
     discoverSkills: { _ in [] },
     fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },

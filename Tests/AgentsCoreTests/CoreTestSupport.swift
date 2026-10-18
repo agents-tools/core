@@ -42,7 +42,9 @@ func gitHead(_ repo: URL) throws -> String {
     .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
-func stateTestProcess(root: URL, arguments: [String]) throws -> Process {
+func stateTestProcess(
+  root: URL, arguments: [String], environment: [String: String] = [:]
+) throws -> Process {
   var directory = Bundle(for: TransactionTestBundle.self).bundleURL.deletingLastPathComponent()
   while !FileManager.default.isExecutableFile(
     atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
@@ -52,6 +54,9 @@ func stateTestProcess(root: URL, arguments: [String]) throws -> Process {
   let process = Process()
   process.executableURL = directory.appendingPathComponent("StateTestProcess")
   process.arguments = [root.path] + arguments
+  process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, supplied in
+    supplied
+  }
   try process.run()
   return process
 }

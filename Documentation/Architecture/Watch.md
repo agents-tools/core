@@ -74,14 +74,23 @@ interruption, following journal recovery so rollback baselines stay reachable.
 Mirrors remain available for source history and future resolution; Git may
 collect histories after their last retention ref is released.
 
-Mirrors are exclusively owned by agents, and every mutation holds the scope
-lock. Git automatic maintenance is disabled for these invocations. Recovery
-under that lock treats all mirror `*.lock` files, including `packed-refs.lock`,
-and the root `packed-refs.new` staging file as abandoned. It validates regular
-files and contained directory ancestry
-without following symlinks, durably removes the locks, then retries ref cleanup.
-The pending marker makes interrupted lock removal repeatable. A live scope
-writer retains the scope lock and blocks competing recovery.
+Mirrors are exclusively owned by agents. Each source has a lock at
+`cache/locks/<source-key>.lock`, created before its mirror's first use. Every
+mirror operation holds that lock, including cloning, fetching, listing,
+cached revision inspection, extraction, retention and recovery. State mutations
+acquire the scope lock before the mirror lock; inspection can use the mirror
+lock even when no scope lock file exists.
+
+Git children explicitly inherit the mirror lock's descriptor. Closing the
+parent's descriptor does not unlock the shared open file description, so a
+surviving Git child continues excluding recovery after its Swift parent is
+killed. Git automatic maintenance is disabled. Recovery acquires the same
+mirror lock before treating `*.lock` files, including `packed-refs.lock`, and
+the root `packed-refs.new` staging file as abandoned. It validates each mirror's
+candidates as regular files through contained directory ancestry without
+following symlinks, durably removes them, then retries ref cleanup. The pending
+marker makes interrupted lock removal repeatable. Live listings and Git
+children keep recovery waiting until their mirror access ends.
 
 Well-known baselines map artifact names to digests. Files artifacts use the
 same aggregate digest as the lock: SHA-256 of deterministically encoded file

@@ -25,13 +25,8 @@ extension SourceCache {
       let mirror = mirrorURL(sourceID: id)
       try validatePath(mirror)
       guard FileManager.default.fileExists(atPath: mirror.path) else { return nil }
-      return try? ProcessRunner.run(
-        "/usr/bin/env",
-        arguments: [
-          "git", "--no-optional-locks", "-C", mirror.path, "rev-parse", "--verify",
-          object + "^{commit}",
-        ]
-      ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+      return try? git(
+        mirror, ["--no-optional-locks", "rev-parse", "--verify", object + "^{commit}"])
     }
     if case .revision(let object) = source.requirement, Self.isObjectID(object),
       let commit = try cachedCommit(object)

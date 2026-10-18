@@ -12,7 +12,8 @@ package struct SourceRevision: Equatable, Sendable {
 }
 
 /// Exclusively owned bare mirrors and immutable content shared by skills and instructions.
-/// Every mirror mutation, content publication and pruning requires the scope writer lock.
+/// Mirror access holds a per-source lock inherited by Git children.
+/// Content publication, watch retention and pruning also require the scope writer lock.
 package struct SourceCache {
   package let store: StateStore
 
@@ -77,47 +78,50 @@ package struct SourceCache {
   /// Publish objects and their retention ref durably before the scope journal can name them.
   func retainWatchRevision(sourceID: String, revision: String) throws {
     let url = mirrorURL(sourceID: sourceID)
-    try validatePath(url)
-    try beginWatchReferenceUpdate()
-    let mirror = try DirectoryHandle(at: url)
-    let objects = try mirror.child("objects")
-    if try objects.info("info") != nil {
-      let info = try objects.child("info")
-      if try info.info("alternates") != nil, try !info.read("alternates").isEmpty {
-        throw CoreError.invalidState("watch requires self-contained mirror objects")
-      }
-    }
-    // Explicit barriers cover pre-existing objects as well as newly fetched objects.
-    func syncObjects(_ directory: DirectoryHandle) throws {
-      for name in try directory.names() {
-        if try (directory.info(name)?.st_mode ?? 0) & 0o170000 == 0o040000 {
-          try syncObjects(directory.child(name))
-        } else {
-          try directory.syncFile(name)
+    try withMirrorLock(at: url) { descriptor in
+      try beginWatchReferenceUpdate()
+      let mirror = try DirectoryHandle(at: url)
+      let objects = try mirror.child("objects")
+      if try objects.info("info") != nil {
+        let info = try objects.child("info")
+        if try info.info("alternates") != nil, try !info.read("alternates").isEmpty {
+          throw CoreError.invalidState("watch requires self-contained mirror objects")
         }
       }
-      try directory.sync()
+      // Explicit barriers cover pre-existing objects as well as newly fetched objects.
+      func syncObjects(_ directory: DirectoryHandle) throws {
+        for name in try directory.names() {
+          if try (directory.info(name)?.st_mode ?? 0) & 0o170000 == 0o040000 {
+            try syncObjects(directory.child(name))
+          } else {
+            try directory.syncFile(name)
+          }
+        }
+        try directory.sync()
+      }
+      try syncObjects(objects)
+      try checkpoint("watch.objects.synced")
+      let refs = try mirror.child("refs")
+      if try refs.info("agents-watch") == nil { try refs.makeDirectory("agents-watch") }
+      let retained = try refs.child("agents-watch")
+      _ = try git(
+        url, ["update-ref", "--no-deref", "refs/agents-watch/" + revision, revision],
+        lock: descriptor)
+      try checkpoint("watch.ref.updated")
+      // Updating an already packed ref to the same commit can leave it packed.
+      if try retained.info(revision) != nil { try retained.syncFile(revision) }
+      if try mirror.info("packed-refs") != nil { try mirror.syncFile("packed-refs") }
+      try retained.sync()
+      try checkpoint("watch.ref.synced")
+      try refs.sync()
+      try mirror.syncFile("config")
+      try mirror.syncFile("HEAD")
+      let mirrors = try DirectoryHandle(at: url.deletingLastPathComponent())
+      try mirrors.sync()
+      try DirectoryHandle(at: store.cacheDirectory).sync()
+      try store.openDirectoryIfPresent()?.sync()
+      try checkpoint("watch.mirror.synced")
     }
-    try syncObjects(objects)
-    try checkpoint("watch.objects.synced")
-    let refs = try mirror.child("refs")
-    if try refs.info("agents-watch") == nil { try refs.makeDirectory("agents-watch") }
-    let retained = try refs.child("agents-watch")
-    _ = try git(url, ["update-ref", "--no-deref", "refs/agents-watch/" + revision, revision])
-    try checkpoint("watch.ref.updated")
-    // Updating an already packed ref to the same commit can leave it packed.
-    if try retained.info(revision) != nil { try retained.syncFile(revision) }
-    if try mirror.info("packed-refs") != nil { try mirror.syncFile("packed-refs") }
-    try retained.sync()
-    try checkpoint("watch.ref.synced")
-    try refs.sync()
-    try mirror.syncFile("config")
-    try mirror.syncFile("HEAD")
-    let mirrors = try DirectoryHandle(at: url.deletingLastPathComponent())
-    try mirrors.sync()
-    try DirectoryHandle(at: store.cacheDirectory).sync()
-    try store.openDirectoryIfPresent()?.sync()
-    try checkpoint("watch.mirror.synced")
   }
 
   /// The marker precedes ref preparation or a state change that can release an existing pin.
@@ -176,30 +180,36 @@ package struct SourceCache {
       if try cache.info("mirrors") != nil {
         let mirrors = try cache.child("mirrors")
         for name in try mirrors.names() where name.hasSuffix(".git") {
-          let mirror = try mirrors.child(name)
-          let refs = try mirror.child("refs")
-          let owned = try refs.info("agents-watch") == nil ? nil : refs.child("agents-watch")
-          if try mirror.info("packed-refs") != nil { try mirror.syncFile("packed-refs") }
-          let references = try git(
-            mirror.url, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/agents-watch/"])
-          for line in references.split(separator: "\n") {
-            let parts = line.split(separator: " ").map(String.init)
-            guard parts.count == 2, parts[0] == "refs/agents-watch/" + parts[1],
-              parts[1].range(of: #"^[0-9a-f]{40}([0-9a-f]{24})?$"#, options: .regularExpression)
-                != nil
-            else { throw CoreError.invalidState("invalid watch retention ref") }
-            if retained[name, default: []].contains(parts[1]) { continue }
-            if let owned, try owned.info(parts[1]) != nil { _ = try owned.read(parts[1]) }
-            _ = try git(mirror.url, ["update-ref", "--no-deref", "-d", parts[0], parts[1]])
-            try checkpoint("watch.references.deleted")
+          try withMirrorLock(at: mirrors.url.appendingPathComponent(name)) { descriptor in
+            let mirror = try mirrors.child(name)
+            let refs = try mirror.child("refs")
+            let owned = try refs.info("agents-watch") == nil ? nil : refs.child("agents-watch")
+            if try mirror.info("packed-refs") != nil { try mirror.syncFile("packed-refs") }
+            let references = try git(
+              mirror.url,
+              ["for-each-ref", "--format=%(refname) %(objectname)", "refs/agents-watch/"],
+              lock: descriptor)
+            for line in references.split(separator: "\n") {
+              let parts = line.split(separator: " ").map(String.init)
+              guard parts.count == 2, parts[0] == "refs/agents-watch/" + parts[1],
+                parts[1].range(of: #"^[0-9a-f]{40}([0-9a-f]{24})?$"#, options: .regularExpression)
+                  != nil
+              else { throw CoreError.invalidState("invalid watch retention ref") }
+              if retained[name, default: []].contains(parts[1]) { continue }
+              if let owned, try owned.info(parts[1]) != nil { _ = try owned.read(parts[1]) }
+              _ = try git(
+                mirror.url, ["update-ref", "--no-deref", "-d", parts[0], parts[1]], lock: descriptor
+              )
+              try checkpoint("watch.references.deleted")
+            }
+            // A previous attempt may have unlinked the final loose ref or rewritten packed-refs.
+            // Flush their parents even when enumeration now finds no obsolete refs.
+            if try mirror.info("packed-refs") != nil { try mirror.syncFile("packed-refs") }
+            if try refs.info("agents-watch") != nil { try refs.child("agents-watch").sync() }
+            try refs.sync()
+            try mirror.sync()
+            try checkpoint("watch.references.synced")
           }
-          // A previous attempt may have unlinked the final loose ref or rewritten packed-refs.
-          // Flush their parents even when enumeration now finds no obsolete refs.
-          if try mirror.info("packed-refs") != nil { try mirror.syncFile("packed-refs") }
-          if try refs.info("agents-watch") != nil { try refs.child("agents-watch").sync() }
-          try refs.sync()
-          try mirror.sync()
-          try checkpoint("watch.references.synced")
         }
       }
     }
@@ -208,13 +218,22 @@ package struct SourceCache {
     return true
   }
 
-  /// The scope lock excludes live mirror writers. Validate all candidates before unlinking;
+  /// Validate each mirror's candidates under its lock before unlinking;
   /// descriptor-relative traversal never follows a symlink outside the owned mirror.
   private func recoverMirrorLocks(in directory: DirectoryHandle) throws {
     guard try directory.info("cache") != nil else { return }
     let cache = try directory.child("cache")
     guard try cache.info("mirrors") != nil else { return }
     let mirrors = try cache.child("mirrors")
+    for name in try mirrors.names() where name.hasSuffix(".git") {
+      try withMirrorLock(at: mirrors.url.appendingPathComponent(name)) { _ in
+        try recoverGitLocks(in: mirrors.child(name), scope: directory)
+      }
+    }
+  }
+
+  private func recoverGitLocks(in mirror: DirectoryHandle, scope directory: DirectoryHandle) throws
+  {
     var locks: [(DirectoryHandle, String)] = []
     func inspect(_ parent: DirectoryHandle, isMirrorRoot: Bool = false) throws {
       for name in try parent.names() {
@@ -230,9 +249,7 @@ package struct SourceCache {
         }
       }
     }
-    for name in try mirrors.names() where name.hasSuffix(".git") {
-      try inspect(mirrors.child(name), isMirrorRoot: true)
-    }
+    try inspect(mirror, isMirrorRoot: true)
     if !locks.isEmpty { try beginWatchReferenceUpdate() }
     guard try directory.info("watch-refs.pending") != nil else { return }
     for (parent, name) in locks {
@@ -248,9 +265,7 @@ package struct SourceCache {
       }
       try parent.sync()
     }
-    for name in try mirrors.names() where name.hasSuffix(".git") {
-      try syncDirectories(mirrors.child(name))
-    }
+    try syncDirectories(mirror)
   }
 
   package func materialize(sourceID: String, source: LockedSource, revision: String) throws -> URL {
@@ -460,16 +475,12 @@ package struct SourceCache {
   }
 
   private func fetch(_ source: SourceDeclaration, id: String) throws -> URL {
-    try validatePath(mirrorURL(sourceID: id))
-    try validatePath(store.cacheDirectory.appendingPathComponent("locks"))
-    return try FileLock.withLock(
-      at: store.cacheDirectory.appendingPathComponent("locks/\(key(id)).lock")
-    ) {
-      try fetchMirror(source, id: id)
+    try withMirrorLock(at: mirrorURL(sourceID: id)) { descriptor in
+      try fetchMirror(source, id: id, lock: descriptor)
     }
   }
 
-  private func fetchMirror(_ source: SourceDeclaration, id: String) throws -> URL {
+  private func fetchMirror(_ source: SourceDeclaration, id: String, lock: Int32) throws -> URL {
     guard source.kind != .wellKnown else {
       throw CoreError.invalidSource("well-known sources have no Git mirror")
     }
@@ -481,35 +492,55 @@ package struct SourceCache {
     if FileManager.default.fileExists(atPath: mirror.path) {
       _ = try git(
         mirror,
-        ["fetch", "--prune", "origin", "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"])
+        ["fetch", "--prune", "origin", "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"],
+        lock: lock)
     } else {
       let staging = mirror.appendingPathExtension("staging-" + UUID().uuidString)
       defer { try? FileManager.default.removeItem(at: staging) }
       try ProcessRunner.run(
         "/usr/bin/env",
         arguments: ["git"] + Self.gitOptions
-          + ["clone", "--mirror", "--no-local", "--", url, staging.path])
+          + ["clone", "--mirror", "--no-local", "--", url, staging.path], inheritingLock: lock)
       try FileManager.default.moveItem(at: staging, to: mirror)
     }
     // A remote can change its default branch after the initial clone.
     let head = try ProcessRunner.run(
-      "/usr/bin/env", arguments: ["git", "ls-remote", "--symref", url, "HEAD"]
+      "/usr/bin/env", arguments: ["git", "ls-remote", "--symref", url, "HEAD"], inheritingLock: lock
     ).stdout
     if let line = head.split(separator: "\n").first(where: { $0.hasPrefix("ref: refs/heads/") }),
       let reference = line.split(separator: "\t").first
     {
-      _ = try git(mirror, ["symbolic-ref", "HEAD", String(reference.dropFirst(5))])
+      _ = try git(mirror, ["symbolic-ref", "HEAD", String(reference.dropFirst(5))], lock: lock)
     }
     return mirror
   }
 
-  private func git(_ repository: URL, _ arguments: [String]) throws -> String {
+  private func withMirrorLock<T>(at mirror: URL, _ body: (Int32) throws -> T) throws -> T {
+    let locks = store.cacheDirectory.appendingPathComponent("locks")
+    try validatePath(locks)
+    let lock = locks.appendingPathComponent(
+      mirror.deletingPathExtension().lastPathComponent + ".lock")
+    try checkpoint("mirror.lock.waiting")
+    return try FileLock.withDescriptor(at: lock) { descriptor in
+      try validatePath(mirror)
+      return try body(descriptor)
+    }
+  }
+
+  func git(_ repository: URL, _ arguments: [String]) throws -> String {
+    try withMirrorLock(at: repository) { descriptor in
+      try git(repository, arguments, lock: descriptor)
+    }
+  }
+
+  private func git(_ repository: URL, _ arguments: [String], lock: Int32) throws -> String {
     let mirror = try DirectoryHandle(at: repository)
     guard let config = try mirror.info("config"), config.st_mode & 0o170000 == 0o100000 else {
       throw CoreError.unsafePath("mirror configuration must be a regular file")
     }
     return try ProcessRunner.run(
-      "/usr/bin/env", arguments: ["git"] + Self.gitOptions + ["-C", repository.path] + arguments
+      "/usr/bin/env", arguments: ["git"] + Self.gitOptions + ["-C", repository.path] + arguments,
+      inheritingLock: lock
     )
     .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
   }

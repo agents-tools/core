@@ -144,16 +144,26 @@ removed and its parent synced. The marker survives interrupted preparation or
 cleanup, so the next access repeats reconciliation against the recovered state;
 refs needed for rollback remain until that state is durable.
 
-Mirrors are exclusively owned by agents. Every mirror mutation runs under the
-scope lock, and Git invocations disable automatic maintenance so no background
-writer outlives that operation. Once recovery holds this lock, Git `*.lock`
-files inside mirrors (including `packed-refs.lock`) and the root
-`packed-refs.new` staging file are abandoned. Recovery validates every candidate
-as a regular file through directory descriptors,
+Mirrors are exclusively owned by agents. Each mirror has a per-source lock at
+`cache/locks/<source-key>.lock`, created before cloning or first access. All
+mirror reads and writes take this lock, including instruction listings and
+cached revision inspection. Scope mutations take the scope lock first, then
+the mirror lock; mirror access never acquires the scope lock in reverse order.
+An instruction listing can therefore populate a mirror before `.agents.lock`
+exists while still excluding concurrent recovery and watch mutations.
+
+Git children explicitly inherit the mirror lock descriptor through spawn file
+actions; unrelated descriptors remain closed. The parent closes its descriptor
+without explicitly unlocking the shared open file description. If the Swift
+parent is killed, a surviving Git child keeps the mirror locked until it exits.
+Git automatic maintenance is disabled. Recovery must acquire this same mirror
+lock before classifying Git `*.lock` files (including `packed-refs.lock`) and
+the root `packed-refs.new` staging file as abandoned. Within each mirror it
+validates all candidates as regular files through directory descriptors,
 without following symlinks, before deleting any candidate. It syncs lock-file
 deletions before retrying Git; the pending marker also covers interruption of
-this cleanup. A live scope writer keeps the lock, so readers and other writers
-wait instead of removing its Git locks.
+this cleanup. Live mirror users and surviving Git children block recovery, so
+their Git locks and refs cannot be removed or recreated beneath them.
 
 Each state operation first checks for an abandoned journal under the scope
 lock, then validates watch state and finishes pending ref cleanup before
