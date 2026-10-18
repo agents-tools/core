@@ -17,21 +17,24 @@ struct FileLockProcessTests {
         defined(my $child = fork) or die $!;
         if (!$child) {
           close STDOUT; close STDERR;
-          open my $ready, '>', $ARGV[0] or die $!;
+          open my $ready, '>', "$ARGV[0].new" or die $!;
           print $ready "$$"; close $ready;
+          rename "$ARGV[0].new", $ARGV[0] or die $!;
           kill 'STOP', $$;
           exit 0;
         }
+        print $child;
         """
-      try ProcessRunner.run(
+      let output = try ProcessRunner.run(
         "/usr/bin/perl", arguments: ["-e", script, ready.path], inheritingLock: descriptor)
+      let identifier = Int32(output.stdout)
+      let pid: Int32 = try #require(identifier)
+      child = pid
       let deadline = Date().addingTimeInterval(10)
       while !FileManager.default.fileExists(atPath: ready.path), Date() < deadline {
         Thread.sleep(forTimeInterval: 0.01)
       }
-      let identifier = Int32(try String(contentsOf: ready, encoding: .utf8))
-      let pid: Int32 = try #require(identifier)
-      child = pid
+      #expect(try String(contentsOf: ready, encoding: .utf8) == String(pid))
       #expect(fcntl(descriptor, F_GETFD) & FD_CLOEXEC != 0)
     }
     let contender = open(lock.path, O_RDWR | O_CLOEXEC)
