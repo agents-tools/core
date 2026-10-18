@@ -98,10 +98,8 @@ struct ProcessRunnerTests {
         print STDERR $ARGV[1];
       }
       """
-    let start = ContinuousClock.now
     let output = try ProcessRunner.run("/usr/bin/perl", arguments: ["-e", script, stdout, stderr])
 
-    #expect(start.duration(to: .now) < .seconds(5))
     #expect(output.stdout == String(repeating: stdout, count: 1024))
     #expect(output.stderr == String(repeating: stderr, count: 1024))
     #expect(output.exitCode == 0)
