@@ -39,17 +39,23 @@ public struct GitError: Error, CustomStringConvertible, Equatable, Sendable {
   }
 
   private static func isProgress(_ line: String) -> Bool {
-    if line.hasPrefix("Cloning into ") { return true }
-    let progress = line.hasPrefix("remote: ") ? String(line.dropFirst(8)) : line
-    if progress.range(of: #"^[0-9]+%(?:\s|$)"#, options: .regularExpression) != nil { return true }
-    if line.hasPrefix("remote: Total "),
-      progress.range(of: #"^Total [0-9]+ \(delta [0-9]+\)"#, options: .regularExpression) != nil
+    if line.range(
+      of: #"^Cloning into (?:bare repository )?'.*'\.\.\.$"#, options: .regularExpression)
+      != nil
     {
       return true
     }
-    return progress.range(
-      of:
-        #"^(?:(?:Counting|Compressing|Enumerating|Receiving|Writing) objects|Resolving deltas|Updating files|Checking out files|Filtering content|Checking connectivity|Updating the index):\s+(?:[0-9]+(?:%|, done\.|$)|done\.)"#,
-      options: .regularExpression) != nil
+    let progress = line.hasPrefix("remote: ") ? String(line.dropFirst(8)) : line
+    let bytes = #"[0-9]+(?:\.[0-9]+)? (?:bytes|[KMGTPE]iB)"#
+    let percentage =
+      #"[0-9]+%\s+\([0-9]+/[0-9]+\)(?:, \#(bytes)(?: \| \#(bytes)/s)?)?(?:, done\.)?"#
+    let phase =
+      #"(?:Counting|Compressing|Enumerating|Receiving|Writing) objects|Resolving deltas|Updating files|Checking out files|Filtering content|Checking connectivity|Updating the index"#
+    let patterns = [
+      #"^\#(percentage)$"#,
+      #"^(?:\#(phase)):\s+(?:\#(percentage)|[0-9]+(?:, done\.)?|done\.)$"#,
+      #"^Total [0-9]+ \(delta [0-9]+\), reused [0-9]+ \(delta [0-9]+\), pack-reused [0-9]+(?: \(from [0-9]+\))?$"#,
+    ]
+    return patterns.contains { progress.range(of: $0, options: .regularExpression) != nil }
   }
 }

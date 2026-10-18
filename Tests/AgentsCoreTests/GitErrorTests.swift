@@ -160,6 +160,63 @@ struct GitErrorTests {
     #expect(error.exitCode == 128)
   }
 
+  @Test(
+    arguments: [
+      "100% of the authentication token quota is exhausted; contact support.",
+      "50% (5/10) of the required credentials are unavailable.",
+      "Receiving objects: 100% (10/10), authentication token quota exhausted.",
+      "Counting objects: 10, done. Authentication failed.",
+      "Total 10 (delta 2), authentication token quota exhausted.",
+    ], ["", "remote: "])
+  func preservesExplanatoryProgressSuffixes(_ diagnostic: String, _ prefix: String) {
+    let source = "https://example.com/source.git"
+    let error = GitError(
+      operation: "fetch", source: source, stderr: prefix + diagnostic + "\n",
+      command: [], exitCode: 128)
+
+    #expect(error.stderr == prefix + diagnostic)
+    #expect(error.description == "Git could not fetch \(source).\n" + prefix + diagnostic)
+  }
+
+  @Test(
+    arguments: [
+      "50% (5/10)",
+      "100% (10/10), done.",
+      "Receiving objects:   1% (1/100), 1.25 MiB | 2.50 MiB/s",
+      "Receiving objects: 100% (100/100), 1.25 MiB | 2.50 MiB/s, done.",
+      "Receiving objects: 100% (1/1), 256 bytes | 1.00 KiB/s, done.",
+      "Total 10 (delta 2), reused 10 (delta 2), pack-reused 0 (from 0)",
+    ], ["", "remote: "])
+  func removesCompleteProgressLines(_ progress: String, _ prefix: String) {
+    let error = GitError(
+      operation: "fetch", source: "https://example.com/source.git",
+      stderr: prefix + progress + "\n", command: [], exitCode: 128)
+
+    #expect(error.stderr.isEmpty)
+  }
+
+  @Test func preservesPercentageDiagnosticFromSSHHelper() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let helper = root.appendingPathComponent("ssh-helper")
+    let diagnostic = "100% of the authentication token quota is exhausted; contact support."
+    try Data("#!/bin/sh\nprintf '%s\\n' '\(diagnostic)' >&2\nexit 1\n".utf8).write(to: helper)
+    let source = "ssh://git@example.invalid/source.git"
+    let quotedHelper = "'" + helper.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    let arguments = [
+      "-c", "core.sshCommand=/bin/sh " + quotedHelper, "-c", "ssh.variant=ssh",
+      "ls-remote", "--", source,
+    ]
+
+    let error = try #require(throws: GitError.self) {
+      try ProcessRunner.git(arguments, operation: "list remote refs for", source: source)
+    }
+
+    #expect(error.stderr.contains(diagnostic))
+    #expect(error.description.contains(diagnostic))
+    #expect(error.command == ["/usr/bin/env", "git"] + arguments)
+  }
+
   @Test func emptyDiagnosticHasOnlyTheSummary() {
     let error = GitError(
       operation: "clone", source: "https://example.com/source.git",
