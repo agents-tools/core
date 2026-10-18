@@ -190,6 +190,10 @@ the scope and asking the caller to retry against the recovered generation.
 This includes recovery of pending watch refs even when no journal remains.
 Non-applying skill and instruction operations and watch status and diff take an
 existing shared lock without creating scope state files or replaying recovery.
+When the scope lock is absent, inspection reads without a lock, then checks again
+for a lock or pending recovery before returning either a result or an error.
+If a writer appeared, inspection discards that attempt and retries under the
+shared lock. Writers create the scope lock before mutation and never remove it.
 Listings, previews, watch status and watch diff fail with `CoreError.invalidState`
 when a transaction journal is pending. A pending watch-ref cleanup marker does
 not block these reads or trigger reconciliation: comparisons use the committed

@@ -7,6 +7,42 @@ import Testing
 
 @Suite("Read-only skill inspection")
 struct ReadOnlyInspectionTests {
+  @Test(arguments: [false, true], [false, true])
+  func firstSkillAddRetriesAnUnlockedRead(_ cached: Bool, _ bodyThrows: Bool) throws {
+    let fixture = try SkillFixture()
+    try fixture.skill("demo", body: "Committed content")
+    try fixture.commit()
+    let store = fixture.store()
+    if cached {
+      _ = try SourceCache(store: store).resolve(
+        SourceDeclaration(kind: .local, location: fixture.repo.path))
+    }
+    let lock = store.directory.appendingPathComponent(".agents.lock")
+    try #require(!FileManager.default.fileExists(atPath: lock.path))
+    var reads = 0
+
+    let skills = try store.withReadLock {
+      reads += 1
+      let skills = try store.readResolved().skills
+      if reads == 1 {
+        try #require(skills.isEmpty)
+        _ = try fixture.add(mode: .copy)
+        if bodyThrows { throw CoreError.invalidState("inconsistent inspection") }
+      } else {
+        let descriptor = open(lock.path, O_RDONLY | O_CLOEXEC)
+        try #require(descriptor >= 0)
+        defer { close(descriptor) }
+        #expect(flock(descriptor, LOCK_EX | LOCK_NB) == -1)
+        #expect(errno == EWOULDBLOCK)
+      }
+      return skills
+    }
+    #expect(reads == 2)
+    #expect(skills.keys.sorted() == ["demo"])
+    #expect(skills["demo"]?.revision == (try fixture.head()))
+    #expect(try fixture.body(fixture.target("demo")).contains("Committed content"))
+  }
+
   @Test(arguments: [InstallScope.project, .user])
   func pendingTransactionSurvivesDoctorsListingsAndPreviews(_ scope: InstallScope) throws {
     try inspectPendingTransaction(scope: scope, initialize: false)
