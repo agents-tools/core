@@ -67,7 +67,7 @@ paths; their ownership does not require importing the skill module.
 
 The returned models expose skills, installation results and health, skipped
 restorations, update results, and doctor checks. `Discovery`, `Installer`,
-`WellKnownProvider`, metadata sanitization, and skill-path helpers are internal.
+`WellKnownProvider`, and metadata sanitization are internal.
 
 `SkillSourceResolver` dispatches well-known URLs to `WellKnownProvider` and
 local/Git sources to core resolution. Well-known discovery supports legacy

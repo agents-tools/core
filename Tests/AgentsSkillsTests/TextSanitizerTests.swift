@@ -1,11 +1,9 @@
-import Foundation
 import Testing
 
-@testable import AgentsCore
 @testable import AgentsSkills
 
-@Suite("Skill Metadata And Paths")
-struct SkillMetadataAndPathTests {
+@Suite("Text Sanitizer")
+struct TextSanitizerTests {
   @Test func stripsUnsafeTerminalControlCharacters() {
     let esc = "\u{001B}"
     let cases: [(String, String)] = [
@@ -66,48 +64,4 @@ struct SkillMetadataAndPathTests {
       TextSanitizer.sanitizeMetadata("Build UIs with @nuxt/ui v4")
         == "Build UIs with @nuxt/ui v4")
   }
-
-  @Test func normalizesSkillPaths() {
-    for path in ["SKILL.md", "src/helper.ts", "assets/logo.png", ".config"] {
-      #expect(SkillPath.isValidSkillFile(path), "valid skill file: \(path)")
-    }
-    for path in ["/etc/passwd", "\\Windows\\System32", "../../../etc/passwd", "file..name"] {
-      #expect(!SkillPath.isValidSkillFile(path), "invalid skill file: \(path)")
-    }
-
-    #expect(SkillPath.normalizeSkillPath("skills/my-skill/SKILL.md") == "skills/my-skill")
-    #expect(SkillPath.normalizeSkillPath("skills\\my-skill\\SKILL.md") == "skills/my-skill")
-    #expect(SkillPath.normalizeSkillPath("SKILL.md") == "")
-    #expect(SkillPath.normalizeSkillPath("skills/my-skill/") == "skills/my-skill")
-    #expect(SkillPath.normalizeSkillPath("skills\\my-skill\\") == "skills/my-skill")
-    #expect(SkillPath.normalizeSkillPath("skills\\deep\\nested\\SKILL.md") == "skills/deep/nested")
-    #expect(
-      SkillPath.normalizeSkillPath("skills\\.curated\\advanced-skill\\SKILL.md")
-        == "skills/.curated/advanced-skill")
-  }
-
-  @Test func computesRelativeSkillFilePaths() {
-    #expect(
-      SkillPath.relativeSkillFilePath(
-        root: "/tmp/abc123", skillPath: "/tmp/abc123", separator: "/")
-        == "SKILL.md")
-    #expect(
-      SkillPath.relativeSkillFilePath(
-        root: "/tmp/abc123", skillPath: "/tmp/abc123/skills/my-skill", separator: "/")
-        == "skills/my-skill/SKILL.md")
-    #expect(
-      SkillPath.relativeSkillFilePath(
-        root: "/tmp/abc123", skillPath: "/tmp/other/my-skill", separator: "/") == nil)
-    #expect(
-      SkillPath.relativeSkillFilePath(
-        root: "C:\\Users\\test\\Temp\\abc123",
-        skillPath: "C:\\Users\\test\\Temp\\abc123\\skills\\my-skill",
-        separator: "\\") == "skills/my-skill/SKILL.md")
-    #expect(
-      SkillPath.relativeSkillFilePath(
-        root: "C:\\Users\\test\\Temp\\abc",
-        skillPath: "C:\\Users\\test\\Temp\\abc123\\skills\\my-skill",
-        separator: "\\") == nil)
-  }
-
 }

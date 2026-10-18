@@ -92,7 +92,7 @@ struct SkillOperationsWorkflowTests {
             source: source.path, agents: [.codex, .claudeCode], mode: .copy, all: true,
             watch: command == "watch", environment: environment))
       case "install":
-        _ = try SkillOperations.installResolved(environment: environment)
+        _ = try SkillOperations.installResolvedReport(environment: environment).installed
       case "update":
         _ = try SkillOperations.updateInstalled(
           scope: .project, environment: environment, apply: true)

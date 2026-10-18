@@ -561,18 +561,6 @@ public enum SkillOperations {
     return Set((onDisk + managed).map { PathSafety.sanitizeName($0.name) })
   }
 
-  static func installProjectResolved(environment: RuntimeEnvironment) throws
-    -> [InstallResult]
-  {
-    try installResolved(scope: .project, environment: environment)
-  }
-
-  static func installResolved(
-    scope: InstallScope = .project, environment: RuntimeEnvironment
-  ) throws -> [InstallResult] {
-    try installResolvedReport(scope: scope, environment: environment).installed
-  }
-
   public static func installResolvedReport(
     scope: InstallScope = .project, environment: RuntimeEnvironment
   ) throws -> ResolvedInstallReport {

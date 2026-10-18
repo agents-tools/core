@@ -147,6 +147,21 @@ struct PublicSkillOperationsTests {
         #expect(throws: CoreError.self) { try SkillOperations.add(options) }
       }
     }
+    let publicSkill = try SkillOperations.initializeSkill(
+      named: "public-skill", directory: source.appendingPathComponent("skills"))
+    try """
+    ---
+    name: public-skill
+    description: Public skill
+    metadata:
+      internal: false
+    ---
+    """.write(to: publicSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+    var internalDisabled = environment
+    internalDisabled.environment["INSTALL_INTERNAL_SKILLS"] = "false"
+    let publicOnly = try SkillOperations.add(
+      AddOptions(source: source.path, listOnly: true, environment: internalDisabled))
+    #expect(publicOnly.availableSkills.map(\.name) == ["public-skill"])
     _ = try SkillOperations.initializeSkill(
       named: "shallow", directory: source.appendingPathComponent("skills"))
     _ = try SkillOperations.initializeSkill(
@@ -161,7 +176,7 @@ struct PublicSkillOperationsTests {
     #expect(installed.installed.map(\.skill) == ["deep"])
     let listed = try SkillOperations.add(
       AddOptions(source: source.path, listOnly: true, fullDepth: true, environment: environment))
-    #expect(Set(listed.availableSkills.map(\.name)) == ["shallow", "deep"])
+    #expect(Set(listed.availableSkills.map(\.name)) == ["public-skill", "shallow", "deep"])
     #expect(throws: CoreError.self) { try AgentID.parse("invalid-agent") }
   }
 
@@ -239,5 +254,170 @@ struct PublicSkillOperationsTests {
       skillNames: ["gemini-only"], scope: .project, agents: [.geminiCLI], environment: environment)
     #expect(
       !FileManager.default.fileExists(atPath: native.appendingPathComponent("gemini-only").path))
+  }
+
+  @Test func updatesFromWatchPreservingInferredInstallationTargets() throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let repo = root.appendingPathComponent("repo")
+    let skill = try SkillOperations.initializeSkill(
+      named: "demo", directory: repo.appendingPathComponent("skills"))
+    let skillFile = skill.appendingPathComponent("SKILL.md")
+    let originalContent = try String(contentsOf: skillFile, encoding: .utf8)
+    try initGitRepo(repo)
+    let environment = RuntimeEnvironment(
+      projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
+    let projectInstall = try SkillOperations.add(
+      AddOptions(
+        source: repo.path, agents: [.claudeCode], scope: .project, mode: .symlink, watch: true,
+        environment: environment))
+    let watchID = try #require(projectInstall.watched.first?.watchID)
+    let globalInstall = try SkillOperations.add(
+      AddOptions(
+        source: watchID, agents: [.codex], scope: .global, mode: .copy,
+        environment: environment))
+    let originalTargets = projectInstall.installed + globalInstall.installed
+    #expect(originalTargets.count == 2)
+
+    let reviewedContent = originalContent + "\nReviewed update\n"
+    try reviewedContent.write(to: skillFile, atomically: true, encoding: .utf8)
+    try ProcessRunner.run("/usr/bin/env", arguments: ["git", "-C", repo.path, "add", "."])
+    try ProcessRunner.run(
+      "/usr/bin/env", arguments: ["git", "-C", repo.path, "commit", "-m", "update skill"])
+    let reviewedCommit = try gitHead(repo)
+    _ = try SkillOperations.watches.refreshWatchedHead(
+      watchID: watchID, environment: environment, apply: true)
+    _ = try SkillOperations.watches.check(
+      watchID: watchID, path: "skills/demo", environment: environment, apply: true)
+    _ = try SkillOperations.watches.done(
+      watchID: watchID, path: "skills/demo", environment: environment, apply: true)
+    for target in originalTargets {
+      let installedFile = URL(fileURLWithPath: target.path).appendingPathComponent("SKILL.md")
+      #expect(try String(contentsOf: installedFile, encoding: .utf8) == originalContent)
+    }
+
+    let updated = try SkillOperations.updateFromWatch(
+      watchID, path: "skills/demo", environment: environment, apply: true)
+
+    #expect(updated.count == originalTargets.count)
+    for target in originalTargets {
+      let result = try #require(
+        updated.first { $0.agent == target.agent && $0.scope == target.scope })
+      #expect(result.skill == "demo")
+      #expect(result.mode == target.mode)
+      #expect(result.path == target.path)
+      #expect(result.materialization == target.materialization)
+      let installedFile = URL(fileURLWithPath: result.path).appendingPathComponent("SKILL.md")
+      #expect(try String(contentsOf: installedFile, encoding: .utf8) == reviewedContent)
+      let managed = try SkillOperations.listManaged(
+        scope: target.scope, agents: AgentID.allCases, environment: environment)
+      #expect(managed.count == 1)
+      let record = try #require(managed.first)
+      #expect(record.name == "demo")
+      #expect(record.agent == target.agent)
+      #expect(record.scope == target.scope)
+      #expect(record.mode == target.mode)
+      #expect(record.path == target.path)
+      #expect(record.reviewedCommit == reviewedCommit)
+    }
+  }
+
+  @Test(arguments: [InstallScope.project, .global])
+  func removesAllSkillsOnlyForSelectedAgentAndScope(_ scope: InstallScope) throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent("source")
+    for name in ["shared", "orphan", "missing"] {
+      _ = try SkillOperations.initializeSkill(named: name, directory: source)
+    }
+    let environment = RuntimeEnvironment(
+      projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
+    for installScope in [InstallScope.project, .global] {
+      _ = try SkillOperations.add(
+        AddOptions(
+          source: source.path, agents: [.claudeCode, .codex], skillNames: ["shared"],
+          scope: installScope, mode: .symlink, environment: environment))
+      _ = try SkillOperations.add(
+        AddOptions(
+          source: source.path, agents: [.claudeCode], skillNames: ["orphan", "missing"],
+          scope: installScope, mode: .symlink, environment: environment))
+      let base = installScope == .project ? root : environment.homeDirectory
+      for name in ["unmanaged-one", "unmanaged-two"] {
+        _ = try SkillOperations.initializeSkill(
+          named: name, directory: base.appendingPathComponent(".claude/skills"))
+      }
+    }
+    let base = scope == .project ? root : environment.homeDirectory
+    for name in ["orphan", "missing"] {
+      try FileManager.default.removeItem(at: base.appendingPathComponent(".claude/skills/\(name)"))
+    }
+    try FileManager.default.removeItem(at: base.appendingPathComponent(".agents/skills/missing"))
+    let otherScope: InstallScope = scope == .project ? .global : .project
+    let otherLockURL =
+      otherScope == .project
+      ? root.appendingPathComponent(".agent/skills.resolved")
+      : environment.homeDirectory.appendingPathComponent(".agents/skills.resolved")
+    let otherLock = try Data(contentsOf: otherLockURL)
+    let otherInstallations = try SkillOperations.listInstalled(
+      scope: otherScope, agents: AgentID.allCases, environment: environment)
+    let otherContents = try otherInstallations.map {
+      try Data(contentsOf: URL(fileURLWithPath: $0.path).appendingPathComponent("SKILL.md"))
+    }
+    let sharedFile = base.appendingPathComponent(".agents/skills/shared/SKILL.md")
+    let sharedContent = try Data(contentsOf: sharedFile)
+
+    let removed = try SkillOperations.remove(
+      skillNames: [], scope: scope, agents: [.claudeCode], environment: environment)
+
+    let expectedRemoved = [
+      ".claude/skills/shared", ".claude/skills/unmanaged-one", ".claude/skills/unmanaged-two",
+      ".agents/skills/orphan",
+    ].map { base.appendingPathComponent($0).path }
+    func normalizedRemovalPath(_ path: String) -> String {
+      let url = URL(fileURLWithPath: path)
+      return url.deletingLastPathComponent().resolvingSymlinksInPath()
+        .appendingPathComponent(url.lastPathComponent).path
+    }
+    #expect(
+      Set(removed.map(normalizedRemovalPath)) == Set(expectedRemoved.map(normalizedRemovalPath)))
+    for path in expectedRemoved {
+      #expect(!FileManager.default.fileExists(atPath: path))
+    }
+    #expect(
+      try SkillOperations.listInstalled(
+        scope: scope, agents: [.claudeCode], environment: environment
+      )
+      .isEmpty)
+    let remaining = try SkillOperations.listManaged(
+      scope: scope, agents: AgentID.allCases, environment: environment)
+    #expect(remaining.map(\.name) == ["shared"])
+    #expect(remaining.map(\.agent) == [.codex])
+    #expect(try Data(contentsOf: sharedFile) == sharedContent)
+    #expect(try Data(contentsOf: otherLockURL) == otherLock)
+
+    _ = try SkillOperations.remove(
+      skillNames: [], scope: scope, agents: [.codex], environment: environment)
+    #expect(!FileManager.default.fileExists(atPath: sharedFile.deletingLastPathComponent().path))
+    let lockURL =
+      scope == .project
+      ? root.appendingPathComponent(".agent/skills.resolved")
+      : environment.homeDirectory.appendingPathComponent(".agents/skills.resolved")
+    let lock = try #require(
+      JSONSerialization.jsonObject(with: Data(contentsOf: lockURL)) as? [String: Any])
+    #expect(try #require(lock["pins"] as? [Any]).isEmpty)
+    #expect(try Data(contentsOf: otherLockURL) == otherLock)
+    #expect(
+      try SkillOperations.listInstalled(
+        scope: otherScope, agents: AgentID.allCases, environment: environment) == otherInstallations
+    )
+    for (installation, content) in zip(otherInstallations, otherContents) {
+      let file = URL(fileURLWithPath: installation.path).appendingPathComponent("SKILL.md")
+      #expect(try Data(contentsOf: file) == content)
+    }
+    for name in ["shared", "orphan", "missing"] {
+      #expect(
+        FileManager.default.fileExists(
+          atPath: source.appendingPathComponent("\(name)/SKILL.md").path))
+    }
   }
 }

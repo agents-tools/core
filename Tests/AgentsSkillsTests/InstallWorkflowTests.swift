@@ -66,7 +66,8 @@ extension SkillOperationsWorkflowTests {
     #expect(lock.pins[0].kind == "localFileSystem")
 
     try FileManager.default.removeItem(at: project.appendingPathComponent(".agents/skills"))
-    let resolvedInstall = try SkillOperations.installProjectResolved(environment: environment)
+    let resolvedInstall = try SkillOperations.installResolvedReport(environment: environment)
+      .installed
     #expect(resolvedInstall.count == 2)
     #expect(
       FileManager.default.fileExists(atPath: installed.appendingPathComponent("SKILL.md").path))

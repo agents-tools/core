@@ -208,7 +208,9 @@ struct InstallerTests {
       FileManager.default.fileExists(atPath: installed.appendingPathComponent("SKILL.md").path))
 
     try FileManager.default.removeItem(at: installed)
-    let restored = try SkillOperations.installResolved(scope: .global, environment: environment)
+    let restored = try SkillOperations.installResolvedReport(
+      scope: .global, environment: environment
+    ).installed
     #expect(restored.map(\.skill) == ["remote"])
     #expect(
       FileManager.default.fileExists(atPath: installed.appendingPathComponent("SKILL.md").path))
@@ -266,7 +268,8 @@ struct InstallerTests {
         scope: .global,
         mode: .symlink,
         environment: environment))
-    _ = try SkillOperations.installResolved(scope: .global, environment: environment)
+    _ = try SkillOperations.installResolvedReport(scope: .global, environment: environment)
+      .installed
 
     let canonical = home.appendingPathComponent(".agents/skills/shared-user")
     let claude = home.appendingPathComponent(".claude/skills/shared-user")
