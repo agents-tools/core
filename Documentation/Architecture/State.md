@@ -118,7 +118,10 @@ finishes cleanup. Recovery is repeatable if interrupted. Before deleting any
 recovery material, both the terminal journal file and its parent directory are
 fsynced, even when that phase was already visible on entry. State and backup
 files and their parent directories are synced before publishing the terminal
-phase. On macOS these barriers also use `F_FULLFSYNC` to request a storage flush.
+phase. Replayed deletions sync their own parent directories even when the entry
+is already absent; a visible unlink alone does not establish durability on that
+target's volume. On macOS these barriers also use `F_FULLFSYNC` to request a
+storage flush.
 
 Recovery throws `CoreError.transactionRecovered` after completing, reporting
 the scope and asking the caller to retry against the recovered generation.

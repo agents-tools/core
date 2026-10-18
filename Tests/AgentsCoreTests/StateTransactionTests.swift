@@ -188,8 +188,11 @@ extension StateTransactionTests {
     try #require(FileManager.default.fileExists(atPath: root.appendingPathComponent(marker).path))
   }
 
-  private func abandon(_ fixture: TransactionFixture, at step: String = "replace.2") throws {
-    let child = try stateTestProcess(root: fixture.root, arguments: ["crash", step])
+  private func abandon(
+    _ fixture: TransactionFixture, at step: String = "replace.2", scope: InstallScope = .project
+  ) throws {
+    let child = try stateTestProcess(
+      root: fixture.root, arguments: ["crash", step, scope.rawValue])
     defer {
       if child.isRunning {
         kill(child.processIdentifier, SIGKILL)
@@ -199,6 +202,60 @@ extension StateTransactionTests {
     try waitFor("ready", root: fixture.root, child: child)
     kill(child.processIdentifier, SIGKILL)
     child.waitUntilExit()
+  }
+
+  @Test(arguments: [InstallScope.project, .user])
+  func replayedDeletionSyncsParentBeforeTerminalPhase(_ scope: InstallScope) throws {
+    let fixture = try TransactionFixture()
+    var environment = fixture.store.environment
+    environment.environment["CLAUDE_CONFIG_DIR"] =
+      fixture.root.appendingPathComponent("configured-claude").path
+    let store = StateStore(scope: scope, environment: environment)
+    if scope == .user { try store.save(declaration: Declaration(), resolved: ResolvedState()) }
+    let declaration = try Data(contentsOf: store.declarationURL)
+    let resolved = try Data(contentsOf: store.resolvedURL)
+    let projectState = try Data(contentsOf: fixture.store.resolvedURL)
+    let target = AgentRegistry.installSkillsDirectory(
+      for: .claudeCode, scope: scope, environment: environment
+    ).appendingPathComponent("created")
+    try abandon(fixture, at: "replace.4", scope: scope)
+    try #require(FileManager.default.fileExists(atPath: target.path))
+
+    let recovery = try stateTestProcess(
+      root: fixture.root, arguments: ["recover", "restore.4.remove.unlinked", scope.rawValue])
+    defer {
+      if recovery.isRunning {
+        kill(recovery.processIdentifier, SIGKILL)
+        recovery.waitUntilExit()
+      }
+    }
+    try waitFor("recovery-ready", root: fixture.root, child: recovery)
+    #expect(try DirectoryHandle(at: target.deletingLastPathComponent()).info("created") == nil)
+    kill(recovery.processIdentifier, SIGKILL)
+    recovery.waitUntilExit()
+    #expect(recovery.terminationReason == .uncaughtSignal)
+
+    var steps: [String] = []
+    try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
+      let recovered = try FileTransaction.recover(store: store) { steps.append($0) }
+      #expect(recovered)
+    }
+    #expect(!steps.contains("restore.4.remove.unlinked"))
+    let synced = try #require(steps.firstIndex(of: "restore.4.remove.synced"))
+    let terminal = try #require(steps.firstIndex(of: "journal.rolledBack.renamed"))
+    let cleanup = try #require(steps.firstIndex(of: "journal.terminalSynced"))
+    #expect(synced < terminal && terminal < cleanup)
+    #expect(try Data(contentsOf: store.declarationURL) == declaration)
+    #expect(try Data(contentsOf: store.resolvedURL) == resolved)
+    #expect(try Data(contentsOf: fixture.store.resolvedURL) == projectState)
+    #expect(try store.loadResolved() == ResolvedState())
+    #expect(try DirectoryHandle(at: target.deletingLastPathComponent()).info("created") == nil)
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: store.directory.appendingPathComponent("transaction.json").path))
+    #expect(
+      try FileManager.default.contentsOfDirectory(atPath: target.deletingLastPathComponent().path)
+        .isEmpty)
   }
 
   @Test(arguments: [

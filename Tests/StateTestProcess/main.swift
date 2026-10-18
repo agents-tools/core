@@ -4,11 +4,13 @@ import Foundation
 
 let arguments = CommandLine.arguments
 let root = URL(fileURLWithPath: arguments[1])
+let scope: InstallScope = arguments.count > 4 && arguments[4] == "user" ? .user : .project
 let store = StateStore(
-  scope: .project,
+  scope: scope,
   environment: RuntimeEnvironment(
     projectDirectory: root,
-    homeDirectory: root.appendingPathComponent("home"), environment: [:]))
+    homeDirectory: root.appendingPathComponent("home"),
+    environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path]))
 func stop(_ step: String, marker: String = "ready") throws {
   if step == arguments[3] {
     try Data(step.utf8).write(to: root.appendingPathComponent(marker))
@@ -68,7 +70,10 @@ if arguments[2] == "recover" {
         try stop(step)
       }
       try transaction.replace(
-        root.appendingPathComponent(".agents/skills/target"),
+        AgentRegistry.installSkillsDirectory(
+          for: .codex, scope: scope, environment: store.environment
+        )
+        .appendingPathComponent("target"),
         content: root.appendingPathComponent("new"))
       try transaction.replace(
         store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.codex])))
@@ -76,9 +81,11 @@ if arguments[2] == "recover" {
         store.resolvedURL, content: nil,
         data: StateStore.encode(ResolvedState(sources: ["local:/new": LockedSource(kind: .local)])))
       try transaction.replace(
-        root.appendingPathComponent(".agent/cache/artifact-content/pruned"), content: nil)
+        store.cacheDirectory.appendingPathComponent("artifact-content/pruned"), content: nil)
       try transaction.replace(
-        root.appendingPathComponent(".claude/skills/created"),
+        AgentRegistry.installSkillsDirectory(
+          for: .claudeCode, scope: scope, environment: store.environment
+        ).appendingPathComponent("created"),
         content: root.appendingPathComponent("new"),
         link: true)
       try transaction.commit()

@@ -218,7 +218,7 @@ package final class FileTransaction {
           }
           try parent.remove(restore)
         } else {
-          try parent.remove(entry.name)
+          try parent.remove(entry.name) { try checkpoint("restore.\(index).remove.\($0)") }
         }
         try checkpoint("restore.\(index)")
       }

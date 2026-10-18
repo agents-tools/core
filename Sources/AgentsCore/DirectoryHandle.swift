@@ -83,18 +83,22 @@ final class DirectoryHandle {
     return names.sorted()
   }
 
-  func remove(_ name: String) throws {
-    guard let info = try info(name) else { return }
-    if info.st_mode & S_IFMT == S_IFDIR {
-      let directory = try child(name)
-      for entry in try directory.names() { try directory.remove(entry) }
-      guard unlinkat(descriptor, name, AT_REMOVEDIR) == 0 else {
-        throw CoreError.unsafePath("cannot remove directory: \(name)")
+  func remove(_ name: String, checkpoint: (String) throws -> Void = { _ in }) throws {
+    if let info = try info(name) {
+      if info.st_mode & S_IFMT == S_IFDIR {
+        let directory = try child(name)
+        for entry in try directory.names() { try directory.remove(entry) }
+        guard unlinkat(descriptor, name, AT_REMOVEDIR) == 0 else {
+          throw CoreError.unsafePath("cannot remove directory: \(name)")
+        }
+      } else if unlinkat(descriptor, name, 0) != 0 {
+        throw CoreError.unsafePath("cannot remove entry: \(name)")
       }
-    } else if unlinkat(descriptor, name, 0) != 0 {
-      throw CoreError.unsafePath("cannot remove entry: \(name)")
+      try checkpoint("unlinked")
     }
+    // An absent entry may reflect an interrupted unlink whose parent was never synced.
     try sync()
+    try checkpoint("synced")
   }
 
   func rename(
