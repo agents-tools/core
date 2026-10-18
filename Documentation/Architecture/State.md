@@ -129,6 +129,16 @@ that a competing reader waits for the recovering process's lock.
 
 ## Materialization and Installation
 
+Git materializations, downloaded artifact bytes and expanded artifact trees use
+private journal-owned staging. Exact Git commits are extracted there; expanded
+artifacts are checked against their locked tree hash. Copied trees are hashed
+through pinned directory descriptors and verified before publication. Files,
+metadata and directory entries are synced before atomic publication of the
+final cache name. Git extraction scratch also belongs to the journal, so
+recovery cleans an incomplete copy or extraction without retaining a partial
+final directory just because the lock references its pin. Cache publication
+completes before the installation transaction references that content.
+
 Each scope's cache contains:
 
 ```text

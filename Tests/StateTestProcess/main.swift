@@ -33,7 +33,26 @@ if arguments[2] == "recover" {
     })
 } else {
   try store.withLock {
-    if arguments[2] == "writer" {
+    if arguments[2] == "cache-content" || arguments[2] == "cache-git"
+      || arguments[2] == "cache-bytes"
+    {
+      let cache = SourceCache(store: store) { try stop($0) }
+      let lock = try store.readResolved()
+      guard let skill = lock.skills["demo"], let hash = skill.hash else {
+        throw CoreError.invalidState("missing fixture skill")
+      }
+      if arguments[2] == "cache-content", let artifact = skill.artifact {
+        _ = try cache.materializeArtifact(
+          root.appendingPathComponent("new"), digest: artifact.digest, hash: hash)
+      } else if arguments[2] == "cache-bytes", let artifact = skill.artifact {
+        _ = try cache.storeArtifact(
+          Data(contentsOf: root.appendingPathComponent("payload")), digest: artifact.digest)
+      } else if let revision = skill.revision, let source = lock.sources[skill.source] {
+        _ = try cache.materialize(sourceID: skill.source, source: source, revision: revision)
+      } else {
+        throw CoreError.invalidState("missing fixture pin")
+      }
+    } else if arguments[2] == "writer" {
       for index in 0..<5 {
         var declaration = try store.readDeclaration()
         declaration.sources["\(arguments[3])-\(index)"] = SourceDeclaration(

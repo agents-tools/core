@@ -27,3 +27,18 @@ func gitHead(_ repo: URL) throws -> String {
     .stdout
     .trimmingCharacters(in: .whitespacesAndNewlines)
 }
+
+func stateTestProcess(root: URL, arguments: [String]) throws -> Process {
+  var directory = Bundle(for: TransactionTestBundle.self).bundleURL.deletingLastPathComponent()
+  while !FileManager.default.isExecutableFile(
+    atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
+  {
+    directory.deleteLastPathComponent()
+  }
+  let process = Process()
+  process.executableURL = directory.appendingPathComponent("StateTestProcess")
+  process.arguments = [root.path] + arguments
+  try process.run()
+  return process
+}
+private final class TransactionTestBundle: NSObject {}

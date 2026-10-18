@@ -40,7 +40,7 @@ struct StateTransactionTests {
   ])
   func killedWriterRecoversOnNextStateRead(_ step: String) throws {
     let fixture = try TransactionFixture()
-    let child = try process(root: fixture.root, arguments: ["crash", step])
+    let child = try stateTestProcess(root: fixture.root, arguments: ["crash", step])
     defer {
       if child.isRunning {
         kill(child.processIdentifier, SIGKILL)
@@ -71,7 +71,7 @@ struct StateTransactionTests {
   @Test func serializesSeparateWriterProcesses() throws {
     let fixture = try TransactionFixture()
     let children = try (0..<4).map {
-      try process(root: fixture.root, arguments: ["writer", "writer-\($0)"])
+      try stateTestProcess(root: fixture.root, arguments: ["writer", "writer-\($0)"])
     }
     for child in children {
       child.waitUntilExit()
@@ -80,19 +80,6 @@ struct StateTransactionTests {
     #expect(try fixture.store.loadDeclaration().sources.count == 20)
   }
 
-  func process(root: URL, arguments: [String]) throws -> Process {
-    var directory = Bundle(for: TransactionTestBundle.self).bundleURL.deletingLastPathComponent()
-    while !FileManager.default.isExecutableFile(
-      atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
-    {
-      directory.deleteLastPathComponent()
-    }
-    let process = Process()
-    process.executableURL = directory.appendingPathComponent("StateTestProcess")
-    process.arguments = [root.path] + arguments
-    try process.run()
-    return process
-  }
 }
 
 final class TransactionFixture {
@@ -156,8 +143,6 @@ final class TransactionFixture {
   }
 }
 
-private final class TransactionTestBundle: NSObject {}
-
 extension StateTransactionTests {
   @Test func recoversAnInterruptedInitialJournalWrite() throws {
     let root = try temporaryDirectory()
@@ -204,7 +189,7 @@ extension StateTransactionTests {
   }
 
   private func abandon(_ fixture: TransactionFixture, at step: String = "replace.2") throws {
-    let child = try process(root: fixture.root, arguments: ["crash", step])
+    let child = try stateTestProcess(root: fixture.root, arguments: ["crash", step])
     defer {
       if child.isRunning {
         kill(child.processIdentifier, SIGKILL)
@@ -223,7 +208,7 @@ extension StateTransactionTests {
   func interruptedRecoverySerializesCompetingReader(_ point: String) throws {
     let fixture = try TransactionFixture()
     try abandon(fixture)
-    let recovery = try process(root: fixture.root, arguments: ["recover", point])
+    let recovery = try stateTestProcess(root: fixture.root, arguments: ["recover", point])
     defer {
       if recovery.isRunning {
         kill(recovery.processIdentifier, SIGKILL)
@@ -231,7 +216,7 @@ extension StateTransactionTests {
       }
     }
     try waitFor("recovery-ready", root: fixture.root, child: recovery)
-    let reader = try process(root: fixture.root, arguments: ["read", ""])
+    let reader = try stateTestProcess(root: fixture.root, arguments: ["read", ""])
     defer {
       if reader.isRunning {
         kill(reader.processIdentifier, SIGKILL)
@@ -255,7 +240,7 @@ extension StateTransactionTests {
   func committedRecoverySyncsObservedMarkerBeforeCleanup(_ point: String) throws {
     let fixture = try TransactionFixture()
     try abandon(fixture, at: "journal.committed.renamed")
-    let recovery = try process(root: fixture.root, arguments: ["recover", point])
+    let recovery = try stateTestProcess(root: fixture.root, arguments: ["recover", point])
     defer {
       if recovery.isRunning {
         kill(recovery.processIdentifier, SIGKILL)
@@ -301,6 +286,12 @@ extension StateTransactionTests {
       #expect(throws: (any Error).self) { try fixture.store.loadResolved() }
       #expect(try FileHash.folderHash(fixture.root) == snapshot)
     }
+    var directories = try #require(JSONSerialization.jsonObject(with: original) as? [String: Any])
+    directories["directories"] = [victim.absoluteString]
+    try JSONSerialization.data(withJSONObject: directories).write(to: journalURL)
+    let directorySnapshot = try FileHash.folderHash(fixture.root)
+    #expect(throws: (any Error).self) { try fixture.store.loadResolved() }
+    #expect(try FileHash.folderHash(fixture.root) == directorySnapshot)
     // The absolute-parent counterexample is rejected as a foreign schema, too.
     let forged =
       #"{"id":"00000000-0000-0000-0000-000000000000","phase":"applying","entries":[{"parent":""#
@@ -316,6 +307,26 @@ extension StateTransactionTests {
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
       try fixture.store.loadResolved()
     }
+  }
+
+  @Test func rejectsOverlappingJournalDestinationsBeforeRollback() throws {
+    let fixture = try TransactionFixture()
+    try abandon(fixture)
+    let pin = fixture.store.cacheDirectory.appendingPathComponent("materialized/source/pin")
+    try FileManager.default.createDirectory(at: pin, withIntermediateDirectories: true)
+    try Data("keep".utf8).write(to: pin.appendingPathComponent("sentinel"))
+    let url = fixture.store.directory.appendingPathComponent("transaction.json")
+    var journal = try #require(
+      JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    var entries = try #require(journal["entries"] as? [[String: Any]])
+    for path in ["state/cache/materialized/source", "state/cache/materialized/source/pin"] {
+      entries.append(["path": path, "existed": false, "replacement": false])
+    }
+    journal["entries"] = entries
+    try JSONSerialization.data(withJSONObject: journal).write(to: url)
+    let before = try FileHash.folderHash(fixture.root)
+    #expect(throws: (any Error).self) { try fixture.store.loadResolved() }
+    #expect(try FileHash.folderHash(fixture.root) == before)
   }
 
   @Test func rejectsCopiedJournalWithoutTouchingEitherLocation() throws {
@@ -390,7 +401,8 @@ extension StateTransactionTests {
     defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
-    let child = try process(root: root, arguments: ["create-scope", "directory.created..agent"])
+    let child = try stateTestProcess(
+      root: root, arguments: ["create-scope", "directory.created..agent"])
     defer {
       if child.isRunning {
         kill(child.processIdentifier, SIGKILL)
@@ -419,5 +431,58 @@ extension StateTransactionTests {
           #expect(created < synced)
         }
       })
+  }
+}
+
+extension StateTransactionTests {
+  @Test func userRecoveryBindsConfiguredTargetsAndPreservesProjectState() throws {
+    let fixture = try TransactionFixture()
+    let projectBefore = try Data(contentsOf: fixture.store.resolvedURL)
+    var environment = fixture.store.environment
+    let configured = fixture.root.appendingPathComponent("configured-claude")
+    environment.environment["CLAUDE_CONFIG_DIR"] = configured.path
+    let store = StateStore(scope: .user, environment: environment)
+    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    let targets = [
+      environment.homeDirectory.appendingPathComponent(".agents/skills/demo"),
+      configured.appendingPathComponent("skills/demo"),
+    ]
+    for target in targets {
+      try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+      try Data("original".utf8).write(to: target.appendingPathComponent("SKILL.md"))
+    }
+    let before = try Data(contentsOf: store.resolvedURL)
+    #expect(throws: CoreError.self) {
+      try store.withLock {
+        let transaction = FileTransaction(store: store) { step in
+          if step == "replace.3.renamed" {
+            let journal = try String(
+              contentsOf: store.directory.appendingPathComponent("transaction.json"),
+              encoding: .utf8)
+            #expect(!journal.contains(fixture.root.path))
+            throw CoreError.invalidState("interrupted user write")
+          }
+        }
+        for target in targets {
+          try transaction.replace(target, content: fixture.root.appendingPathComponent("new"))
+        }
+        try transaction.replace(
+          store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.codex]))
+        )
+        try transaction.replace(
+          store.resolvedURL, content: nil,
+          data: StateStore.encode(
+            ResolvedState(sources: ["local:/new": LockedSource(kind: .local)])))
+        try transaction.commit()
+      }
+    }
+    for target in targets {
+      #expect(
+        try String(contentsOf: target.appendingPathComponent("SKILL.md"), encoding: .utf8)
+          == "original")
+    }
+    #expect(try Data(contentsOf: store.resolvedURL) == before)
+    #expect(try Data(contentsOf: fixture.store.resolvedURL) == projectBefore)
+    #expect(try store.loadDeclaration().agents == nil)
   }
 }

@@ -12,10 +12,16 @@ package struct SourceRevision: Equatable, Sendable {
 }
 
 /// Scope-owned bare mirrors and immutable content shared by skills and instructions.
+/// Content publication and pruning require the scope writer lock.
 package struct SourceCache {
   package let store: StateStore
 
-  package init(store: StateStore) { self.store = store }
+  private let checkpoint: (String) throws -> Void
+
+  package init(store: StateStore, checkpoint: @escaping (String) throws -> Void = { _ in }) {
+    self.store = store
+    self.checkpoint = checkpoint
+  }
 
   package func mirrorURL(sourceID: String) -> URL {
     store.cacheDirectory.appendingPathComponent("mirrors/\(key(sourceID)).git")
@@ -98,12 +104,13 @@ package struct SourceCache {
     ) {
       let destination = materializedURL(sourceID: sourceID, revision: revision)
       if FileManager.default.fileExists(atPath: destination.path) { return destination }
-      return try withSnapshot(sourceID: sourceID, source: source, revision: revision) { snapshot in
-        try FileManager.default.createDirectory(
-          at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: snapshot, to: destination)
-        return destination
+      let mirror = try pinnedMirror(sourceID: sourceID, source: source, revision: revision)
+      let transaction = FileTransaction(store: store, checkpoint: checkpoint)
+      try transaction.prepare(destination) { work in
+        try extract(revision: revision, mirror: mirror, root: work)
       }
+      try transaction.commit()
+      return destination
     }
   }
 
@@ -111,6 +118,16 @@ package struct SourceCache {
   package func withSnapshot<T>(
     sourceID: String, source: LockedSource, revision: String, _ body: (URL) throws -> T
   ) throws -> T {
+    let mirror = try pinnedMirror(sourceID: sourceID, source: source, revision: revision)
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "agents-snapshot-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    return try body(extract(revision: revision, mirror: mirror, root: root))
+  }
+
+  private func pinnedMirror(sourceID: String, source: LockedSource, revision: String) throws -> URL
+  {
     guard revision.range(of: #"^[0-9a-f]{40}([0-9a-f]{24})?$"#, options: .regularExpression) != nil
     else {
       throw CoreError.invalidState("materialization requires an exact commit")
@@ -123,17 +140,17 @@ package struct SourceCache {
     guard try git(mirror, ["rev-parse", "--verify", revision + "^{commit}"]) == revision else {
       throw CoreError.invalidState("locked commit is unavailable")
     }
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "agents-snapshot-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
+    return mirror
+  }
+
+  private func extract(revision: String, mirror: URL, root: URL) throws -> URL {
     let archive = root.appendingPathComponent("tree.tar")
     let tree = root.appendingPathComponent("tree")
     try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
     _ = try git(mirror, ["archive", "--format=tar", "--output=" + archive.path, revision])
     try ProcessRunner.run("/usr/bin/env", arguments: ["tar", "-xf", archive.path, "-C", tree.path])
     try validateTree(tree)
-    return try body(tree)
+    return tree
   }
 
   package func storeArtifact(_ data: Data, digest: String) throws -> URL {
@@ -141,16 +158,35 @@ package struct SourceCache {
       throw CoreError.invalidState("artifact digest mismatch")
     }
     let url = try artifactURL(digest: digest)
-    try FileManager.default.createDirectory(
-      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     if FileManager.default.fileExists(atPath: url.path) {
       guard try Data(contentsOf: url) == data else {
         throw CoreError.invalidState("cached artifact digest mismatch")
       }
     } else {
-      try data.write(to: url, options: .atomic)
+      let transaction = FileTransaction(store: store, checkpoint: checkpoint)
+      try transaction.replace(url, content: nil, data: data, expectedHash: digest)
+      try transaction.commit()
     }
     return url
+  }
+
+  /// Publishes a verified expansion under the scope lock; interrupted staging is journaled.
+  package func materializeArtifact(_ directory: URL, digest: String, hash: String) throws -> URL {
+    try StateValidation.digest(digest)
+    try StateValidation.digest(hash)
+    let destination = store.cacheDirectory.appendingPathComponent(
+      "artifact-content/\(digest.dropFirst(7))")
+    try validatePath(destination)
+    if FileManager.default.fileExists(atPath: destination.path) {
+      guard try "sha256:" + FileHash.folderHash(destination) == hash else {
+        throw CoreError.invalidState("cached artifact content mismatch")
+      }
+    } else {
+      let transaction = FileTransaction(store: store, checkpoint: checkpoint)
+      try transaction.replace(destination, content: directory, expectedHash: hash)
+      try transaction.commit()
+    }
+    return destination
   }
 
   /// Retains pins and any cache tree containing a live edit source.

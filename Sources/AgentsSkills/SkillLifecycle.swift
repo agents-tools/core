@@ -216,19 +216,11 @@ final class SkillLifecycle {
           retained[name] = path
         } else if let artifact = skill.artifact {
           for (digest, data) in item.payloads { _ = try cache.storeArtifact(data, digest: digest) }
-          let content = store.cacheDirectory.appendingPathComponent(
-            "artifact-content/\(artifact.digest.dropFirst(7))", isDirectory: true)
-          try cache.validatePath(content)
-          if FileManager.default.fileExists(atPath: content.path) {
-            guard try "sha256:" + FileHash.folderHash(content) == skill.hash else {
-              throw CoreError.invalidState("cached artifact content mismatch")
-            }
-          } else {
-            try FileManager.default.createDirectory(
-              at: content.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.copyItem(at: item.directory, to: content)
+          guard let hash = skill.hash else {
+            throw CoreError.invalidState("missing artifact content hash")
           }
-          retained[name] = content
+          retained[name] = try cache.materializeArtifact(
+            item.directory, digest: artifact.digest, hash: hash)
         } else {
           retained[name] = item.directory
         }

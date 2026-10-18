@@ -12,37 +12,28 @@ package enum FileHash {
 
   /// Hashes every tree entry in path order, including hidden files and symlink destinations.
   package static func folderHash(_ directory: URL) throws -> String {
-    let directory = directory.resolvingSymlinksInPath()
-    guard
-      let enumerator = FileManager.default.enumerator(
-        at: directory,
-        includingPropertiesForKeys: [.isSymbolicLinkKey, .isDirectoryKey, .isRegularFileKey])
-    else {
-      throw CoreError.notFound("content directory: \(directory.path)")
-    }
+    try folderHash(DirectoryHandle(at: directory.resolvingSymlinksInPath()))
+  }
+
+  static func folderHash(_ directory: DirectoryHandle) throws -> String {
     var entries: [(String, Data)] = []
-    for case let url as URL in enumerator {
-      let relative = PathSafety.relativePath(url.path, to: directory.path)
-      let values = try url.resourceValues(forKeys: [
-        .isSymbolicLinkKey, .isDirectoryKey, .isRegularFileKey,
-      ])
-      if values.isSymbolicLink == true {
-        enumerator.skipDescendants()
-        entries.append(
-          (
-            relative,
-            Data(
-              ("link\0" + (try FileManager.default.destinationOfSymbolicLink(atPath: url.path)))
-                .utf8)
-          ))
-      } else if values.isDirectory == true {
-        entries.append((relative, Data("directory".utf8)))
-      } else if values.isRegularFile == true {
-        entries.append((relative, Data("file\0".utf8) + (try Data(contentsOf: url))))
-      } else {
-        throw CoreError.invalidState("unsupported content entry: \(relative)")
+    func collect(_ directory: DirectoryHandle, prefix: String) throws {
+      for name in try directory.names() {
+        let path = prefix + name
+        guard let info = try directory.info(name) else { throw CoreError.notFound(path) }
+        switch info.st_mode & 0o170000 {
+        case 0o120000:
+          entries.append((path, Data(("link\0" + (try directory.readLink(name))).utf8)))
+        case 0o040000:
+          entries.append((path, Data("directory".utf8)))
+          try collect(directory.child(name), prefix: path + "/")
+        case 0o100000:
+          entries.append((path, Data("file\0".utf8) + (try directory.read(name))))
+        default: throw CoreError.invalidState("unsupported content entry: \(path)")
+        }
       }
     }
+    try collect(directory, prefix: "")
     var hasher = SHA256()
     // Each field has a fixed-width byte length, so arbitrary payload bytes cannot
     // impersonate paths, entry types or record boundaries.

@@ -167,6 +167,15 @@ final class DirectoryHandle {
     }
   }
 
+  func readLink(_ name: String) throws -> String {
+    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+    let count = readlinkat(descriptor, name, &buffer, buffer.count - 1)
+    guard count >= 0, count < buffer.count - 1 else {
+      throw CoreError.unsafePath("invalid symbolic link")
+    }
+    return String(decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+  }
+
   func syncFile(_ name: String) throws {
     let file = try regularFile(name)
     defer { close(file) }
@@ -223,15 +232,7 @@ final class DirectoryHandle {
       }
       try Self.copyMetadata(from: origin.descriptor, to: destination.descriptor, mode: info.st_mode)
     case S_IFLNK:
-      var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
-      let count = readlinkat(source.descriptor, original, &buffer, buffer.count - 1)
-      guard count >= 0, count < buffer.count - 1 else {
-        throw CoreError.unsafePath("invalid symbolic link")
-      }
-      try link(
-        name,
-        destination: String(
-          decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) }, as: UTF8.self))
+      try link(name, destination: source.readLink(original))
       let origin = openat(source.descriptor, original, O_RDONLY | O_SYMLINK | O_CLOEXEC)
       let destination = openat(descriptor, name, O_RDONLY | O_SYMLINK | O_CLOEXEC)
       defer {

@@ -21,6 +21,8 @@ package final class FileTransaction {
     var url: URL?
     var link: Bool
     var data: Data?
+    var expectedHash: String?
+    var prepare: ((URL) throws -> URL)?
   }
   private let store: StateStore
   private let checkpoint: (String) throws -> Void
@@ -32,15 +34,30 @@ package final class FileTransaction {
     self.checkpoint = checkpoint
   }
 
-  package func replace(_ destination: URL, content: URL?, link: Bool = false, data: Data? = nil)
-    throws
-  {
+  package func replace(
+    _ destination: URL, content: URL?, link: Bool = false, data: Data? = nil,
+    expectedHash: String? = nil
+  ) throws {
+    if let expectedHash {
+      try StateValidation.digest(expectedHash)
+      guard !link, content != nil || data != nil else {
+        throw CoreError.invalidState("verification requires copied content")
+      }
+    }
     let path = try TransactionPaths(store: store).path(for: destination)
     guard !entries.contains(where: { $0.path == path }) else {
       throw CoreError.invalidState("duplicate transaction destination")
     }
     entries.append(Entry(path: path, existed: false, replacement: content != nil || data != nil))
-    contents.append(Content(url: content, link: link, data: data))
+    contents.append(
+      Content(url: content, link: link, data: data, expectedHash: expectedHash, prepare: nil))
+  }
+
+  /// Builds source content inside journal-owned scratch storage before verified copying.
+  func prepare(_ destination: URL, content: @escaping (URL) throws -> URL) throws {
+    try replace(destination, content: nil)
+    entries[entries.count - 1].replacement = true
+    contents[contents.count - 1].prepare = content
   }
 
   func remove(_ name: String, from parent: DirectoryHandle) throws {
@@ -64,14 +81,8 @@ package final class FileTransaction {
     let parents = try entries.map {
       try paths.parent(for: $0.path, roots: roots, create: true, checkpoint: checkpoint)
     }
-    var physical = Set<String>()
+    try Self.validateDestinations(entries, parents: parents)
     for index in entries.indices {
-      guard
-        physical.insert(parents[index].url.appendingPathComponent(entries[index].name).path)
-          .inserted
-      else {
-        throw CoreError.invalidState("duplicate physical transaction destination")
-      }
       entries[index].existed = try parents[index].info(entries[index].name) != nil
     }
     var journal = Journal(
@@ -86,9 +97,23 @@ package final class FileTransaction {
         let staged = Self.temporaryName(journal, index, "new")
         if entry.existed { try parent.copy(backup, from: parent, named: entry.name) }
         try checkpoint("backup.\(index)")
-        let content = contents[index]
+        var content = contents[index]
+        if let prepare = content.prepare {
+          let work = Self.temporaryName(journal, index, "work")
+          try parent.makeDirectory(work)
+          try checkpoint("prepare.\(index).directory")
+          let root = parent.url.appendingPathComponent(work)
+          let source = try prepare(root)
+          guard PathSafety.isContained(source.resolvingSymlinksInPath(), in: root) else {
+            throw CoreError.unsafePath("prepared content escapes transaction staging")
+          }
+          content.url = source
+          content.expectedHash = "sha256:" + (try FileHash.folderHash(source))
+          try checkpoint("prepare.\(index).ready")
+        }
         if let data = content.data {
           try parent.write(staged, data: data)
+          try checkpoint("stage.\(index).written")
         } else if let source = content.url {
           if content.link {
             try parent.link(
@@ -98,8 +123,19 @@ package final class FileTransaction {
             let origin = source.resolvingSymlinksInPath()
             try parent.copy(
               staged, from: DirectoryHandle(at: origin.deletingLastPathComponent()),
-              named: origin.lastPathComponent)
+              named: origin.lastPathComponent,
+              checkpoint: { try checkpoint("stage.\(index).copy.\($0)") })
           }
+        }
+        if let expectedHash = content.expectedHash {
+          let hash =
+            try content.data == nil
+            ? FileHash.folderHash(parent.child(staged))
+            : FileHash.sha256Hex(data: parent.read(staged))
+          guard "sha256:" + hash == expectedHash else {
+            throw CoreError.invalidState("staged content digest mismatch")
+          }
+          try checkpoint("stage.\(index).verified")
         }
         try checkpoint("stage.\(index)")
       }
@@ -160,12 +196,8 @@ package final class FileTransaction {
       roots[key] = root
     }
     let parents = try journal.entries.map { try paths.parent(for: $0.path, roots: roots) }
-    var destinations = Set<String>()
+    try validateDestinations(journal.entries, parents: parents)
     for (index, entry) in journal.entries.enumerated() {
-      guard destinations.insert(parents[index].url.appendingPathComponent(entry.name).path).inserted
-      else {
-        throw CoreError.invalidState("duplicate transaction destination")
-      }
       if journal.phase == .applying, entry.existed,
         try parents[index].info(temporaryName(journal, index, "old")) == nil
       {
@@ -199,6 +231,21 @@ package final class FileTransaction {
     return true
   }
 
+  private static func validateDestinations(_ entries: [Entry], parents: [DirectoryHandle]) throws {
+    var paths: [URL] = []
+    for (index, entry) in entries.enumerated() {
+      let path = parents[index].url.appendingPathComponent(entry.name)
+      guard
+        !paths.contains(where: {
+          PathSafety.isContained(path, in: $0) || PathSafety.isContained($0, in: path)
+        })
+      else {
+        throw CoreError.invalidState("overlapping transaction destinations")
+      }
+      paths.append(path)
+    }
+  }
+
   private static func cleanup(
     _ journal: Journal, directory: DirectoryHandle, parents: [DirectoryHandle],
     checkpoint: (String) throws -> Void
@@ -208,7 +255,7 @@ package final class FileTransaction {
     try directory.syncFile("transaction.json")
     try checkpoint("journal.terminalSynced")
     for (index, _) in journal.entries.enumerated() {
-      for suffix in ["old", "new", "removed", "restore"] {
+      for suffix in ["old", "new", "removed", "restore", "work"] {
         try parents[index].remove(temporaryName(journal, index, suffix))
       }
       try checkpoint("cleanup.\(index)")
