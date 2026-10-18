@@ -144,6 +144,17 @@ removed and its parent synced. The marker survives interrupted preparation or
 cleanup, so the next access repeats reconciliation against the recovered state;
 refs needed for rollback remain until that state is durable.
 
+Mirrors are exclusively owned by agents. Every mirror mutation runs under the
+scope lock, and Git invocations disable automatic maintenance so no background
+writer outlives that operation. Once recovery holds this lock, Git `*.lock`
+files inside mirrors (including `packed-refs.lock`) and the root
+`packed-refs.new` staging file are abandoned. Recovery validates every candidate
+as a regular file through directory descriptors,
+without following symlinks, before deleting any candidate. It syncs lock-file
+deletions before retrying Git; the pending marker also covers interruption of
+this cleanup. A live scope writer keeps the lock, so readers and other writers
+wait instead of removing its Git locks.
+
 Each state operation first checks for an abandoned journal under the scope
 lock, then validates watch state and finishes pending ref cleanup before
 proceeding. An applying journal rolls back every replacement, including watch

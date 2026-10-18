@@ -11,8 +11,8 @@ package struct SourceRevision: Equatable, Sendable {
   }
 }
 
-/// Scope-owned bare mirrors and immutable content shared by skills and instructions.
-/// Content publication and pruning require the scope writer lock.
+/// Exclusively owned bare mirrors and immutable content shared by skills and instructions.
+/// Every mirror mutation, content publication and pruning requires the scope writer lock.
 package struct SourceCache {
   package let store: StateStore
 
@@ -140,15 +140,17 @@ package struct SourceCache {
   /// Run only after journal recovery or successful commit, while holding the scope lock.
   /// The marker survives interruptions until every deletion and its parent are durable.
   func recoverWatchReferences() throws -> Bool {
-    guard let directory = try store.openDirectoryIfPresent(),
-      try directory.info("watch-refs.pending") != nil
-    else { return false }
-    guard try directory.read("watch-refs.pending").isEmpty else {
-      throw CoreError.invalidState("invalid watch ref cleanup marker")
-    }
+    guard let directory = try store.openDirectoryIfPresent() else { return false }
     guard try directory.info("transaction.json") == nil,
       try directory.info("transaction.new") == nil
     else { throw CoreError.invalidState("transaction recovery must precede watch ref cleanup") }
+    if try directory.info("watch-refs.pending") != nil,
+      try !directory.read("watch-refs.pending").isEmpty
+    {
+      throw CoreError.invalidState("invalid watch ref cleanup marker")
+    }
+    try recoverMirrorLocks(in: directory)
+    guard try directory.info("watch-refs.pending") != nil else { return false }
     let watch = try store.readWatch()
     let resolved = try store.readResolved()
     var retained: [String: Set<String>] = [:]
@@ -204,6 +206,51 @@ package struct SourceCache {
     try directory.remove("watch-refs.pending")
     try checkpoint("watch.references.cleared")
     return true
+  }
+
+  /// The scope lock excludes live mirror writers. Validate all candidates before unlinking;
+  /// descriptor-relative traversal never follows a symlink outside the owned mirror.
+  private func recoverMirrorLocks(in directory: DirectoryHandle) throws {
+    guard try directory.info("cache") != nil else { return }
+    let cache = try directory.child("cache")
+    guard try cache.info("mirrors") != nil else { return }
+    let mirrors = try cache.child("mirrors")
+    var locks: [(DirectoryHandle, String)] = []
+    func inspect(_ parent: DirectoryHandle, isMirrorRoot: Bool = false) throws {
+      for name in try parent.names() {
+        guard let info = try parent.info(name) else { continue }
+        // Packed ref transactions stage new contents separately from their lock file.
+        if name.hasSuffix(".lock") || (isMirrorRoot && name == "packed-refs.new") {
+          guard info.st_mode & 0o170000 == 0o100000 else {
+            throw CoreError.unsafePath("abandoned Git lock or ref staging must be a regular file")
+          }
+          locks.append((parent, name))
+        } else if info.st_mode & 0o170000 == 0o040000 {
+          try inspect(parent.child(name))
+        }
+      }
+    }
+    for name in try mirrors.names() where name.hasSuffix(".git") {
+      try inspect(mirrors.child(name), isMirrorRoot: true)
+    }
+    if !locks.isEmpty { try beginWatchReferenceUpdate() }
+    guard try directory.info("watch-refs.pending") != nil else { return }
+    for (parent, name) in locks {
+      try parent.remove(name) { try checkpoint("watch.git-lock.\($0)") }
+    }
+    // A killed cleanup may have unlinked the last lock before syncing its parent.
+    // The pending marker requires these barriers even if no lock remains visible.
+    func syncDirectories(_ parent: DirectoryHandle) throws {
+      for name in try parent.names() {
+        if try (parent.info(name)?.st_mode ?? 0) & 0o170000 == 0o040000 {
+          try syncDirectories(parent.child(name))
+        }
+      }
+      try parent.sync()
+    }
+    for name in try mirrors.names() where name.hasSuffix(".git") {
+      try syncDirectories(mirrors.child(name))
+    }
   }
 
   package func materialize(sourceID: String, source: LockedSource, revision: String) throws -> URL {
@@ -469,6 +516,7 @@ package struct SourceCache {
 
   private static let gitOptions = [
     "-c", "core.fsync=objects,reference,pack-metadata", "-c", "core.fsyncMethod=fsync",
+    "-c", "gc.auto=0", "-c", "maintenance.auto=false",
   ]
 
   private func key(_ sourceID: String) -> String {

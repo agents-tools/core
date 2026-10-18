@@ -74,6 +74,15 @@ interruption, following journal recovery so rollback baselines stay reachable.
 Mirrors remain available for source history and future resolution; Git may
 collect histories after their last retention ref is released.
 
+Mirrors are exclusively owned by agents, and every mutation holds the scope
+lock. Git automatic maintenance is disabled for these invocations. Recovery
+under that lock treats all mirror `*.lock` files, including `packed-refs.lock`,
+and the root `packed-refs.new` staging file as abandoned. It validates regular
+files and contained directory ancestry
+without following symlinks, durably removes the locks, then retries ref cleanup.
+The pending marker makes interrupted lock removal repeatable. A live scope
+writer retains the scope lock and blocks competing recovery.
+
 Well-known baselines map artifact names to digests. Files artifacts use the
 same aggregate digest as the lock: SHA-256 of deterministically encoded file
 records sorted by path, including each file's URL and digest. Archive and
