@@ -1,0 +1,253 @@
+import AgentsCore
+import AgentsInstructions
+import Foundation
+import Testing
+
+@Suite("Instruction lifecycle")
+struct InstructionLifecycleTests {
+  @Test func orderedBlocksPreserveCustomBytesAndRestoreLockedContent() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("one")
+    try fixture.section("two")
+    try fixture.commit()
+    try fixture.write(
+      "# Project\n\nOwner text.\n\n## Custom\n\nKeep this.\n",
+      to: fixture.project.appendingPathComponent("AGENTS.md"))
+    try fixture.add(names: ["two", "one"])
+    let first = try fixture.bytes()
+    let text = try fixture.text()
+    #expect(text.range(of: "## two")!.lowerBound < text.range(of: "## one")!.lowerBound)
+    #expect(text.hasPrefix("# Project\n\nOwner text.\n\n"))
+    #expect(text.hasSuffix("\n\n## Custom\n\nKeep this.\n"))
+    let lock = try Data(contentsOf: fixture.store().resolvedURL)
+    _ = try InstructionOperations.installResolvedReport(environment: fixture.environment)
+    #expect(try fixture.bytes() == first)
+    #expect(try Data(contentsOf: fixture.store().resolvedURL) == lock)
+    try fixture.write(
+      text.replacingOccurrences(of: "Original", with: "Drift"),
+      to: fixture.project.appendingPathComponent("AGENTS.md"))
+    #expect(
+      try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
+        $0.kind == .drift
+      })
+    try fixture.section("one", body: "Upstream")
+    try fixture.commit()
+    let preview = try InstructionOperations.updateInstalled(environment: fixture.environment)
+    #expect(preview.targets[0].assembly.blockDifference?.contains("Drift") == true)
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+    #expect(try fixture.text().contains("Upstream"))
+    let applied = try fixture.bytes()
+    try fixture.write(
+      try fixture.text().replacingOccurrences(of: "Upstream", with: "Drift"),
+      to: fixture.project.appendingPathComponent("AGENTS.md"))
+    _ = try InstructionOperations.installResolvedReport(environment: fixture.environment)
+    #expect(try fixture.bytes() == applied)
+  }
+
+  @Test(arguments: ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"])
+  func claudeFilesReceiveOnlyRelativeImports(_ path: String) throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    try fixture.write("Custom Claude guidance.\n", to: fixture.project.appendingPathComponent(path))
+    try fixture.add()
+    let text = try fixture.text(path)
+    #expect(text.contains(path == ".claude/CLAUDE.md" ? "@../AGENTS.md" : "@AGENTS.md"))
+    #expect(!text.contains("# rules"))
+    #expect(text.hasSuffix("Custom Claude guidance.\n"))
+    let before = try fixture.bytes(path)
+    _ = try InstructionOperations.installResolvedReport(environment: fixture.environment)
+    #expect(try fixture.bytes(path) == before)
+  }
+
+  @Test func claudeSymlinkAndExistingImportNeedNoManagedForwarder() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    let file = fixture.project.appendingPathComponent("CLAUDE.md")
+    try FileManager.default.createSymbolicLink(atPath: file.path, withDestinationPath: "AGENTS.md")
+    try fixture.add()
+    #expect(try FileManager.default.destinationOfSymbolicLink(atPath: file.path) == "AGENTS.md")
+    #expect(try fixture.store().loadResolved().instructions.targets.count == 1)
+    try FileManager.default.removeItem(at: file)
+    try fixture.write("@AGENTS.md\n\nCustom.\n", to: file)
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+    #expect(try fixture.text("CLAUDE.md") == "@AGENTS.md\n\nCustom.\n")
+    #expect(try fixture.store().loadResolved().instructions.targets.count == 1)
+  }
+
+  @Test func userMappingHonorsConfiguredHomesAndCoalescesPhysicalFiles() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    var runtime = fixture.environment
+    let config = fixture.root.appendingPathComponent("external-config")
+    runtime.environment = [
+      "CODEX_HOME": config.appendingPathComponent("opencode").path,
+      "CLAUDE_CONFIG_DIR": fixture.home.appendingPathComponent("claude-config").path,
+      "XDG_CONFIG_HOME": config.path,
+    ]
+    try fixture.add(scope: .user, agents: AgentID.allCases, environment: runtime)
+    let lock = try fixture.store(.user, environment: runtime).loadResolved()
+    #expect(lock.instructions.targets.count == 3)
+    let common = try #require(
+      lock.instructions.targets[config.appendingPathComponent("opencode/AGENTS.md").path])
+    #expect(Set(common.agents) == [.codex, .opencode])
+    let codex = try Data(contentsOf: config.appendingPathComponent("opencode/AGENTS.md"))
+    #expect(
+      try codex == Data(contentsOf: fixture.home.appendingPathComponent("claude-config/CLAUDE.md")))
+    #expect(try codex == Data(contentsOf: fixture.home.appendingPathComponent(".gemini/GEMINI.md")))
+    _ = try InstructionOperations.installResolvedReport(scope: .user, environment: runtime)
+    #expect(try fixture.store(.user, environment: runtime).loadResolved() == lock)
+  }
+
+  @Test func previewAndCallbackAreReadOnlyAndPromptsTrackChangedContent() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("one")
+    try fixture.section("two")
+    try fixture.commit()
+    try fixture.add(agents: [.codex, .geminiCLI])
+    var declaration = try fixture.store().loadDeclaration()
+    declaration.instructions?.chatgpt = [
+      "daily": PromptDeclaration(sections: ["rules:one", "rules:two"], append: ".agent/custom.md"),
+      "stable": PromptDeclaration(sections: ["rules:two"]),
+    ]
+    try fixture.write(
+      "Custom prompt.\r\n", to: fixture.project.appendingPathComponent(".agent/custom.md"))
+    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+    let old = try fixture.snapshot(fixture.project, excludingCache: true)
+    try fixture.section("one", body: "Changed")
+    try fixture.commit()
+    let preview = try InstructionOperations.updateInstalled(environment: fixture.environment)
+    #expect(preview.changedPrompts == ["daily"])
+    #expect(preview.targets.count == 2 && preview.targets.allSatisfy(\.changed))
+    #expect(try fixture.snapshot(fixture.project, excludingCache: true) == old)
+    struct Cancelled: Error {}
+    #expect(throws: Cancelled.self) {
+      try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true) {
+        report in
+        #expect(report == preview)
+        #expect(try fixture.snapshot(fixture.project, excludingCache: true) == old)
+        throw Cancelled()
+      }
+    }
+    #expect(try fixture.snapshot(fixture.project, excludingCache: true) == old)
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true) {
+      report in
+      #expect(report == preview)
+      let beforeAgents = try fixture.bytes()
+      let beforeGemini = try fixture.bytes("GEMINI.md")
+      #expect(beforeAgents == beforeGemini)
+    }
+    #expect(try fixture.bytes() == fixture.bytes("GEMINI.md"))
+    let rendered = try InstructionOperations.renderChatGPT(
+      prompt: "daily", environment: fixture.environment)
+    #expect(rendered == Data("# one\n\nChanged\n\n# two\n\nOriginal\n\nCustom prompt.\r\n".utf8))
+    try fixture.section("one", body: "Uncommitted")
+    #expect(
+      try InstructionOperations.renderChatGPT(prompt: "daily", environment: fixture.environment)
+        == rendered)
+    #expect(throws: InstructionError.emptyPrompt) {
+      try InstructionOperations.renderChatGPT(prompt: "unknown", environment: fixture.environment)
+    }
+  }
+
+  @Test func lostLockIsReportedAndIdenticalBlocksAreAdoptedWithoutDeletionOwnership() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    try fixture.add()
+    let bytes = try fixture.bytes()
+    try FileManager.default.removeItem(at: fixture.store().resolvedURL)
+    let preview = try InstructionOperations.updateInstalled(environment: fixture.environment)
+    #expect(preview.lockMissing)
+    #expect(preview.targets.allSatisfy { !$0.changed })
+    #expect(!FileManager.default.fileExists(atPath: fixture.store().resolvedURL.path))
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+    #expect(try fixture.bytes() == bytes)
+    #expect(try fixture.store().loadResolved().instructions.targets["AGENTS.md"]?.created == false)
+    try InstructionOperations.remove(names: ["rules"], environment: fixture.environment)
+    #expect(try fixture.bytes().isEmpty)
+  }
+
+  @Test func conflictingCustomSectionStopsAddAndReplaceAdoptsIt() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    try fixture.write(
+      "# rules\n\nCustom rule.\n", to: fixture.project.appendingPathComponent("AGENTS.md"))
+    let before = try fixture.bytes()
+    do {
+      try fixture.add()
+      Issue.record("Expected conflicting section")
+    } catch InstructionError.conflictingSections(let conflicts) {
+      #expect(conflicts[0].difference.contains("-Custom rule."))
+    }
+    #expect(try fixture.bytes() == before)
+    #expect(!FileManager.default.fileExists(atPath: fixture.store().declarationURL.path))
+    #expect(!FileManager.default.fileExists(atPath: fixture.store().resolvedURL.path))
+    try fixture.add(replace: true)
+    #expect(try fixture.text().contains("Original"))
+    #expect(try fixture.store().loadResolved().instructions.targets["AGENTS.md"]?.created == false)
+  }
+
+  @Test(arguments: [false, true])
+  func removingLastSectionDeletesOnlyOwnedEmptyFiles(_ existing: Bool) throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("one")
+    try fixture.section("two")
+    try fixture.commit()
+    if existing { try fixture.write("", to: fixture.project.appendingPathComponent("AGENTS.md")) }
+    try fixture.add()
+    try InstructionOperations.remove(names: ["one"], environment: fixture.environment)
+    #expect(try fixture.text().contains("# two"))
+    #expect(try !fixture.text().contains("# one"))
+    try InstructionOperations.remove(names: ["two"], environment: fixture.environment)
+    #expect(
+      FileManager.default.fileExists(
+        atPath: fixture.project.appendingPathComponent("AGENTS.md").path) == existing)
+    #expect(try fixture.store().loadResolved().instructions.targets.isEmpty)
+  }
+
+  @Test func discoveryUsesOnlyDirectCommittedFilesAndSearchPath() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("one", container: "bundle/instructions")
+    try fixture.section("two", container: "bundle/.agents/instructions")
+    try fixture.write(
+      "Invalid", to: fixture.repo.appendingPathComponent("bundle/instructions/nested/no.md"))
+    try fixture.section("outside")
+    try fixture.commit()
+    try fixture.section("one", body: "Dirty", container: "bundle/instructions")
+    let available = try InstructionOperations.list(
+      source: SourceDeclaration(kind: .local, location: fixture.repo.path, path: "bundle"),
+      environment: fixture.environment)
+    #expect(available.map(\.record.name) == ["one", "two"])
+    try fixture.add(path: "bundle")
+    #expect(try !fixture.text().contains("Dirty"))
+    #expect(
+      try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
+        $0.kind == .uncommittedSource
+      })
+    #expect(throws: (any Error).self) {
+      try InstructionOperations.list(
+        source: SourceDeclaration(kind: .local, location: fixture.home.path),
+        environment: fixture.environment)
+    }
+  }
+
+  @Test func initializeCreatesValidatedSkeletonAndNeverOverwrites() throws {
+    let fixture = try InstructionFixture()
+    let file = try InstructionOperations.initializeInstructions(
+      named: "new-rules", directory: fixture.repo.appendingPathComponent("instructions"))
+    let section = try Instructions.validateSource(Data(contentsOf: file), id: "new-rules")
+    #expect(section.heading == "new-rules")
+    #expect(throws: (any Error).self) {
+      try InstructionOperations.initializeInstructions(
+        named: "new-rules", directory: file.deletingLastPathComponent())
+    }
+    #expect(throws: (any Error).self) {
+      try InstructionOperations.initializeInstructions(named: "../escape", directory: fixture.repo)
+    }
+  }
+}

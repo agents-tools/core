@@ -146,7 +146,9 @@ final class DirectoryHandle {
     try sync()
   }
 
-  func write(_ name: String, data: Data, mode: mode_t = 0o600) throws {
+  func write(
+    _ name: String, data: Data, mode: mode_t = 0o600, preservingMetadataOf original: String? = nil
+  ) throws {
     let file = openat(descriptor, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)
     guard file >= 0 else { throw CoreError.invalidState("cannot stage \(name)") }
     defer { close(file) }
@@ -159,8 +161,18 @@ final class DirectoryHandle {
         offset += count
       }
     }
-    guard fchmod(file, mode) == 0 else { throw CoreError.invalidState("cannot set permissions") }
-    try Self.synchronize(file)
+    if let original {
+      let source = try regularFile(original)
+      defer { close(source) }
+      var attributes = stat()
+      guard fstat(source, &attributes) == 0 else {
+        throw CoreError.invalidState("cannot inspect file metadata")
+      }
+      try Self.copyMetadata(from: source, to: file, mode: attributes.st_mode)
+    } else {
+      guard fchmod(file, mode) == 0 else { throw CoreError.invalidState("cannot set permissions") }
+      try Self.synchronize(file)
+    }
     try sync()
   }
 

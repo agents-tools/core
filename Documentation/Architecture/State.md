@@ -76,6 +76,9 @@ Instruction section records carry name, source, revision or artifact, path and
 hash. Prompts hold ordered locked sections and optional append paths. Physical
 targets record agents, heading offset or import, block hash, and whether the
 file was created by the tool. Skill writes retain these records unchanged.
+Instruction lifecycle writes preserve skill records. Target keys are project
+relative or user-home relative; configured user files outside home use absolute
+keys checked against the runtime's registered instruction locations.
 
 Maps are key sorted. Unordered selections and agent lists are sorted; section
 arrays and each prompt's section order are preserved. Files have a trailing
@@ -94,7 +97,9 @@ operation.
 
 A durable `transaction.json` in the scope state directory records target, state
 file and pruning replacements before mutation. Paths are relative to named
-roots in that scope: `state` and registered agent installation directories. The
+roots in that scope: `state`, registered agent installation directories, and
+registered instruction destinations. Instruction roots permit fixed project
+files, configured user files and named Markdown authoring files. The
 journal binds the state directory and each used root to its physical location
 and filesystem identity. Configured agent containers are resolved at the
 registry boundary; recovery opens journal descendants without following links.
@@ -106,7 +111,9 @@ never accepted as arbitrary journal paths.
 
 Backups and staged data are fsynced before applying changes. macOS `fcopyfile`
 preserves original bytes, permissions, ACLs and extended attributes in backups
-and restores; final modes are applied explicitly rather than through the umask.
+and restores. Data replacements inherit the existing regular file's metadata
+from its backup before publication; new files default to `0600`. Final modes
+are applied explicitly rather than through the umask.
 `renameatx_np(RENAME_SWAP)` atomically exchanges existing directories, files and
 links with their replacements; installations always retain a directory entry.
 Discarding transaction-owned trees grants owner access through pinned directory
@@ -129,8 +136,10 @@ storage flush.
 
 Recovery throws `CoreError.transactionRecovered` after completing, reporting
 the scope and asking the caller to retry against the recovered generation.
-This also applies to inventory, previews and doctor. Corrupt journals stop the
-operation without guessing a recovery plan. Tests interrupt writers between
+Skill inventory, previews and doctor also recover. Instruction read operations
+instead take an existing shared lock and report pending recovery without
+replaying it, so explicit multi-root instruction audits never write. Corrupt
+journals stop the operation without guessing a recovery plan. Tests interrupt writers between
 rename and parent fsync, interrupt rollback and terminal cleanup, and verify
 that a competing reader waits for the recovering process's lock.
 
@@ -160,6 +169,8 @@ cache/
 A source key combines a readable prefix and the SHA-256 of its normalized ID.
 A source has one bare mirror; requirement resolution reads its refs and tags.
 Exact trees are extracted with Git archive and contain no repository metadata.
+Read-only revision inspection uses local Git reads or remote ref advertisements
+with the same requirement selection policy, without fetching or populating caches.
 Consumers of the same source and revision share a materialized directory.
 
 `link` points an agent's skill entry at verified cached content. `copy` installs

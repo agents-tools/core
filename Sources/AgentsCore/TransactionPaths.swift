@@ -10,6 +10,30 @@ struct TransactionPaths {
       store.scope == .project ? store.environment.projectDirectory : store.environment.homeDirectory
     let physicalState = base.resolvingSymlinksInPath().appendingPathComponent(
       store.directory.lastPathComponent)
+    if store.scope == .project {
+      let relative = PathSafety.relativePath(
+        destination.path, to: base.resolvingSymlinksInPath().path)
+      if InstructionLocations.projectPaths.contains(relative) {
+        return "instructions-project/" + relative
+      }
+      if destination.deletingLastPathComponent().standardizedFileURL
+        == base.resolvingSymlinksInPath(),
+        destination.pathExtension == "md",
+        destination.deletingPathExtension().lastPathComponent
+          == PathSafety.sanitizeName(destination.deletingPathExtension().lastPathComponent)
+      {
+        return "instructions-authoring/" + destination.lastPathComponent
+      }
+    } else {
+      for agent in AgentID.allCases {
+        if let file = InstructionLocations.file(
+          for: agent, scope: .user, environment: store.environment),
+          InstructionLocations.physical(file) == destination.standardizedFileURL
+        {
+          return "instructions-" + agent.rawValue + "/" + file.lastPathComponent
+        }
+      }
+    }
     for agent in AgentID.allCases {
       let logical = AgentRegistry.installSkillsDirectory(
         for: agent, scope: store.scope, environment: store.environment)
@@ -40,6 +64,15 @@ struct TransactionPaths {
         store.scope == .project
         ? store.environment.projectDirectory : store.environment.homeDirectory
       url = base.resolvingSymlinksInPath().appendingPathComponent(store.directory.lastPathComponent)
+    } else if key == "instructions-project" || key == "instructions-authoring",
+      store.scope == .project
+    {
+      url = store.environment.projectDirectory.resolvingSymlinksInPath()
+    } else if key.hasPrefix("instructions-"), store.scope == .user,
+      let agent = AgentID(rawValue: String(key.dropFirst("instructions-".count))),
+      let file = InstructionLocations.file(for: agent, scope: .user, environment: store.environment)
+    {
+      url = file.deletingLastPathComponent().resolvingSymlinksInPath()
     } else if let agent = AgentID(rawValue: key) {
       // Configured agent containers are trusted inputs. Resolve that boundary once;
       // journal descendants are opened without following links and roots are identity-bound.
@@ -71,6 +104,23 @@ struct TransactionPaths {
           || (["artifacts", "artifact-content"].contains(descendants[1]) && descendants.count == 3))
       guard stateFile || cache else {
         throw CoreError.unsafePath("unmanaged state transaction path")
+      }
+    } else if key == "instructions-project", store.scope == .project {
+      guard InstructionLocations.projectPaths.contains(descendants.joined(separator: "/")) else {
+        throw CoreError.unsafePath("unmanaged project instruction path")
+      }
+    } else if key == "instructions-authoring", store.scope == .project {
+      let file = URL(fileURLWithPath: descendants[0])
+      guard descendants.count == 1, file.pathExtension == "md",
+        file.deletingPathExtension().lastPathComponent
+          == PathSafety.sanitizeName(file.deletingPathExtension().lastPathComponent)
+      else { throw CoreError.unsafePath("invalid instruction authoring path") }
+    } else if key.hasPrefix("instructions-"), store.scope == .user,
+      let agent = AgentID(rawValue: String(key.dropFirst("instructions-".count))),
+      let file = InstructionLocations.file(for: agent, scope: .user, environment: store.environment)
+    {
+      guard descendants == [file.lastPathComponent] else {
+        throw CoreError.unsafePath("unmanaged user instruction path")
       }
     } else {
       guard AgentID(rawValue: key) != nil, descendants.count == 1,

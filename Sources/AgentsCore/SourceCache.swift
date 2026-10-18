@@ -43,53 +43,10 @@ package struct SourceCache {
   package func resolve(_ source: SourceDeclaration) throws -> SourceRevision {
     let id = try source.identity(environment: store.environment)
     let mirror = try fetch(source, id: id)
-    try source.requirement?.validate()
-    let tags = try git(mirror, ["tag", "--list"]).split(separator: "\n").compactMap {
-      raw -> (String, SemanticVersion)? in
-      let name = String(raw)
-      return SemanticVersion(name).map { (name, $0) }
-    }.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 < $1.1 }
-    var ref: String
-    var version: String?
-    if let requirement = source.requirement {
-      switch requirement.kind {
-      case "branch": ref = "refs/heads/" + requirement.value
-      case "revision": ref = requirement.value
-      default:
-        guard let lower = SemanticVersion(requirement.value) else {
-          throw CoreError.invalidSource("invalid semantic version")
-        }
-        let candidates: [(String, SemanticVersion)]
-        if requirement.kind == "exact" {
-          candidates = tags.filter { $0.1.description == lower.description }
-        } else {
-          let upper: SemanticVersion
-          switch requirement.kind {
-          case "from": upper = SemanticVersion(major: lower.major + 1, minor: 0, patch: 0)
-          case "minor":
-            upper = SemanticVersion(major: lower.major, minor: lower.minor + 1, patch: 0)
-          default:
-            guard let bound = requirement.upperBound, let parsed = SemanticVersion(bound) else {
-              throw CoreError.invalidSource("missing version upper bound")
-            }
-            upper = parsed
-          }
-          candidates = tags.filter { $0.1.isInRange(from: lower, to: upper) }
-        }
-        guard let selected = candidates.last else {
-          throw CoreError.notFound("no tag matches source requirement")
-        }
-        ref = "refs/tags/" + selected.0
-        version = selected.1.description
-      }
-    } else if let selected = tags.last {
-      ref = "refs/tags/" + selected.0
-      version = selected.1.description
-    } else {
-      ref = "HEAD"
-    }
-    let revision = try git(mirror, ["rev-parse", "--verify", ref + "^{commit}"])
-    return SourceRevision(revision: revision, version: version)
+    let tags = try git(mirror, ["tag", "--list"]).split(separator: "\n").map(String.init)
+    let ref = try SourceReference(requirement: source.requirement, tags: tags)
+    let revision = try git(mirror, ["rev-parse", "--verify", ref.name + "^{commit}"])
+    return SourceRevision(revision: revision, version: ref.version)
   }
 
   package func materialize(sourceID: String, source: LockedSource, revision: String) throws -> URL {

@@ -243,7 +243,11 @@ public struct ResolvedState: Codable, Equatable, Sendable {
       if let append = prompt.append { _ = try PathSafety.sanitizeSubpath(append) }
     }
     for (path, target) in instructions.targets {
-      _ = try PathSafety.sanitizeSubpath(path.hasPrefix("~/") ? String(path.dropFirst(2)) : path)
+      let relative =
+        path.hasPrefix("~/")
+        ? String(path.dropFirst(2))
+        : path.hasPrefix("/") ? String(path.dropFirst()) : path
+      _ = try PathSafety.sanitizeSubpath(relative)
       guard target.headingOffset.map({ (0...5).contains($0) }) ?? (target.import != nil) else {
         throw CoreError.invalidState("target needs a heading offset or import")
       }

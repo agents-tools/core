@@ -2,8 +2,8 @@
 
 ## Purpose and Consumers
 
-`core` supplies skill management and instruction text transformations for
-`agents-tools/cli` and `skill-cli/cli`.
+`core` supplies skill and instruction management and instruction text
+transformations for `agents-tools/cli` and `skill-cli/cli`.
 Those repositories own command trees, argument parsing, terminal presentation,
 and executable distribution. The package uses Swift 6.3, Swift 6 language mode,
 and a macOS 13 minimum deployment platform.
@@ -55,9 +55,10 @@ this dependency graph.
   `PathSafety` checks paths and creates filesystem skill identities.
 
 Core has no dependency on skill discovery, frontmatter, Yams or Markdown.
-`AgentsInstructions` owns instruction text transformations. Instruction lifecycle
-integration and watch subscriptions are separate work; the state model defines
-their declaration and lock fields and watch-state path.
+`AgentsInstructions` owns instruction text transformations and lifecycle.
+`InstructionLocations` supplies fixed target locations to lifecycle and journal
+validation. Watch subscriptions are separate work; the state model defines
+their declaration fields and watch-state path.
 
 ## AgentsSkills
 
@@ -104,6 +105,12 @@ contains typed entry snapshots, so deletions, empty directories, symbolic link
 destinations and file contents can all be presented before applying.
 
 ## AgentsInstructions
+
+`InstructionOperations` discovers committed instruction units and supplies add,
+list, update, install, remove, ChatGPT render, initialization and read-only doctor
+workflows. It composes the text APIs below with scope state and journaled writes.
+See [Instruction lifecycle](Instructions.md) for consumer APIs, target mapping,
+lost-lock recovery and diagnostics.
 
 `Instructions` validates source bytes into immutable `InstructionSection`
 values, assembles or removes managed blocks, detects drift, renders ChatGPT
@@ -191,9 +198,9 @@ code, HTML, headings, containers, and inline formatting cannot establish
 forwarding. This verifies context for multiline constructs without using
 inline source coordinates or treating an inline-node boundary as a path end.
 The probe is never emitted. Malformed managed markers still produce errors.
-Callers own ancestor-file warnings, actual filesystem access, declaration and
-lock updates, and deletion decisions using the lock's `created` flag. This target
-performs no I/O and does not invoke the state or cache lifecycle.
+`InstructionOperations` owns ancestor-file warnings, filesystem access,
+declaration and lock updates, and deletion decisions using the lock's `created`
+flag. The `Instructions` and `ClaudeForwarding` text APIs perform no I/O.
 
 ## Validation and Documentation
 
@@ -204,7 +211,9 @@ lifecycle, including public consumer calls and failed-operation preservation.
 Fixtures create isolated homes and explicit Git initial branches and remove
 their temporary roots. Instruction tests cover source validation, managed-block
 assembly and removal, byte preservation, drift, Claude forwarding, and ChatGPT
-rendering through public APIs with in-memory fixtures.
+rendering through public APIs with in-memory fixtures. Lifecycle tests cover
+pinned sources, physical targets, transactional writes, conflict stops, lost
+locks, prompts, deletion ownership and read-only multi-root audits.
 
 [State and cache](State.md) describes persisted data and lifecycle invariants.
 `../Proposals/` holds design work; `../Decisions/`, `../Migrations/` and
