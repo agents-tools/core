@@ -8,16 +8,23 @@ struct WellKnownRemoteSkill: Equatable, Sendable {
   var sourceURL: URL
   var digest: String?
   var files: [String: Data]
+  var artifact: LockedArtifact
+  var payloads: [String: Data]
 
   init(
     installName: String, description: String, sourceURL: URL, digest: String? = nil,
-    files: [String: Data]
+    files: [String: Data], artifact: LockedArtifact? = nil, payloads: [String: Data] = [:]
   ) {
     self.installName = installName
     self.description = description
     self.sourceURL = sourceURL
     self.digest = digest
     self.files = files
+    self.artifact =
+      artifact
+      ?? LockedArtifact(type: .skillMD, url: sourceURL.absoluteString, digest: digest ?? "")
+    self.payloads =
+      payloads.isEmpty && digest != nil ? [digest!: files["SKILL.md"] ?? Data()] : payloads
   }
 }
 
@@ -51,7 +58,7 @@ struct WellKnownProvider: Sendable {
     }
     let basePath = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     let pathPrefix = basePath.isEmpty ? "" : "/" + basePath
-    let root = "\(scheme)://\(host)"
+    let root = "\(scheme)://\(host)" + (url.port.map { ":\($0)" } ?? "")
     let paths = [".well-known/agent-skills", ".well-known/skills"]
     var candidates: [(URL, URL, String)] = []
     for wellKnownPath in paths {
@@ -147,6 +154,8 @@ struct WellKnownProvider: Sendable {
     case .v1(let entries):
       return try entries.map { entry in
         var files: [String: Data] = [:]
+        var records: [ArtifactFile] = []
+        var payloads: [String: Data] = [:]
         for file in entry.files {
           let safe = try PathSafety.sanitizeSubpath(file)
           let fileURL =
@@ -154,7 +163,11 @@ struct WellKnownProvider: Sendable {
             .appendingPathComponent(wellKnownPath)
             .appendingPathComponent(entry.name)
             .appendingPathComponent(safe)
-          files[safe] = try fetch(fileURL)
+          let data = try fetch(fileURL)
+          files[safe] = data
+          let digest = "sha256:" + FileHash.sha256Hex(data: data)
+          records.append(ArtifactFile(url: fileURL.absoluteString, path: safe, digest: digest))
+          payloads[digest] = data
         }
         return WellKnownRemoteSkill(
           installName: entry.name,
@@ -162,7 +175,11 @@ struct WellKnownProvider: Sendable {
           sourceURL: baseURL.appendingPathComponent(wellKnownPath).appendingPathComponent(
             entry.name
           ).appendingPathComponent("SKILL.md"),
-          files: files
+          files: files,
+          artifact: LockedArtifact(
+            type: .files, url: indexURL.absoluteString,
+            digest: try LockedArtifact.filesDigest(records), files: records),
+          payloads: payloads
         )
       }
     case .v2(let entries):
@@ -186,9 +203,45 @@ struct WellKnownProvider: Sendable {
           description: entry.description,
           sourceURL: artifactURL,
           digest: entry.digest,
-          files: files
+          files: files,
+          artifact: LockedArtifact(
+            type: entry.type == "archive" ? .archive : .skillMD, url: artifactURL.absoluteString,
+            digest: entry.digest),
+          payloads: [entry.digest: data]
         )
       }
+    }
+  }
+
+  func restore(_ artifact: LockedArtifact, cache: SourceCache) throws -> (
+    files: [String: Data], payloads: [String: Data]
+  ) {
+    try artifact.validate()
+    var payloads: [String: Data] = [:]
+    func download(_ url: String, digest: String) throws -> Data {
+      let cached = try cache.artifactURL(digest: digest)
+      let data =
+        FileManager.default.fileExists(atPath: cached.path)
+        ? try Data(contentsOf: cached) : try fetch(URL(string: url)!)
+      try verifyDigest(data: data, expected: digest)
+      payloads[digest] = data
+      return data
+    }
+    switch artifact.type {
+    case .skillMD:
+      let data = try download(artifact.url, digest: artifact.digest)
+      return (["SKILL.md": data], payloads)
+    case .archive:
+      let data = try download(artifact.url, digest: artifact.digest)
+      return (try unpackArchive(data, artifactURL: URL(string: artifact.url)!), payloads)
+    case .files:
+      let records = artifact.files ?? []
+      guard try LockedArtifact.filesDigest(records) == artifact.digest else {
+        throw CoreError.invalidState("files artifact digest mismatch")
+      }
+      var files: [String: Data] = [:]
+      for record in records { files[record.path] = try download(record.url, digest: record.digest) }
+      return (files, payloads)
     }
   }
 
