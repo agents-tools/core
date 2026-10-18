@@ -89,6 +89,8 @@ public struct InstructionDiagnostic: Sendable, Equatable {
     case codexOverride
     case codexSize
     case uncommittedSource
+    case sourceUpdateAvailable
+    case sourceResolutionFailed
     case invalidConfiguration
     case stateUnavailable
   }

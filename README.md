@@ -86,8 +86,8 @@ under a source's `instructions/` or `.agents/instructions/` search root:
 - `renderChatGPT(prompt:...)` renders locked sections plus a custom append file
   without markers. Prompts live in `instructions.chatgpt`.
 - `doctor(...)` checks drift, scope duplication, Claude forwarding, Codex
-  overrides and size limits, and uncommitted sources. Its `projectRoots`
-  overload audits explicit projects without writing.
+  overrides and size limits, newer matching source revisions and uncommitted
+  sources. Its `projectRoots` overload audits explicit projects without writing.
 - `initializeInstructions(named:directory:)` creates a valid source skeleton.
 
 Project recipients share `AGENTS.md` except Gemini CLI, which uses `GEMINI.md`.

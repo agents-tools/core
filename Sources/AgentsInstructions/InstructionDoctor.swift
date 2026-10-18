@@ -2,7 +2,7 @@ import AgentsCore
 import Foundation
 
 extension InstructionOperations {
-  /// Audits disk and state without fetching sources, creating locks or recovering transactions.
+  /// Audits disk, state and upstream refs without fetching objects, creating locks or recovering transactions.
   /// Supply Codex's effective settings to include trusted project, profile or policy overrides.
   /// Without them, discovery uses top-level user configuration and defaults.
   public static func doctor(
@@ -91,28 +91,8 @@ extension InstructionOperations {
         diagnostics += InstructionDoctor.codex(
           scope: scope, environment: environment, lock: lock, configuration: codexConfiguration)
       }
-      let sections =
-        lock.instructions.sections + lock.instructions.chatgpt.values.flatMap(\.sections)
-      for (id, source) in lock.sources.sorted(by: { $0.key < $1.key }) where source.kind == .local {
-        let paths = Set(sections.filter { $0.source == id }.map(\.path)).sorted()
-        guard !paths.isEmpty else { continue }
-        let root = URL(fileURLWithPath: String(id.dropFirst("local:".count)))
-        do {
-          let output = try ProcessRunner.run(
-            "/usr/bin/env",
-            arguments: [
-              "git", "--no-optional-locks", "-C", root.path, "status", "--porcelain",
-              "--untracked-files=all", "--",
-            ] + paths
-          ).stdout
-          if !output.isEmpty {
-            report(
-              .uncommittedSource, "Local source has uncommitted selected instructions: \(id)", root)
-          }
-        } catch {
-          report(.stateUnavailable, "Cannot inspect local instruction source: \(error)", root)
-        }
-      }
+      diagnostics += InstructionSourceDiagnostics.inspect(
+        store: store, declaration: declaration, lock: lock)
       return InstructionDoctorReport(
         root: scope == .project ? environment.projectDirectory : environment.homeDirectory,
         diagnostics: diagnostics)

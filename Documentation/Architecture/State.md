@@ -169,6 +169,8 @@ cache/
 A source key combines a readable prefix and the SHA-256 of its normalized ID.
 A source has one bare mirror; requirement resolution reads its refs and tags.
 Exact trees are extracted with Git archive and contain no repository metadata.
+Read-only revision inspection uses local Git reads or remote ref advertisements
+with the same requirement selection policy, without fetching or populating caches.
 Consumers of the same source and revision share a materialized directory.
 
 `link` points an agent's skill entry at verified cached content. `copy` installs

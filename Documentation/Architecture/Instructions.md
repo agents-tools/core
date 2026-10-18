@@ -91,8 +91,9 @@ Read operations take an existing shared scope lock without creating one or
 replaying recovery. Pending recovery stops inspection; a mutating state
 operation recovers it and asks the caller to retry. Source inspection and update
 preview may fetch mirror objects and use disposable snapshots, but never
-publish materializations, declaration, lock or targets. Doctor does not fetch
-or create files, including in projects with no state directory.
+publish materializations, declaration, lock or targets. Doctor reads remote ref
+advertisements but does not fetch objects or create files, including in projects
+with no state directory.
 
 Install reconstructs and verifies locked blocks before replacement, using
 recorded heading offsets even if custom titles changed. Update recomputes
@@ -121,7 +122,17 @@ Doctor reports missing or drifted blocks, malformed targets, missing locks,
 custom-section adoptions and conflicts using cached locked content, duplicate
 source-qualified sections across scopes, Claude forwarding and ancestor
 problems, and uncommitted selected local source paths. Git status uses
-`--no-optional-locks` to avoid index refresh writes.
+`--no-optional-locks` to avoid index refresh writes. File and ChatGPT prompt pins
+are compared with matching source revisions using the declaration's current
+requirements (or locked requirements when a source is no longer declared).
+`sourceUpdateAvailable` identifies differing pins and affected prompt names;
+it does not imply that section bytes have changed. Local Git reads and remote
+`ls-remote` advertisements share the cache resolver's branch and semantic-version
+selection policy, including annotated tags. No mirror or snapshot is written.
+Unresolvable sources produce `sourceResolutionFailed`, including remote revision
+expressions not present in advertised refs. Full immutable remote revision IDs
+cannot advance and are compared directly; doctor does not fetch to verify their
+availability or validate upstream content.
 
 Codex checks report a nonempty `AGENTS.override.md` hiding managed content and
 sum loaded instruction bytes and separators along the global and
