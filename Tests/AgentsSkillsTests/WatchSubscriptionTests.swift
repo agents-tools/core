@@ -159,18 +159,68 @@ struct WatchSubscriptionTests {
     try git(fixture, ["rm", "-rf", "."])
     try fixture.skill("new", body: "new")
     try fixture.commit()
+    let replacement = try fixture.head()
     try git(fixture, ["branch", "-D", "master"])
     _ = try watch.status(environment: fixture.environment)
-    let mirrorRoot = fixture.store().cacheDirectory.appendingPathComponent("mirrors")
-    let mirror = try #require(
-      FileManager.default.contentsOfDirectory(at: mirrorRoot, includingPropertiesForKeys: nil).first
-    )
-    try ProcessRunner.run(
-      "/usr/bin/env", arguments: ["git", "-C", mirror.path, "gc", "--prune=now"])
+    try mirrorGit(fixture, ["reflog", "expire", "--expire=now", "--all"])
+    try mirrorGit(fixture, ["gc", "--prune=now"])
     let status = try #require(watch.status(environment: fixture.environment).first)
     #expect(status.seen == .revision(old) && status.commitCount == 1)
     #expect(status.changes.first { $0.name == "old" }?.change == .removed)
     #expect(status.changes.first { $0.name == "new" }?.change == .new)
+    let diff = try watch.diff("source", name: "old", environment: fixture.environment)
+    #expect(diff.changes.first?.files.first?.before != nil)
+    try watch.seen("source", environment: fixture.environment)
+    #expect(
+      try mirrorGit(fixture, ["for-each-ref", "--format=%(objectname)", "refs/agents-watch/"])
+        == replacement)
+    try mirrorGit(fixture, ["gc", "--prune=now"])
+    #expect(throws: (any Error).self) { try mirrorGit(fixture, ["cat-file", "-e", old]) }
+
+    try git(fixture, ["checkout", "--orphan", "later"])
+    try git(fixture, ["rm", "-rf", "."])
+    try fixture.skill("later", body: "later")
+    try fixture.commit()
+    try git(fixture, ["branch", "-D", "replacement"])
+    _ = try watch.status(environment: fixture.environment)
+    let later = try fixture.head()
+    try mirrorGit(fixture, ["update-ref", "refs/other/keep", later])
+    try watch.remove("source", environment: fixture.environment)
+    #expect(
+      try mirrorGit(fixture, ["for-each-ref", "--format=%(refname)", "refs/agents-watch/"]).isEmpty)
+    #expect(try mirrorGit(fixture, ["rev-parse", "refs/other/keep"]) == later)
+    try mirrorGit(fixture, ["reflog", "expire", "--expire=now", "--all"])
+    try mirrorGit(fixture, ["gc", "--prune=now"])
+    #expect(throws: (any Error).self) { try mirrorGit(fixture, ["cat-file", "-e", replacement]) }
+  }
+
+  @Test func retainsWatchRefUntilTheLastInstalledConsumerIsRemoved() throws {
+    let fixture = try SkillFixture()
+    try fixture.skill("demo", body: "installed")
+    try fixture.commit()
+    let installed = try fixture.head()
+    _ = try fixture.add()
+    let watch = SkillOperations.watchOperations()
+    try watch.add("fixture", environment: fixture.environment)
+    try git(fixture, ["checkout", "--orphan", "replacement"])
+    try git(fixture, ["rm", "-rf", "."])
+    try fixture.skill("demo", body: "replacement")
+    try fixture.commit()
+    try git(fixture, ["branch", "-D", "master"])
+    try watch.seen("fixture", environment: fixture.environment)
+    try watch.remove("fixture", environment: fixture.environment)
+    #expect(
+      try mirrorGit(fixture, ["for-each-ref", "--format=%(objectname)", "refs/agents-watch/"])
+        == installed)
+    try mirrorGit(fixture, ["gc", "--prune=now"])
+    #expect(try fixture.body(fixture.target("demo")).contains("installed"))
+    try SkillOperations.remove(skillNames: ["demo"], environment: fixture.environment)
+    #expect(
+      try mirrorGit(fixture, ["for-each-ref", "--format=%(objectname)", "refs/agents-watch/"])
+        .isEmpty)
+    try mirrorGit(fixture, ["reflog", "expire", "--expire=now", "--all"])
+    try mirrorGit(fixture, ["gc", "--prune=now"])
+    #expect(throws: (any Error).self) { try mirrorGit(fixture, ["cat-file", "-e", installed]) }
   }
 
   @Test(arguments: ["skill-md", "files", "archive"])
@@ -295,6 +345,18 @@ private func stateBytes(_ fixture: SkillFixture) throws -> [Data?] {
   try [fixture.store().declarationURL, fixture.store().resolvedURL, fixture.store().watchURL].map {
     FileManager.default.fileExists(atPath: $0.path) ? try Data(contentsOf: $0) : nil
   }
+}
+
+@discardableResult
+private func mirrorGit(_ fixture: SkillFixture, _ arguments: [String]) throws -> String {
+  let mirrorRoot = fixture.store().cacheDirectory.appendingPathComponent("mirrors")
+  let mirror = try #require(
+    FileManager.default.contentsOfDirectory(at: mirrorRoot, includingPropertiesForKeys: nil)
+      .first { $0.pathExtension == "git" })
+  return try ProcessRunner.run(
+    "/usr/bin/env", arguments: ["git", "-C", mirror.path] + arguments
+  ).stdout
+    .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 private func git(_ fixture: SkillFixture, _ arguments: [String]) throws {

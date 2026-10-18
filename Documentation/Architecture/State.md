@@ -132,9 +132,21 @@ Git config and HEAD, and mirror/cache directory entries are synced before the
 scope journal can commit the baseline. This orders durable Git content before
 the durable watch reference; power loss cannot publish a baseline ahead of its
 retained content.
+
+Before preparing a watch ref or changing watch/lock pins, the scope writes and
+syncs `watch-refs.pending`. Under the scope lock, reconciliation runs only after
+the transaction has committed or journal recovery has selected and synced a
+consistent generation. It removes only `refs/agents-watch/<revision>` refs no
+longer named by watch state, skills, instruction sections or prompt sections.
+Loose-ref parents and packed refs are synced before the pending marker is
+removed and its parent synced. The marker survives interrupted preparation or
+cleanup, so the next access repeats reconciliation against the recovered state;
+refs needed for rollback remain until that state is durable.
+
 Each state operation first checks for an abandoned journal under the scope
-lock, then validates watch state before proceeding. An applying journal rolls
-back every replacement, including watch baselines; a committed journal
+lock, then validates watch state and finishes pending ref cleanup before
+proceeding. An applying journal rolls back every replacement, including watch
+baselines; a committed journal
 finishes cleanup. Recovery is repeatable if interrupted. Before deleting any
 recovery material, both the terminal journal file and its parent directory are
 fsynced, even when that phase was already visible on entry. State and backup
@@ -146,6 +158,7 @@ storage flush.
 
 Recovery throws `CoreError.transactionRecovered` after completing, reporting
 the scope and asking the caller to retry against the recovered generation.
+This includes recovery of pending watch refs even when no journal remains.
 Skill inventory, previews and doctor also recover. Instruction read operations
 instead take an existing shared lock and report pending recovery without
 replaying it, so explicit multi-root instruction audits never write. Corrupt
@@ -202,8 +215,9 @@ by watch state and trees containing live edit sources. Pruning opens directory
 ancestry without following symlinks and uses
 directory-relative enumeration, rename and deletion. It rejects symlinked cache
 containers and never recursively follows a link during cleanup.
-Mirrors remain available for source
-history and future resolution.
+Mirrors remain available for source history and future resolution. Watch-owned
+Git refs retain only revisions still referenced by watch state or installed
+pins; obsolete histories can be collected by Git after those refs are released.
 
 Doctor reports missing installs, changed content and broken links, newer
 matching Git resolutions, and uncommitted changes in selected local source

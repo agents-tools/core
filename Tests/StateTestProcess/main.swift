@@ -17,7 +17,7 @@ func stop(_ step: String, marker: String = "ready") throws {
     raise(SIGSTOP)
   }
 }
-if arguments[2] == "watch-add" || arguments[2] == "watch-seen" {
+if ["watch-add", "watch-seen", "watch-remove"].contains(arguments[2]) {
   let watch = WatchOperations(
     discoverSkills: { _ in [] },
     fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
@@ -25,9 +25,13 @@ if arguments[2] == "watch-add" || arguments[2] == "watch-seen" {
   if arguments[2] == "watch-add" {
     try watch.add(
       root.appendingPathComponent("source").path, alias: "source", environment: store.environment)
-  } else {
+  } else if arguments[2] == "watch-seen" {
     try watch.seen("source", environment: store.environment)
+  } else {
+    try watch.remove("source", environment: store.environment)
   }
+} else if arguments[2] == "watch-recover" {
+  try store.withLock(checkpoint: { try stop($0) }, {})
 } else if arguments[2] == "recover" {
   try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
     _ = try FileTransaction.recover(store: store) { try stop($0, marker: "recovery-ready") }

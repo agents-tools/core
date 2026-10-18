@@ -8,7 +8,8 @@ struct WatchDurabilityTests {
   @Test(
     arguments: [false, true],
     [
-      "watch.mirror.fetched", "watch.objects.synced", "watch.ref.updated", "watch.ref.synced",
+      "watch.mirror.fetched", "watch.references.pending", "watch.objects.synced",
+      "watch.ref.updated", "watch.ref.synced",
       "watch.mirror.synced", "journal.applying", "replace.0.renamed",
       "journal.committed.renamed", "journal.committed", "journal.removed",
     ])
@@ -30,6 +31,7 @@ struct WatchDurabilityTests {
     let state = try fixture.recoveredWatch()
     let expected = committed ? current : advancing ? first : nil
     #expect(state.sources[fixture.id]?.seen == expected.map(WatchSeen.revision))
+    #expect(try fixture.watchRefs() == Set(expected.map { [$0] } ?? []))
     if !committed { #expect(try fixture.stateBytes() == before) }
     if let expected {
       // Neither a deleted upstream nor collection of unreachable mirror objects can
@@ -40,7 +42,7 @@ struct WatchDurabilityTests {
       let content = try fixture.cachedInstruction(expected)
       #expect(content.contains(expected == first ? "initial" : "replacement"))
     }
-    if step != "watch.mirror.fetched" {
+    if !["watch.mirror.fetched", "watch.references.pending"].contains(step) {
       #expect(
         try fixture.mirrorGit(["config", "--local", "--get", "core.fsync"])
           == "objects,reference,pack-metadata")
@@ -188,6 +190,12 @@ final class WatchGitFixture {
     ) {
       try String(contentsOf: $0.appendingPathComponent("instructions/rule.md"), encoding: .utf8)
     }
+  }
+
+  func watchRefs() throws -> Set<String> {
+    Set(
+      try mirrorGit(["for-each-ref", "--format=%(objectname)", "refs/agents-watch/"])
+        .split(separator: "\n").map(String.init))
   }
 
   func kill(_ child: Process, at step: String) throws {

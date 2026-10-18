@@ -71,7 +71,10 @@ public struct StateStore: Sendable {
     }
   }
 
-  package func withLock<T>(createIfMissing: Bool = true, _ body: () throws -> T) throws -> T {
+  package func withLock<T>(
+    createIfMissing: Bool = true, checkpoint: @escaping (String) throws -> Void = { _ in },
+    _ body: () throws -> T
+  ) throws -> T {
     if try openDirectoryIfPresent() == nil, !createIfMissing {
       return try body()
     }
@@ -88,11 +91,26 @@ public struct StateStore: Sendable {
     let physicalDirectory = base.resolvingSymlinksInPath().appendingPathComponent(
       directory.lastPathComponent)
     return try FileLock.withLock(at: physicalDirectory.appendingPathComponent(".agents.lock")) {
-      if try FileTransaction.recover(store: self) {
+      let recovered = try FileTransaction.recover(store: self, checkpoint: checkpoint)
+      _ = try readWatch()
+      let cache = SourceCache(store: self, checkpoint: checkpoint)
+      let referencesRecovered = try cache.recoverWatchReferences()
+      if recovered || referencesRecovered {
         throw CoreError.transactionRecovered(directory.path)
       }
-      _ = try readWatch()
-      return try body()
+      let result: T
+      do {
+        result = try body()
+      } catch {
+        // A handled failure can finish rollback now. A killed process leaves the marker
+        // for the next access, which must recover the journal before releasing any ref.
+        if (try? FileTransaction.recover(store: self)) != nil {
+          _ = try? SourceCache(store: self).recoverWatchReferences()
+        }
+        throw error
+      }
+      _ = try cache.recoverWatchReferences()
+      return result
     }
   }
 

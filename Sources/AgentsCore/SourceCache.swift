@@ -78,6 +78,7 @@ package struct SourceCache {
   func retainWatchRevision(sourceID: String, revision: String) throws {
     let url = mirrorURL(sourceID: sourceID)
     try validatePath(url)
+    try beginWatchReferenceUpdate()
     _ = try git(url, ["config", "--local", "core.fsync", "objects,reference,pack-metadata"])
     _ = try git(url, ["config", "--local", "core.fsyncMethod", "fsync"])
     let mirror = try DirectoryHandle(at: url)
@@ -120,6 +121,92 @@ package struct SourceCache {
     try DirectoryHandle(at: store.cacheDirectory).sync()
     try store.openDirectoryIfPresent()?.sync()
     try checkpoint("watch.mirror.synced")
+  }
+
+  /// The marker precedes ref preparation or a state change that can release an existing pin.
+  func beginWatchReferenceUpdate() throws {
+    guard let directory = try store.openDirectoryIfPresent(),
+      try directory.info("cache") != nil,
+      try directory.child("cache").info("mirrors") != nil
+    else { return }
+    if try directory.info("watch-refs.pending") == nil {
+      try directory.write("watch-refs.pending", data: Data())
+    } else {
+      guard try directory.read("watch-refs.pending").isEmpty else {
+        throw CoreError.invalidState("invalid watch ref cleanup marker")
+      }
+      try directory.syncFile("watch-refs.pending")
+    }
+    try checkpoint("watch.references.pending")
+  }
+
+  /// Run only after journal recovery or successful commit, while holding the scope lock.
+  /// The marker survives interruptions until every deletion and its parent are durable.
+  func recoverWatchReferences() throws -> Bool {
+    guard let directory = try store.openDirectoryIfPresent(),
+      try directory.info("watch-refs.pending") != nil
+    else { return false }
+    guard try directory.read("watch-refs.pending").isEmpty else {
+      throw CoreError.invalidState("invalid watch ref cleanup marker")
+    }
+    guard try directory.info("transaction.json") == nil,
+      try directory.info("transaction.new") == nil
+    else { throw CoreError.invalidState("transaction recovery must precede watch ref cleanup") }
+    let watch = try store.readWatch()
+    let resolved = try store.readResolved()
+    var retained: [String: Set<String>] = [:]
+    func retain(_ source: String, _ revision: String?) {
+      if let revision { retained[key(source) + ".git", default: []].insert(revision) }
+    }
+    for (source, state) in watch.sources {
+      if case .revision(let revision) = state.seen { retain(source, revision) }
+    }
+    for skill in resolved.skills.values { retain(skill.source, skill.revision) }
+    for section in resolved.instructions.sections
+      + resolved.instructions.chatgpt.values.flatMap(\.sections)
+    {
+      retain(section.source, section.revision)
+    }
+    // Even a manually supplied generation must reach storage before its obsolete pins go away.
+    for file in ["agents.watch", "agents.resolved"] where try directory.info(file) != nil {
+      try directory.syncFile(file)
+    }
+    try directory.sync()
+    if try directory.info("cache") != nil {
+      let cache = try directory.child("cache")
+      if try cache.info("mirrors") != nil {
+        let mirrors = try cache.child("mirrors")
+        for name in try mirrors.names() where name.hasSuffix(".git") {
+          let mirror = try mirrors.child(name)
+          let refs = try mirror.child("refs")
+          let owned = try refs.info("agents-watch") == nil ? nil : refs.child("agents-watch")
+          if try mirror.info("packed-refs") != nil { try mirror.syncFile("packed-refs") }
+          let references = try git(
+            mirror.url, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/agents-watch/"])
+          for line in references.split(separator: "\n") {
+            let parts = line.split(separator: " ").map(String.init)
+            guard parts.count == 2, parts[0] == "refs/agents-watch/" + parts[1],
+              parts[1].range(of: #"^[0-9a-f]{40}([0-9a-f]{24})?$"#, options: .regularExpression)
+                != nil
+            else { throw CoreError.invalidState("invalid watch retention ref") }
+            if retained[name, default: []].contains(parts[1]) { continue }
+            if let owned, try owned.info(parts[1]) != nil { _ = try owned.read(parts[1]) }
+            _ = try git(mirror.url, ["update-ref", "--no-deref", "-d", parts[0], parts[1]])
+            try checkpoint("watch.references.deleted")
+          }
+          // A previous attempt may have unlinked the final loose ref or rewritten packed-refs.
+          // Flush their parents even when enumeration now finds no obsolete refs.
+          if try mirror.info("packed-refs") != nil { try mirror.syncFile("packed-refs") }
+          if try refs.info("agents-watch") != nil { try refs.child("agents-watch").sync() }
+          try refs.sync()
+          try mirror.sync()
+          try checkpoint("watch.references.synced")
+        }
+      }
+    }
+    try directory.remove("watch-refs.pending")
+    try checkpoint("watch.references.cleared")
+    return true
   }
 
   package func materialize(sourceID: String, source: LockedSource, revision: String) throws -> URL {

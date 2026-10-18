@@ -82,6 +82,11 @@ package final class FileTransaction {
       try paths.parent(for: $0.path, roots: roots, create: true, checkpoint: checkpoint)
     }
     try Self.validateDestinations(entries, parents: parents)
+    if entries.contains(where: {
+      ["state/agents.watch", "state/agents.resolved"].contains($0.path)
+    }) {
+      try SourceCache(store: store, checkpoint: checkpoint).beginWatchReferenceUpdate()
+    }
     for index in entries.indices {
       entries[index].existed = try parents[index].info(entries[index].name) != nil
     }

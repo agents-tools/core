@@ -31,7 +31,7 @@ public struct WatchOperations: Sendable {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> WatchSeen {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withLock {
+    return try store.withLock(checkpoint: checkpoint) {
       var declaration = try store.readDeclaration()
       let lock = try store.readResolved()
       var watch = try store.readWatch()
@@ -102,7 +102,7 @@ public struct WatchOperations: Sendable {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> WatchSeen {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withLock {
+    return try store.withLock(checkpoint: checkpoint) {
       let declaration = try store.readDeclaration()
       let lock = try store.readResolved()
       var watch = try store.readWatch()
@@ -122,7 +122,7 @@ public struct WatchOperations: Sendable {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws {
     let store = StateStore(scope: scope, environment: environment)
-    try store.withLock {
+    try store.withLock(checkpoint: checkpoint) {
       var declaration = try store.readDeclaration()
       let lock = try store.readResolved()
       var watch = try store.readWatch()

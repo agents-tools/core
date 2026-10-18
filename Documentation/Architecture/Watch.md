@@ -64,8 +64,13 @@ the current head but not the seen revision, including after divergent history.
 Acknowledged commits and their mirror refs are made durable before watch state
 is committed. Mirror-local Git fsync settings cover objects and references;
 explicit barriers also flush existing objects and parent directory entries.
-Force-pushes and Git garbage collection cannot discard seen content. Mirrors remain available
-for source history and future resolution.
+Force-pushes and Git garbage collection cannot discard seen content. After a
+durable acknowledgment or removal, obsolete watch-owned refs are released unless
+an installed skill, instruction section or prompt section still pins that
+revision. A durable pending marker makes ref cleanup repeatable after an
+interruption, following journal recovery so rollback baselines stay reachable.
+Mirrors remain available for source history and future resolution; Git may
+collect histories after their last retention ref is released.
 
 Well-known baselines map artifact names to digests. Files artifacts use the
 same aggregate digest as the lock: SHA-256 of deterministically encoded file
