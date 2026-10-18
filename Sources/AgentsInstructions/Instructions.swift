@@ -110,7 +110,7 @@ public enum Instructions {
     try validateAssembly(output, expected: block)
     let previous = oldBlock.map { document.normalized($0) }
     return InstructionAssembly(
-      bytes: Data(output.utf8), headingOffset: offset, block: block,
+      bytes: document.byteOrderMark + Data(output.utf8), headingOffset: offset, block: block,
       blockHash: hash(Data(block.utf8)),
       adoptedSections: adopted, conflicts: conflicts,
       blockDifference: previous.flatMap {
@@ -127,7 +127,7 @@ public enum Instructions {
       return InstructionAssembly(
         bytes: bytes, headingOffset: 0, block: nil, blockHash: nil, adoptedSections: [],
         conflicts: [],
-        blockDifference: nil, hasCustomContent: !bytes.isEmpty)
+        blockDifference: nil, hasCustomContent: !document.lines.isEmpty)
     }
     var lower = block.lowerBound
     var upper = block.upperBound
@@ -139,7 +139,8 @@ public enum Instructions {
     if let last = custom.last { output += last.text + "\n" }
     try validateAssembly(output, expected: nil)
     return InstructionAssembly(
-      bytes: Data(output.utf8), headingOffset: 0, block: nil, blockHash: nil, adoptedSections: [],
+      bytes: document.byteOrderMark + Data(output.utf8), headingOffset: 0, block: nil,
+      blockHash: nil, adoptedSections: [],
       conflicts: [], blockDifference: difference(from: document.normalized(block), to: ""),
       hasCustomContent: !output.isEmpty)
   }
@@ -172,14 +173,15 @@ public enum Instructions {
   ) throws -> Data {
     guard !sections.isEmpty else { throw InstructionError.emptyPrompt }
     try validateSelection(sections)
-    var output = sections.map(\.content).joined(separator: "\n\n") + "\n"
+    var output = Data((sections.map(\.content).joined(separator: "\n\n") + "\n").utf8)
     if let customContent, !customContent.isEmpty {
-      guard let custom = String(data: customContent, encoding: .utf8) else {
+      guard String(data: customContent, encoding: .utf8) != nil else {
         throw InstructionError.invalidUTF8
       }
-      output += "\n" + custom
+      output.append(10)
+      output.append(customContent)
     }
-    return Data(output.utf8)
+    return output
   }
 
   /// Source-qualified identities installed in both scopes, in project order, for doctor warnings.

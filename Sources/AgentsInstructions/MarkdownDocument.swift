@@ -53,78 +53,69 @@ struct MarkdownDocument: Sendable, Equatable {
     "<!-- BEGIN managed by agents: do not edit this block. Edit its sources and run `agents update`. -->"
   static let end = "<!-- END managed by agents -->"
 
+  let byteOrderMark: Data
   let lines: [MarkdownLine]
   var headings: [MarkdownHeading] = []
   var topLevelHeadings: [MarkdownHeading] = []
   var markers: [Int] = []
   var sections: [HeadingIdentity: [Range<Int>]] = [:]
-  var codeByteRanges: [Range<Int>] = []
+  var inlineText: [String] = []
   var endsInCode = false
   var endsInHTML = false
 
   init(bytes: Data) throws {
-    guard let text = String(data: bytes, encoding: .utf8) else {
+    guard String(data: bytes, encoding: .utf8) != nil else {
       throw InstructionError.invalidUTF8
     }
-    self.init(text)
+    self.init(String(decoding: bytes, as: UTF8.self))
   }
 
   init(_ text: String) {
-    lines = MarkdownLine.parse(text)
+    let hasBOM = text.utf8.starts(with: [0xEF, 0xBB, 0xBF])
+    byteOrderMark = hasBOM ? Data([0xEF, 0xBB, 0xBF]) : Data()
+    lines = MarkdownLine.parse(hasBOM ? String(text.dropFirst()) : text)
     let normalized = normalized(0..<lines.count)
     let parsed = Document(parsing: normalized, options: [.disableSmartOpts])
-    var starts = [0]
-    for line in lines { starts.append(starts.last! + line.raw.utf8.count) }
-    var pending: [(Markup, Bool, Int)] = [(parsed, false, lines.count)]
-    while let (node, topLevel, containerEnd) = pending.popLast() {
-      if let range = node.range {
+    var pending: [(Markup, Bool)] = [(parsed, false)]
+    while let (node, topLevel) = pending.popLast() {
+      if let range = node.range, let heading = node as? Heading {
         let first = range.lowerBound.line - 1
-        // cmark can include the first line after a terminated container in a code block's range.
-        let end = min(range.upperBound.line, containerEnd, lines.count)
-        if let heading = node as? Heading {
-          let offset = range.lowerBound.column - 1
-          let bytes = Array(lines[first].text.utf8)
-          let isATX = offset < bytes.count && bytes[offset] == 35
-          let inlineRanges = heading.children.compactMap(\.range)
-          let title: String
-          let headingEnd: Int
-          if let lower = inlineRanges.first?.lowerBound, let upper = inlineRanges.last?.upperBound {
-            title = sourceText(lower..<upper)
-            // cmark may extend a Setext heading through the following block. Inline ranges
-            // identify its content; the underline is the immediately following source line.
-            headingEnd = isATX ? first + 1 : min(upper.line + 1, lines.count)
-          } else {
-            title = ""
-            headingEnd = first + 1
-          }
-          let item = MarkdownHeading(
-            level: heading.level, text: title, lines: first..<headingEnd,
-            openingOffset: isATX ? offset : nil)
-          headings.append(item)
-          if topLevel { topLevelHeadings.append(item) }
-        } else if let html = node as? HTMLBlock, topLevel {
-          let literal = MarkdownLine.parse(html.rawHTML)
-          if literal.count == 1, lines[first].text == Self.begin || lines[first].text == Self.end {
-            markers.append(first)
-          }
-        } else if node is CodeBlock {
-          codeByteRanges.append(starts[first]..<starts[end])
-        } else if node is InlineCode {
-          let last = min(range.upperBound.line - 1, lines.count - 1)
-          let lower = starts[first] + range.lowerBound.column - 1
-          let upper = starts[last] + min(range.upperBound.column - 1, lines[last].text.utf8.count)
-          codeByteRanges.append(lower..<upper)
+        let opening = Self.atxOpening(in: lines[first].text, inContainer: !topLevel)
+        let end: Int
+        if opening != nil {
+          end = first + 1
+        } else if topLevel {
+          // A Setext range can extend into the following block. Verify the physical underline.
+          end =
+            ((first + 1)..<lines.count).first {
+              Self.isSetextUnderline(lines[$0].text, level: heading.level)
+            }.map { $0 + 1 } ?? first + 1
+        } else {
+          // Container headings are never target boundaries; source validation rejects Setext.
+          end = first + 1
         }
+        let item = MarkdownHeading(
+          level: heading.level, text: heading.plainText, lines: first..<end,
+          openingOffset: opening)
+        headings.append(item)
+        if topLevel { topLevelHeadings.append(item) }
+      } else if let html = node as? HTMLBlock, topLevel, let range = html.range {
+        let first = range.lowerBound.line - 1
+        let literal = MarkdownLine.parse(html.rawHTML)
+        if literal.count == 1, lines[first].text == Self.begin || lines[first].text == Self.end {
+          markers.append(first)
+        }
+      } else if let text = node as? Text {
+        inlineText.append(text.string)
       }
-      let childEnd =
-        node is ListItem || node is BlockQuote
-        ? min(node.range?.upperBound.line ?? containerEnd, containerEnd) : containerEnd
+      if node is CodeBlock || node is InlineCode || node is HTMLBlock || node is InlineHTML {
+        continue
+      }
       for child in node.children.reversed() {
-        pending.append((child, node is Document, childEnd))
+        pending.append((child, node is Document))
       }
     }
     indexSections()
-    codeByteRanges.sort { $0.lowerBound < $1.lowerBound }
     inspectEnd(of: parsed, text: normalized)
   }
 
@@ -156,15 +147,53 @@ struct MarkdownDocument: Sendable, Equatable {
     return trimmed.map(\.text).joined(separator: "\n")
   }
 
-  private func sourceText(_ range: SourceRange) -> String {
-    let first = range.lowerBound.line - 1
-    let last = range.upperBound.line - 1
-    return (first...last).map { line in
-      let bytes = Array(lines[line].text.utf8)
-      let lower = line == first ? min(range.lowerBound.column - 1, bytes.count) : 0
-      let upper = line == last ? min(range.upperBound.column - 1, bytes.count) : bytes.count
-      return String(decoding: bytes[lower..<upper], as: UTF8.self)
-    }.joined(separator: "\n")
+  /// Physical prefix verification is used only for blocks already identified by CommonMark.
+  private static func contentOffset(in bytes: [UInt8], inContainer: Bool) -> Int {
+    var cursor = 0
+    while cursor < bytes.count {
+      if bytes[cursor] == 32 || bytes[cursor] == 9 {
+        cursor += 1
+      } else if inContainer, bytes[cursor] == 62 {
+        cursor += 1
+      } else if inContainer {
+        var end = cursor
+        if bytes[end] == 45 || bytes[end] == 43 || bytes[end] == 42 {
+          end += 1
+        } else {
+          while end < bytes.count, (48...57).contains(bytes[end]), end - cursor < 9 { end += 1 }
+          guard end > cursor, end < bytes.count, bytes[end] == 46 || bytes[end] == 41 else {
+            break
+          }
+          end += 1
+        }
+        guard end < bytes.count, bytes[end] == 32 || bytes[end] == 9 else { break }
+        cursor = end + 1
+      } else {
+        break
+      }
+    }
+    return cursor
+  }
+
+  private static func atxOpening(in line: String, inContainer: Bool) -> Int? {
+    let bytes = Array(line.utf8)
+    let start = contentOffset(in: bytes, inContainer: inContainer)
+    if !inContainer, start > 3 || bytes[..<start].contains(9) { return nil }
+    var end = start
+    while end < bytes.count, bytes[end] == 35 { end += 1 }
+    guard (1...6).contains(end - start),
+      end == bytes.count || bytes[end] == 32 || bytes[end] == 9
+    else { return nil }
+    return start
+  }
+
+  private static func isSetextUnderline(_ line: String, level: Int) -> Bool {
+    let bytes = Array(line.utf8)
+    let indentation = bytes.prefix(while: { $0 == 32 }).count
+    guard indentation <= 3 else { return false }
+    let marker: UInt8 = level == 1 ? 61 : 45
+    let run = bytes.dropFirst(indentation).prefix(while: { $0 == marker }).count
+    return run > 0 && bytes.dropFirst(indentation + run).allSatisfy { $0 == 32 || $0 == 9 }
   }
 
   private mutating func indexSections() {
@@ -200,7 +229,8 @@ struct MarkdownDocument: Sendable, Equatable {
     guard tail is CodeBlock || tail is HTMLBlock, let start = tail.range?.lowerBound else { return }
     // The AST does not expose closure state. Continue the same container and ask the parser
     // whether a sentinel becomes code/HTML. List markers become continuation indentation.
-    let prefix = lines[start.line - 1].text.utf8.prefix(start.column - 1).map {
+    let bytes = Array(lines[start.line - 1].text.utf8)
+    let prefix = bytes.prefix(Self.contentOffset(in: bytes, inContainer: true)).map {
       $0 == 62 || $0 == 9 ? $0 : UInt8(32)
     }
     let sentinel = "agents-instructions-boundary-probe"

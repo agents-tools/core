@@ -33,26 +33,18 @@ public enum ClaudeForwarding: Sendable, Equatable {
     MarkdownDocument.begin + "\n" + path.importLine + "\n" + MarkdownDocument.end + "\n"
   }
 
-  /// Recognizes unquoted @path tokens, including prose, outside code spans and code blocks.
+  /// Recognizes unquoted @path tokens, including prose, outside code spans, code blocks, and HTML.
   public static func containsImport(in bytes: Data, at path: ClaudeInstructionPath) throws -> Bool {
     let document = try MarkdownDocument(bytes: bytes)
     _ = try document.managedBlock()
-    let input = Array(bytes)
+    return document.inlineText.contains { containsImport(in: $0, at: path) }
+  }
+
+  private static func containsImport(in text: String, at path: ClaudeInstructionPath) -> Bool {
+    let input = Array(text.utf8)
     let delimiters = Set(" \t\r\n\"'`<>[](){};,".utf8)
     var cursor = 0
-    var codeIndex = 0
     while cursor < input.count {
-      while codeIndex < document.codeByteRanges.count,
-        document.codeByteRanges[codeIndex].upperBound <= cursor
-      {
-        codeIndex += 1
-      }
-      if codeIndex < document.codeByteRanges.count,
-        document.codeByteRanges[codeIndex].contains(cursor)
-      {
-        cursor = document.codeByteRanges[codeIndex].upperBound
-        continue
-      }
       let position = cursor
       cursor += 1
       guard input[position] == 64 else { continue }

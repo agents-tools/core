@@ -134,7 +134,7 @@ struct InstructionStructureTests {
   @Test(arguments: ["", " ", "  ", "   "])
   func preservesHeadingIndentationAndInlineSyntax(_ indentation: String) throws {
     let section = try source(indentation + "# Rüles *and* `code` ###\nBody\n")
-    #expect(section.heading == "Rüles *and* `code`")
+    #expect(section.heading == "Rüles and `code`")
     let result = try Instructions.assemble(Data("# Guide\n".utf8), sections: [section])
     #expect(result.block == block(indentation + "## Rüles *and* `code` ###\nBody"))
   }

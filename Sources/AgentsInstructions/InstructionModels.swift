@@ -3,8 +3,9 @@ import Foundation
 public struct InstructionSection: Sendable, Equatable {
   /// Caller-owned, source-qualified identity, used in reports and scope comparisons.
   public let id: String
+  /// The Markdown AST's plain text for the source heading, with whitespace trimmed and collapsed.
   public let heading: String
-  /// SHA-256 of the original source bytes, including their line endings.
+  /// SHA-256 of the original source bytes, including their line endings and any UTF-8 byte order mark.
   public let hash: String
   let content: String
   let document: MarkdownDocument
@@ -41,6 +42,7 @@ public struct InstructionAssembly: Sendable, Equatable {
   /// Difference from the previous managed block, independent of custom-section conflicts.
   public let blockDifference: String?
   /// The caller combines this with its locked `created` flag before deleting a file.
+  /// A leading UTF-8 byte order mark is file metadata and does not count as custom content.
   public let hasCustomContent: Bool
 }
 
