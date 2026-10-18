@@ -67,7 +67,12 @@ public struct InstructionTargetChange: Sendable, Equatable {
   public let assembly: InstructionAssembly
   /// Nil when no previous lock entry exists. Missing files report `missingBlock`.
   public let drift: InstructionDrift?
+  /// Whether the file bytes differ; recipient-only changes do not affect this value.
+  /// Use `InstructionUpdateReport.hasChanges` to detect any update in the report.
   public var changed: Bool { before != after }
+  /// Whether the planned recipients differ from the previous lock's recipients.
+  /// A missing previous entry (`beforeAgents == nil`) differs from any planned list.
+  /// Use `InstructionUpdateReport.hasChanges` to detect any update in the report.
   public var agentsChanged: Bool { beforeAgents != afterAgents }
 }
 
