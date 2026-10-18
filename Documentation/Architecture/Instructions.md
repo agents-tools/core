@@ -62,8 +62,8 @@ modified.
 | `remove(names:scope:agents:environment:beforeApply:)` | Remove sections from file and prompt selections and lock records |
 | `renderChatGPT(prompt:scope:environment:)` | Return locked sections followed by the prompt's current custom file |
 | `initializeInstructions(named:directory:)` | Create a validated `<name>.md`, refusing an existing entry |
-| `doctor(scope:environment:)` | Inspect one scope and compare sections against the other scope |
-| `doctor(projectRoots:environment:)` | Audit explicit project roots without writing |
+| `doctor(scope:environment:codexConfiguration:)` | Inspect one scope and compare sections against the other scope |
+| `doctor(projectRoots:environment:codexConfiguration:)` | Audit explicit project roots without writing |
 
 An `agents` argument sets the complete instruction recipient list. Removing
 names accepts `alias:name` references or unambiguous bare names and removes
@@ -127,9 +127,17 @@ Codex checks report a nonempty `AGENTS.override.md` hiding managed content and
 sum loaded instruction bytes and separators along the global and
 root-to-project chain, honoring `project_root_markers` (default `.git`) and
 `project_doc_fallback_filenames`. With no root marker, only the project directory
-is checked. The budget comes from top-level `project_doc_max_bytes` in
-`$CODEX_HOME/config.toml`, defaulting to 32 KiB. Table fields and multiline string
-contents cannot override it; invalid budgets produce a diagnostic. Discovery
+is checked. Consumers supply `CodexInstructionConfiguration` with the effective
+byte limit, fallback filenames and root markers after resolving Codex trust,
+profiles and policy. Multi-root audit accepts a configuration resolver per root.
+The TOML initializer can merge trusted layers in precedence order, preserving
+omitted settings; trust decisions and layer selection belong to the consumer.
+Trusted `.codex/config.toml` layers override user settings, with the closest to
+the working directory taking precedence, following
+[Codex configuration rules](https://learn.chatgpt.com/docs/config-file/config-advanced).
+Without supplied settings, doctor reads top-level `$CODEX_HOME/config.toml`,
+defaulting to 32 KiB. Table fields and multiline string contents cannot override
+it; invalid budgets produce a diagnostic. Discovery
 follows the [Codex instruction guide](https://developers.openai.com/codex/guides/agents-md).
 
 Multi-root audit deduplicates explicit roots, reports unavailable or pending

@@ -95,6 +95,8 @@ Claude project files receive only a managed import when forwarding is needed.
 User locations honor `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and `XDG_CONFIG_HOME`;
 Codex and Claude use separate files. Lost-lock update reports the comparison;
 apply reconstructs the lock without claiming ownership of pre-existing files.
+Codex diagnostics accept effective discovery settings from the consumer,
+including trusted project configuration overrides.
 See [instruction lifecycle](Documentation/Architecture/Instructions.md) for API
 contracts, target paths, read-only inspection and deletion rules.
 

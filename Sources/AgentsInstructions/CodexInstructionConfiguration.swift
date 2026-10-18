@@ -1,16 +1,28 @@
 import AgentsCore
 import Foundation
 
-/// The top-level settings that determine instruction discovery; runtime profile and policy layers
-/// belong to Codex. This reader does not interpret unrelated configuration values.
-struct CodexInstructionConfiguration {
-  var maxBytes = 32 * 1024
-  var fallbackNames: [String] = []
-  var rootMarkers = [".git"]
+/// Effective Codex instruction discovery settings. Consumers resolve trust, profiles and policy
+/// before supplying these settings to doctor. The TOML initializer reads top-level settings only.
+public struct CodexInstructionConfiguration: Sendable, Equatable {
+  public private(set) var maxBytes = 32 * 1024
+  public private(set) var fallbackNames: [String] = []
+  public private(set) var rootMarkers = [".git"]
 
-  init() {}
+  public init() {}
 
-  init(_ data: Data) throws {
+  public init(maxBytes: Int, fallbackNames: [String] = [], rootMarkers: [String] = [".git"]) throws
+  {
+    guard maxBytes >= 0 else { throw CoreError.invalidState("invalid instruction byte limit") }
+    try Self.validateNames(fallbackNames + rootMarkers)
+    self.maxBytes = maxBytes
+    self.fallbackNames = fallbackNames
+    self.rootMarkers = rootMarkers
+  }
+
+  /// Applies the top-level values present in one TOML layer, preserving omitted settings.
+  /// Only pass project layers that the consumer has established are trusted, in precedence order.
+  public init(_ data: Data, inheriting base: Self = Self()) throws {
+    self = base
     guard let text = String(data: data, encoding: .utf8) else { throw InstructionError.invalidUTF8 }
     var multiline: String?
     var arrayKey: String?
@@ -119,10 +131,7 @@ struct CodexInstructionConfiguration {
         try quote == "'"
         ? String(token.dropFirst().dropLast())
         : JSONDecoder().decode(String.self, from: Data(token.utf8))
-      guard !name.isEmpty, name != ".", name != "..",
-        !name.contains("/"), !name.contains("\\"), !name.contains("\0"),
-        !name.contains(where: \.isNewline)
-      else { throw CoreError.unsafePath("instruction discovery requires filenames") }
+      try Self.validateNames([name])
       names.append(name)
       remaining =
         remaining[remaining.index(after: end)...].trimmingCharacters(in: .whitespaces)[...]
@@ -134,5 +143,14 @@ struct CodexInstructionConfiguration {
       }
     }
     return names
+  }
+
+  private static func validateNames(_ names: [String]) throws {
+    for name in names {
+      guard !name.isEmpty, name != ".", name != "..",
+        !name.contains("/"), !name.contains("\\"), !name.contains("\0"),
+        !name.contains(where: \.isNewline)
+      else { throw CoreError.unsafePath("instruction discovery requires filenames") }
+    }
   }
 }

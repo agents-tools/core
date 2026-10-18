@@ -3,8 +3,11 @@ import Foundation
 
 extension InstructionOperations {
   /// Audits disk and state without fetching sources, creating locks or recovering transactions.
+  /// Supply Codex's effective settings to include trusted project, profile or policy overrides.
+  /// Without them, discovery uses top-level user configuration and defaults.
   public static func doctor(
-    scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
+    scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment(),
+    codexConfiguration: CodexInstructionConfiguration? = nil
   ) throws -> InstructionDoctorReport {
     let store = StateStore(scope: scope, environment: environment)
     let other = StateStore(scope: scope == .project ? .user : .project, environment: environment)
@@ -85,7 +88,8 @@ extension InstructionOperations {
         }
       }
       if agents.contains(.codex) {
-        diagnostics += InstructionDoctor.codex(scope: scope, environment: environment, lock: lock)
+        diagnostics += InstructionDoctor.codex(
+          scope: scope, environment: environment, lock: lock, configuration: codexConfiguration)
       }
       let sections =
         lock.instructions.sections + lock.instructions.chatgpt.values.flatMap(\.sections)
@@ -118,7 +122,8 @@ extension InstructionOperations {
   /// Audits explicit project roots independently. An unreadable scope becomes a diagnostic;
   /// no project is repaired and no source cache is populated.
   public static func doctor(
-    projectRoots: [URL], environment: RuntimeEnvironment = RuntimeEnvironment()
+    projectRoots: [URL], environment: RuntimeEnvironment = RuntimeEnvironment(),
+    codexConfiguration: ((URL) throws -> CodexInstructionConfiguration)? = nil
   ) -> [InstructionDoctorReport] {
     var seen = Set<String>()
     return projectRoots.compactMap { root in
@@ -126,7 +131,10 @@ extension InstructionOperations {
       guard seen.insert(root.path).inserted else { return nil }
       var runtime = environment
       runtime.projectDirectory = root
-      do { return try doctor(scope: .project, environment: runtime) } catch {
+      do {
+        return try doctor(
+          scope: .project, environment: runtime, codexConfiguration: codexConfiguration?(root))
+      } catch {
         return InstructionDoctorReport(
           root: root,
           diagnostics: [
@@ -149,15 +157,16 @@ private enum InstructionDoctor {
     return result
   }
 
-  static func codex(scope: InstallScope, environment: RuntimeEnvironment, lock: ResolvedState)
-    -> [InstructionDiagnostic]
-  {
+  static func codex(
+    scope: InstallScope, environment: RuntimeEnvironment, lock: ResolvedState,
+    configuration supplied: CodexInstructionConfiguration?
+  ) -> [InstructionDiagnostic] {
     var result: [InstructionDiagnostic] = []
     let user = InstructionLocations.file(for: .codex, scope: .user, environment: environment)!
     let config = user.deletingLastPathComponent().appendingPathComponent("config.toml")
-    var configuration = CodexInstructionConfiguration()
+    var configuration = supplied ?? CodexInstructionConfiguration()
     do {
-      if FileManager.default.fileExists(atPath: config.path) {
+      if supplied == nil, FileManager.default.fileExists(atPath: config.path) {
         configuration = try CodexInstructionConfiguration(Data(contentsOf: config))
       }
     } catch {

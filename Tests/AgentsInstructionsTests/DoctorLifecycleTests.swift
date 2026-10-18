@@ -5,6 +5,71 @@ import Testing
 
 @Suite("Instruction diagnostics")
 struct InstructionDoctorTests {
+  @Test(arguments: [true, false])
+  func trustedProjectConfigurationOverridesUserByteLimit(_ trusted: Bool) throws {
+    let fixture = try InstructionFixture()
+    try fixture.write(
+      String(repeating: "x", count: 2048), to: fixture.project.appendingPathComponent("AGENTS.md"))
+    let userConfig = fixture.home.appendingPathComponent(".codex/config.toml")
+    let projectConfig = fixture.project.appendingPathComponent(".codex/config.toml")
+    try fixture.write("project_doc_max_bytes = 32768\n", to: userConfig)
+    try fixture.write("project_doc_max_bytes = 1024\n", to: projectConfig)
+    var effective = try CodexInstructionConfiguration(Data(contentsOf: userConfig))
+    if trusted {
+      effective = try CodexInstructionConfiguration(
+        Data(contentsOf: projectConfig), inheriting: effective)
+    }
+    let before = try fixture.snapshot()
+    let report = try InstructionOperations.doctor(
+      environment: fixture.environment, codexConfiguration: effective)
+    #expect(report.diagnostics.contains { $0.kind == .codexSize } == trusted)
+    if trusted {
+      #expect(
+        report.diagnostics.contains { $0.kind == .codexSize && $0.message.contains("(1024)") })
+    }
+    #expect(try fixture.snapshot() == before)
+  }
+
+  @Test func multiRootAuditUsesEffectiveConfigurationForEachProject() throws {
+    let fixture = try InstructionFixture()
+    let nested = fixture.project.appendingPathComponent("nested")
+    let other = fixture.root.appendingPathComponent("other")
+    let userConfig = fixture.home.appendingPathComponent(".codex/config.toml")
+    let projectConfig = fixture.project.appendingPathComponent(".codex/config.toml")
+    let nestedConfig = nested.appendingPathComponent(".codex/config.toml")
+    let otherConfig = other.appendingPathComponent(".codex/config.toml")
+    try fixture.write("marker", to: fixture.project.appendingPathComponent(".project-root"))
+    try fixture.write(
+      "project_doc_max_bytes = 32768\nproject_root_markers = ['.project-root']\n", to: userConfig)
+    try fixture.write(
+      "project_doc_max_bytes = 1024\nproject_doc_fallback_filenames = ['TEAM.md']\n",
+      to: projectConfig)
+    try fixture.write("project_doc_max_bytes = 1536\n", to: nestedConfig)
+    try fixture.write("project_doc_max_bytes = 4096\n", to: otherConfig)
+    for file in [
+      fixture.project.appendingPathComponent("TEAM.md"), nested.appendingPathComponent("AGENTS.md"),
+      other.appendingPathComponent("AGENTS.md"),
+    ] {
+      try fixture.write(String(repeating: "x", count: 1024), to: file)
+    }
+    let before = try fixture.snapshot()
+    let reports = InstructionOperations.doctor(
+      projectRoots: [nested, other], environment: fixture.environment,
+      codexConfiguration: { root in
+        let layers =
+          root.path == nested.path
+          ? [userConfig, projectConfig, nestedConfig] : [userConfig, otherConfig]
+        return try layers.reduce(CodexInstructionConfiguration()) { base, layer in
+          try CodexInstructionConfiguration(Data(contentsOf: layer), inheriting: base)
+        }
+      })
+    let size = try #require(reports[0].diagnostics.first { $0.kind == .codexSize })
+    #expect(size.message.contains("2050 bytes"))
+    #expect(size.message.contains("(1536)"))
+    #expect(!reports[1].diagnostics.contains { $0.kind == .codexSize })
+    #expect(try fixture.snapshot() == before)
+  }
+
   @Test func codexUsesConfiguredRootMarkersAndFallbackFilenames() throws {
     let fixture = try InstructionFixture()
     try fixture.write("marker", to: fixture.project.appendingPathComponent(".project-root"))
