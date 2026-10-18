@@ -2,6 +2,11 @@
 
 This directory holds supporting reference material for `core`.
 
+## Guides
+
+- [Release checklist](Release.md): preflight, signed version tags, GitHub
+  releases, and downstream CLI and Homebrew updates.
+
 ## Placement
 
 - Use this directory for details that support implementation and operation.

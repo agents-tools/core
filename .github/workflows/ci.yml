@@ -24,7 +24,7 @@ jobs:
           xcrun swift-format --version
 
       - name: Format
-        run: xcrun swift-format lint --configuration .swift-format --recursive Package.swift Sources Tests
+        run: xcrun swift-format lint --strict --configuration .swift-format --recursive Package.swift Sources Tests
 
       - name: Test
         run: swift test
