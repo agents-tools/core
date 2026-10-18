@@ -79,7 +79,9 @@ file was created by the tool. Skill writes retain these records unchanged.
 
 Maps are key sorted. Unordered selections and agent lists are sorted; section
 arrays and each prompt's section order are preserved. Files have a trailing
-newline and no timestamps. Invalid state, duplicate JSON keys at any depth and
+newline and no timestamps. State and journal JSON must be UTF-8 without a byte
+order mark; validation consumes the entire document. Other encodings, invalid
+state, duplicate JSON keys at any depth and
 fields that would be discarded by decoding cause an error. Tree hashes use
 length-prefixed paths and typed entry payloads, including empty
 directories and symbolic link destinations.

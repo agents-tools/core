@@ -3,9 +3,18 @@ import Foundation
 /// Checks object identity before a dictionary decoder can discard duplicate keys.
 enum JSONKeys {
   static func validate(_ data: Data) throws {
+    guard String(data: data, encoding: .utf8) != nil,
+      !data.starts(with: [0xEF, 0xBB, 0xBF]), !data.contains(0)
+    else {
+      throw CoreError.invalidState("JSON must be UTF-8 without a byte order mark")
+    }
     _ = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
     var scanner = Scanner(bytes: Array(data))
     try scanner.value()
+    scanner.whitespace()
+    guard scanner.offset == data.count else {
+      throw CoreError.invalidState("trailing JSON content")
+    }
   }
 
   private struct Scanner {
