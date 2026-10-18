@@ -1,4 +1,8 @@
-# core
+<p align="center">
+  <img src="Documentation/Assets/Logo.svg" width="160" alt="core logo">
+</p>
+
+<h1 align="center">core</h1>
 
 Swift libraries for managing agent skills and instructions from declared
 sources. The package provides the engine for `agents` in
