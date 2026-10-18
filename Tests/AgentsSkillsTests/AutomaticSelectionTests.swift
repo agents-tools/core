@@ -6,7 +6,7 @@ import Testing
 @Suite("Automatic add selection")
 struct AutomaticSelectionTests {
   @Test(arguments: ["skill", "instruction"], ["rename", "source", "removed-source", "content"])
-  func revalidatesIdentityBetweenDiscoveryPasses(_ kind: String, _ change: String) throws {
+  func revalidatesSelectionDuringConcurrentChanges(_ kind: String, _ change: String) throws {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "Original")
     let instructions = fixture.repo.appendingPathComponent("instructions")
@@ -74,25 +74,31 @@ struct AutomaticSelectionTests {
     child.waitUntilExit()
     #expect(child.terminationStatus == 0)
     let result = try String(contentsOf: root.appendingPathComponent("add-result"), encoding: .utf8)
-    if change == "content" {
+    if change == "content" || change == "source" {
       #expect(result == "applied")
       let lock = try store.loadResolved()
+      let source = try #require(declaration.sources["source"])
+      let sourceID = try source.identity(environment: fixture.environment)
+      let content = change == "content" ? "Current" : "Original"
       if kind == "skill" {
         #expect(lock.skills.keys.sorted() == ["demo"])
+        #expect(lock.skills["demo"]?.source == sourceID)
         #expect(lock.skills["demo"]?.revision == (try fixture.head()))
-        #expect(try fixture.body(fixture.target("demo")).contains("Current"))
+        #expect(try fixture.body(fixture.target("demo")).contains(content))
       } else {
         #expect(lock.instructions.sections.map(\.name) == ["demo"])
+        #expect(lock.instructions.sections.first?.source == sourceID)
         #expect(lock.instructions.sections.first?.revision == (try fixture.head()))
         #expect(
           try String(contentsOf: root.appendingPathComponent("AGENTS.md"), encoding: .utf8)
-            .contains("Current"))
+            .contains(content))
       }
     } else {
-      #expect(
-        result
-          == "Invalid state: automatic \(kind) selection changed during discovery; retry the command"
-      )
+      let expected =
+        change == "removed-source"
+        ? "Invalid source: expected a local path or repository URL"
+        : "Invalid state: automatic \(kind) selection changed during discovery; retry the command"
+      #expect(result == expected)
       #expect(try Data(contentsOf: store.declarationURL) == beforeDeclaration)
       #expect((try? Data(contentsOf: store.resolvedURL)) == beforeLock)
       #expect(

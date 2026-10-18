@@ -67,7 +67,7 @@ public struct WatchOperations: Sendable {
     scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> [WatchStatus] {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withLock(createIfMissing: false) {
+    return try store.withReadLock {
       let declaration = try store.readDeclaration()
       _ = try store.readResolved()
       let watch = try store.readWatch()
@@ -83,7 +83,7 @@ public struct WatchOperations: Sendable {
     scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> WatchStatus {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withLock(createIfMissing: false) {
+    return try store.withReadLock {
       let declaration = try store.readDeclaration()
       _ = try store.readResolved()
       let watch = try store.readWatch()

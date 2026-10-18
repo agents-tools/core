@@ -108,14 +108,25 @@ sorted, timestamp-free, UTF-8 without a BOM and newline-terminated. Duplicate
 keys, malformed input, unknown non-null fields, unsupported versions and invalid
 revisions or digests are errors. Subscriptions cannot repeat an alias.
 
-Watch operations hold the scope file lock. Add and seen prepare cached content
-before publishing its baseline. Declaration and watch replacements and cache
-pruning commit through the existing scope transaction journal; recovery follows
-the same retry contract as other state operations. Every scope operation checks
-watch state after transaction recovery, and corrupt watch state blocks mutations
-before fetching, cache publication, installation or state replacement.
+Add, seen and remove hold the scope writer lock and recover interrupted
+transactions and pending ref cleanup before proceeding. Add and seen prepare
+cached content before publishing its baseline. Declaration and watch replacements
+and cache pruning commit through the existing scope transaction journal; recovery
+follows the same retry contract as other mutating state operations. Every scope
+mutation checks watch state after transaction recovery, and corrupt watch state
+blocks mutations before fetching, cache publication, installation or state
+replacement.
 
-Status and diff may fetch into mirrors and download current index artifacts for
-inspection. They use disposable snapshots and memory, leave retained artifact
-content unchanged, and do not write declaration, lock, watch state, installations
-or source working trees. Scheduling and diff rendering belong to consumers.
+Status and diff take an existing shared scope lock without creating state files
+or replaying recovery. When a first writer creates the scope lock during an
+unlocked read, inspection discards that attempt, including any error, and retries
+under the shared lock. A pending transaction journal or watch-ref cleanup marker
+fails inspection with
+`CoreError.invalidState` ("transaction recovery is required before inspection").
+Inspection leaves pending cleanup and retained refs untouched for the next
+mutating operation to recover.
+Status and diff may fetch into mirrors under each mirror's lock and download
+current index artifacts for inspection. They use disposable snapshots and memory,
+leave retained artifact content unchanged, and do not write declaration, lock,
+watch state, installations or source working trees. Scheduling and diff rendering
+belong to consumers.
