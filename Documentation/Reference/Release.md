@@ -78,20 +78,37 @@ its CLI release.
 
   Confirm the tag resolves to `release_commit`.
 
-- [ ] Push that tag, then create the GitHub release with the prepared notes:
+- [ ] Push that tag and verify its remote target before creating the GitHub
+  release with the prepared notes:
 
   ```bash
-  git push origin "refs/tags/$version"
-  gh release create "$version" --verify-tag --title "$version" --notes-file "$notes_file"
+  git push origin "refs/tags/$version" &&
+    remote_tag=$(git ls-remote --exit-code origin "refs/tags/$version^{}") &&
+    test "$remote_tag" = "$(printf '%s\t%s' "$release_commit" "refs/tags/$version^{}")" &&
+    gh release create "$version" --verify-tag --title "$version" --notes-file "$notes_file"
   ```
 
-  `--verify-tag` requires the published tag to exist. Confirm the release
-  displays the expected version, commit, and notes before updating consumers.
+  The remote `^{}` entry identifies the annotated tag's target commit. The
+  `&&` chain requires a successful push, remote lookup, and exact match with
+  `release_commit` before publication. Stop on any failure; published tags are
+  never moved. `--verify-tag` checks tag existence, not commit identity. Confirm
+  the release displays the expected version, commit, and notes before updating
+  consumers.
 
 ## Release Consumers and Taps
 
 - [ ] In **both** `agents-tools/cli` and `skill-cli/cli`, update the core
-  dependency in `Package.swift` to the published core version:
+  dependency in `Package.swift` to the published core version. While core is
+  `0.x`, use the minor-bounded range `"X.Y.Z"..<"X.(Y+1).0"`: substitute the
+  released version and the next minor version, with patch zero. For example:
+
+  ```swift
+  .package(url: "https://github.com/agents-tools/core.git", "0.2.3"..<"0.3.0")
+  ```
+
+  This permits compatible patch updates while excluding breaking minor
+  releases. When core reaches `1.0.0`, change the rule to `from:` for the
+  published version, allowing updates up to the next major version:
 
   ```swift
   .package(url: "https://github.com/agents-tools/core.git", from: "X.Y.Z")
@@ -105,13 +122,35 @@ its CLI release.
 - [ ] Update the formula in each CLI's Homebrew tap: set `url` to that CLI's
   released source archive and `sha256` to the SHA-256 of the exact downloaded
   archive bytes. Use each CLI's release version for its formula.
-- [ ] Verify **each** updated formula in a clean test environment where it is
-  not already installed. Set `formula` to the tap's fully qualified formula
-  name and run:
+- [ ] Verify **each** updated formula in a disposable Homebrew test environment
+  where it is not already installed. Start in the edited tap checkout. Set
+  `formula_name` to the formula's filename without `.rb` and `test_tap` to an
+  unused temporary `owner/name` tap name. Disable API installs and automatic
+  updates, tap the local checkout, and copy the candidate formula into that
+  test tap so uncommitted edits are included:
 
   ```bash
-  brew install --build-from-source "$formula"
-  brew test "$formula"
+  export HOMEBREW_NO_INSTALL_FROM_API=1
+  export HOMEBREW_NO_AUTO_UPDATE=1
+  tap_checkout=$PWD
+  brew tap "$test_tap" "$tap_checkout" &&
+    test_tap_checkout=$(brew --repository "$test_tap") &&
+    cp "Formula/$formula_name.rb" "$test_tap_checkout/Formula/$formula_name.rb" &&
+    cmp "Formula/$formula_name.rb" "$test_tap_checkout/Formula/$formula_name.rb" &&
+    brew info --json=v2 "$test_tap/$formula_name"
   ```
 
-  Both commands must pass for both formulae before publishing the tap updates.
+  Stop if setup fails. Check the displayed stable source URL and SHA-256
+  against the intended CLI release archive and its independently calculated
+  digest before proceeding. Keep the test tap unchanged throughout validation.
+- [ ] Fetch the candidate's source archive to validate its checksum, then
+  build and test the formula from the populated test tap:
+
+  ```bash
+  brew fetch --force --build-from-source "$test_tap/$formula_name" &&
+    brew install --build-from-source "$test_tap/$formula_name" &&
+    brew test "$test_tap/$formula_name"
+  ```
+
+  All commands must pass for both formulae before publishing the tap updates.
+  Discard the disposable test environment after validation.
