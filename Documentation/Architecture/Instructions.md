@@ -130,9 +130,11 @@ it does not imply that section bytes have changed. Local Git reads and remote
 `ls-remote` advertisements share the cache resolver's branch and semantic-version
 selection policy, including annotated tags. No mirror or snapshot is written.
 Unresolvable sources produce `sourceResolutionFailed`, including remote revision
-expressions not present in advertised refs. Full immutable remote revision IDs
-cannot advance and are compared directly; doctor does not fetch to verify their
-availability or validate upstream content.
+expressions not present in advertised refs. Full object IDs are resolved through
+`^{commit}` in the existing mirror. Without a cached object, an advertised tag's
+peeled target must be verifiable as a cached commit or an advertised branch head;
+otherwise inspection reports an unresolved source. Doctor does not fetch to
+resolve missing objects or validate upstream content.
 
 Codex checks report a nonempty `AGENTS.override.md` hiding managed content and
 sum loaded instruction bytes and separators along the global and

@@ -6,6 +6,92 @@ import Testing
 @Suite("Instruction source diagnostics")
 struct InstructionSourceDiagnosticTests {
   @Test(arguments: [SourceKind.local, .git])
+  func annotatedTagObjectRevisionsResolveToLockedCommits(_ kind: SourceKind) throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("file")
+    try fixture.section("prompt")
+    try fixture.commit()
+    try fixture.git(["-c", "tag.gpgsign=false", "tag", "-a", "release", "-m", "release"])
+    let object = try fixture.git(["rev-parse", "release"])
+    let commit = try fixture.git(["rev-parse", "release^{commit}"])
+    #expect(object != commit)
+    try install(fixture, kind: kind, requirement: .revision(object))
+    try fixture.git(["tag", "--delete", "release"])
+    for apply in [false, true] {
+      if apply {
+        _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+      }
+      let lock = try fixture.store().loadResolved()
+      #expect(lock.instructions.sections.first?.revision == commit)
+      #expect(lock.instructions.chatgpt["daily"]?.sections.first?.revision == commit)
+      let before = try fixture.snapshot()
+      let report = try InstructionOperations.doctor(environment: fixture.environment)
+      #expect(
+        !report.diagnostics.contains {
+          $0.kind == .sourceUpdateAvailable || $0.kind == .sourceResolutionFailed
+        })
+      #expect(try fixture.snapshot() == before)
+    }
+  }
+
+  @Test(arguments: [true, false])
+  func advertisedTagObjectsResolveWithoutFetching(_ retainMirror: Bool) throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("prompt")
+    try fixture.commit()
+    let commit = try fixture.git(["rev-parse", "HEAD"])
+    try install(fixture, kind: .git, requirement: .revision(commit), files: [])
+    try fixture.git(["-c", "tag.gpgsign=false", "tag", "-a", "release", "-m", "release"])
+    let object = try fixture.git(["rev-parse", "release"])
+    var declaration = try fixture.store().loadDeclaration()
+    declaration.sources["rules"]?.requirement = .revision(object)
+    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
+    let mirrors = fixture.store().cacheDirectory.appendingPathComponent("mirrors")
+    if retainMirror {
+      try fixture.section("prompt", body: "New branch content")
+      try fixture.commit()
+    } else {
+      try FileManager.default.removeItem(at: mirrors)
+    }
+    let before = try fixture.snapshot()
+    let report = try InstructionOperations.doctor(environment: fixture.environment)
+    #expect(
+      !report.diagnostics.contains {
+        $0.kind == .sourceUpdateAvailable || $0.kind == .sourceResolutionFailed
+      })
+    #expect(try fixture.snapshot() == before)
+    #expect(FileManager.default.fileExists(atPath: mirrors.path) == retainMirror)
+  }
+
+  @Test(arguments: ["missing", "tree", "tagged-tree"])
+  func unresolvedObjectRevisionsAreReportedWithoutWrites(_ objectKind: String) throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("prompt")
+    try fixture.commit()
+    let commit = try fixture.git(["rev-parse", "HEAD"])
+    try install(fixture, kind: .git, requirement: .revision(commit), files: [])
+    let object: String
+    switch objectKind {
+    case "tree": object = try fixture.git(["rev-parse", "HEAD^{tree}"])
+    case "tagged-tree":
+      try fixture.git(["-c", "tag.gpgsign=false", "tag", "-a", "tree", "HEAD^{tree}", "-m", "tree"])
+      object = try fixture.git(["rev-parse", "tree"])
+    default: object = String(repeating: "a", count: 40)
+    }
+    var declaration = try fixture.store().loadDeclaration()
+    declaration.sources["rules"]?.requirement = .revision(object)
+    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
+    let before = try fixture.snapshot()
+    let report = try InstructionOperations.doctor(environment: fixture.environment)
+    #expect(
+      report.diagnostics.contains {
+        $0.kind == .sourceResolutionFailed && $0.message.contains(object)
+      })
+    #expect(!report.diagnostics.contains { $0.kind == .sourceUpdateAvailable })
+    #expect(try fixture.snapshot() == before)
+  }
+
+  @Test(arguments: [SourceKind.local, .git])
   func newerBranchRevisionsIncludeFileAndPromptPinsWithoutWrites(_ kind: SourceKind) throws {
     let fixture = try InstructionFixture()
     try fixture.section("file")
