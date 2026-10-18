@@ -39,7 +39,7 @@ struct ProcessRunnerTests {
 
   @Test func propagatesLaunchErrors() throws {
     let directory = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: directory) }
+    defer { removeTemporaryDirectory(directory) }
     let executable = directory.appendingPathComponent("missing-executable")
     let process = Process()
     process.executableURL = executable
@@ -59,7 +59,7 @@ struct ProcessRunnerTests {
 
   @Test func respectsWorkingDirectory() throws {
     let directory = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: directory) }
+    defer { removeTemporaryDirectory(directory) }
     try Data("working directory\n".utf8).write(to: directory.appendingPathComponent("marker"))
 
     let output = try ProcessRunner.run(

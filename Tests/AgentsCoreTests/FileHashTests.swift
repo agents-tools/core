@@ -7,7 +7,7 @@ import Testing
 struct FileHashTests {
   @Test func arbitraryBytesCannotImpersonateTreeEntries() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     try Data("same skill".utf8).write(to: root.appendingPathComponent("SKILL.md"))
     try Data("x".utf8).write(to: root.appendingPathComponent("a"))
     try Data("y".utf8).write(to: root.appendingPathComponent("b"))
@@ -19,7 +19,7 @@ struct FileHashTests {
 
   @Test func hashesEveryContentEntryDeterministically() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     try "one".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent("nested"), withIntermediateDirectories: true)
@@ -45,7 +45,7 @@ struct FileHashTests {
 
   @Test func hashesSymlinkedFolderLikeItsTarget() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let target = root.appendingPathComponent("target")
     try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
     try "one".write(to: target.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)

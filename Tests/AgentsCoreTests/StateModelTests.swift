@@ -7,7 +7,7 @@ import Testing
 struct StateModelTests {
   @Test func roundTripsCompleteStateDeterministically() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let environment = RuntimeEnvironment(
       projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
     let store = StateStore(scope: .project, environment: environment)
@@ -54,7 +54,7 @@ struct StateModelTests {
 
   @Test func rejectsCorruptionWithoutReplacingFiles() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     try store.save(declaration: Declaration(), resolved: ResolvedState())
     let declaration = try Data(contentsOf: store.declarationURL)
@@ -113,7 +113,7 @@ extension StateModelTests {
   ])
   func duplicateKeysRejectReadsAndWrites(_ json: String) throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     try store.save(declaration: Declaration(), resolved: ResolvedState())
     let url = json.contains("version") ? store.resolvedURL : store.declarationURL
@@ -136,7 +136,7 @@ extension StateModelTests {
 
   @Test func rejectsUnknownFieldsInsteadOfDiscardingIntent() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     try store.save(declaration: Declaration(), resolved: ResolvedState())
     let bytes = Data(#"{"sources":{},"unexpected":{"intent":true}}"#.utf8)

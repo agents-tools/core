@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 
 @testable import AgentsCore
 
@@ -9,9 +10,22 @@ func temporaryDirectory() throws -> URL {
   return url
 }
 
+func removeTemporaryDirectory(_ directory: URL) {
+  do {
+    try FileManager.default.removeItem(at: directory)
+  } catch let error as CocoaError where error.code == .fileNoSuchFile {
+  } catch {
+    Issue.record(error)
+  }
+}
+
 func initGitRepo(_ repo: URL) throws {
   try ProcessRunner.run(
     "/usr/bin/env", arguments: ["git", "init", "--initial-branch=master", repo.path])
+  try ProcessRunner.run(
+    "/usr/bin/env", arguments: ["git", "-C", repo.path, "config", "maintenance.auto", "false"])
+  try ProcessRunner.run(
+    "/usr/bin/env", arguments: ["git", "-C", repo.path, "config", "gc.auto", "0"])
   try ProcessRunner.run(
     "/usr/bin/env",
     arguments: ["git", "-C", repo.path, "config", "user.email", "tests@example.com"])

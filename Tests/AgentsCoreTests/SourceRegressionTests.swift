@@ -56,7 +56,7 @@ struct SourceRegressionTests {
 
   @Test func explicitBranchFollowsFetchedHeadWithoutMovingExistingTree() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let repo = root.appendingPathComponent("repo")
     try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
     try Data("A".utf8).write(to: repo.appendingPathComponent("content"))
@@ -97,7 +97,7 @@ struct SourceRegressionTests {
     _ requirement: SourceRequirement, _ tags: [String], _ expected: String
   ) throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let cache = try taggedCache(root: root, tags: tags)
     let source = SourceDeclaration(
       kind: .local, location: root.appendingPathComponent("repo").path, requirement: requirement)
@@ -113,7 +113,7 @@ struct SourceRegressionTests {
   @Test(arguments: ["1.0.0-alpha.1", "1.5.0-alpha.1", "2.0.0-alpha.1"])
   func stableRangeRejectsSourcesWithoutEligibleTags(_ tag: String) throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let cache = try taggedCache(root: root, tags: [tag])
     #expect(throws: CoreError.self) {
       try cache.resolve(

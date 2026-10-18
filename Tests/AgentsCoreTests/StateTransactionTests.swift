@@ -101,11 +101,11 @@ final class TransactionFixture {
           to: directory.appendingPathComponent("SKILL.md"))
       }
     } catch {
-      try? FileManager.default.removeItem(at: root)
+      removeTemporaryDirectory(root)
       throw error
     }
   }
-  deinit { try? FileManager.default.removeItem(at: root) }
+  deinit { removeTemporaryDirectory(root) }
   func commit(checkpoint: @escaping (String) throws -> Void) throws {
     try store.withLock {
       let transaction = FileTransaction(store: store, checkpoint: checkpoint)
@@ -146,7 +146,7 @@ final class TransactionFixture {
 extension StateTransactionTests {
   @Test func recoversAnInterruptedInitialJournalWrite() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     try store.save(declaration: Declaration(), resolved: ResolvedState())
     let before = try Data(contentsOf: store.resolvedURL)
@@ -165,7 +165,7 @@ extension StateTransactionTests {
   ])
   func corruptJournalDoesNotChangeState(_ json: String) throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     try store.save(declaration: Declaration(), resolved: ResolvedState())
     let before = try Data(contentsOf: store.resolvedURL)
@@ -390,7 +390,7 @@ extension StateTransactionTests {
     let fixture = try TransactionFixture()
     try abandon(fixture)
     let container = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: container) }
+    defer { removeTemporaryDirectory(container) }
     let copy = container.appendingPathComponent("copy")
     try FileManager.default.copyItem(at: fixture.root, to: copy)
     let originalHash = try FileHash.folderHash(fixture.root)
@@ -455,7 +455,7 @@ extension StateTransactionTests {
 
   @Test func scopeCreationSyncsParentBeforeAllowingTargets() throws {
     let root = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
+    defer { removeTemporaryDirectory(root) }
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
     let child = try stateTestProcess(

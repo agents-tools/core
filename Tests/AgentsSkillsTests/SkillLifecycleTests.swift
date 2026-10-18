@@ -276,7 +276,7 @@ final class SkillFixture {
       homeDirectory: root.appendingPathComponent("home"), environment: [:])
   }
 
-  deinit { try? FileManager.default.removeItem(at: root) }
+  deinit { removeTemporaryDirectory(root) }
 
   func store(_ scope: InstallScope = .project) -> StateStore {
     StateStore(scope: scope, environment: environment)
