@@ -2,14 +2,14 @@
 
 ## Scope Locations
 
-| Scope | Declaration | Lock | Watch path | Cache |
+| Scope | Declaration | Lock | Watch state | Cache |
 | --- | --- | --- | --- | --- |
 | Project | `.agent/agents.json` | `.agent/agents.resolved` | `.agent/agents.watch` | `.agent/cache/` |
 | User | `~/.agents/agents.json` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | `~/.agents/cache/` |
 
 User paths are relative to `RuntimeEnvironment.homeDirectory`. State files belong
-to their scope and are local state. Watch subscriptions have a declaration field
-and reserved file path; subscription operations are implemented separately.
+to their scope and are local state. `agents.watch` stores subscription baselines
+independently of installed pins; [Watch](Watch.md) describes the operations.
 
 ## Declaration
 
@@ -53,7 +53,8 @@ its scheme. Declaring two aliases for one normalized ID is an error.
 
 `instructions` holds recipients, ordered `source:name` section references, and
 named `chatgpt` prompts with ordered sections and optional relative `append`
-paths. `watch` is an alias array. Skill operations preserve both fields.
+paths. `watch` is a unique alias array. Skill operations preserve both fields
+and existing watch-state bytes.
 
 ## Lock
 
@@ -122,9 +123,57 @@ the metadata of the installed or restored tree, nor of a backup still needed
 for rollback; symbolic links are unlinked without following their destinations.
 
 After a process kill or power loss at any point, the next state access recovers
-one consistent generation of targets, declaration, lock and cache references.
+one consistent generation of targets, declaration, lock, watch state and cache references.
+Mirror Git invocations pass `-c core.fsync=objects,reference,pack-metadata` and
+`-c core.fsyncMethod=fsync`; durability settings never rewrite configuration.
+Mirror configuration must be a regular file, checked before invoking Git.
+Before a Git acknowledgment publishes watch state, existing object bytes and
+object directory entries are flushed as well. The retained ref, its parent,
+Git config and HEAD, and mirror/cache directory entries are synced before the
+scope journal can commit the baseline. This orders durable Git content before
+the durable watch reference; power loss cannot publish a baseline ahead of its
+retained content.
+
+Before preparing a watch ref or changing watch/lock pins, the scope writes and
+syncs `watch-refs.pending`. Under the scope lock, reconciliation runs only after
+the transaction has committed or journal recovery has selected and synced a
+consistent generation. It removes only `refs/agents-watch/<revision>` refs no
+longer named by watch state, skills, instruction sections or prompt sections.
+Loose-ref parents and packed refs are synced before the pending marker is
+removed and its parent synced. The marker survives interrupted preparation or
+cleanup, so the next access repeats reconciliation against the recovered state;
+refs needed for rollback remain until that state is durable.
+
+Mirrors are exclusively owned by agents. Each mirror has a per-source lock at
+`cache/locks/<source-key>.lock`, created before cloning or first access. All
+mirror reads and writes take this lock, including instruction listings and
+cached revision inspection. Scope mutations take the scope lock first, then
+the mirror lock; mirror access never acquires the scope lock in reverse order.
+An instruction listing can therefore populate a mirror before `.agents.lock`
+exists while still excluding concurrent recovery and watch mutations.
+
+Git children explicitly inherit a duplicate of the mirror lock descriptor
+allocated at 3 or above with `F_DUPFD_CLOEXEC`. Spawn file actions inherit that
+duplicate without changing the parent's close-on-exec flags. Output pipe sources
+also use descriptors above the standard streams before redirection; closed stdin
+is connected to `/dev/null` in the child. Unrelated descriptors remain closed,
+and the parent closes the temporary duplicates immediately after spawning.
+The parent closes its lock descriptor without explicitly unlocking the shared
+open file description. If the Swift
+parent is killed, a surviving Git child keeps the mirror locked until it exits.
+Git automatic maintenance is disabled. Recovery must acquire this same mirror
+lock before classifying Git `*.lock` files (including `packed-refs.lock`) and
+the root `packed-refs.new` staging file as abandoned. Within each mirror it
+validates all candidates as regular files through directory descriptors,
+without following symlinks, before deleting any candidate. It syncs lock-file
+deletions before retrying Git; the pending marker also covers interruption of
+this cleanup. Live mirror users and surviving Git children block recovery, so
+their Git locks and refs cannot be removed or recreated beneath them.
+
 Each state operation first checks for an abandoned journal under the scope
-lock. An applying journal rolls back every replacement; a committed journal
+lock, then validates watch state and finishes pending ref cleanup before
+proceeding. An applying journal rolls back every replacement, including watch
+baselines; a committed journal
 finishes cleanup. Recovery is repeatable if interrupted. Before deleting any
 recovery material, both the terminal journal file and its parent directory are
 fsynced, even when that phase was already visible on entry. State and backup
@@ -136,6 +185,7 @@ storage flush.
 
 Recovery throws `CoreError.transactionRecovered` after completing, reporting
 the scope and asking the caller to retry against the recovered generation.
+This includes recovery of pending watch refs even when no journal remains.
 Skill inventory, previews and doctor also recover. Instruction read operations
 instead take an existing shared lock and report pending recovery without
 replaying it, so explicit multi-root instruction audits never write. Corrupt
@@ -187,12 +237,14 @@ Inspection snapshots are disposable and do not move an installed tree or write
 state or targets. Applying prepares all selected content, computes differences,
 stages replacements, and commits target changes and state under the scope lock.
 Pruning participates in that transaction. Pins referenced by skills, instruction
-sections or prompt sections remain cached, as do trees containing live edit
-sources. Pruning opens directory ancestry without following symlinks and uses
+sections or prompt sections remain cached, as do artifact contents referenced
+by watch state and trees containing live edit sources. Pruning opens directory
+ancestry without following symlinks and uses
 directory-relative enumeration, rename and deletion. It rejects symlinked cache
 containers and never recursively follows a link during cleanup.
-Mirrors remain available for source
-history and future resolution.
+Mirrors remain available for source history and future resolution. Watch-owned
+Git refs retain only revisions still referenced by watch state or installed
+pins; obsolete histories can be collected by Git after those refs are released.
 
 Doctor reports missing installs, changed content and broken links, newer
 matching Git resolutions, and uncommitted changes in selected local source

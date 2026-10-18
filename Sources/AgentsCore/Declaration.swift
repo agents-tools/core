@@ -228,6 +228,9 @@ public struct Declaration: Codable, Equatable, Sendable {
       try Self.validateNames(selection.exclude ?? [])
       try Self.validateNames(Array((selection.overrides ?? [:]).keys))
     }
+    guard Set(watch ?? []).count == (watch ?? []).count else {
+      throw CoreError.invalidState("duplicate watch subscription")
+    }
     for alias in watch ?? [] where sources[alias] == nil {
       throw CoreError.invalidState("unknown watch source: \(alias)")
     }

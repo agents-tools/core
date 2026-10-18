@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsInstructions
 import Darwin
 import Foundation
 
@@ -13,11 +14,92 @@ let store = StateStore(
     environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path]))
 func stop(_ step: String, marker: String = "ready") throws {
   if step == arguments[3] {
-    try Data(step.utf8).write(to: root.appendingPathComponent(marker))
+    try Data(step.utf8).write(to: root.appendingPathComponent(marker), options: .atomic)
     raise(SIGSTOP)
   }
 }
-if arguments[2] == "recover" {
+func signalContention() throws {
+  let signal = try FileHandle(forWritingTo: root.appendingPathComponent("writer-contended"))
+  defer { try? signal.close() }
+  try signal.write(contentsOf: Data("contended\n".utf8))
+}
+if arguments[2] == "locked-git" {
+  close(STDOUT_FILENO)
+  close(STDERR_FILENO)
+  if arguments[4] == "all" { close(STDIN_FILENO) }
+  try FileLock.withDescriptor(at: root.appendingPathComponent(arguments[3])) { descriptor in
+    try Data(String(descriptor).utf8).write(to: root.appendingPathComponent("lock-descriptor"))
+    try ProcessRunner.run(
+      "/usr/bin/env",
+      arguments: [
+        "git", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+        "-C", root.appendingPathComponent("repository").path,
+        "update-ref", "--no-deref", "-d", "refs/agents-watch/" + arguments[5], arguments[5],
+      ], inheritingLock: descriptor)
+  }
+} else if arguments[2] == "lock-contender" {
+  try FileLock.withLock(
+    at: root.appendingPathComponent(arguments[3]),
+    checkpoint: { if $0 == "lock.contended" { try signalContention() } },
+    { try Data().write(to: root.appendingPathComponent("lock-acquired")) })
+} else if arguments[2] == "closed-streams" {
+  let mask = Int(arguments[3])!
+  try FileLock.withDescriptor(at: root.appendingPathComponent("writer.lock")) { descriptor in
+    for stream: Int32 in 0...2 where mask & (1 << stream) != 0 { close(stream) }
+    let script = """
+      if ($ARGV[0]) {
+        my $byte;
+        my $count = sysread(STDIN, $byte, 1);
+        defined($count) && $count == 0 or die 'stdin must provide EOF';
+      }
+      print STDOUT 'out'; print STDERR 'err';
+      """
+    let output = try ProcessRunner.run(
+      "/usr/bin/perl", arguments: ["-e", script, String(mask & 1)], inheritingLock: descriptor)
+    try Data(output.stdout.utf8).write(to: root.appendingPathComponent("stdout"))
+    try Data(output.stderr.utf8).write(to: root.appendingPathComponent("stderr"))
+  }
+} else if arguments[2] == "instruction-list" {
+  let units = try InstructionOperations.list(
+    source: SourceDeclaration(kind: .local, location: root.appendingPathComponent("source").path),
+    environment: store.environment)
+  try Data(units.map(\.record.name).joined(separator: "\n").utf8).write(
+    to: root.appendingPathComponent("listing-finished"))
+} else if ["watch-subscribe", "watch-acknowledge"].contains(arguments[2]) {
+  let watch = WatchOperations(
+    discoverSkills: { _ in [] },
+    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+    checkpoint: { step in
+      if step == "mirror.lock.contended" {
+        try signalContention()
+      }
+    })
+  func acknowledge() throws {
+    if arguments[2] == "watch-subscribe" {
+      try watch.add(
+        root.appendingPathComponent("source").path, alias: "source", environment: store.environment)
+    } else {
+      try watch.seen("source", revision: arguments[3], environment: store.environment)
+    }
+  }
+  do { try acknowledge() } catch CoreError.transactionRecovered { try acknowledge() }
+  try Data().write(to: root.appendingPathComponent("writer-finished"))
+} else if ["watch-add", "watch-seen", "watch-remove"].contains(arguments[2]) {
+  let watch = WatchOperations(
+    discoverSkills: { _ in [] },
+    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+    checkpoint: { try stop($0) })
+  if arguments[2] == "watch-add" {
+    try watch.add(
+      root.appendingPathComponent("source").path, alias: "source", environment: store.environment)
+  } else if arguments[2] == "watch-seen" {
+    try watch.seen("source", environment: store.environment)
+  } else {
+    try watch.remove("source", environment: store.environment)
+  }
+} else if arguments[2] == "watch-recover" {
+  try store.withLock(checkpoint: { try stop($0) }, {})
+} else if arguments[2] == "recover" {
   try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
     _ = try FileTransaction.recover(store: store) { try stop($0, marker: "recovery-ready") }
   }
@@ -54,6 +136,17 @@ if arguments[2] == "recover" {
       } else {
         throw CoreError.invalidState("missing fixture pin")
       }
+    } else if arguments[2] == "watch-crash" {
+      var declaration = try store.readDeclaration()
+      declaration.watch = ["source"]
+      let watch = WatchState(sources: [
+        "local:/source": WatchSourceState(seen: .revision(String(repeating: "b", count: 40)))
+      ])
+      let transaction = FileTransaction(store: store) { try stop($0) }
+      try transaction.replace(
+        store.declarationURL, content: nil, data: StateStore.encode(declaration))
+      try transaction.replace(store.watchURL, content: nil, data: StateStore.encode(watch))
+      try transaction.commit()
     } else if arguments[2] == "writer" {
       for index in 0..<5 {
         var declaration = try store.readDeclaration()

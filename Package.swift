@@ -25,7 +25,8 @@ let package = Package(
     ),
     .target(name: "AgentsSkills", dependencies: ["AgentsCore", "Yams"]),
     .executableTarget(
-      name: "StateTestProcess", dependencies: ["AgentsCore"], path: "Tests/StateTestProcess"),
+      name: "StateTestProcess", dependencies: ["AgentsCore", "AgentsInstructions"],
+      path: "Tests/StateTestProcess"),
     .testTarget(name: "AgentsCoreTests", dependencies: ["AgentsCore", "StateTestProcess"]),
     .testTarget(name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions"]),
     .testTarget(

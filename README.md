@@ -9,7 +9,8 @@ parsing, terminal output and executable distribution.
 
 - **AgentsCore**: source parsing and identity, Git requirements, declaration and
   resolved-state models, atomic state storage, bare mirrors and immutable source
-  materializations, hashing, path safety, process execution and agent locations.
+  materializations, watch subscriptions, hashing, path safety, process execution
+  and agent locations.
 - **AgentsSkills**: `SKILL.md` discovery and frontmatter, well-known artifacts,
   installation, updates, removal, listing, initialization and diagnostics. It
   depends on `AgentsCore` and Yams.
@@ -18,8 +19,7 @@ parsing, terminal output and executable distribution.
   `AgentsCore` for sources, state and transactions, and `swift-markdown` for
   CommonMark structure. Pure text APIs remain available separately.
 
-`AgentsCore` defines the instruction declaration and lock models. Watch
-subscriptions are separate implementation work.
+`AgentsCore` defines the instruction declaration and lock models.
 Skill operations preserve the instruction and watch declarations and the locked
 instruction records.
 
@@ -30,8 +30,8 @@ a duplicate import is acceptable to ensure the instructions load.
 
 ## State and Lifecycle
 
-Project state lives in `.agent/agents.json` and `.agent/agents.resolved`. User
-state lives in `~/.agents/agents.json` and `~/.agents/agents.resolved`. The
+Project state lives in `.agent/agents.json`, `.agent/agents.resolved` and
+`.agent/agents.watch`. User state uses the same filenames under `~/.agents/`. The
 respective `cache/` directory holds source mirrors and exact content. State is
 local to its scope and should be ignored by version control.
 
@@ -66,9 +66,21 @@ removals, entry types and symbolic link destinations. Installed inventory valida
 skill metadata and excludes missing entries; managed inventory retains those
 records for diagnosis.
 
+`WatchOperations` subscribes to sources independently of installations. Create
+it with `SkillOperations.watchOperations()` to use the package's skill discovery
+and well-known artifact formats. `add` declares and subscribes a source, `status`
+reports commits and new/changed/removed skills and instruction units, and `diff`
+provides typed before/after file contents. `seen` acknowledges the current head
+or a specified Git revision; `remove` drops only the subscription and baseline.
+Git subscriptions follow the declared branch or default branch, even when
+installations use a version requirement. Well-known subscriptions compare
+artifact digests and retain seen content for later diffs. Status and diff leave
+declaration, lock, watch state and installed content unchanged.
+
 Mutating state operations recover interrupted transactions before proceeding and report
 `CoreError.transactionRecovered` when the command should be retried. The durable
-scope journal covers installations, declaration, lock and cache pruning.
+scope journal covers installations, declaration, lock, watch state and cache
+pruning. Corrupt watch state stops scope mutations before any replacement.
 
 `InstructionOperations` manages ordered sections from committed `.md` files
 under a source's `instructions/` or `.agents/instructions/` search root:
@@ -135,6 +147,8 @@ let preview = try SkillOperations.updateInstalled(
 let skills = try SkillOperations.listManaged(
   scope: .project, agents: [.codex], environment: environment
 )
+let watch = SkillOperations.watchOperations()
+let changes = try watch.status(scope: .project, environment: environment)
 ```
 
 ## Development
@@ -154,5 +168,6 @@ tests use in-memory fixtures; lifecycle tests use isolated homes and Git
 repositories. Public API tests import the libraries normally.
 
 See [package architecture](Documentation/Architecture/Package.md),
-[state and cache](Documentation/Architecture/State.md), and the
+[state and cache](Documentation/Architecture/State.md), the
+[watch API](Documentation/Architecture/Watch.md), and the
 [documentation index](Documentation/README.md).
