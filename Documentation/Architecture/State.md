@@ -142,8 +142,8 @@ consistent generation. It removes only `refs/agents-watch/<revision>` refs no
 longer named by watch state, skills, instruction sections or prompt sections.
 Loose-ref parents and packed refs are synced before the pending marker is
 removed and its parent synced. The marker survives interrupted preparation or
-cleanup, so the next access repeats reconciliation against the recovered state;
-refs needed for rollback remain until that state is durable.
+cleanup, so the next mutating access repeats reconciliation against the recovered
+state; refs needed for rollback remain until that state is durable.
 
 Mirrors are exclusively owned by agents. Each mirror has a per-source lock at
 `cache/locks/<source-key>.lock`, created before cloning or first access. All
@@ -188,11 +188,14 @@ storage flush.
 Recovery throws `CoreError.transactionRecovered` after completing, reporting
 the scope and asking the caller to retry against the recovered generation.
 This includes recovery of pending watch refs even when no journal remains.
-Non-applying skill and instruction operations take an existing shared lock without
-creating scope state files or replaying recovery. Listings and previews fail with
-`CoreError.invalidState` when a transaction journal is pending. Each doctor instead
-reports one pending-recovery diagnostic per affected scope and skips checks that
-require that scope's consistent state. The diagnostic explains that the next
+Non-applying skill and instruction operations and watch status and diff take an
+existing shared lock without creating scope state files or replaying recovery.
+Listings, previews, watch status and watch diff fail with `CoreError.invalidState`
+when a transaction journal is pending. A pending watch-ref cleanup marker does
+not block these reads or trigger reconciliation: comparisons use the committed
+baseline while obsolete refs remain retained until the next mutating access.
+Each doctor instead reports one pending-recovery diagnostic per affected scope
+and skips checks that require that scope's consistent state. The diagnostic explains that the next
 command changing the scope will recover it. Explicit multi-root instruction audits
 never write. Corrupt journals stop mutations without guessing a recovery plan.
 Tests interrupt writers between rename and parent fsync, interrupt rollback and terminal cleanup, and verify
