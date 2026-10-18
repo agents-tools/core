@@ -111,7 +111,9 @@ never accepted as arbitrary journal paths.
 
 Backups and staged data are fsynced before applying changes. macOS `fcopyfile`
 preserves original bytes, permissions, ACLs and extended attributes in backups
-and restores; final modes are applied explicitly rather than through the umask.
+and restores. Data replacements inherit the existing regular file's metadata
+from its backup before publication; new files default to `0600`. Final modes
+are applied explicitly rather than through the umask.
 `renameatx_np(RENAME_SWAP)` atomically exchanges existing directories, files and
 links with their replacements; installations always retain a directory entry.
 Discarding transaction-owned trees grants owner access through pinned directory

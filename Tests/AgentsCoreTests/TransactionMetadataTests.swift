@@ -6,6 +6,55 @@ import Testing
 
 @Suite("Transaction metadata")
 struct TransactionMetadataTests {
+  @Test(arguments: ["complete", "journal.applying", "replace.1", "journal.committed"])
+  func dataReplacementPreservesPermissionsACLsAndExtendedAttributes(_ point: String) throws {
+    let fixture = try TransactionFixture()
+    let target = fixture.root.appendingPathComponent("AGENTS.md")
+    let created = fixture.root.appendingPathComponent("GEMINI.md")
+    try Data("owner content".utf8).write(to: target)
+    let files = [target, fixture.store.declarationURL, fixture.store.resolvedURL]
+    for (file, mode) in zip(files, [0o644, 0o440, 0o600]) {
+      let value = Data("owner metadata".utf8)
+      try #require(
+        value.withUnsafeBytes {
+          setxattr(file.path, "org.agents.tests", $0.baseAddress, $0.count, 0, XATTR_NOFOLLOW)
+        } == 0)
+      try ProcessRunner.run(
+        "/bin/chmod",
+        arguments: ["+a", "everyone allow readattr,readextattr,readsecurity", file.path])
+      try #require(chmod(file.path, mode_t(mode)) == 0)
+    }
+    let before = try files.map(metadata)
+    let original = try files.map { try Data(contentsOf: $0) }
+    let replacement = Data("replacement bytes".utf8)
+    try fixture.store.withLock {
+      let transaction = FileTransaction(store: fixture.store) { step in
+        if step == point { throw CoreError.invalidState("injected failure") }
+      }
+      for file in files + [created] {
+        try transaction.replace(file, content: nil, data: replacement)
+      }
+      if point == "complete" {
+        try transaction.commit()
+      } else {
+        #expect(throws: CoreError.self) { try transaction.commit() }
+      }
+    }
+    let committed = point == "complete" || point == "journal.committed"
+    #expect(try files.map(metadata) == before)
+    #expect(
+      try files.map { try Data(contentsOf: $0) }
+        == (committed ? Array(repeating: replacement, count: files.count) : original))
+    if committed {
+      var info = stat()
+      try #require(lstat(created.path, &info) == 0)
+      #expect(info.st_mode & 0o7777 == 0o600)
+    } else {
+      #expect(!FileManager.default.fileExists(atPath: created.path))
+    }
+    try expectRecoveryMaterialRemoved(fixture)
+  }
+
   @Test(arguments: ["complete", "journal.committed", "cleanup.0"])
   func committedCleanupDiscardsReadOnlyDirectories(_ point: String) throws {
     let fixture = try TransactionFixture()

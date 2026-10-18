@@ -112,7 +112,7 @@ package final class FileTransaction {
           try checkpoint("prepare.\(index).ready")
         }
         if let data = content.data {
-          try parent.write(staged, data: data)
+          try parent.write(staged, data: data, preservingMetadataOf: entry.existed ? backup : nil)
           try checkpoint("stage.\(index).written")
         } else if let source = content.url {
           if content.link {
