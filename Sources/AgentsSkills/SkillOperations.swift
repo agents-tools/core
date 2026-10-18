@@ -280,9 +280,15 @@ public enum SkillOperations {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> [InstalledSkill] {
     let store = StateStore(scope: scope, environment: environment)
-    _ = try store.loadDeclaration()
-    let lock = try store.loadResolved()
-    return try lock.skills.keys.sorted().flatMap { name in
+    return try operate(store, apply: false) { _, lock in
+      try managedInventory(store: store, lock: lock, agents: agents)
+    }
+  }
+
+  private static func managedInventory(store: StateStore, lock: ResolvedState, agents: [AgentID]?)
+    throws -> [InstalledSkill]
+  {
+    try lock.skills.keys.sorted().flatMap { name in
       guard let skill = lock.skills[name] else { return [InstalledSkill]() }
       return try skill.installs.keys.sorted().compactMap { raw in
         guard let agent = AgentID(rawValue: raw), let mode = skill.installs[raw],
@@ -304,7 +310,8 @@ public enum SkillOperations {
           status = .brokenLink
         }
         return InstalledSkill(
-          name: name, agent: agent, scope: scope, path: target.path, sourceIdentity: skill.source,
+          name: name, agent: agent, scope: store.scope, path: target.path,
+          sourceIdentity: skill.source,
           isInstalled: present, status: status, mode: mode)
       }
     }
@@ -314,30 +321,33 @@ public enum SkillOperations {
     scope: InstallScope = .project, agents: [AgentID]? = nil,
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> [InstalledSkill] {
-    var result = try listManaged(scope: scope, agents: agents, environment: environment)
-    for agent in agents ?? AgentID.allCases {
-      let roots =
-        scope == .project
-        ? AgentRegistry.projectScanDirectories(for: agent, environment: environment)
-        : AgentRegistry.nativeUserScanDirectories(for: agent, environment: environment)
-      for root in roots {
-        for path
-          in (try? FileManager.default.contentsOfDirectory(
-            at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-        {
-          guard
-            FileManager.default.fileExists(atPath: path.appendingPathComponent("SKILL.md").path),
-            !result.contains(where: { $0.agent == agent && $0.path == path.path })
-          else { continue }
-          result.append(
-            InstalledSkill(
-              name: path.lastPathComponent, agent: agent, scope: scope, path: path.path,
-              sourceIdentity: nil, isInstalled: true, status: .installedOnly, mode: nil))
+    let store = StateStore(scope: scope, environment: environment)
+    return try operate(store, apply: false) { _, lock in
+      var result = try managedInventory(store: store, lock: lock, agents: agents)
+      for agent in agents ?? AgentID.allCases {
+        let roots =
+          scope == .project
+          ? AgentRegistry.projectScanDirectories(for: agent, environment: environment)
+          : AgentRegistry.nativeUserScanDirectories(for: agent, environment: environment)
+        for root in roots {
+          for path
+            in (try? FileManager.default.contentsOfDirectory(
+              at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+          {
+            guard
+              FileManager.default.fileExists(atPath: path.appendingPathComponent("SKILL.md").path),
+              !result.contains(where: { $0.agent == agent && $0.path == path.path })
+            else { continue }
+            result.append(
+              InstalledSkill(
+                name: path.lastPathComponent, agent: agent, scope: scope, path: path.path,
+                sourceIdentity: nil, isInstalled: true, status: .installedOnly, mode: nil))
+          }
         }
       }
-    }
-    return result.sorted {
-      ($0.name, $0.agent.rawValue, $0.path) < ($1.name, $1.agent.rawValue, $1.path)
+      return result.sorted {
+        ($0.name, $0.agent.rawValue, $0.path) < ($1.name, $1.agent.rawValue, $1.path)
+      }
     }
   }
 
@@ -346,80 +356,84 @@ public enum SkillOperations {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> DoctorReport {
     let store = StateStore(scope: scope, environment: environment)
-    let declaration = try store.loadDeclaration()
-    let lock = try store.loadResolved()
-    var checks = try listManaged(scope: scope, agents: agents, environment: environment).filter {
-      $0.status != .installed && $0.status != .editLinked
-    }.map {
-      DoctorCheck(
-        id: $0.status.rawValue, status: .warning, message: "\($0.name): \($0.status.rawValue)",
-        path: $0.path)
-    }
-    let cache = SourceCache(store: store)
-    for (alias, source) in declaration.sources.sorted(by: { $0.key < $1.key }) {
-      let id = try source.identity(environment: environment)
-      let skills = lock.skills.values.filter { $0.source == id }
-      guard !skills.isEmpty else { continue }
-      if source.kind == .local {
-        let paths = skills.compactMap(\.path)
-        let output = try? ProcessRunner.run(
-          "/usr/bin/env",
-          arguments: [
-            "git", "-C", source.localURL(environment: environment).path, "status", "--porcelain",
-            "--",
-          ] + paths
-        ).stdout
-        if let output, !output.isEmpty {
-          checks.append(
-            DoctorCheck(
-              id: "uncommitted-source", status: .warning,
-              message: "\(alias) has uncommitted changes in selected paths",
-              path: source.localURL(environment: environment).path))
-        }
+    return try operate(store, apply: false) { declaration, lock in
+      var checks = try managedInventory(store: store, lock: lock, agents: agents).filter {
+        $0.status != .installed && $0.status != .editLinked
+      }.map {
+        DoctorCheck(
+          id: $0.status.rawValue, status: .warning, message: "\($0.name): \($0.status.rawValue)",
+          path: $0.path)
       }
-      if source.kind != .wellKnown, skills.contains(where: { $0.revision != nil }) {
-        do {
-          let current = try cache.resolve(source)
-          if skills.contains(where: { $0.revision != nil && $0.revision != current.revision }) {
+      let cache = SourceCache(store: store)
+      for (alias, source) in declaration.sources.sorted(by: { $0.key < $1.key }) {
+        let id = try source.identity(environment: environment)
+        let skills = lock.skills.values.filter { $0.source == id }
+        guard !skills.isEmpty else { continue }
+        if source.kind == .local {
+          let paths = skills.compactMap(\.path)
+          let output = try? ProcessRunner.run(
+            "/usr/bin/env",
+            arguments: [
+              "git", "-C", source.localURL(environment: environment).path, "status", "--porcelain",
+              "--",
+            ] + paths
+          ).stdout
+          if let output, !output.isEmpty {
             checks.append(
               DoctorCheck(
-                id: "source-update", status: .warning,
-                message:
-                  "\(alias) has a newer matching revision\(current.version.map { " (\($0))" } ?? "")",
-                path: nil))
+                id: "uncommitted-source", status: .warning,
+                message: "\(alias) has uncommitted changes in selected paths",
+                path: source.localURL(environment: environment).path))
           }
-        } catch {
-          checks.append(
-            DoctorCheck(
-              id: "source-unavailable", status: .warning, message: "\(alias): \(error)", path: nil))
+        }
+        if source.kind != .wellKnown, skills.contains(where: { $0.revision != nil }) {
+          do {
+            let current = try cache.resolve(source)
+            if skills.contains(where: { $0.revision != nil && $0.revision != current.revision }) {
+              checks.append(
+                DoctorCheck(
+                  id: "source-update", status: .warning,
+                  message:
+                    "\(alias) has a newer matching revision\(current.version.map { " (\($0))" } ?? "")",
+                  path: nil))
+            }
+          } catch {
+            checks.append(
+              DoctorCheck(
+                id: "source-unavailable", status: .warning, message: "\(alias): \(error)", path: nil
+              ))
+          }
         }
       }
+      return DoctorReport(checks: checks)
     }
-    return DoctorReport(checks: checks)
   }
 
   public static func initializeSkill(named name: String?, directory: URL) throws -> URL {
-    let name = name.map(PathSafety.sanitizeName)
-    let root = name.map { directory.appendingPathComponent($0) } ?? directory
-    let file = root.appendingPathComponent("SKILL.md")
-    guard !FileManager.default.fileExists(atPath: file.path) else {
-      throw CoreError.invalidSkill("SKILL.md already exists at \(file.path)")
+    let store = StateStore(
+      scope: .project, environment: RuntimeEnvironment(projectDirectory: directory))
+    return try operate(store, apply: false) { _, _ in
+      let name = name.map(PathSafety.sanitizeName)
+      let root = name.map { directory.appendingPathComponent($0) } ?? directory
+      let file = root.appendingPathComponent("SKILL.md")
+      guard !FileManager.default.fileExists(atPath: file.path) else {
+        throw CoreError.invalidSkill("SKILL.md already exists at \(file.path)")
+      }
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      let title = name ?? PathSafety.sanitizeName(root.lastPathComponent)
+      try
+        "---\nname: \(title)\ndescription: Describe when to use this skill\n---\n\n# \(title)\n\nWrite the skill instructions here.\n"
+        .write(to: file, atomically: true, encoding: .utf8)
+      return root
     }
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let title = name ?? PathSafety.sanitizeName(root.lastPathComponent)
-    try
-      "---\nname: \(title)\ndescription: Describe when to use this skill\n---\n\n# \(title)\n\nWrite the skill instructions here.\n"
-      .write(to: file, atomically: true, encoding: .utf8)
-    return root
   }
 
   private static func operate<T>(
     _ store: StateStore, apply: Bool, _ body: (Declaration, ResolvedState) throws -> T
   ) throws -> T {
-    let declaration = try store.loadDeclaration()
-    let lock = try store.loadResolved()
-    if !apply { return try body(declaration, lock) }
-    return try store.withLock { try body(store.loadDeclaration(), store.loadResolved()) }
+    try store.withLock(createIfMissing: apply) {
+      try body(store.readDeclaration(), store.readResolved())
+    }
   }
 
   private static func sourceDeclaration(_ options: AddOptions, declaration: Declaration) throws

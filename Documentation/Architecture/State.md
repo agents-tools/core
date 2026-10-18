@@ -79,10 +79,27 @@ file was created by the tool. Skill writes retain these records unchanged.
 
 Maps are key sorted. Unordered selections and agent lists are sorted; section
 arrays and each prompt's section order are preserved. Files have a trailing
-newline and no timestamps. Invalid state and fields that would be discarded
-by decoding cause an error. Writers serialize through `.agents.lock`, stage
-all replacements, and restore originals on operation errors. Each state file
-is replaced atomically.
+newline and no timestamps. Invalid state, duplicate JSON keys at any depth and
+fields that would be discarded by decoding cause an error. Tree hashes use
+length-prefixed records for paths, entry types and bytes, including empty
+directories and symbolic link destinations.
+
+Readers and writers serialize through `.agents.lock`. A durable
+`transaction.json` in the scope state directory records every target, state
+file and pruning replacement, its backup and staging paths, and created
+parent directories before mutation. Backups and staged data are synced before
+applying changes. macOS `renameatx_np(RENAME_SWAP)` atomically exchanges existing
+directories, files and links with their replacements; installations are never
+moved away before a replacement is present.
+
+Each state operation first checks for an abandoned journal under the scope
+lock. Before the journal's durable commit point, recovery restores all backups;
+after it, recovery finishes cleanup. Backups remain available until rollback
+or commit is durable, so recovery itself can be interrupted and repeated.
+Recovery throws `CoreError.transactionRecovered` after completing, reporting
+the scope and asking the caller to retry against the recovered generation.
+This also applies to inventory, previews and doctor. Corrupt journals stop the
+operation without guessing a recovery plan.
 
 ## Materialization and Installation
 
@@ -103,7 +120,10 @@ Exact trees are extracted with Git archive and contain no repository metadata.
 Consumers of the same source and revision share a materialized directory.
 
 `link` points an agent's skill entry at verified cached content. `copy` installs
-that content as a directory. `edit` points directly at a live local skill
+that content as a directory and rejects links escaping the installed subtree.
+Links to content within the same project or user state root are relative, so
+moving that root preserves them; external live edit links are absolute.
+`edit` points directly at a live local skill
 without pin or hash and requires a source without a requirement. Local
 non-Git directories support edit mode. Git-backed link and copy operations read
 committed trees, including when the source has uncommitted changes.
@@ -113,7 +133,11 @@ Inspection snapshots are disposable and do not move an installed tree or write
 state or targets. Applying prepares all selected content, computes differences,
 stages replacements, and commits target changes and state under the scope lock.
 Pruning participates in that transaction. Pins referenced by skills, instruction
-sections or prompt sections remain cached. Mirrors remain available for source
+sections or prompt sections remain cached, as do trees containing live edit
+sources. Pruning opens directory ancestry without following symlinks and uses
+directory-relative enumeration, rename and deletion. It rejects symlinked cache
+containers and never recursively follows a link during cleanup.
+Mirrors remain available for source
 history and future resolution.
 
 Doctor reports missing installs, changed content and broken links, newer

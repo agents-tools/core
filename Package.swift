@@ -24,7 +24,9 @@ let package = Package(
       dependencies: ["AgentsCore", .product(name: "Markdown", package: "swift-markdown")]
     ),
     .target(name: "AgentsSkills", dependencies: ["AgentsCore", "Yams"]),
-    .testTarget(name: "AgentsCoreTests", dependencies: ["AgentsCore"]),
+    .executableTarget(
+      name: "StateTestProcess", dependencies: ["AgentsCore"], path: "Tests/StateTestProcess"),
+    .testTarget(name: "AgentsCoreTests", dependencies: ["AgentsCore", "StateTestProcess"]),
     .testTarget(name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions"]),
     .testTarget(name: "AgentsSkillsTests", dependencies: ["AgentsSkills", "AgentsCore", "Yams"]),
   ],

@@ -21,12 +21,20 @@ public struct StateStore: Sendable {
   public var cacheDirectory: URL { directory.appendingPathComponent("cache") }
 
   public func loadDeclaration() throws -> Declaration {
+    try withLock(createIfMissing: false) { try readDeclaration() }
+  }
+
+  package func readDeclaration() throws -> Declaration {
     let declaration: Declaration = try load(declarationURL) ?? Declaration()
     try declaration.validate(environment: environment)
     return declaration
   }
 
   public func loadResolved() throws -> ResolvedState {
+    try withLock(createIfMissing: false) { try readResolved() }
+  }
+
+  package func readResolved() throws -> ResolvedState {
     let lock: ResolvedState = try load(resolvedURL) ?? ResolvedState()
     try lock.validate()
     return lock
@@ -34,14 +42,12 @@ public struct StateStore: Sendable {
 
   /// Serializes cooperating writers and atomically replaces each state file.
   public func save(declaration: Declaration, resolved: ResolvedState) throws {
-    try declaration.validate(environment: environment)
-    try resolved.validate()
-    _ = try loadDeclaration()
-    _ = try loadResolved()
     try withLock {
-      _ = try loadDeclaration()
-      _ = try loadResolved()
-      let transaction = FileTransaction()
+      try declaration.validate(environment: environment)
+      try resolved.validate()
+      _ = try readDeclaration()
+      _ = try readResolved()
+      let transaction = FileTransaction(store: self)
       try transaction.replace(
         declarationURL, content: nil, data: Self.encode(declaration.normalized))
       try transaction.replace(resolvedURL, content: nil, data: Self.encode(resolved.normalized))
@@ -49,8 +55,24 @@ public struct StateStore: Sendable {
     }
   }
 
-  package func withLock<T>(_ body: () throws -> T) throws -> T {
-    try FileLock.withLock(at: directory.appendingPathComponent(".agents.lock"), body)
+  package func withLock<T>(createIfMissing: Bool = true, _ body: () throws -> T) throws -> T {
+    if !createIfMissing, !FileManager.default.fileExists(atPath: directory.path) {
+      return try body()
+    }
+    if !FileManager.default.fileExists(
+      atPath: directory.appendingPathComponent(".agents.lock").path),
+      !FileManager.default.fileExists(
+        atPath: directory.appendingPathComponent("transaction.json").path)
+    {
+      _ = try readDeclaration()
+      _ = try readResolved()
+    }
+    return try FileLock.withLock(at: directory.appendingPathComponent(".agents.lock")) {
+      if try FileTransaction.recover(store: self) {
+        throw CoreError.transactionRecovered(directory.path)
+      }
+      return try body()
+    }
   }
 
   package static func encode<T: Encodable>(_ value: T) throws -> Data {

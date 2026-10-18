@@ -345,7 +345,7 @@ enum Discovery {
   private static func projectInstalledAgentSkillNames(base: URL) -> Set<String> {
     let environment = RuntimeEnvironment(projectDirectory: base)
     // Source-owned resolved state is only a hint for excluding installed copies.
-    let lock = try? StateStore(scope: .project, environment: environment).loadResolved()
+    let lock = try? StateStore(scope: .project, environment: environment).readResolved()
     return Set(lock?.skills.keys.map { $0 } ?? [])
   }
 }

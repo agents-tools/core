@@ -28,7 +28,9 @@ package struct SourceCache {
 
   package func artifactURL(digest: String) throws -> URL {
     try StateValidation.digest(digest)
-    return store.cacheDirectory.appendingPathComponent("artifacts/\(digest.dropFirst(7))")
+    let url = store.cacheDirectory.appendingPathComponent("artifacts/\(digest.dropFirst(7))")
+    try validatePath(url, directory: false)
+    return url
   }
 
   /// Fetching only changes the bare mirror. No installed or materialized tree moves.
@@ -89,6 +91,8 @@ package struct SourceCache {
     else {
       throw CoreError.invalidState("materialization requires an exact commit")
     }
+    try validatePath(materializedURL(sourceID: sourceID, revision: revision))
+    try validatePath(store.cacheDirectory.appendingPathComponent("locks"))
     return try FileLock.withLock(
       at: store.cacheDirectory.appendingPathComponent("locks/\(key(sourceID))-\(revision).lock")
     ) {
@@ -111,6 +115,7 @@ package struct SourceCache {
     else {
       throw CoreError.invalidState("materialization requires an exact commit")
     }
+    try validatePath(mirrorURL(sourceID: sourceID))
     var mirror = mirrorURL(sourceID: sourceID)
     if (try? git(mirror, ["cat-file", "-e", revision + "^{commit}"])) == nil {
       mirror = try fetch(declaration(sourceID: sourceID, source: source), id: sourceID)
@@ -148,14 +153,19 @@ package struct SourceCache {
     return url
   }
 
-  /// Keep every pin referenced by either kind, including named prompts.
+  /// Retains pins and any cache tree containing a live edit source.
+  /// The caller holds the scope lock, including during failure cleanup.
   package func prune(referencedBy lock: ResolvedState, transaction: FileTransaction? = nil) throws {
+    let scope = try DirectoryHandle(at: store.directory.resolvingSymlinksInPath())
+    guard try scope.info("cache") != nil else { return }
+    let cache = try scope.child("cache")
+    let transactionToUse = transaction ?? FileTransaction(store: store)
     var paths = Set<String>()
     var digests = Set<String>()
+    var edits: [URL] = []
     func retain(source: String, revision: String?, artifact: LockedArtifact?) {
       if let revision {
-        paths.insert(
-          materializedURL(sourceID: source, revision: revision).resolvingSymlinksInPath().path)
+        paths.insert(materializedURL(sourceID: source, revision: revision).standardizedFileURL.path)
       }
       if let artifact {
         digests.insert(String(artifact.digest.dropFirst(7)))
@@ -164,35 +174,69 @@ package struct SourceCache {
     }
     for skill in lock.skills.values {
       retain(source: skill.source, revision: skill.revision, artifact: skill.artifact)
+      if skill.installs.values.contains(.edit), let source = lock.sources[skill.source] {
+        let local = try declaration(sourceID: skill.source, source: source).localURL(
+          environment: store.environment)
+        edits.append(
+          try PathSafety.resolvedChild(base: local, subpath: skill.path ?? ".")
+            .resolvingSymlinksInPath())
+      }
     }
     for section in lock.instructions.sections + lock.instructions.chatgpt.values.flatMap(\.sections)
     {
       retain(source: section.source, revision: section.revision, artifact: section.artifact)
     }
-    func remove(_ url: URL) throws {
-      if let transaction {
-        try transaction.replace(url, content: nil)
-      } else {
-        try FileManager.default.removeItem(at: url)
+    func edited(_ url: URL) -> Bool {
+      edits.contains { PathSafety.isContained($0, in: url) }
+    }
+    if try cache.info("materialized") != nil {
+      let materialized = try cache.child("materialized")
+      for name in try materialized.names() {
+        let source = try materialized.child(name)
+        let pins = try source.names()
+        var unused: [String] = []
+        for pin in pins {
+          let tree = try source.child(pin)
+          if !paths.contains(tree.url.path) && !edited(tree.url) { unused.append(pin) }
+        }
+        if unused.count == pins.count {
+          try transactionToUse.remove(name, from: materialized)
+        } else {
+          for pin in unused { try transactionToUse.remove(pin, from: source) }
+        }
       }
     }
-    let materialized = store.cacheDirectory.appendingPathComponent("materialized")
-    for source in try children(materialized) {
-      let pins = try children(source)
-      let unused = pins.filter { !paths.contains($0.resolvingSymlinksInPath().path) }
-      if unused.count == pins.count {
-        try remove(source)
-      } else {
-        for pin in unused { try remove(pin) }
+    for container in ["artifacts", "artifact-content"] where try cache.info(container) != nil {
+      let directory = try cache.child(container)
+      for name in try directory.names() {
+        let url = directory.url.appendingPathComponent(name)
+        if container == "artifact-content" {
+          _ = try directory.child(name)
+        } else if (try directory.info(name)?.st_mode ?? 0) & 0o170000 != 0o100000 {
+          throw CoreError.unsafePath("unexpected artifact cache entry")
+        }
+        if !digests.contains(name) && !edited(url) {
+          try transactionToUse.remove(name, from: directory)
+        }
       }
     }
-    for artifact in try children(store.cacheDirectory.appendingPathComponent("artifacts"))
-    where !digests.contains(artifact.lastPathComponent) {
-      try remove(artifact)
-    }
-    for artifact in try children(store.cacheDirectory.appendingPathComponent("artifact-content"))
-    where !digests.contains(artifact.lastPathComponent) {
-      try remove(artifact)
+    if transaction == nil { try transactionToUse.commit() }
+  }
+
+  package func validatePath(_ url: URL, directory: Bool = true) throws {
+    guard FileManager.default.fileExists(atPath: store.directory.path) else { return }
+    var parent = try DirectoryHandle(at: store.directory.resolvingSymlinksInPath())
+    let relative = PathSafety.relativePath(url.path, to: store.directory.path)
+    let parts = try PathSafety.sanitizeSubpath(relative).split(separator: "/").map(String.init)
+    for (index, name) in parts.enumerated() {
+      guard let info = try parent.info(name) else { return }
+      if index == parts.count - 1 && !directory {
+        guard info.st_mode & 0o170000 == 0o100000 else {
+          throw CoreError.unsafePath("unexpected cache file")
+        }
+      } else {
+        parent = try parent.child(name)
+      }
     }
   }
 
@@ -210,6 +254,8 @@ package struct SourceCache {
   }
 
   private func fetch(_ source: SourceDeclaration, id: String) throws -> URL {
+    try validatePath(mirrorURL(sourceID: id))
+    try validatePath(store.cacheDirectory.appendingPathComponent("locks"))
     return try FileLock.withLock(
       at: store.cacheDirectory.appendingPathComponent("locks/\(key(id)).lock")
     ) {
@@ -258,12 +304,6 @@ package struct SourceCache {
   private func key(_ sourceID: String) -> String {
     String(PathSafety.sanitizeName(sourceID).prefix(60)) + "-"
       + FileHash.sha256Hex(data: Data(sourceID.utf8))
-  }
-
-  private func children(_ directory: URL) throws -> [URL] {
-    guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
-    return try FileManager.default.contentsOfDirectory(
-      at: directory, includingPropertiesForKeys: nil)
   }
 
   private func validateTree(_ tree: URL) throws {

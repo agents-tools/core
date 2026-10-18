@@ -8,6 +8,8 @@ public enum CoreError: Error, CustomStringConvertible, Equatable {
   case invalidSkill(String)
   case invalidState(String)
   case commandFailed(String)
+  /// Recovery completed; retry the operation against the recovered state.
+  case transactionRecovered(String)
 
   public var description: String {
     switch self {
@@ -23,6 +25,8 @@ public enum CoreError: Error, CustomStringConvertible, Equatable {
       return "Invalid skill: \(message)"
     case .invalidState(let message):
       return "Invalid state: \(message)"
+    case .transactionRecovered(let path):
+      return "Recovered interrupted transaction at \(path); retry the command"
     case .commandFailed(let message):
       return "Command failed: \(message)"
     }

@@ -96,3 +96,64 @@ struct SourceCacheTests {
       ).stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "fixture")
   }
 }
+
+extension SourceCacheTests {
+  @Test(arguments: ["cache", "materialized", "source", "pin"])
+  func rejectsSymlinkedCacheAncestryWithoutDeletingExternalFiles(_ level: String) throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
+    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    let cache = SourceCache(store: store)
+    let id = "local:/fixture"
+    let revision = String(repeating: "a", count: 40)
+    let pin = cache.materializedURL(sourceID: id, revision: revision)
+    let source = pin.deletingLastPathComponent()
+    let external = root.appendingPathComponent("external")
+    try FileManager.default.createDirectory(
+      at: external.appendingPathComponent(revision), withIntermediateDirectories: true)
+    try Data("keep".utf8).write(to: external.appendingPathComponent("unrelated"))
+    let link: URL
+    switch level {
+    case "cache": link = store.cacheDirectory
+    case "materialized": link = store.cacheDirectory.appendingPathComponent("materialized")
+    case "source": link = source
+    default: link = pin
+    }
+    try FileManager.default.createDirectory(
+      at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: external)
+    let state = ResolvedState(
+      sources: [id: LockedSource(kind: .local)],
+      skills: [
+        "demo": LockedSkill(
+          source: id, revision: revision, path: ".",
+          hash: "sha256:" + String(repeating: "b", count: 64), installs: ["codex": .link])
+      ])
+    #expect(throws: CoreError.self) { try cache.prune(referencedBy: state) }
+    #expect(
+      try String(contentsOf: external.appendingPathComponent("unrelated"), encoding: .utf8)
+        == "keep")
+    #expect(FileManager.default.fileExists(atPath: external.appendingPathComponent(revision).path))
+  }
+
+  @Test func retainsArtifactContentContainingLiveEditSources() throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
+    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    let content = store.cacheDirectory.appendingPathComponent(
+      "artifact-content/" + String(repeating: "a", count: 64))
+    try FileManager.default.createDirectory(
+      at: content.appendingPathComponent("nested"), withIntermediateDirectories: true)
+    try Data("live".utf8).write(to: content.appendingPathComponent("nested/SKILL.md"))
+    let id = "local:" + content.path
+    let state = ResolvedState(
+      sources: [id: LockedSource(kind: .local)],
+      skills: ["live": LockedSkill(source: id, path: "nested", installs: ["codex": .edit])])
+    try SourceCache(store: store).prune(referencedBy: state)
+    #expect(
+      FileManager.default.fileExists(atPath: content.appendingPathComponent("nested/SKILL.md").path)
+    )
+  }
+}

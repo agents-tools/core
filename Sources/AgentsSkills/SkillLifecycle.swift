@@ -167,6 +167,7 @@ final class SkillLifecycle {
         throw CoreError.invalidState("missing locked revision or path")
       }
       let cached = cache.materializedURL(sourceID: skill.source, revision: revision)
+      try cache.validatePath(cached)
       let root: URL
       if FileManager.default.fileExists(atPath: cached.path) {
         root = cached
@@ -193,7 +194,7 @@ final class SkillLifecycle {
   ) throws -> [InstallResult] {
     try declaration.validate(environment: store.environment)
     try next.validate()
-    let transaction = FileTransaction()
+    let transaction = FileTransaction(store: store)
     let oldTargets = try targets(previous)
     let newTargets = try targets(next)
     var results: [InstallResult] = []
@@ -217,6 +218,7 @@ final class SkillLifecycle {
           for (digest, data) in item.payloads { _ = try cache.storeArtifact(data, digest: digest) }
           let content = store.cacheDirectory.appendingPathComponent(
             "artifact-content/\(artifact.digest.dropFirst(7))", isDirectory: true)
+          try cache.validatePath(content)
           if FileManager.default.fileExists(atPath: content.path) {
             guard try "sha256:" + FileHash.folderHash(content) == skill.hash else {
               throw CoreError.invalidState("cached artifact content mismatch")
@@ -256,7 +258,7 @@ final class SkillLifecycle {
       try cache.prune(referencedBy: next, transaction: transaction)
       try transaction.commit()
     } catch {
-      try? cache.prune(referencedBy: previous)
+      if let recovered = try? store.readResolved() { try? cache.prune(referencedBy: recovered) }
       throw error
     }
     for name in names.sorted() {
