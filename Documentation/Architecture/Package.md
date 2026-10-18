@@ -2,7 +2,8 @@
 
 ## Purpose and Consumers
 
-The SwiftPM package `core` provides the shared engine for agent skill management.
+The SwiftPM package `core` provides shared libraries for agent skill management
+and instruction text transformations.
 Its consumers are `agents` in `agents-tools/cli` and `skill` in `skill-cli/cli`.
 Those repositories own their command trees, argument parsing, terminal output,
 and executable distribution. Their dependency integration is separate work.
@@ -17,13 +18,16 @@ AgentsSkills ──> AgentsCore
       │
       └───────> Yams
 
+AgentsInstructions ──> AgentsCore
+
 AgentsCoreTests ──> AgentsCore
 AgentsSkillsTests ──> AgentsSkills, AgentsCore, Yams
+AgentsInstructionsTests ──> AgentsInstructions
 ```
 
-Both `AgentsCore` and `AgentsSkills` are library products with matching targets
-under `Sources/`. Each has a test target under `Tests/`. Package-private helpers
-use Swift's `package` access level when needed across targets; other
+`AgentsCore`, `AgentsSkills`, and `AgentsInstructions` are library products with
+matching targets under `Sources/`. Each has a test target under `Tests/`.
+Package-private helpers use Swift's `package` access level when needed across targets; other
 implementation details are internal or private.
 
 ## AgentsCore
@@ -79,6 +83,31 @@ Consumers use that configured watch service for skill workflows. A standalone
 `WatchService()` reads the current JSON ledger. Both use the same core watch
 bookkeeping and JSON writer.
 
+## AgentsInstructions
+
+`Instructions` validates source bytes into immutable `InstructionSection`
+values, assembles or removes managed blocks, detects drift, renders ChatGPT
+prompts, and compares source-qualified identities across scopes. Its Markdown
+scanner recognizes ATX and Setext headings and fixed marker lines, excluding
+fenced and indented code, HTML comments, and standard HTML blocks. Sources
+require one initial H1 and ATX headings throughout.
+
+Assembly returns bytes, heading offset, the rendered block and its hash,
+adoptions, conflicts, a block difference, and whether custom content remains.
+The caller chooses whether to replace conflicting custom sections and supplies
+the locked heading offset for installation. Existing managed content is
+rendered anew; lifecycle callers check drift before deciding to persist it.
+Source hashes cover original bytes. Block hashes cover LF-normalized marker
+and content lines, including the final LF. Drift detection accepts an optional
+reconstructed locked block for a textual difference; a hash alone establishes
+drift but cannot recover the old text.
+
+`ClaudeForwarding` renders import blocks, recognizes equivalent standalone
+imports, and classifies existing project Claude files from caller-supplied
+bytes and symbolic-link metadata. Callers own ancestor-file warnings, actual
+filesystem access, declaration and lock updates, and deletion decisions using
+the lock's `created` flag. This target performs no I/O.
+
 ## Runtime State
 
 Operations take `RuntimeEnvironment` explicitly. The default environment uses
@@ -111,7 +140,9 @@ Core tests cover source parsing and resolution, semantic versions, paths,
 hashing, lock persistence, agent locations, and watch bookkeeping. Skill tests
 cover discovery, frontmatter, providers, installation workflows, diagnostics,
 and legacy YAML integration. Public workflow tests use ordinary imports to
-exercise consumer-visible operations.
+exercise consumer-visible operations. Instruction tests cover source validation,
+managed-block assembly and removal, byte preservation, drift, Claude forwarding,
+and ChatGPT rendering through public APIs with in-memory fixtures.
 
 Current architecture lives here. `../Proposals/` contains design work;
 `../Decisions/`, `../Migrations/`, and `../Archive/` retain historical records
