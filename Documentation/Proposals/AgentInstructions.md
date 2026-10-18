@@ -36,7 +36,8 @@ The skill implementation this package starts from has related gaps:
   declaration, lock and lifecycle commands.
 - Make every managed instruction section traceable to a source and a locked
   version, keep owner-written content editable, and make drift detectable.
-- Render instructions as a prompt for ChatGPT.
+- Render instructions as named prompts for ChatGPT project instructions and
+  scheduled tasks.
 - Restore exactly what the lock records; re-resolve only on `add` and `update`.
 - Report what changed upstream in subscribed sources.
 
@@ -71,7 +72,7 @@ writes the same declaration, lock and watch state and leaves the
 | Skill | A directory with a `SKILL.md`, loaded by agents on demand |
 | Instructions | One Markdown file in a source, loaded by agents in every session |
 | Section | The content of one instructions file as written into a target |
-| Target | A file that agents read instructions from, or the ChatGPT prompt |
+| Target | A file that agents read instructions from, or a named ChatGPT prompt |
 | Managed block | The part of a target file that the tool writes from sources |
 | Custom content | Everything in a target outside the managed block; it belongs to the target's owner |
 | Declaration | What the user wants: sources, selected skills and sections, agents, subscriptions |
@@ -124,8 +125,8 @@ Two declared sources that normalize to the same ID are an error.
 
 | Scope | Declaration | Lock | Watch state | Targets |
 | --- | --- | --- | --- | --- |
-| Project | `.agent/agents.json` | `.agent/agents.resolved` | `.agent/agents.watch` | Project skills; `AGENTS.md`, `GEMINI.md` and Claude forwarding at the project root; the ChatGPT prompt |
-| User | `~/.agents/agents.json` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | User skills; each agent's user instructions file; the ChatGPT prompt |
+| Project | `.agent/agents.json` | `.agent/agents.resolved` | `.agent/agents.watch` | Project skills; `AGENTS.md`, `GEMINI.md` and Claude forwarding at the project root; ChatGPT prompts |
+| User | `~/.agents/agents.json` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | User skills; each agent's user instructions file; ChatGPT prompts |
 
 All three files are local state and are not committed. The project's state
 lives inside the project, so moving a repository moves its state. User state is
@@ -155,7 +156,13 @@ Commands edit the declaration; editing it by hand is possible.
   "instructions": {
     "agents": ["codex", "claude-code", "cursor", "opencode"],
     "sections": ["rules:canonical-artifacts", "rules:first-principles-work"],
-    "chatgpt": ".agent/chatgpt.md"
+    "chatgpt": {
+      "training": {
+        "sections": ["rules:canonical-artifacts", "rules:training-logging"],
+        "append": ".agent/chatgpt-training.md"
+      },
+      "weekly-export": { "sections": ["rules:weekly-nutrition-export"] }
+    }
   },
   "watch": ["anthropic"]
 }
@@ -179,8 +186,10 @@ Commands edit the declaration; editing it by hand is possible.
 - `instructions` holds one ordered section list per scope, written to the
   instruction file of every listed agent. Every change to the list or its pins
   is applied to all listed targets together; `--agent` on instruction
-  commands sets the list of recipients. `chatgpt` names an optional
-  custom-content file, relative to the scope root, appended by `render`.
+  commands sets the list of recipients.
+- `chatgpt` names prompts for ChatGPT project instructions and scheduled
+  tasks. Each prompt has its own ordered section list and an optional
+  custom-content file, relative to the scope root, that `render` appends.
 - `watch` lists the aliases of subscribed sources. A source can be subscribed
   without selecting anything from it.
 
@@ -249,6 +258,19 @@ Commands edit the declaration; editing it by hand is possible.
         "hash": "sha256:…"
       }
     ],
+    "chatgpt": {
+      "weekly-export": {
+        "sections": [
+          {
+            "name": "weekly-nutrition-export",
+            "source": "local:/Users/me/Developer/rules",
+            "revision": "a03a475f0c1d2e3b4a5968778695a4b3c2d1e0f9",
+            "path": "instructions/weekly-nutrition-export.md",
+            "hash": "sha256:…"
+          }
+        ]
+      }
+    },
     "targets": {
       "AGENTS.md": {
         "agents": ["codex", "claude-code", "cursor", "opencode"],
@@ -326,7 +348,7 @@ agents
 │   ├── list [source]
 │   ├── remove <names…>
 │   ├── update [--apply]
-│   ├── render chatgpt
+│   ├── render chatgpt <prompt>
 │   └── init <name>
 ├── watch
 │   ├── add <source>
@@ -347,12 +369,12 @@ in every command except `install`. `--agent` defaults to the declaration's
 | Command | Behavior |
 | --- | --- |
 | `add` | Update the declaration, resolve, write, update the lock. Any stop leaves the declaration, lock and files unchanged |
-| `update` | Re-resolve the declaration and show what would change against the files on disk. `--apply` writes the resolved content and the new lock together, showing the difference before it replaces drifted or conflicting content. Without names it reconciles `"all"` selections with the source's membership; with names it touches only those skills, and a named skill missing upstream is an error |
+| `update` | Re-resolve the declaration and show what would change against the files on disk. `--apply` writes the resolved content and the new lock together, showing the difference before it replaces drifted or conflicting content. Without names it reconciles `"all"` selections with the source's membership; with names it touches only those skills, and a named skill missing upstream is an error. `--apply` lists the ChatGPT prompts whose content changed, since ChatGPT has to be updated by pasting the new render |
 | `install` | Restore skills and managed blocks exactly as the lock records them, without resolving. It takes no `--agent` or `--mode` |
 | `list` | Installed skills, or managed sections and targets; with a source, what it provides |
 | `remove` | Remove from the declaration, files and lock |
 | `init` | Create a skill directory or an instructions file in the current directory |
-| `render` | Print the locked sections followed by the declared `chatgpt` file, without markers. Without locked sections it is an error |
+| `render` | Print a ChatGPT prompt: its locked sections followed by its custom-content file, without markers. A prompt without locked sections is an error |
 | `watch add` | Subscribe and record the source's current revision as seen |
 | `watch status` | Report each subscribed source since its seen revision, per skill and instructions: new, changed, removed |
 | `watch diff` | Show the changes behind `status`, for one source or one item |
@@ -383,7 +405,7 @@ behavior: `skill add|list|remove|update|init|install|doctor|watch …`.
 | `cursor` | Not file-based | `AGENTS.md` |
 | `opencode` | `$XDG_CONFIG_HOME/opencode/AGENTS.md`, default `~/.config/opencode/AGENTS.md` | `AGENTS.md` |
 | `gemini-cli` | `~/.gemini/GEMINI.md` | `GEMINI.md` |
-| `chatgpt` | Rendered prompt, no file | Rendered prompt, no file |
+| `chatgpt` | Named rendered prompts, no file | Named rendered prompts, no file |
 
 Claude Code reads a project's `AGENTS.md` only when no `CLAUDE.md`,
 `.claude/CLAUDE.md` or `CLAUDE.local.md` exists in the working directory or
@@ -472,8 +494,10 @@ contain exactly the expected block; otherwise nothing is written.
 11. A section installed at both user and project scope produces a `doctor`
     warning.
 
-`agents instructions render chatgpt` prints the locked sections in order with
-their source headings, followed by the declared `chatgpt` file.
+`agents instructions render chatgpt <prompt>` prints the prompt's locked
+sections in order with their source headings, followed by its custom-content
+file. The output is pasted into ChatGPT, for example with `pbcopy`; the tool
+does not write to ChatGPT.
 
 A lost lock is not restored exactly, because headings do not identify a pin.
 `update` re-resolves the declaration and reports how the result compares with
