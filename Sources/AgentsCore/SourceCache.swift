@@ -520,11 +520,12 @@ package struct SourceCache {
     try validatePath(locks)
     let lock = locks.appendingPathComponent(
       mirror.deletingPathExtension().lastPathComponent + ".lock")
-    try checkpoint("mirror.lock.waiting")
-    return try FileLock.withDescriptor(at: lock) { descriptor in
-      try validatePath(mirror)
-      return try body(descriptor)
-    }
+    return try FileLock.withDescriptor(
+      at: lock, checkpoint: { try checkpoint("mirror." + $0) },
+      { descriptor in
+        try validatePath(mirror)
+        return try body(descriptor)
+      })
   }
 
   func git(_ repository: URL, _ arguments: [String]) throws -> String {

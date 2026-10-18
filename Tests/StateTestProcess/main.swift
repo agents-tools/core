@@ -29,8 +29,10 @@ if arguments[2] == "instruction-list" {
     discoverSkills: { _ in [] },
     fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
     checkpoint: { step in
-      if step == "mirror.lock.waiting" {
-        try Data().write(to: root.appendingPathComponent("writer-waiting"))
+      if step == "mirror.lock.contended" {
+        let signal = try FileHandle(forWritingTo: root.appendingPathComponent("writer-contended"))
+        defer { try? signal.close() }
+        try signal.write(contentsOf: Data("contended\n".utf8))
       }
     })
   func acknowledge() throws {

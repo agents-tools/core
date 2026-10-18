@@ -31,8 +31,18 @@ package enum FileLock {
     guard fstat(descriptor, &info) == 0, info.st_mode & 0o170000 == 0o100000 else {
       throw CoreError.unsafePath("writer lock must be a regular file: \(url.path)")
     }
-    while flock(descriptor, LOCK_EX) != 0 {
-      if errno != EINTR { throw CoreError.invalidState("cannot acquire writer lock: \(url.path)") }
+    while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+      if errno == EINTR { continue }
+      guard errno == EWOULDBLOCK else {
+        throw CoreError.invalidState("cannot acquire writer lock: \(url.path)")
+      }
+      try checkpoint("lock.contended")
+      while flock(descriptor, LOCK_EX) != 0 {
+        if errno != EINTR {
+          throw CoreError.invalidState("cannot acquire writer lock: \(url.path)")
+        }
+      }
+      break
     }
     return try body(descriptor)
   }
