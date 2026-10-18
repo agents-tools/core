@@ -24,4 +24,5 @@ default.
 - Put historical records in `Decisions/`, `Migrations/`, and `Archive/`.
 - Put supporting reference material in `Reference/`.
 - Keep DocC catalogs with their SwiftPM targets.
-- Keep GitHub-facing governance in `.github/`, not here.
+- Keep GitHub-facing workflow metadata in `.github/`; community files and
+  templates use the organization defaults in `agents-tools/.github`.
