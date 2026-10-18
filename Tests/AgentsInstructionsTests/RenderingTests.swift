@@ -59,12 +59,12 @@ struct InstructionRenderingTests {
       Data(), sections: [source()], options: .init(headingOffset: 1))
     #expect(first.blockHash != shifted.blockHash)
     #expect(try first.blockHash != source().hash)
-    let indentedMarker = " " + text(first)
+    let paddedContent = text(first).replacingOccurrences(of: "Use care.", with: "Use care. ")
     guard
       case .drifted = try Instructions.detectDrift(
-        in: Data(indentedMarker.utf8), lockedBlockHash: #require(first.blockHash))
+        in: Data(paddedContent.utf8), lockedBlockHash: #require(first.blockHash))
     else {
-      Issue.record("Marker indentation is block drift")
+      Issue.record("Content whitespace is block drift")
       return
     }
   }
@@ -133,13 +133,13 @@ struct ClaudeForwardingTests {
     #expect(try ClaudeForwarding.containsImport(in: Data(rendered.utf8), at: path))
   }
 
-  @Test(arguments: ["@AGENTS.md", "@./AGENTS.md", "@rules/../AGENTS.md", "@\"AGENTS.md\""])
-  func recognizesEquivalentStandaloneImport(_ line: String) throws {
+  @Test(arguments: ["@AGENTS.md", "@./AGENTS.md", "@rules/../AGENTS.md", "See @AGENTS.md"])
+  func recognizesEquivalentImport(_ line: String) throws {
     #expect(
       try ClaudeForwarding.containsImport(in: Data(("# Guide\n\n" + line + "\n").utf8), at: .root))
   }
 
-  @Test(arguments: ["@AGENTS.md", "@../../AGENTS.md", "See @../AGENTS.md", "@../AGENTS.md other"])
+  @Test(arguments: ["@AGENTS.md", "@../../AGENTS.md", "@\"../AGENTS.md\"", "@../AGENTS.md/"])
   func rejectsWrongDirectoryImport(_ line: String) throws {
     #expect(try !ClaudeForwarding.containsImport(in: Data(line.utf8), at: .directory))
   }

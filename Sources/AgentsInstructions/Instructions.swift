@@ -8,7 +8,7 @@ public enum Instructions {
     func invalid(_ reason: String) -> InstructionError {
       .invalidSource(id: id, reason: reason)
     }
-    guard let first = document.headings.first, first.level == 1, first.isATX,
+    guard let first = document.topLevelHeadings.first, first.level == 1, first.isATX,
       document.lines[..<first.lines.lowerBound].allSatisfy(\.isBlank)
     else {
       throw invalid("the file must start with a level-1 ATX heading.")
@@ -20,6 +20,7 @@ public enum Instructions {
       throw invalid("Setext headings are not allowed; use ATX headings.")
     }
     guard !document.endsInCode else { throw invalid("the file ends inside a code block.") }
+    guard !document.endsInHTML else { throw invalid("the file ends inside an HTML block.") }
     guard document.markers.isEmpty else { throw invalid("managed marker lines are not allowed.") }
     let content = MarkdownDocument.content(document.lines[...])
     return InstructionSection(
@@ -38,7 +39,7 @@ public enum Instructions {
     let document = try MarkdownDocument(bytes: bytes)
     let oldBlock = try document.managedBlock()
     let selectedHeadings = Set(sections.map(\.heading))
-    let title = document.headings.first {
+    let title = document.topLevelHeadings.first {
       $0.level == 1 && $0.lines.lowerBound < (oldBlock?.lowerBound ?? document.lines.count)
         && !selectedHeadings.contains($0.key)
     }
@@ -49,16 +50,15 @@ public enum Instructions {
     var adopted: [String] = []
     var conflicts: [InstructionConflict] = []
     for (section, content) in zip(sections, rendered) {
-      let matches = document.headings.filter {
-        $0.level == 1 + offset && $0.key == section.heading
-          && !(oldBlock?.contains($0.lines.lowerBound) ?? false)
+      let identity = HeadingIdentity(level: 1 + offset, text: section.heading)
+      let matches = (document.sections[identity] ?? []).filter {
+        !(oldBlock?.contains($0.lowerBound) ?? false)
       }
       if matches.count > 1 {
         throw InstructionError.ambiguousMatch(
-          sectionID: section.id, lines: matches.map { $0.lines.lowerBound + 1 })
+          sectionID: section.id, lines: matches.map { $0.lowerBound + 1 })
       }
-      if let match = matches.first {
-        let range = document.sectionRange(match)
+      if let range = matches.first {
         let existing = MarkdownDocument.content(document.lines[range])
         removals.append(range)
         if existing.utf8.elementsEqual(content.utf8) {
@@ -82,15 +82,20 @@ public enum Instructions {
       insertion = earliest
     } else if let title {
       insertion =
-        document.headings.first { $0.lines.lowerBound >= title.lines.upperBound }?
+        document.topLevelHeadings.first { $0.lines.lowerBound >= title.lines.upperBound }?
         .lines.lowerBound ?? document.lines.count
     } else {
       insertion = 0
     }
     var prefix: [MarkdownLine] = []
     var suffix: [MarkdownLine] = []
-    for (index, line) in document.lines.enumerated()
-    where !removals.contains(where: { $0.contains(index) }) {
+    removals.sort { $0.lowerBound < $1.lowerBound }
+    var removalIndex = 0
+    for (index, line) in document.lines.enumerated() {
+      while removalIndex < removals.count, removals[removalIndex].upperBound <= index {
+        removalIndex += 1
+      }
+      if removalIndex < removals.count, removals[removalIndex].contains(index) { continue }
       if index < insertion { prefix.append(line) } else { suffix.append(line) }
     }
     // Exactly one adjacent blank belongs to the block; any additional blanks remain custom bytes.
@@ -198,13 +203,13 @@ public enum Instructions {
 
   static func separatedPrefix(_ text: String) -> String {
     guard !text.isEmpty else { return "" }
-    return text + (text.utf8.last == 10 || text.utf8.last == 13 ? "\n" : "\n\n")
+    return text + (text.utf8.last == 10 ? "\n" : "\n\n")
   }
 
   private static func validateSelection(_ sections: [InstructionSection]) throws {
+    let byHeading = Dictionary(grouping: sections, by: \.heading)
     for section in sections {
-      let duplicates = sections.filter { $0.heading == section.heading }
-      if duplicates.count > 1 {
+      if let duplicates = byHeading[section.heading], duplicates.count > 1 {
         throw InstructionError.duplicateHeading(
           heading: section.heading, sectionIDs: duplicates.map(\.id))
       }
@@ -219,15 +224,16 @@ public enum Instructions {
           sectionID: section.id, level: heading.level, offset: offset)
       }
       let line = heading.lines.lowerBound
-      let index = lines[line].firstIndex(of: "#")!
+      let index = lines[line].utf8.index(
+        lines[line].utf8.startIndex, offsetBy: heading.openingOffset!)
       lines[line].insert(contentsOf: String(repeating: "#", count: offset), at: index)
     }
     return lines.joined(separator: "\n")
   }
 
   static func difference(from old: String, to new: String) -> String {
-    let before = MarkdownDocument(old).lines.map(\.text)
-    let after = MarkdownDocument(new).lines.map(\.text)
+    let before = MarkdownLine.parse(old).map(\.text)
+    let after = MarkdownLine.parse(new).map(\.text)
     let changes = after.map { Data($0.utf8) }.difference(from: before.map { Data($0.utf8) })
     var removed: Set<Int> = []
     var inserted: Set<Int> = []

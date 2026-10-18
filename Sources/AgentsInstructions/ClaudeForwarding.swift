@@ -33,20 +33,50 @@ public enum ClaudeForwarding: Sendable, Equatable {
     MarkdownDocument.begin + "\n" + path.importLine + "\n" + MarkdownDocument.end + "\n"
   }
 
-  /// Recognizes standalone imports inside or outside a managed block, excluding code blocks.
+  /// Recognizes unquoted @path tokens, including prose, outside code spans and code blocks.
   public static func containsImport(in bytes: Data, at path: ClaudeInstructionPath) throws -> Bool {
     let document = try MarkdownDocument(bytes: bytes)
     _ = try document.managedBlock()
-    for index in document.structuralLines {
-      let line = document.lines[index].trimmed
-      guard line.hasPrefix("@") else { continue }
-      var reference = String(line.dropFirst())
-      if reference.hasPrefix("\""), reference.hasSuffix("\""), reference.count >= 2 {
-        reference = String(reference.dropFirst().dropLast())
+    let input = Array(bytes)
+    let delimiters = Set(" \t\r\n\"'`<>[](){};,".utf8)
+    var cursor = 0
+    var codeIndex = 0
+    while cursor < input.count {
+      while codeIndex < document.codeByteRanges.count,
+        document.codeByteRanges[codeIndex].upperBound <= cursor
+      {
+        codeIndex += 1
       }
-      if reference.hasPrefix("/") { continue }
+      if codeIndex < document.codeByteRanges.count,
+        document.codeByteRanges[codeIndex].contains(cursor)
+      {
+        cursor = document.codeByteRanges[codeIndex].upperBound
+        continue
+      }
+      let position = cursor
+      cursor += 1
+      guard input[position] == 64 else { continue }
+      if position > 0 {
+        let previous = input[position - 1]
+        if !delimiters.contains(previous) || previous == 34 || previous == 39 { continue }
+      }
+      var reference: [UInt8] = []
+      while cursor < input.count {
+        let byte = input[cursor]
+        if byte == 92, cursor + 1 < input.count, input[cursor + 1] == 32 {
+          reference.append(32)
+          cursor += 2
+        } else if delimiters.contains(byte) {
+          break
+        } else {
+          reference.append(byte)
+          cursor += 1
+        }
+      }
+      guard !reference.isEmpty, reference.first != 47, reference.last != 47 else { continue }
+      let name = String(decoding: reference, as: UTF8.self)
       var components = path == .directory ? [".claude"] : []
-      for part in reference.split(separator: "/") where part != "." {
+      for part in name.split(separator: "/") where part != "." {
         if part == "..", let last = components.last, last != ".." {
           components.removeLast()
         } else {

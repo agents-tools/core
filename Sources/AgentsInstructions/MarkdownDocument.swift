@@ -1,4 +1,5 @@
 import Foundation
+import Markdown
 
 struct MarkdownLine: Sendable, Equatable {
   let text: String
@@ -6,29 +7,45 @@ struct MarkdownLine: Sendable, Equatable {
   var raw: String { text + ending }
   var isBlank: Bool { text.allSatisfy { $0 == " " || $0 == "\t" } }
 
-  var indentation: Int {
-    var columns = 0
-    for character in text {
-      if character == " " {
-        columns += 1
-      } else if character == "\t" {
-        columns += 4 - columns % 4
+  static func parse(_ text: String) -> [Self] {
+    let bytes = Array(text.utf8)
+    var lines: [Self] = []
+    var start = 0
+    var cursor = 0
+    while cursor < bytes.count {
+      if bytes[cursor] == 10 || bytes[cursor] == 13 {
+        let end = cursor
+        cursor += 1
+        if bytes[end] == 13, cursor < bytes.count, bytes[cursor] == 10 { cursor += 1 }
+        lines.append(
+          Self(
+            text: String(decoding: bytes[start..<end], as: UTF8.self),
+            ending: String(decoding: bytes[end..<cursor], as: UTF8.self)))
+        start = cursor
       } else {
-        break
+        cursor += 1
       }
     }
-    return columns
+    if start < bytes.count {
+      lines.append(Self(text: String(decoding: bytes[start...], as: UTF8.self), ending: ""))
+    }
+    return lines
   }
-
-  var trimmed: String { text.trimmingCharacters(in: .whitespaces) }
 }
 
 struct MarkdownHeading: Sendable, Equatable {
   let level: Int
   let text: String
   let lines: Range<Int>
-  let isATX: Bool
+  /// UTF-8 offset of the ATX opening run, including container prefixes; nil for Setext.
+  let openingOffset: Int?
+  var isATX: Bool { openingOffset != nil }
   var key: String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+}
+
+struct HeadingIdentity: Hashable, Sendable {
+  let level: Int
+  let text: String
 }
 
 struct MarkdownDocument: Sendable, Equatable {
@@ -38,9 +55,12 @@ struct MarkdownDocument: Sendable, Equatable {
 
   let lines: [MarkdownLine]
   var headings: [MarkdownHeading] = []
+  var topLevelHeadings: [MarkdownHeading] = []
   var markers: [Int] = []
-  var structuralLines: Set<Int> = []
+  var sections: [HeadingIdentity: [Range<Int>]] = [:]
+  var codeByteRanges: [Range<Int>] = []
   var endsInCode = false
+  var endsInHTML = false
 
   init(bytes: Data) throws {
     guard let text = String(data: bytes, encoding: .utf8) else {
@@ -50,38 +70,69 @@ struct MarkdownDocument: Sendable, Equatable {
   }
 
   init(_ text: String) {
-    // Splitting UTF-8 avoids treating CRLF as one Swift Character and retains custom bytes.
-    let bytes = Array(text.utf8)
-    var parsed: [MarkdownLine] = []
-    var start = 0
-    var cursor = 0
-    while cursor < bytes.count {
-      if bytes[cursor] == 10 || bytes[cursor] == 13 {
-        let end = cursor
-        cursor += 1
-        if bytes[end] == 13, cursor < bytes.count, bytes[cursor] == 10 { cursor += 1 }
-        parsed.append(
-          MarkdownLine(
-            text: String(decoding: bytes[start..<end], as: UTF8.self),
-            ending: String(decoding: bytes[end..<cursor], as: UTF8.self)))
-        start = cursor
-      } else {
-        cursor += 1
+    lines = MarkdownLine.parse(text)
+    let normalized = normalized(0..<lines.count)
+    let parsed = Document(parsing: normalized, options: [.disableSmartOpts])
+    var starts = [0]
+    for line in lines { starts.append(starts.last! + line.raw.utf8.count) }
+    var pending: [(Markup, Bool, Int)] = [(parsed, false, lines.count)]
+    while let (node, topLevel, containerEnd) = pending.popLast() {
+      if let range = node.range {
+        let first = range.lowerBound.line - 1
+        // cmark can include the first line after a terminated container in a code block's range.
+        let end = min(range.upperBound.line, containerEnd, lines.count)
+        if let heading = node as? Heading {
+          let offset = range.lowerBound.column - 1
+          let bytes = Array(lines[first].text.utf8)
+          let isATX = offset < bytes.count && bytes[offset] == 35
+          let inlineRanges = heading.children.compactMap(\.range)
+          let title: String
+          let headingEnd: Int
+          if let lower = inlineRanges.first?.lowerBound, let upper = inlineRanges.last?.upperBound {
+            title = sourceText(lower..<upper)
+            // cmark may extend a Setext heading through the following block. Inline ranges
+            // identify its content; the underline is the immediately following source line.
+            headingEnd = isATX ? first + 1 : min(upper.line + 1, lines.count)
+          } else {
+            title = ""
+            headingEnd = first + 1
+          }
+          let item = MarkdownHeading(
+            level: heading.level, text: title, lines: first..<headingEnd,
+            openingOffset: isATX ? offset : nil)
+          headings.append(item)
+          if topLevel { topLevelHeadings.append(item) }
+        } else if let html = node as? HTMLBlock, topLevel {
+          let literal = MarkdownLine.parse(html.rawHTML)
+          if literal.count == 1, lines[first].text == Self.begin || lines[first].text == Self.end {
+            markers.append(first)
+          }
+        } else if node is CodeBlock {
+          codeByteRanges.append(starts[first]..<starts[end])
+        } else if node is InlineCode {
+          let last = min(range.upperBound.line - 1, lines.count - 1)
+          let lower = starts[first] + range.lowerBound.column - 1
+          let upper = starts[last] + min(range.upperBound.column - 1, lines[last].text.utf8.count)
+          codeByteRanges.append(lower..<upper)
+        }
+      }
+      let childEnd =
+        node is ListItem || node is BlockQuote
+        ? min(node.range?.upperBound.line ?? containerEnd, containerEnd) : containerEnd
+      for child in node.children.reversed() {
+        pending.append((child, node is Document, childEnd))
       }
     }
-    if start < bytes.count {
-      parsed.append(
-        MarkdownLine(text: String(decoding: bytes[start...], as: UTF8.self), ending: ""))
-    }
-    lines = parsed
-    scan()
+    indexSections()
+    codeByteRanges.sort { $0.lowerBound < $1.lowerBound }
+    inspectEnd(of: parsed, text: normalized)
   }
 
   func managedBlock() throws -> Range<Int>? {
     var open: Int?
     var block: Range<Int>?
     for index in markers {
-      if lines[index].trimmed == Self.begin {
+      if lines[index].text == Self.begin {
         if open != nil { throw InstructionError.nestedMarker(line: index + 1) }
         if block != nil { throw InstructionError.multipleBlocks }
         open = index
@@ -95,15 +146,6 @@ struct MarkdownDocument: Sendable, Equatable {
     return block
   }
 
-  func sectionRange(_ heading: MarkdownHeading) -> Range<Int> {
-    let nextHeading =
-      headings.first {
-        $0.lines.lowerBound > heading.lines.lowerBound && $0.level <= heading.level
-      }?.lines.lowerBound ?? lines.count
-    let nextMarker = markers.first { $0 > heading.lines.lowerBound } ?? lines.count
-    return heading.lines.lowerBound..<min(nextHeading, nextMarker)
-  }
-
   func normalized(_ range: Range<Int>) -> String {
     lines[range].map { $0.text + ($0.ending.isEmpty ? "" : "\n") }.joined()
   }
@@ -114,137 +156,59 @@ struct MarkdownDocument: Sendable, Equatable {
     return trimmed.map(\.text).joined(separator: "\n")
   }
 
-  private mutating func scan() {
-    var fence: (character: Character, count: Int, containerIndent: Int)?
-    var htmlEnd: String?
-    var htmlUntilBlank = false
-    var indented = false
-    var paragraph: Int?
-    for (index, line) in lines.enumerated() {
-      let text = line.trimmed
-      if let active = fence {
-        if !line.isBlank && line.indentation < active.containerIndent {
-          fence = nil
-        } else {
-          if line.indentation < active.containerIndent + 4, text.first == active.character {
-            let run = text.prefix { $0 == active.character }.count
-            if run >= active.count, text.dropFirst(run).allSatisfy({ $0 == " " || $0 == "\t" }) {
-              fence = nil
-            }
-          }
-          continue
-        }
-      }
-      if let end = htmlEnd {
-        if text.lowercased().contains(end) { htmlEnd = nil }
-        continue
-      }
-      if htmlUntilBlank {
-        if line.isBlank { htmlUntilBlank = false }
-        continue
-      }
-      if line.isBlank {
-        paragraph = nil
-        continue
-      }
-      if line.indentation >= 4 {
-        if paragraph == nil { indented = true }
-        continue
-      }
-      indented = false
-      var fenceText = text
-      var containerIndent = 0
-      if let range = text.range(
-        of: #"^(?:[-+*]|[0-9]{1,9}[.)])[ \t]+"#, options: .regularExpression)
-      {
-        containerIndent = line.indentation + text[range].count
-        fenceText = String(text[range.upperBound...])
-      }
-      if let character = fenceText.first, character == "`" || character == "~" {
-        let run = fenceText.prefix { $0 == character }.count
-        if run >= 3, character != "`" || !fenceText.dropFirst(run).contains("`") {
-          fence = (character, run, containerIndent)
-          paragraph = nil
-          continue
-        }
-      }
-      structuralLines.insert(index)
-      if text == Self.begin || text == Self.end {
-        markers.append(index)
-        paragraph = nil
-        continue
-      }
-      if let end = Self.htmlTerminator(text) {
-        if !text.lowercased().contains(end) { htmlEnd = end }
-        structuralLines.remove(index)
-        paragraph = nil
-        continue
-      }
-      if text.range(
-        of:
-          #"^</?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|source|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t/>]|$)"#,
-        options: [.regularExpression, .caseInsensitive]) != nil
-      {
-        htmlUntilBlank = true
-        structuralLines.remove(index)
-        paragraph = nil
-        continue
-      }
-      if text.first == "#" {
-        let level = text.prefix { $0 == "#" }.count
-        let rest = text.dropFirst(level)
-        if level <= 6, rest.isEmpty || rest.first == " " || rest.first == "\t" {
-          var heading = rest.trimmingCharacters(in: .whitespaces)
-          let closing = heading.reversed().prefix { $0 == "#" }.count
-          if closing > 0 {
-            let prefix = heading.dropLast(closing)
-            if prefix.isEmpty || prefix.last == " " || prefix.last == "\t" {
-              heading = prefix.trimmingCharacters(in: .whitespaces)
-            }
-          }
-          headings.append(
-            MarkdownHeading(level: level, text: heading, lines: index..<(index + 1), isATX: true))
-          paragraph = nil
-          continue
-        }
-      }
-      if let first = paragraph, let character = text.first,
-        character == "=" || character == "-", text.allSatisfy({ $0 == character })
-      {
-        headings.append(
-          MarkdownHeading(
-            level: character == "=" ? 1 : 2,
-            text: lines[first..<index].map(\.trimmed).joined(separator: " "),
-            lines: first..<(index + 1), isATX: false))
-        paragraph = nil
-        continue
-      }
-      let compact = text.filter { $0 != " " && $0 != "\t" }
-      if let character = compact.first, "*-_".contains(character), compact.count >= 3,
-        compact.allSatisfy({ $0 == character })
-      {
-        paragraph = nil
-      } else if text.hasPrefix(">") {
-        paragraph = nil
-      } else if paragraph == nil {
-        paragraph = index
-      }
-    }
-    endsInCode = fence != nil || indented
+  private func sourceText(_ range: SourceRange) -> String {
+    let first = range.lowerBound.line - 1
+    let last = range.upperBound.line - 1
+    return (first...last).map { line in
+      let bytes = Array(lines[line].text.utf8)
+      let lower = line == first ? min(range.lowerBound.column - 1, bytes.count) : 0
+      let upper = line == last ? min(range.upperBound.column - 1, bytes.count) : bytes.count
+      return String(decoding: bytes[lower..<upper], as: UTF8.self)
+    }.joined(separator: "\n")
   }
 
-  private static func htmlTerminator(_ text: String) -> String? {
-    if text.hasPrefix("<!--") { return "-->" }
-    if text.hasPrefix("<?") { return "?>" }
-    if text.hasPrefix("<![CDATA[") { return "]]>" }
-    if text.range(of: #"^<![A-Z]"#, options: .regularExpression) != nil { return ">" }
-    for tag in ["pre", "script", "style", "textarea"] {
-      if text.range(of: "^<\(tag)(?:[ \\t>]|$)", options: [.regularExpression, .caseInsensitive])
-        != nil
-      {
-        return "</\(tag)>"
+  private mutating func indexSections() {
+    var nextAtLevel = Array(repeating: lines.count, count: 7)
+    var markerIndex = markers.count
+    var nextMarker = lines.count
+    var ranges: [Range<Int>] = []
+    for heading in topLevelHeadings.reversed() {
+      while markerIndex > 0, markers[markerIndex - 1] > heading.lines.lowerBound {
+        markerIndex -= 1
+        nextMarker = markers[markerIndex]
       }
+      let end = min(nextAtLevel[1...heading.level].min()!, nextMarker)
+      ranges.append(heading.lines.lowerBound..<end)
+      nextAtLevel[heading.level] = heading.lines.lowerBound
     }
-    return nil
+    for (heading, range) in zip(topLevelHeadings, ranges.reversed()) {
+      sections[HeadingIdentity(level: heading.level, text: heading.key), default: []].append(range)
+    }
+  }
+
+  private static func terminalBlock(_ document: Markup) -> Markup {
+    var node = document
+    while node is Document || node is BlockQuote || node is ListItem || node is ListItemContainer {
+      guard node.childCount > 0, let child = node.child(at: node.childCount - 1) else { break }
+      node = child
+    }
+    return node
+  }
+
+  private mutating func inspectEnd(of document: Document, text: String) {
+    let tail = Self.terminalBlock(document)
+    guard tail is CodeBlock || tail is HTMLBlock, let start = tail.range?.lowerBound else { return }
+    // The AST does not expose closure state. Continue the same container and ask the parser
+    // whether a sentinel becomes code/HTML. List markers become continuation indentation.
+    let prefix = lines[start.line - 1].text.utf8.prefix(start.column - 1).map {
+      $0 == 62 || $0 == 9 ? $0 : UInt8(32)
+    }
+    let sentinel = "agents-instructions-boundary-probe"
+    let probe =
+      text + (text.utf8.last == 10 ? "" : "\n")
+      + String(decoding: prefix, as: UTF8.self) + sentinel + "\n"
+    let last = Self.terminalBlock(Document(parsing: probe, options: [.disableSmartOpts]))
+    endsInCode = (last as? CodeBlock)?.code.contains(sentinel) == true
+    endsInHTML = (last as? HTMLBlock)?.rawHTML.contains(sentinel) == true
   }
 }

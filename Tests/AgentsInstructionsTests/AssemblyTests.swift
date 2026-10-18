@@ -315,9 +315,8 @@ struct InstructionAssemblyTests {
     #expect(throws: InstructionError.invalidAssembly) {
       try Instructions.assemble(Data("# Guide\n\n<!-- unclosed\n".utf8), sections: [source()])
     }
-    let section = try source("# Rules\n<!-- unclosed\n")
-    #expect(throws: InstructionError.invalidAssembly) {
-      try Instructions.assemble(Data(), sections: [section])
+    #expect(throws: InstructionError.self) {
+      try source("# Rules\n<!-- unclosed\n")
     }
   }
 
