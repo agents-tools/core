@@ -16,8 +16,8 @@ repositories.
   and diagnostics. It depends on `AgentsCore` and Yams.
 - **AgentsInstructions**: in-memory validation and rendering of instruction
   sources, managed Markdown blocks, drift reports, Claude forwarding, and
-  ChatGPT prompts. It depends on `AgentsCore` for hashing; callers own files
-  and instruction lifecycle state.
+  ChatGPT prompts. It uses `AgentsCore` for hashing and `swift-markdown` for
+  CommonMark structure; callers own files and instruction lifecycle state.
 
 `SkillOperations` exposes skill workflows. `SkillOperations.watches` supplies
 watch operations with support for both the current JSON ledger and legacy YAML

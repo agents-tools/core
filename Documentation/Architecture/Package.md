@@ -19,6 +19,8 @@ AgentsSkills ──> AgentsCore
       └───────> Yams
 
 AgentsInstructions ──> AgentsCore
+         │
+         └───────> Markdown (swift-markdown) ──> cmark-gfm
 
 AgentsCoreTests ──> AgentsCore
 AgentsSkillsTests ──> AgentsSkills, AgentsCore, Yams
@@ -87,10 +89,36 @@ bookkeeping and JSON writer.
 
 `Instructions` validates source bytes into immutable `InstructionSection`
 values, assembles or removes managed blocks, detects drift, renders ChatGPT
-prompts, and compares source-qualified identities across scopes. Its Markdown
-scanner recognizes ATX and Setext headings and fixed marker lines, excluding
-fenced and indented code, HTML comments, and standard HTML blocks. Sources
-require one initial H1 and ATX headings throughout.
+prompts, and compares source-qualified identities across scopes. The `Markdown`
+product from [swift-markdown](https://github.com/swiftlang/swift-markdown)
+provides CommonMark block structure and UTF-8 source ranges through cmark-gfm.
+Only `AgentsInstructions` depends on that product. The adapter retains original
+line bytes for splicing; it does not format the parsed tree.
+
+Only top-level headings are target titles or section boundaries. Headings
+inside lists and block quotes belong to their containing section. Every source
+heading, including container headings, shifts by the target offset and is
+checked for level-6 overflow. A source starts with a top-level ATX H1, has no
+other H1 anywhere, uses no Setext headings, and cannot end inside a code or HTML
+block. Heading identity retains source inline syntax with whitespace collapsed.
+Markers count only as top-level, single-line HTML blocks whose complete source
+line equals the fixed marker text; indented, quoted, or padded examples are not
+markers.
+
+The parser supplies heading levels and container ownership. The adapter checks
+the heading's opening byte for ATX syntax and derives a Setext span from its
+inline content plus the following underline line. Code exclusions are bounded
+by their enclosing container. These adjustments accommodate source ranges that
+can include a line from the next block. Because the AST does not expose fence
+or HTML closure state, source validation reparses a continuation token in the
+terminal block's container and checks whether it becomes code or HTML. The
+token is never emitted. Final assembly is reparsed and must contain exactly the
+expected managed block.
+
+Selected headings are grouped once. Target headings and section boundaries
+are indexed in one traversal, with a reverse pass across the six heading
+levels. Removal ranges are sorted and applied in a single pass over target
+lines; assembly does not scan all headings for each selected section.
 
 Assembly returns bytes, heading offset, the rendered block and its hash,
 adoptions, conflicts, a block difference, and whether custom content remains.
@@ -102,10 +130,13 @@ and content lines, including the final LF. Drift detection accepts an optional
 reconstructed locked block for a textual difference; a hash alone establishes
 drift but cannot recover the old text.
 
-`ClaudeForwarding` renders import blocks, recognizes equivalent standalone
-imports, and classifies existing project Claude files from caller-supplied
-bytes and symbolic-link metadata. Callers own ancestor-file warnings, actual
-filesystem access, declaration and lock updates, and deletion decisions using
+`ClaudeForwarding` renders import blocks, recognizes equivalent unquoted
+`@path` tokens anywhere in prose outside code spans and code blocks, and
+classifies existing project Claude files from caller-supplied bytes and
+symbolic-link metadata. Imports resolve relative to the containing file;
+backslash-escaped spaces are supported and quoted paths are not imports, as
+specified by [Claude Code's import syntax](https://code.claude.com/docs/en/memory#import-additional-files).
+Callers own ancestor-file warnings, actual filesystem access, declaration and lock updates, and deletion decisions using
 the lock's `created` flag. This target performs no I/O.
 
 ## Runtime State

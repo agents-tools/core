@@ -4,8 +4,8 @@ This directory holds the current truth for `core`, a SwiftPM library package.
 `AgentsCore` owns shared source, registry, lock, and watch behavior;
 `AgentsSkills` owns skill discovery and lifecycle operations and depends on
 `AgentsCore` and Yams. `AgentsInstructions` owns pure instruction text
-transformations and depends on `AgentsCore` for hashing. Tests follow those
-module boundaries.
+transformations and depends on `AgentsCore` for hashing and `swift-markdown`
+for CommonMark structure. Tests follow those module boundaries.
 
 ## Belongs Here
 
