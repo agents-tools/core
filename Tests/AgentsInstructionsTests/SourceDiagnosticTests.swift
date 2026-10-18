@@ -165,10 +165,13 @@ struct InstructionSourceDiagnosticTests {
     try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
     let before = try fixture.snapshot()
     let report = try InstructionOperations.doctor(environment: fixture.environment)
-    #expect(
-      report.diagnostics.contains {
-        $0.kind == .sourceResolutionFailed && $0.message.contains("missing")
-      })
+    let failure = try #require(report.diagnostics.first { $0.kind == .sourceResolutionFailed })
+    if kind == .local {
+      #expect(failure.message.contains("Git could not read a revision from \(fixture.repo.path)."))
+      #expect(!failure.message.contains("Command failed:"))
+    } else {
+      #expect(failure.message.contains("missing"))
+    }
     #expect(!report.diagnostics.contains { $0.kind == .sourceUpdateAvailable })
     #expect(try fixture.snapshot() == before)
   }

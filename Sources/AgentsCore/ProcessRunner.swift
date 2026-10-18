@@ -18,13 +18,9 @@ package enum ProcessRunner {
     _ executable: String, arguments: [String], workingDirectory: URL? = nil,
     inheritingLock descriptor: Int32? = nil
   ) throws -> ProcessOutput {
-    let output: ProcessOutput
-    if let descriptor {
-      output = try spawn(
-        executable, arguments: arguments, workingDirectory: workingDirectory, lock: descriptor)
-    } else {
-      output = try runProcess(executable, arguments: arguments, workingDirectory: workingDirectory)
-    }
+    let output = try execute(
+      executable, arguments: arguments, workingDirectory: workingDirectory,
+      environment: ProcessInfo.processInfo.environment, lock: descriptor)
     guard output.exitCode == 0 else {
       throw CoreError.commandFailed(
         ([executable] + arguments).joined(separator: " ") + "\n" + output.stderr)
@@ -32,13 +28,48 @@ package enum ProcessRunner {
     return output
   }
 
+  @discardableResult
+  package static func git(
+    _ arguments: [String], operation: String, source: String,
+    replacingPaths paths: [URL] = [], inheritingLock descriptor: Int32? = nil
+  ) throws -> ProcessOutput {
+    var environment = ProcessInfo.processInfo.environment
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment["GCM_INTERACTIVE"] = "never"
+    let arguments = ["git"] + arguments
+    let output = try execute(
+      "/usr/bin/env", arguments: arguments, workingDirectory: nil,
+      environment: environment, lock: descriptor)
+    guard output.exitCode == 0 else {
+      throw GitError(
+        operation: operation, source: source, stderr: output.stderr,
+        command: ["/usr/bin/env"] + arguments, exitCode: output.exitCode, replacingPaths: paths)
+    }
+    return output
+  }
+
+  private static func execute(
+    _ executable: String, arguments: [String], workingDirectory: URL?,
+    environment: [String: String], lock: Int32?
+  ) throws -> ProcessOutput {
+    if let lock {
+      return try spawn(
+        executable, arguments: arguments, workingDirectory: workingDirectory,
+        environment: environment, lock: lock)
+    }
+    return try runProcess(
+      executable, arguments: arguments, workingDirectory: workingDirectory, environment: environment
+    )
+  }
+
   private static func runProcess(
-    _ executable: String, arguments: [String], workingDirectory: URL?
+    _ executable: String, arguments: [String], workingDirectory: URL?, environment: [String: String]
   ) throws -> ProcessOutput {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
     process.currentDirectoryURL = workingDirectory
+    process.environment = environment
 
     let stdout = Pipe()
     let stderr = Pipe()
@@ -61,7 +92,8 @@ package enum ProcessRunner {
   /// Spawn actions inherit only this lock and standard streams, without clearing
   /// CLOEXEC in the parent where another thread could concurrently launch a child.
   private static func spawn(
-    _ executable: String, arguments: [String], workingDirectory: URL?, lock: Int32
+    _ executable: String, arguments: [String], workingDirectory: URL?,
+    environment: [String: String], lock: Int32
   ) throws -> ProcessOutput {
     func check(_ error: Int32) throws {
       if error != 0 { throw NSError(domain: NSPOSIXErrorDomain, code: Int(error)) }
@@ -97,7 +129,7 @@ package enum ProcessRunner {
     }
     let argv = ([executable] + arguments).map { strdup($0) } + [nil]
     let environment =
-      ProcessInfo.processInfo.environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+      environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
     defer {
       for pointer in argv + environment { free(pointer) }
     }

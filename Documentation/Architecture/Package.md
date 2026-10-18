@@ -63,6 +63,28 @@ Core has no dependency on skill discovery, frontmatter, Yams or Markdown.
 `InstructionLocations` supplies fixed target locations to lifecycle and journal
 validation.
 
+### Process Execution and Errors
+
+All package Git calls use `ProcessRunner.git`, which overlays
+`GIT_TERMINAL_PROMPT=0` and `GCM_INTERACTIVE=never` on the inherited child
+environment. Other variables and the caller's environment are preserved;
+credential helpers that provide credentials without prompting remain available.
+The same policy applies to ordinary subprocesses and Git children inheriting
+mirror locks.
+
+A nonzero Git exit throws public `GitError`. Its `operation` describes the action
+in user terms, `source` identifies the source location or URL, and `stderr`
+contains diagnostic lines with progress removed and internal cache or extraction
+paths replaced by that source. `description` combines these into a user-facing
+message. `command` retains the executable and argument array unchanged for
+debugging, and `exitCode` records Git's status. Source context is supplied by the
+operation; orphaned mirror cleanup reads the clone's origin URL.
+
+Consumers should display `description` and supply any remedy appropriate to their
+workflow. The full command belongs in explicit debug output. Non-Git process
+failures continue to use `CoreError.commandFailed`; process launch errors retain
+their underlying platform error.
+
 ## AgentsSkills
 
 `SkillOperations` is the public lifecycle surface:

@@ -44,9 +44,13 @@ package struct SourceCache {
   package func resolve(_ source: SourceDeclaration) throws -> SourceRevision {
     let id = try source.identity(environment: store.environment)
     let mirror = try fetch(source, id: id)
-    let tags = try git(mirror, ["tag", "--list"]).split(separator: "\n").map(String.init)
+    let tags = try git(
+      mirror, ["tag", "--list"], operation: "list tags for", source: source.location
+    ).split(separator: "\n").map(String.init)
     let ref = try SourceReference(requirement: source.requirement, tags: tags)
-    let revision = try git(mirror, ["rev-parse", "--verify", ref.name + "^{commit}"])
+    let revision = try git(
+      mirror, ["rev-parse", "--verify", ref.name + "^{commit}"],
+      operation: "read a revision from", source: source.location)
     return SourceRevision(revision: revision, version: ref.version)
   }
 
@@ -65,18 +69,23 @@ package struct SourceCache {
     } else {
       ref = "HEAD"
     }
-    return try git(mirror, ["rev-parse", "--verify", "--end-of-options", ref + "^{commit}"])
+    return try git(
+      mirror, ["rev-parse", "--verify", "--end-of-options", ref + "^{commit}"],
+      operation: "read a revision from", source: source.location)
   }
 
-  func watchCommitCount(sourceID: String, seen: String, current: String) throws -> Int {
+  func watchCommitCount(sourceID: String, source: String, seen: String, current: String) throws
+    -> Int
+  {
     let count = try git(
-      mirrorURL(sourceID: sourceID), ["rev-list", "--count", seen + ".." + current])
+      mirrorURL(sourceID: sourceID), ["rev-list", "--count", seen + ".." + current],
+      operation: "count commits in", source: source)
     guard let result = Int(count) else { throw CoreError.invalidState("invalid Git commit count") }
     return result
   }
 
   /// Publish objects and their retention ref durably before the scope journal can name them.
-  func retainWatchRevision(sourceID: String, revision: String) throws {
+  func retainWatchRevision(sourceID: String, source: String, revision: String) throws {
     let url = mirrorURL(sourceID: sourceID)
     try withMirrorLock(at: url) { descriptor in
       try beginWatchReferenceUpdate()
@@ -106,7 +115,7 @@ package struct SourceCache {
       let retained = try refs.child("agents-watch")
       _ = try git(
         url, ["update-ref", "--no-deref", "refs/agents-watch/" + revision, revision],
-        lock: descriptor)
+        operation: "retain a revision for", source: source, lock: descriptor)
       try checkpoint("watch.ref.updated")
       // Updating an already packed ref to the same commit can leave it packed.
       if try retained.info(revision) != nil { try retained.syncFile(revision) }
@@ -157,6 +166,18 @@ package struct SourceCache {
     guard try directory.info("watch-refs.pending") != nil else { return false }
     let watch = try store.readWatch()
     let resolved = try store.readResolved()
+    var sourceLocations: [String: String] = [:]
+    for id in watch.sources.keys {
+      sourceLocations[key(id) + ".git"] =
+        id.hasPrefix("local:") ? String(id.dropFirst("local:".count)) : id
+    }
+    for (id, source) in resolved.sources where source.kind != .wellKnown {
+      sourceLocations[key(id) + ".git"] = try declaration(sourceID: id, source: source).location
+    }
+    for source in try store.readDeclaration().sources.values where source.kind != .wellKnown {
+      let id = try source.identity(environment: store.environment)
+      sourceLocations[key(id) + ".git"] = source.location
+    }
     var retained: [String: Set<String>] = [:]
     func retain(_ source: String, _ revision: String?) {
       if let revision { retained[key(source) + ".git", default: []].insert(revision) }
@@ -182,13 +203,14 @@ package struct SourceCache {
         for name in try mirrors.names() where name.hasSuffix(".git") {
           try withMirrorLock(at: mirrors.url.appendingPathComponent(name)) { descriptor in
             let mirror = try mirrors.child(name)
+            let source = try sourceLocations[name] ?? mirrorSource(mirror.url, lock: descriptor)
             let refs = try mirror.child("refs")
             let owned = try refs.info("agents-watch") == nil ? nil : refs.child("agents-watch")
             if try mirror.info("packed-refs") != nil { try mirror.syncFile("packed-refs") }
             let references = try git(
               mirror.url,
               ["for-each-ref", "--format=%(refname) %(objectname)", "refs/agents-watch/"],
-              lock: descriptor)
+              operation: "list references for", source: source, lock: descriptor)
             for line in references.split(separator: "\n") {
               let parts = line.split(separator: " ").map(String.init)
               guard parts.count == 2, parts[0] == "refs/agents-watch/" + parts[1],
@@ -198,7 +220,8 @@ package struct SourceCache {
               if retained[name, default: []].contains(parts[1]) { continue }
               if let owned, try owned.info(parts[1]) != nil { _ = try owned.read(parts[1]) }
               _ = try git(
-                mirror.url, ["update-ref", "--no-deref", "-d", parts[0], parts[1]], lock: descriptor
+                mirror.url, ["update-ref", "--no-deref", "-d", parts[0], parts[1]],
+                operation: "release a revision for", source: source, lock: descriptor
               )
               try checkpoint("watch.references.deleted")
             }
@@ -283,7 +306,9 @@ package struct SourceCache {
       let mirror = try pinnedMirror(sourceID: sourceID, source: source, revision: revision)
       let transaction = FileTransaction(store: store, checkpoint: checkpoint)
       try transaction.prepare(destination) { work in
-        try extract(revision: revision, mirror: mirror, root: work)
+        try extract(
+          revision: revision, mirror: mirror,
+          source: declaration(sourceID: sourceID, source: source).location, root: work)
       }
       try transaction.commit()
       return destination
@@ -309,11 +334,13 @@ package struct SourceCache {
             guard
               let revision = try? git(
                 mirror, ["--no-optional-locks", "rev-parse", "--verify", object + "^{commit}"],
-                lock: descriptor)
+                operation: "read a revision from", source: source.location, lock: descriptor)
             else { return nil }
             return try (
               SourceRevision(revision: revision),
-              extract(revision: revision, mirror: mirror, root: root, lock: descriptor)
+              extract(
+                revision: revision, mirror: mirror, source: source.location, root: root,
+                lock: descriptor)
             )
           }) ?? nil
       {
@@ -347,7 +374,10 @@ package struct SourceCache {
       "agents-snapshot-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    return try body(extract(revision: revision, mirror: mirror, root: root))
+    return try body(
+      extract(
+        revision: revision, mirror: mirror,
+        source: declaration(sourceID: sourceID, source: source).location, root: root))
   }
 
   private func pinnedMirror(sourceID: String, source: LockedSource, revision: String) throws -> URL
@@ -358,16 +388,26 @@ package struct SourceCache {
     }
     try validatePath(mirrorURL(sourceID: sourceID))
     var mirror = mirrorURL(sourceID: sourceID)
-    if (try? git(mirror, ["cat-file", "-e", revision + "^{commit}"])) == nil {
-      mirror = try fetch(declaration(sourceID: sourceID, source: source), id: sourceID)
+    let declaration = try declaration(sourceID: sourceID, source: source)
+    if (try? git(
+      mirror, ["cat-file", "-e", revision + "^{commit}"],
+      operation: "read a revision from", source: declaration.location)) == nil
+    {
+      mirror = try fetch(declaration, id: sourceID)
     }
-    guard try git(mirror, ["rev-parse", "--verify", revision + "^{commit}"]) == revision else {
+    guard
+      try git(
+        mirror, ["rev-parse", "--verify", revision + "^{commit}"],
+        operation: "read a revision from", source: declaration.location) == revision
+    else {
       throw CoreError.invalidState("locked commit is unavailable")
     }
     return mirror
   }
 
-  private func extract(revision: String, mirror: URL, root: URL, lock: Int32? = nil) throws -> URL {
+  private func extract(
+    revision: String, mirror: URL, source: String, root: URL, lock: Int32? = nil
+  ) throws -> URL {
     let archive = root.appendingPathComponent("tree.tar")
     let tree = root.appendingPathComponent("tree")
     try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
@@ -375,9 +415,13 @@ package struct SourceCache {
       "--no-optional-locks", "archive", "--format=tar", "--output=" + archive.path, revision,
     ]
     if let lock {
-      _ = try git(mirror, arguments, lock: lock)
+      _ = try git(
+        mirror, arguments, operation: "extract a revision from", source: source,
+        replacingPaths: [root], lock: lock)
     } else {
-      _ = try git(mirror, arguments)
+      _ = try git(
+        mirror, arguments, operation: "extract a revision from", source: source,
+        replacingPaths: [root])
     }
     try ProcessRunner.run("/usr/bin/env", arguments: ["tar", "-xf", archive.path, "-C", tree.path])
     try validateTree(tree)
@@ -548,24 +592,27 @@ package struct SourceCache {
       _ = try git(
         mirror,
         ["fetch", "--prune", "origin", "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"],
-        lock: lock)
+        operation: "fetch", source: source.location, lock: lock)
     } else {
       let staging = mirror.appendingPathExtension("staging-" + UUID().uuidString)
       defer { try? FileManager.default.removeItem(at: staging) }
-      try ProcessRunner.run(
-        "/usr/bin/env",
-        arguments: ["git"] + Self.gitOptions
-          + ["clone", "--mirror", "--no-local", "--", url, staging.path], inheritingLock: lock)
+      try ProcessRunner.git(
+        Self.gitOptions + ["clone", "--mirror", "--no-local", "--", url, staging.path],
+        operation: "clone", source: source.location,
+        replacingPaths: [staging, store.cacheDirectory], inheritingLock: lock)
       try FileManager.default.moveItem(at: staging, to: mirror)
     }
     // A remote can change its default branch after the initial clone.
-    let head = try ProcessRunner.run(
-      "/usr/bin/env", arguments: ["git", "ls-remote", "--symref", url, "HEAD"], inheritingLock: lock
+    let head = try ProcessRunner.git(
+      ["ls-remote", "--symref", url, "HEAD"], operation: "list remote refs for",
+      source: source.location, inheritingLock: lock
     ).stdout
     if let line = head.split(separator: "\n").first(where: { $0.hasPrefix("ref: refs/heads/") }),
       let reference = line.split(separator: "\t").first
     {
-      _ = try git(mirror, ["symbolic-ref", "HEAD", String(reference.dropFirst(5))], lock: lock)
+      _ = try git(
+        mirror, ["symbolic-ref", "HEAD", String(reference.dropFirst(5))],
+        operation: "update the default branch for", source: source.location, lock: lock)
     }
     return mirror
   }
@@ -583,17 +630,22 @@ package struct SourceCache {
       })
   }
 
-  func git(_ repository: URL, _ arguments: [String]) throws -> String {
+  private func git(
+    _ repository: URL, _ arguments: [String], operation: String, source: String,
+    replacingPaths paths: [URL] = []
+  ) throws -> String {
     try withMirrorLock(at: repository) { descriptor in
-      try git(repository, arguments, lock: descriptor)
+      try git(
+        repository, arguments, operation: operation, source: source, replacingPaths: paths,
+        lock: descriptor)
     }
   }
 
-  func inspectCommit(_ object: String, sourceID: String) throws -> String? {
+  func inspectCommit(_ object: String, sourceID: String, source: String) throws -> String? {
     try withExistingMirror(sourceID: sourceID) { mirror, descriptor in
       try git(
         mirror, ["--no-optional-locks", "rev-parse", "--verify", object + "^{commit}"],
-        lock: descriptor)
+        operation: "read a revision from", source: source, lock: descriptor)
     }
   }
 
@@ -613,16 +665,35 @@ package struct SourceCache {
     }
   }
 
-  private func git(_ repository: URL, _ arguments: [String], lock: Int32) throws -> String {
+  private func git(
+    _ repository: URL, _ arguments: [String], operation: String, source: String,
+    replacingPaths paths: [URL] = [], lock: Int32
+  ) throws -> String {
     let mirror = try DirectoryHandle(at: repository)
     guard let config = try mirror.info("config"), config.st_mode & 0o170000 == 0o100000 else {
       throw CoreError.unsafePath("mirror configuration must be a regular file")
     }
-    return try ProcessRunner.run(
-      "/usr/bin/env", arguments: ["git"] + Self.gitOptions + ["-C", repository.path] + arguments,
-      inheritingLock: lock
+    return try ProcessRunner.git(
+      Self.gitOptions + ["-C", repository.path] + arguments, operation: operation, source: source,
+      replacingPaths: paths + [repository, store.cacheDirectory], inheritingLock: lock
     )
     .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func mirrorSource(_ mirror: URL, lock: Int32) throws -> String {
+    // Orphaned mirrors outlive their declarations; the clone's origin retains the source location.
+    let source: String
+    do {
+      source = try git(
+        mirror, ["config", "--get", "remote.origin.url"],
+        operation: "read the origin of", source: "the cached source", lock: lock)
+    } catch let error as GitError where error.exitCode == 1 && error.stderr.isEmpty {
+      throw CoreError.invalidState("cached Git source has no origin URL")
+    }
+    guard !source.isEmpty else {
+      throw CoreError.invalidState("cached Git source has no origin URL")
+    }
+    return source
   }
 
   private static let gitOptions = [
