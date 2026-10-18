@@ -76,11 +76,18 @@ public struct InstalledSkill: Codable, Equatable, Sendable {
   public var mode: InstallMode?
 }
 
-/// File bytes before and after an update, so callers can present a diff before applying.
+/// The physical entry type and payload shown in an update preview.
+public enum SkillFileEntry: Codable, Equatable, Sendable {
+  case file(Data)
+  case directory
+  case symbolicLink(String)
+}
+
+/// Entry snapshots before and after the planned replacement or removal.
 public struct SkillFileChange: Codable, Equatable, Sendable {
   public var path: String
-  public var before: Data?
-  public var after: Data?
+  public var before: SkillFileEntry?
+  public var after: SkillFileEntry?
 }
 
 public struct UpdateResult: Codable, Equatable, Sendable {

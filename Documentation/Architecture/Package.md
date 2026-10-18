@@ -67,7 +67,7 @@ their declaration and lock fields and watch-state path.
 | List managed records | `listManaged(scope:agents:environment:)` |
 | Inventory installed directories | `listInstalled(scope:agents:environment:)` |
 | Remove recipients or skills | `remove(...)`, `removableSkillNames(...)` |
-| Preview or apply declared updates | `updateInstalled(...)`, `UpdateResult`, `SkillFileChange` |
+| Preview or apply declared updates | `updateInstalled(...)`, `UpdateResult`, `SkillFileChange`, `SkillFileEntry` |
 | Restore exact installations | `installResolvedReport(scope:environment:)` |
 | Initialize a skill | `initializeSkill(named:directory:)` |
 | Diagnose a scope | `doctor(scope:agents:environment:)` |
@@ -196,3 +196,14 @@ rendering through public APIs with in-memory fixtures.
 [State and cache](State.md) describes persisted data and lifecycle invariants.
 `../Proposals/` holds design work; `../Decisions/`, `../Migrations/` and
 `../Archive/` retain historical records with their original scope.
+
+Inventory reads and lifecycle writes hold the scope lock and recover abandoned
+transactions before accessing state. `listManaged` includes missing records for
+diagnosis; `listInstalled` returns present skills with valid frontmatter, including
+unmanaged candidates from each agent's scan roots. Omitted agent filters list or
+remove all recipients. Declaration defaults supply recipients for additions and
+selections that have no explicit recipients.
+
+Update previews use the same physical target mapping as application. Each change
+contains typed entry snapshots, so deletions, empty directories, symbolic link
+destinations and file contents can all be presented before applying.

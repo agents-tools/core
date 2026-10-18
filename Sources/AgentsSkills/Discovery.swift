@@ -138,6 +138,7 @@ enum Discovery {
     let wanted = Set(names.map { $0.lowercased() })
     return skills.filter {
       wanted.contains($0.name.lowercased())
+        || wanted.contains(PathSafety.sanitizeName($0.name))
         || wanted.contains(URL(fileURLWithPath: $0.path).lastPathComponent.lowercased())
     }
   }

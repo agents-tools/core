@@ -96,7 +96,8 @@ package final class FileTransaction {
           try parent.write(staged, data: data)
         } else if let source = content.url {
           if content.link {
-            try parent.link(staged, destination: linkDestination(source, parent: entry.parent))
+            try parent.link(
+              staged, destination: Self.linkDestination(source, parent: entry.parent, store: store))
           } else {
             try Self.validateCopy(source)
             let origin = source.resolvingSymlinksInPath()
@@ -213,7 +214,7 @@ package final class FileTransaction {
     try directory.rename(staging, to: journalURL(store).lastPathComponent)
   }
 
-  private func linkDestination(_ source: URL, parent: URL) -> String {
+  package static func linkDestination(_ source: URL, parent: URL, store: StateStore) -> String {
     let root = (store.scope == .project ? store.environment.projectDirectory : store.directory)
       .resolvingSymlinksInPath()
     let source = source.resolvingSymlinksInPath()

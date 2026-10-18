@@ -19,7 +19,7 @@ struct SkillMatchingTests {
     #expect(Discovery.filter(skills, names: ["FOO"]).map(\.name) == ["foo"])
     #expect(
       Discovery.filter(skills, names: ["convex-best-practices"]).map(\.name)
-        == ["convex-best-practices"])
+        == ["convex-best-practices", "Convex Best Practices"])
     #expect(
       Discovery.filter(skills, names: ["foo", "bar"]).map(\.name).sorted() == ["bar", "foo"])
     #expect(

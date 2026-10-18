@@ -140,12 +140,19 @@ public enum SkillOperations {
         let primary = try discover(live: primaryLive)
         var names = explicit ?? primary.skills.map { PathSafety.sanitizeName($0.name) }
         if explicit == nil {
-          names += (selection.overrides ?? [:]).keys.filter { mode($0) == .edit }
+          let overrides = (selection.overrides ?? [:]).keys.filter {
+            (mode($0) == .edit) != primaryLive
+          }
+          for name in overrides {
+            let alternate = try discover(live: mode(name) == .edit)
+            if !Discovery.filter(alternate.skills, names: [name]).isEmpty { names.append(name) }
+          }
           names = Array(Set(names)).filter { !(selection.exclude ?? []).contains($0) }.sorted()
         }
         for name in names {
           let discovered = try discover(live: mode(name) == .edit)
           let matches = Discovery.filter(discovered.skills, names: [name])
+          if matches.isEmpty, explicit == nil { continue }
           if matches.isEmpty, previous.skills[name] == nil, !requested.isEmpty,
             !selection.hasNamedSelection
           {
@@ -323,7 +330,12 @@ public enum SkillOperations {
   ) throws -> [InstalledSkill] {
     let store = StateStore(scope: scope, environment: environment)
     return try operate(store, apply: false) { _, lock in
-      var result = try managedInventory(store: store, lock: lock, agents: agents)
+      var result = try managedInventory(store: store, lock: lock, agents: agents).filter {
+        $0.isInstalled
+          && (try? Discovery.parseSkill(
+            at: URL(fileURLWithPath: $0.path).appendingPathComponent("SKILL.md"),
+            includeInternal: true)) != nil
+      }
       for agent in agents ?? AgentID.allCases {
         let roots =
           scope == .project
@@ -335,12 +347,18 @@ public enum SkillOperations {
               at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
           {
             guard
-              FileManager.default.fileExists(atPath: path.appendingPathComponent("SKILL.md").path),
-              !result.contains(where: { $0.agent == agent && $0.path == path.path })
+              (try? Discovery.parseSkill(
+                at: path.appendingPathComponent("SKILL.md"), includeInternal: true)) != nil,
+              !result.contains(where: {
+                $0.agent == agent
+                  && SkillLifecycle.physicalTarget(URL(fileURLWithPath: $0.path))
+                    == SkillLifecycle.physicalTarget(path)
+              })
             else { continue }
             result.append(
               InstalledSkill(
-                name: path.lastPathComponent, agent: agent, scope: scope, path: path.path,
+                name: path.lastPathComponent, agent: agent, scope: scope,
+                path: path.standardizedFileURL.path,
                 sourceIdentity: nil, isInstalled: true, status: .installedOnly, mode: nil))
           }
         }

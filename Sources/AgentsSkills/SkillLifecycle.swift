@@ -275,21 +275,40 @@ final class SkillLifecycle {
   }
 
   func changes(name: String, old: LockedSkill?, new: PreparedSkill?) throws -> [SkillFileChange] {
-    let agents = Set(
-      (old?.installs.keys.map { $0 } ?? []) + (new?.lock.installs.keys.map { $0 } ?? []))
+    let oldTargets = try targets(ResolvedState(skills: old.map { [name: $0] } ?? [:]))
+    let newTargets = try targets(ResolvedState(skills: new.map { [name: $0.lock] } ?? [:]))
     var result: [SkillFileChange] = []
-    var seen = Set<String>()
-    for raw in agents.sorted() {
-      guard let agent = AgentID(rawValue: raw) else { continue }
-      let target = Self.target(name: name, agent: agent, store: store)
-      guard seen.insert(target.path).inserted else { continue }
-      let before = try files(target)
-      let after = try new.map { try files($0.directory) } ?? [:]
-      for path in Set(before.keys).union(after.keys).sorted() where before[path] != after[path] {
+    for path in Set(oldTargets.keys).union(newTargets.keys).sorted() {
+      let target = URL(fileURLWithPath: path)
+      let before = try entries(target)
+      var after: [String: SkillFileEntry] = [:]
+      if let planned = newTargets[path], let new {
+        after = try entries(new.directory)
+        if planned.mode != .copy {
+          let content: URL
+          if let revision = new.lock.revision {
+            content = try PathSafety.resolvedChild(
+              base: cache.materializedURL(sourceID: new.lock.source, revision: revision),
+              subpath: new.lock.path ?? ".")
+          } else if let artifact = new.lock.artifact {
+            content = store.cacheDirectory.appendingPathComponent(
+              "artifact-content/" + artifact.digest.dropFirst(7))
+          } else {
+            content = new.directory
+          }
+          after["."] = .symbolicLink(
+            FileTransaction.linkDestination(
+              content, parent: target.deletingLastPathComponent(), store: store))
+        } else {
+          after["."] = .directory
+        }
+      }
+      for relative in Set(before.keys).union(after.keys).sorted()
+      where before[relative] != after[relative] {
         result.append(
           SkillFileChange(
-            path: target.appendingPathComponent(path).path, before: before[path], after: after[path]
-          ))
+            path: relative == "." ? path : target.appendingPathComponent(relative).path,
+            before: before[relative], after: after[relative]))
       }
     }
     return result
@@ -301,6 +320,11 @@ final class SkillLifecycle {
     ).appendingPathComponent(name).standardizedFileURL
   }
 
+  static func physicalTarget(_ url: URL) -> URL {
+    url.deletingLastPathComponent().resolvingSymlinksInPath()
+      .appendingPathComponent(url.lastPathComponent).standardizedFileURL
+  }
+
   private func targets(_ lock: ResolvedState) throws -> [String: (name: String, mode: InstallMode)]
   {
     var result: [String: (name: String, mode: InstallMode)] = [:]
@@ -310,8 +334,7 @@ final class SkillLifecycle {
           throw CoreError.invalidState("unknown locked agent")
         }
         let url = Self.target(name: name, agent: agent, store: store)
-        let physical = url.deletingLastPathComponent().resolvingSymlinksInPath()
-          .appendingPathComponent(name).path
+        let physical = Self.physicalTarget(url).path
         if let existing = result[physical], existing.name != name || existing.mode != mode {
           throw CoreError.invalidState("agents sharing a skill directory must use the same mode")
         }
@@ -331,21 +354,30 @@ final class SkillLifecycle {
     }
   }
 
-  private func files(_ directory: URL) throws -> [String: Data] {
-    let directory = directory.resolvingSymlinksInPath()
-    guard FileManager.default.fileExists(atPath: directory.path),
+  private func entries(_ directory: URL) throws -> [String: SkillFileEntry] {
+    func entry(_ url: URL) throws -> SkillFileEntry? {
+      guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+        return nil
+      }
+      switch attributes[.type] as? FileAttributeType {
+      case .typeSymbolicLink:
+        return .symbolicLink(try FileManager.default.destinationOfSymbolicLink(atPath: url.path))
+      case .typeDirectory: return .directory
+      case .typeRegular: return .file(try Data(contentsOf: url))
+      default: throw CoreError.unsafePath("unsupported installed entry: \(url.path)")
+      }
+    }
+    guard let root = try entry(directory) else { return [:] }
+    var result = [".": root]
+    let resolved = directory.resolvingSymlinksInPath()
+    guard (try? resolved.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
       let enumerator = FileManager.default.enumerator(
-        at: directory, includingPropertiesForKeys: [.isRegularFileKey])
-    else { return [:] }
-    var result: [String: Data] = [:]
+        at: resolved, includingPropertiesForKeys: [.isSymbolicLinkKey])
+    else { return result }
     for case let file as URL in enumerator {
-      if file.lastPathComponent == ".git" {
-        enumerator.skipDescendants()
-        continue
-      }
-      if try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
-        result[PathSafety.relativePath(file.path, to: directory.path)] = try Data(contentsOf: file)
-      }
+      let value = try entry(file)
+      if case .symbolicLink = value { enumerator.skipDescendants() }
+      result[PathSafety.relativePath(file.path, to: resolved.path)] = value
     }
     return result
   }
