@@ -83,14 +83,12 @@ writes the same declaration, lock and watch state and leaves the
 A source can provide both kinds. Discovery needs no manifest. `--path <subdir>`
 moves the search root for both kinds and is recorded with the source.
 
-Skills are found as they are today:
-
-- a `SKILL.md` at the search root makes the root itself one skill;
-- otherwise, skill directories under `skills/` (including `skills/.curated`,
-  `skills/.experimental` and `skills/.system`), `.agents/skills/`,
-  `.claude/skills/`, `.codex/skills/`, `.opencode/skills/` and the directories
-  named by plugin and marketplace manifests;
-- otherwise, a bounded recursive search.
+Skill discovery keeps the current implementation's rules: a `SKILL.md` at the
+search root, skill directories directly under the root, the conventional
+containers (`skills/` with `.curated`, `.experimental` and `.system`,
+`.agents/skills/`, `.claude/skills/`, `.codex/skills/`, `.opencode/skills/`),
+directories named by plugin and marketplace manifests, and a recursive search
+when these find nothing or when `--full-depth` is given.
 
 Instructions are `.md` files directly under `instructions/` or
 `.agents/instructions/`. The file name without `.md` is the instructions name.
@@ -109,7 +107,7 @@ A source's instructions directory is never itself a target location.
 | Source kind | Pinned by | Notes |
 | --- | --- | --- |
 | Git repository | Commit revision | Remote URL or a local repository path |
-| Local directory | Commit revision when it is a Git repository | Content is read from the committed tree; uncommitted changes are ignored and reported. A directory that is not a Git repository can only be used in `edit` mode |
+| Local directory | Commit revision when it is a Git repository | Pinned content (`link` and `copy` installs, instructions) is read from the committed tree; uncommitted changes are ignored and reported. A directory that is not a Git repository can only be used in `edit` mode |
 | Well-known index | Each artifact's URL and digest | Restore fetches the recorded URL and verifies the digest; it never consults the index |
 
 Source IDs are normalized and provider-qualified, so the forms cannot collide:
@@ -164,7 +162,11 @@ Commands edit the declaration; editing it by hand is possible.
 ```
 
 - A source names its kind by key (`git`, `local`, `well-known`), plus an
-  optional requirement (`branch`, `revision`, `from`, `to`) and search `path`.
+  optional requirement and search `path`. Requirements are `branch`,
+  `revision`, `exact` (one version), `from` (up to the next major version),
+  `upToNextMinor`, or `from` with `to` (a half-open range). Without one, the
+  latest version tag is used, or the default branch when there are no version
+  tags.
 - `agents` is the default agent list. Without it the default is `codex` and
   `claude-code`.
 - `select` is `"all"` or a list of names. `"all"` follows the source's current
@@ -172,8 +174,12 @@ Commands edit the declaration; editing it by hand is possible.
   of an `"all"` selection adds it to `exclude`.
 - `agents` and `mode` on a selection apply to its skills; `overrides` sets
   them for single skills. `mode` is `link` (default), `copy` or `edit`.
+  `edit` links the live directory of a local source, takes no requirement and
+  is never pinned.
 - `instructions` holds one ordered section list per scope, written to the
-  instruction file of every listed agent. `chatgpt` names an optional
+  instruction file of every listed agent. Every change to the list or its pins
+  is applied to all listed targets together; `--agent` on instruction
+  commands sets the list of recipients. `chatgpt` names an optional
   custom-content file, relative to the scope root, appended by `render`.
 - `watch` lists the aliases of subscribed sources. A source can be subscribed
   without selecting anything from it.
@@ -285,13 +291,22 @@ Commands edit the declaration; editing it by hand is possible.
 {
   "version": 1,
   "sources": {
-    "github.com/anthropics/skills": { "seen": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678" }
+    "github.com/anthropics/skills": { "seen": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678" },
+    "https://example.com": {
+      "seen": {
+        "spreadsheet": "sha256:…",
+        "pdf-forms": "sha256:…"
+      }
+    }
   }
 }
 ```
 
-`seen` is a Git revision, or for a well-known index the digest of the index
-document.
+For a Git source, `seen` is a revision; the mirror keeps its history. For a
+well-known index, `seen` maps each artifact name to its digest (for a `files`
+artifact, the digest of its sorted file list with per-file digests). The cache
+keeps the artifacts a watch state references, so `watch diff` can show their
+content.
 
 ## Commands
 
@@ -325,14 +340,15 @@ agents
 ```
 
 `--agent <agent>`, `--scope project|user` and `--path <subdir>` mean the same
-in every command. `--agent` defaults to the declaration's `agents`. Skill
-commands also take `--mode link|copy|edit`.
+in every command except `install`. `--agent` defaults to the declaration's
+`agents`. `skills add` also takes `--mode link|copy|edit`, and `skills add` and
+`skills list <source>` take `--full-depth`.
 
 | Command | Behavior |
 | --- | --- |
 | `add` | Update the declaration, resolve, write, update the lock. Any stop leaves the declaration, lock and files unchanged |
-| `update` | Show what re-resolving the declaration would change. `--apply` writes files and the lock, and shows a diff before replacing a drifted or conflicting section |
-| `install` | Restore skills and managed blocks from the lock without resolving |
+| `update` | Re-resolve the declaration and show what would change against the files on disk. `--apply` writes the resolved content and the new lock together, showing the difference before it replaces drifted or conflicting content. Without names it reconciles `"all"` selections with the source's membership; with names it touches only those skills, and a named skill missing upstream is an error |
+| `install` | Restore skills and managed blocks exactly as the lock records them, without resolving. It takes no `--agent` or `--mode` |
 | `list` | Installed skills, or managed sections and targets; with a source, what it provides |
 | `remove` | Remove from the declaration, files and lock |
 | `init` | Create a skill directory or an instructions file in the current directory |
@@ -380,8 +396,9 @@ above it. When `claude-code` is a target in project scope:
   the project's `AGENTS.md` into the first of them that exists, with the path
   relative to that file (`@AGENTS.md`, or `@../AGENTS.md` in
   `.claude/CLAUDE.md`). An existing equivalent import counts as forwarding;
-- a `CLAUDE.md` above the project root is outside the project; `doctor` warns
-  about it and nothing is written.
+- a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` in a directory above
+  the project root is outside the project; `doctor` warns about it and nothing
+  is written. User-level and managed-policy files do not count.
 
 ## Writing Targets
 
@@ -407,16 +424,19 @@ A file target consists of custom content and at most one managed block:
 
 Markdown structure follows CommonMark: headings and marker lines are
 recognized only outside fenced and indented code blocks. Source files must use
-ATX headings; targets may also contain Setext headings.
+ATX headings and must not end inside a code block; targets may also contain
+Setext headings. The assembled file is parsed before it is written and must
+contain exactly the expected block; otherwise nothing is written.
 
 1. A section is a heading and everything up to the next heading of the same or
-   higher level, the END marker or the end of the file. Sections in the block
+   higher level, the next marker line or the end of the file. Sections in the block
    appear in declared order and are identified by heading.
 2. The block is one contiguous region from the BEGIN line to the END line.
    Their text is fixed and carries no versions. More than one block, or
    unpaired or nested markers, is an error and nothing is written.
 3. The target's title is the first level-1 heading in custom content before the
-   block. With a title, every heading in the block is shifted one level down;
+   block that does not match the level-1 heading of a selected section. With a
+   title, every heading in the block is shifted one level down;
    a shift beyond level 6 is an error. The offset is computed on the first
    write and on `update` when the title appears or disappears; `install` uses
    the locked offset.
@@ -430,18 +450,20 @@ ATX headings; targets may also contain Setext headings.
    of a file with a title, otherwise at the start.
 6. A matching section with identical content is adopted: it moves into the
    block. A matching section with different content stops `add` with the
-   difference unless `--replace` is given, is replaced by `update --apply`
-   after the difference is shown, is reported by `update` and `doctor`, and
-   stops `install`.
+   difference unless `--replace` is given and is replaced by `update --apply`
+   after the difference is shown. `update` and `doctor` only report adoptions
+   and conflicts; `install` stops on a conflict.
 7. The tool owns the marker lines, the block content and one blank line
    between the block and adjacent custom content. Custom content keeps its
    bytes. Section content is the source file with LF line endings, trailing
    blank lines removed and headings shifted; sections are separated by one
    blank line. When the block ends the file, the file ends with one newline.
+   Removing the block leaves the custom content ending with one newline.
 8. A section's `hash` covers the source file bytes. `blockHash` covers the
    rendered block from the BEGIN line through the END line with LF endings.
-   Any difference from `blockHash` is drift: `doctor` reports it and
-   `update --apply` restores the locked content after showing the difference.
+   Any difference from `blockHash` is drift: `doctor` reports it, `install`
+   restores the locked content, and `update --apply` writes the newly resolved
+   content after showing the difference.
 9. Writing the same lock into the same custom content produces identical
    bytes.
 10. Removing the last section removes the block, its markers and its
@@ -454,10 +476,10 @@ ATX headings; targets may also contain Setext headings.
 their source headings, followed by the declared `chatgpt` file.
 
 A lost lock is not restored exactly, because headings do not identify a pin.
-`update` re-resolves the declaration and compares the result with the existing
-block; identical content is adopted, and `update --apply` replaces differing
-content after showing the difference. A file without a lock entry is never
-deleted.
+`update` re-resolves the declaration and reports how the result compares with
+the existing block; `update --apply` adopts identical content, replaces
+differing content after showing the difference, and writes the new lock. A file
+without a lock entry is never deleted.
 
 ## Watch
 
@@ -472,7 +494,8 @@ github.com/anthropics/skills  3 commits since a1b2c3d (now 9f8e7d6)
 local:/Users/me/Developer/rules  up to date
 ```
 
-A subscription follows the source's declared branch, or its default branch.
+A Git subscription follows the source's declared branch, or its default
+branch. A well-known subscription follows the index.
 Installing and updating use `add` and `update`. Scheduling periodic checks is
 left to the caller.
 
@@ -499,6 +522,8 @@ working tree that another operation depends on.
   `~/.agents`.
 - Installing from a local directory that is not a Git repository in `link` or
   `copy` mode; such a directory is used in `edit` mode only.
+- Installing uncommitted working-tree content of a local Git repository in
+  `link` or `copy` mode; those modes read the committed tree.
 
 ## Open Questions
 
