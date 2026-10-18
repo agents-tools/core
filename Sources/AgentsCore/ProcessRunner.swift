@@ -66,6 +66,14 @@ package enum ProcessRunner {
     func check(_ error: Int32) throws {
       if error != 0 { throw NSError(domain: NSPOSIXErrorDomain, code: Int(error)) }
     }
+    func duplicate(_ descriptor: Int32) throws -> Int32 {
+      let result = fcntl(descriptor, F_DUPFD_CLOEXEC, 3)
+      if result < 0 { try check(errno) }
+      return result
+    }
+    // Capture stdin before pipes can reuse a closed standard descriptor. A lock
+    // occupying stdin is internal state, not input for the child.
+    let inputIsOpen = lock != STDIN_FILENO && fcntl(STDIN_FILENO, F_GETFD) >= 0
     var actions: posix_spawn_file_actions_t?
     try check(posix_spawn_file_actions_init(&actions))
     defer { posix_spawn_file_actions_destroy(&actions) }
@@ -73,19 +81,20 @@ package enum ProcessRunner {
     try check(posix_spawnattr_init(&attributes))
     defer { posix_spawnattr_destroy(&attributes) }
     try check(posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)))
-    try check(posix_spawn_file_actions_addinherit_np(&actions, lock))
-    try check(posix_spawn_file_actions_addinherit_np(&actions, STDIN_FILENO))
+    if inputIsOpen {
+      try check(posix_spawn_file_actions_addinherit_np(&actions, STDIN_FILENO))
+    } else {
+      try check(posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0))
+    }
     if let workingDirectory {
       try check(posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path))
     }
     let stdout = Pipe()
     let stderr = Pipe()
-    try check(
-      posix_spawn_file_actions_adddup2(
-        &actions, stdout.fileHandleForWriting.fileDescriptor, STDOUT_FILENO))
-    try check(
-      posix_spawn_file_actions_adddup2(
-        &actions, stderr.fileHandleForWriting.fileDescriptor, STDERR_FILENO))
+    defer {
+      stdout.fileHandleForWriting.closeFile()
+      stderr.fileHandleForWriting.closeFile()
+    }
     let argv = ([executable] + arguments).map { strdup($0) } + [nil]
     let environment =
       ProcessInfo.processInfo.environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
@@ -93,7 +102,20 @@ package enum ProcessRunner {
       for pointer in argv + environment { free(pointer) }
     }
     var pid: pid_t = 0
-    try check(posix_spawn(&pid, executable, &actions, &attributes, argv, environment))
+    try {
+      // Standard-stream actions must not overwrite the lock or another pipe's
+      // source, even when open/pipe allocated descriptors 0, 1 or 2 in the host.
+      let inheritedLock = try duplicate(lock)
+      defer { close(inheritedLock) }
+      let output = try duplicate(stdout.fileHandleForWriting.fileDescriptor)
+      defer { close(output) }
+      let error = try duplicate(stderr.fileHandleForWriting.fileDescriptor)
+      defer { close(error) }
+      try check(posix_spawn_file_actions_addinherit_np(&actions, inheritedLock))
+      try check(posix_spawn_file_actions_adddup2(&actions, output, STDOUT_FILENO))
+      try check(posix_spawn_file_actions_adddup2(&actions, error, STDERR_FILENO))
+      try check(posix_spawn(&pid, executable, &actions, &attributes, argv, environment))
+    }()
     stdout.fileHandleForWriting.closeFile()
     stderr.fileHandleForWriting.closeFile()
     let stdoutReader = PipeReader(stdout.fileHandleForReading)

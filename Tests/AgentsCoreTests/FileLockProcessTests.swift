@@ -62,19 +62,86 @@ struct FileLockProcessTests {
     try FileLock.withDescriptor(at: lock) { descriptor in
       let script = """
         alarm 10;
-        open my $lock, '<&=', $ARGV[0] or die $!;
+        open my $lock, '+<', $ARGV[0] or die $!;
+        flock($lock, 2 | 4) and die 'lock not inherited';
         open my $marker, '<', 'marker' or die $!;
         print scalar(<$marker>), "\\n", $ENV{HOME}, "\\n";
         for (1..1024) { print STDOUT 'o' x 1024; print STDERR 'e' x 1024; }
         """
       let output = try ProcessRunner.run(
-        "/usr/bin/perl", arguments: ["-e", script, String(descriptor)],
+        "/usr/bin/perl", arguments: ["-e", script, lock.path],
         workingDirectory: root, inheritingLock: descriptor)
       #expect(
         output.stdout == "directory\n\(ProcessInfo.processInfo.environment["HOME"] ?? "")\n"
           + String(repeating: "o", count: 1024 * 1024))
       #expect(output.stderr == String(repeating: "e", count: 1024 * 1024))
     }
+  }
+
+  @Test(arguments: [0, 1], [false, true])
+  func parentDeathWithClosedStreamsKeepsGitLock(_ depth: Int, _ closeInput: Bool) throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let repository = root.appendingPathComponent("repository")
+    try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+    try Data("baseline".utf8).write(to: repository.appendingPathComponent("file"))
+    try initGitRepo(repository)
+    let revision = try gitHead(repository)
+    let reference = "refs/agents-watch/" + revision
+    try ProcessRunner.run(
+      "/usr/bin/env", arguments: ["git", "-C", repository.path, "update-ref", reference, revision])
+    let pause = try GitTransactionPause(
+      root: root, hooks: repository.appendingPathComponent(".git/hooks"),
+      condition: "[ \"$ref\" = \"\(reference)\" ]")
+    defer { pause.terminate() }
+    // Adjacent directory depths make FileLock's ancestry traversal alternate its
+    // lowest available descriptor, covering locks allocated at both stdout and stderr.
+    let relativeLock = depth == 0 ? "locks/mirror.lock" : "locks/nested/mirror.lock"
+    let parent = try stateTestProcess(
+      root: root,
+      arguments: ["locked-git", relativeLock, closeInput ? "all" : "outputs", revision])
+    defer { terminateProcess(parent) }
+    try pause.wait()
+    let descriptor = try String(
+      contentsOf: root.appendingPathComponent("lock-descriptor"), encoding: .utf8)
+    let allocated = try #require(Int32(descriptor))
+    let components =
+      root.appendingPathComponent(relativeLock).deletingLastPathComponent()
+      .standardizedFileURL.pathComponents.count - 1
+    let lowest: Int32 = closeInput ? STDIN_FILENO : STDOUT_FILENO
+    #expect(allocated == lowest + (components.isMultiple(of: 2) ? 1 : 0))
+    let gitLock = repository.appendingPathComponent(".git/\(reference).lock")
+    try #require(FileManager.default.fileExists(atPath: gitLock.path))
+
+    terminateProcess(parent)
+    try #require(kill(pause.git, 0) == 0)
+    try #require(kill(pause.hook, 0) == 0)
+    let contention = try ProcessSignal(at: root.appendingPathComponent("writer-contended"))
+    let contender = try stateTestProcess(root: root, arguments: ["lock-contender", relativeLock])
+    defer { terminateProcess(contender) }
+    #expect(try contention.receive() == "contended")
+    #expect(
+      !FileManager.default.fileExists(atPath: root.appendingPathComponent("lock-acquired").path))
+    #expect(FileManager.default.fileExists(atPath: gitLock.path))
+
+    try finishProcesses([contender], resuming: pause)
+    #expect(
+      FileManager.default.fileExists(atPath: root.appendingPathComponent("lock-acquired").path))
+    #expect(!FileManager.default.fileExists(atPath: gitLock.path))
+    let refs = try ProcessRunner.run(
+      "/usr/bin/env", arguments: ["git", "-C", repository.path, "for-each-ref", reference])
+    #expect(refs.stdout.isEmpty)
+  }
+
+  @Test(arguments: Array(1...7))
+  func lockedChildHandlesClosedStandardStreams(_ mask: Int) throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let parent = try stateTestProcess(root: root, arguments: ["closed-streams", String(mask)])
+    defer { terminateProcess(parent) }
+    try finishProcesses([parent])
+    #expect(try String(contentsOf: root.appendingPathComponent("stdout"), encoding: .utf8) == "out")
+    #expect(try String(contentsOf: root.appendingPathComponent("stderr"), encoding: .utf8) == "err")
   }
 
   @Test(arguments: [1, 42, 127])

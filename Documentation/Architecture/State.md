@@ -152,9 +152,14 @@ the mirror lock; mirror access never acquires the scope lock in reverse order.
 An instruction listing can therefore populate a mirror before `.agents.lock`
 exists while still excluding concurrent recovery and watch mutations.
 
-Git children explicitly inherit the mirror lock descriptor through spawn file
-actions; unrelated descriptors remain closed. The parent closes its descriptor
-without explicitly unlocking the shared open file description. If the Swift
+Git children explicitly inherit a duplicate of the mirror lock descriptor
+allocated at 3 or above with `F_DUPFD_CLOEXEC`. Spawn file actions inherit that
+duplicate without changing the parent's close-on-exec flags. Output pipe sources
+also use descriptors above the standard streams before redirection; closed stdin
+is connected to `/dev/null` in the child. Unrelated descriptors remain closed,
+and the parent closes the temporary duplicates immediately after spawning.
+The parent closes its lock descriptor without explicitly unlocking the shared
+open file description. If the Swift
 parent is killed, a surviving Git child keeps the mirror locked until it exits.
 Git automatic maintenance is disabled. Recovery must acquire this same mirror
 lock before classifying Git `*.lock` files (including `packed-refs.lock`) and

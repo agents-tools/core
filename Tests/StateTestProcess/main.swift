@@ -18,7 +18,48 @@ func stop(_ step: String, marker: String = "ready") throws {
     raise(SIGSTOP)
   }
 }
-if arguments[2] == "instruction-list" {
+func signalContention() throws {
+  let signal = try FileHandle(forWritingTo: root.appendingPathComponent("writer-contended"))
+  defer { try? signal.close() }
+  try signal.write(contentsOf: Data("contended\n".utf8))
+}
+if arguments[2] == "locked-git" {
+  close(STDOUT_FILENO)
+  close(STDERR_FILENO)
+  if arguments[4] == "all" { close(STDIN_FILENO) }
+  try FileLock.withDescriptor(at: root.appendingPathComponent(arguments[3])) { descriptor in
+    try Data(String(descriptor).utf8).write(to: root.appendingPathComponent("lock-descriptor"))
+    try ProcessRunner.run(
+      "/usr/bin/env",
+      arguments: [
+        "git", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+        "-C", root.appendingPathComponent("repository").path,
+        "update-ref", "--no-deref", "-d", "refs/agents-watch/" + arguments[5], arguments[5],
+      ], inheritingLock: descriptor)
+  }
+} else if arguments[2] == "lock-contender" {
+  try FileLock.withLock(
+    at: root.appendingPathComponent(arguments[3]),
+    checkpoint: { if $0 == "lock.contended" { try signalContention() } },
+    { try Data().write(to: root.appendingPathComponent("lock-acquired")) })
+} else if arguments[2] == "closed-streams" {
+  let mask = Int(arguments[3])!
+  try FileLock.withDescriptor(at: root.appendingPathComponent("writer.lock")) { descriptor in
+    for stream: Int32 in 0...2 where mask & (1 << stream) != 0 { close(stream) }
+    let script = """
+      if ($ARGV[0]) {
+        my $byte;
+        my $count = sysread(STDIN, $byte, 1);
+        defined($count) && $count == 0 or die 'stdin must provide EOF';
+      }
+      print STDOUT 'out'; print STDERR 'err';
+      """
+    let output = try ProcessRunner.run(
+      "/usr/bin/perl", arguments: ["-e", script, String(mask & 1)], inheritingLock: descriptor)
+    try Data(output.stdout.utf8).write(to: root.appendingPathComponent("stdout"))
+    try Data(output.stderr.utf8).write(to: root.appendingPathComponent("stderr"))
+  }
+} else if arguments[2] == "instruction-list" {
   let units = try InstructionOperations.list(
     source: SourceDeclaration(kind: .local, location: root.appendingPathComponent("source").path),
     environment: store.environment)
@@ -30,9 +71,7 @@ if arguments[2] == "instruction-list" {
     fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
     checkpoint: { step in
       if step == "mirror.lock.contended" {
-        let signal = try FileHandle(forWritingTo: root.appendingPathComponent("writer-contended"))
-        defer { try? signal.close() }
-        try signal.write(contentsOf: Data("contended\n".utf8))
+        try signalContention()
       }
     })
   func acknowledge() throws {

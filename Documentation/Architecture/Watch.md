@@ -81,8 +81,10 @@ cached revision inspection, extraction, retention and recovery. State mutations
 acquire the scope lock before the mirror lock; inspection can use the mirror
 lock even when no scope lock file exists.
 
-Git children explicitly inherit the mirror lock's descriptor. Closing the
-parent's descriptor does not unlock the shared open file description, so a
+Git children explicitly inherit a duplicate of the mirror lock's descriptor
+above the standard streams, so redirecting output cannot replace the lock even
+when the host has closed stdout or stderr. Closing the parent's descriptor does
+not unlock the shared open file description, so a
 surviving Git child continues excluding recovery after its Swift parent is
 killed. Git automatic maintenance is disabled. Recovery acquires the same
 mirror lock before treating `*.lock` files, including `packed-refs.lock`, and
