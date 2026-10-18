@@ -156,8 +156,9 @@ package struct SourceCache {
   /// Retains pins and any cache tree containing a live edit source.
   /// The caller holds the scope lock, including during failure cleanup.
   package func prune(referencedBy lock: ResolvedState, transaction: FileTransaction? = nil) throws {
-    let scope = try DirectoryHandle(at: store.directory.resolvingSymlinksInPath())
-    guard try scope.info("cache") != nil else { return }
+    guard let scope = try store.openDirectoryIfPresent(), try scope.info("cache") != nil else {
+      return
+    }
     let cache = try scope.child("cache")
     let transactionToUse = transaction ?? FileTransaction(store: store)
     var paths = Set<String>()
@@ -224,8 +225,7 @@ package struct SourceCache {
   }
 
   package func validatePath(_ url: URL, directory: Bool = true) throws {
-    guard FileManager.default.fileExists(atPath: store.directory.path) else { return }
-    var parent = try DirectoryHandle(at: store.directory.resolvingSymlinksInPath())
+    guard var parent = try store.openDirectoryIfPresent() else { return }
     let relative = PathSafety.relativePath(url.path, to: store.directory.path)
     let parts = try PathSafety.sanitizeSubpath(relative).split(separator: "/").map(String.init)
     for (index, name) in parts.enumerated() {

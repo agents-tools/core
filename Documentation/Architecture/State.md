@@ -81,7 +81,7 @@ Maps are key sorted. Unordered selections and agent lists are sorted; section
 arrays and each prompt's section order are preserved. Files have a trailing
 newline and no timestamps. Invalid state, duplicate JSON keys at any depth and
 fields that would be discarded by decoding cause an error. Tree hashes use
-length-prefixed records for paths, entry types and bytes, including empty
+length-prefixed paths and typed entry payloads, including empty
 directories and symbolic link destinations.
 
 Readers and writers serialize through `.agents.lock`. A durable

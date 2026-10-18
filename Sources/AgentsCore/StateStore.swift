@@ -40,7 +40,7 @@ public struct StateStore: Sendable {
     return lock
   }
 
-  /// Serializes cooperating writers and atomically replaces each state file.
+  /// Commits both state files through the scope's durable transaction journal.
   public func save(declaration: Declaration, resolved: ResolvedState) throws {
     try withLock {
       try declaration.validate(environment: environment)
@@ -56,7 +56,7 @@ public struct StateStore: Sendable {
   }
 
   package func withLock<T>(createIfMissing: Bool = true, _ body: () throws -> T) throws -> T {
-    if !createIfMissing, !FileManager.default.fileExists(atPath: directory.path) {
+    if try openDirectoryIfPresent() == nil, !createIfMissing {
       return try body()
     }
     if !FileManager.default.fileExists(
@@ -75,6 +75,16 @@ public struct StateStore: Sendable {
     }
   }
 
+  /// Only the supplied scope root may resolve through links; state and cache ancestry may not.
+  func openDirectoryIfPresent() throws -> DirectoryHandle? {
+    let root = scope == .project ? environment.projectDirectory : environment.homeDirectory
+    guard FileManager.default.fileExists(atPath: root.path) else { return nil }
+    let parent = try DirectoryHandle(at: root.resolvingSymlinksInPath())
+    let name = scope == .project ? ".agent" : ".agents"
+    guard try parent.info(name) != nil else { return nil }
+    return try parent.child(name)
+  }
+
   package static func encode<T: Encodable>(_ value: T) throws -> Data {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -86,18 +96,22 @@ public struct StateStore: Sendable {
   private func load<T: Codable>(_ url: URL) throws -> T? {
     guard let data = try existingData(url) else { return nil }
     do {
-      try JSONKeys.validate(data)
-      let value = try JSONDecoder().decode(T.self, from: data)
-      try rejectDiscardedFields(
-        JSONSerialization.jsonObject(with: data),
-        encoded: JSONSerialization.jsonObject(with: Self.encode(value)))
-      return value
+      return try Self.decode(data, as: T.self)
     } catch {
       throw CoreError.invalidState("state file \(url.path) could not be decoded: \(error)")
     }
   }
 
-  private func rejectDiscardedFields(_ input: Any, encoded: Any) throws {
+  package static func decode<T: Codable>(_ data: Data, as type: T.Type) throws -> T {
+    try JSONKeys.validate(data)
+    let value = try JSONDecoder().decode(type, from: data)
+    try rejectDiscardedFields(
+      JSONSerialization.jsonObject(with: data),
+      encoded: JSONSerialization.jsonObject(with: encode(value)))
+    return value
+  }
+
+  private static func rejectDiscardedFields(_ input: Any, encoded: Any) throws {
     if let input = input as? [String: Any], let encoded = encoded as? [String: Any] {
       for (key, value) in input where !(value is NSNull) {
         guard let counterpart = encoded[key] else {

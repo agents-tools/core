@@ -321,7 +321,7 @@ struct WellKnownProvider: Sendable {
     ).stdout
       .split(separator: "\n")
       .map(String.init)
-      .filter { !$0.isEmpty && !$0.hasSuffix("/") }
+      .filter { !$0.isEmpty && $0 != "." && $0 != "./" }
     guard listing.count <= Self.maxArchiveFiles else {
       throw CoreError.invalidSource("well-known archive has too many files")
     }

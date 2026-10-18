@@ -351,8 +351,8 @@ public enum SkillOperations {
                 at: path.appendingPathComponent("SKILL.md"), includeInternal: true)) != nil,
               !result.contains(where: {
                 $0.agent == agent
-                  && SkillLifecycle.physicalTarget(URL(fileURLWithPath: $0.path))
-                    == SkillLifecycle.physicalTarget(path)
+                  && SkillLifecycle.physicalTarget(URL(fileURLWithPath: $0.path)).path
+                    == SkillLifecycle.physicalTarget(path).path
               })
             else { continue }
             result.append(

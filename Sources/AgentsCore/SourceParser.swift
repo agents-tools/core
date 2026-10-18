@@ -38,7 +38,10 @@ public enum SourceParser {
         ? homeDirectory.path
         : input.hasPrefix("~/")
           ? homeDirectory.appendingPathComponent(String(input.dropFirst(2))).path : input
-      let path = URL(fileURLWithPath: expanded, relativeTo: currentDirectory).standardizedFileURL
+      let path = URL(
+        fileURLWithPath: expanded,
+        relativeTo: URL(fileURLWithPath: currentDirectory.path, isDirectory: true)
+      ).standardizedFileURL
         .path
       return ParsedSource(type: .local, url: path, localPath: path)
     }

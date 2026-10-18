@@ -59,7 +59,8 @@ use committed content.
   `initializeSkill(named:directory:)` provide inventory, diagnostics and authoring.
 
 Pass `RuntimeEnvironment` to select the project, home directory and environment.
-Default recipients for additions are Codex and Claude Code. Listing and removal
+Default recipients for additions are Codex and Claude Code. Supported agents also
+include Cursor, Gemini CLI and OpenCode. Listing and removal
 without an agent filter cover every recipient. Update previews include physical
 removals, entry types and symbolic link destinations. Installed inventory validates
 skill metadata and excludes missing entries; managed inventory retains those
@@ -67,8 +68,7 @@ records for diagnosis.
 
 State operations recover interrupted transactions before proceeding and report
 `CoreError.transactionRecovered` when the command should be retried. The durable
-scope journal covers installations, declaration, lock and cache pruning. Supported agents also include
-Cursor, Gemini CLI and OpenCode.
+scope journal covers installations, declaration, lock and cache pruning.
 
 ## Dependency
 

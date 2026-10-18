@@ -30,8 +30,9 @@ struct StateTransactionTests {
   }
 
   @Test(arguments: [
-    "journal.preparing", "stage.0", "journal.applying", "replace.0", "replace.1", "replace.2",
-    "replace.3", "journal.committed", "cleanup.0",
+    "journal.preparing", "directory.0", "stage.0", "stage.4", "journal.applying", "replace.0",
+    "replace.1", "replace.2",
+    "replace.3", "replace.4", "journal.committed", "cleanup.0",
   ])
   func killedWriterRecoversOnNextStateRead(_ step: String) throws {
     let fixture = try TransactionFixture()
@@ -124,6 +125,9 @@ private final class TransactionFixture {
         store.resolvedURL, content: nil,
         data: StateStore.encode(ResolvedState(sources: ["local:/new": LockedSource(kind: .local)])))
       try transaction.replace(root.appendingPathComponent("pruned"), content: nil)
+      try transaction.replace(
+        root.appendingPathComponent("created/skill"), content: root.appendingPathComponent("new"),
+        link: true)
       try transaction.commit()
     }
   }
@@ -134,9 +138,46 @@ private final class TransactionFixture {
     #expect(try store.loadDeclaration().agents == (committed ? [.codex] : nil))
     #expect(try store.loadResolved().sources.isEmpty == !committed)
     #expect(
+      FileManager.default.fileExists(
+        atPath: root.appendingPathComponent("created/skill/SKILL.md").path) == committed)
+    #expect(
       FileManager.default.fileExists(atPath: root.appendingPathComponent("pruned").path)
         == !committed)
   }
 }
 
 private final class TransactionTestBundle: NSObject {}
+
+extension StateTransactionTests {
+  @Test func recoversAnInterruptedInitialJournalWrite() throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
+    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    let before = try Data(contentsOf: store.resolvedURL)
+    let staging = store.directory.appendingPathComponent("transaction.new")
+    try Data("partial journal".utf8).write(to: staging)
+    #expect(throws: CoreError.transactionRecovered(store.directory.path)) {
+      try store.loadDeclaration()
+    }
+    #expect(try Data(contentsOf: store.resolvedURL) == before)
+    #expect(!FileManager.default.fileExists(atPath: staging.path))
+  }
+
+  @Test(arguments: [
+    "{broken",
+    "{\"id\":\"00000000-0000-0000-0000-000000000000\",\"phase\":\"committed\",\"entries\":[],\"directories\":[],\"discarded\":true}",
+  ])
+  func corruptJournalDoesNotChangeState(_ json: String) throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
+    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    let before = try Data(contentsOf: store.resolvedURL)
+    let journal = store.directory.appendingPathComponent("transaction.json")
+    try Data(json.utf8).write(to: journal)
+    #expect(throws: (any Error).self) { try store.loadResolved() }
+    #expect(try Data(contentsOf: store.resolvedURL) == before)
+    #expect(try Data(contentsOf: journal) == Data(json.utf8))
+  }
+}

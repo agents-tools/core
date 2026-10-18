@@ -98,7 +98,7 @@ struct SourceCacheTests {
 }
 
 extension SourceCacheTests {
-  @Test(arguments: ["cache", "materialized", "source", "pin"])
+  @Test(arguments: ["state", "cache", "materialized", "source", "pin"])
   func rejectsSymlinkedCacheAncestryWithoutDeletingExternalFiles(_ level: String) throws {
     let root = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -115,6 +115,9 @@ extension SourceCacheTests {
     try Data("keep".utf8).write(to: external.appendingPathComponent("unrelated"))
     let link: URL
     switch level {
+    case "state":
+      link = store.directory
+      try FileManager.default.removeItem(at: link)
     case "cache": link = store.cacheDirectory
     case "materialized": link = store.cacheDirectory.appendingPathComponent("materialized")
     case "source": link = source

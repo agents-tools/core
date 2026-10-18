@@ -36,6 +36,9 @@ try store.withLock {
       store.resolvedURL, content: nil,
       data: StateStore.encode(ResolvedState(sources: ["local:/new": LockedSource(kind: .local)])))
     try transaction.replace(root.appendingPathComponent("pruned"), content: nil)
+    try transaction.replace(
+      root.appendingPathComponent("created/skill"), content: root.appendingPathComponent("new"),
+      link: true)
     try transaction.commit()
   }
 }

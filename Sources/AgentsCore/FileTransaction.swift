@@ -80,10 +80,10 @@ package final class FileTransaction {
     try Self.persist(journal, store: store)
     do {
       try checkpoint("journal.preparing")
-      for directory in journal.directories {
+      for (index, directory) in journal.directories.enumerated() {
         let parent = try DirectoryHandle(at: directory.deletingLastPathComponent())
         try parent.makeDirectory(directory.lastPathComponent)
-        try checkpoint("directory.\(directory.path)")
+        try checkpoint("directory.\(index)")
       }
       for (index, entry) in entries.enumerated() {
         let parent = try contents[index].parent ?? DirectoryHandle(at: entry.parent)
@@ -137,10 +137,19 @@ package final class FileTransaction {
   /// Returns true only after an abandoned journal has been recovered completely.
   package static func recover(store: StateStore) throws -> Bool {
     let url = journalURL(store)
-    guard (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil else { return false }
+    guard (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil else {
+      let staging = store.directory.appendingPathComponent("transaction.new")
+      guard (try? FileManager.default.attributesOfItem(atPath: staging.path)) != nil else {
+        return false
+      }
+      guard let directory = try store.openDirectoryIfPresent() else {
+        throw CoreError.invalidState("missing transaction directory")
+      }
+      try directory.remove(staging.lastPathComponent)
+      return true
+    }
     let data = try Data(contentsOf: url)
-    try JSONKeys.validate(data)
-    var journal = try JSONDecoder().decode(Journal.self, from: data)
+    var journal = try StateStore.decode(data, as: Journal.self)
     guard
       journal.entries.allSatisfy({
         !$0.name.isEmpty && $0.name != "." && $0.name != ".." && !$0.name.contains("/")
@@ -192,7 +201,9 @@ package final class FileTransaction {
         }
       }
     }
-    let directory = try DirectoryHandle(at: store.directory.resolvingSymlinksInPath())
+    guard let directory = try store.openDirectoryIfPresent() else {
+      throw CoreError.invalidState("missing transaction directory")
+    }
     try directory.remove("transaction.new")
     try directory.remove(journalURL(store).lastPathComponent)
     try checkpoint("journal.removed")
@@ -207,7 +218,9 @@ package final class FileTransaction {
   }
 
   private static func persist(_ journal: Journal, store: StateStore) throws {
-    let directory = try DirectoryHandle(at: store.directory.resolvingSymlinksInPath())
+    guard let directory = try store.openDirectoryIfPresent() else {
+      throw CoreError.invalidState("missing transaction directory")
+    }
     let staging = "transaction.new"
     try directory.remove(staging)
     try directory.write(staging, data: StateStore.encode(journal))

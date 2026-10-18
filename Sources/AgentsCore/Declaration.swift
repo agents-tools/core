@@ -90,8 +90,11 @@ public struct SourceDeclaration: Codable, Equatable, Sendable {
       : location.hasPrefix("~/")
         ? environment.homeDirectory.appendingPathComponent(String(location.dropFirst(2))).path
         : location
-    return URL(fileURLWithPath: expanded, relativeTo: environment.projectDirectory)
-      .standardizedFileURL
+    return URL(
+      fileURLWithPath: expanded,
+      relativeTo: URL(fileURLWithPath: environment.projectDirectory.path, isDirectory: true)
+    )
+    .standardizedFileURL
   }
 
   package var gitURL: String {

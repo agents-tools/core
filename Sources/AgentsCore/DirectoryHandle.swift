@@ -54,6 +54,7 @@ final class DirectoryHandle {
     defer { closedir(stream) }
     rewinddir(stream)
     var names: [String] = []
+    errno = 0
     while let entry = readdir(stream) {
       let name = withUnsafePointer(to: &entry.pointee.d_name) {
         $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.d_namlen) + 1) {
@@ -62,6 +63,7 @@ final class DirectoryHandle {
       }
       if name != "." && name != ".." { names.append(name) }
     }
+    guard errno == 0 else { throw CoreError.unsafePath("cannot enumerate \(url.path)") }
     return names.sorted()
   }
 
