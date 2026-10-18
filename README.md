@@ -1,7 +1,7 @@
 # core
 
-Swift libraries for managing agent skills from declared sources and transforming
-instruction text. The package provides the engine for `agents` in
+Swift libraries for managing agent skills and instructions from declared
+sources. The package provides the engine for `agents` in
 `agents-tools/cli` and `skill` in `skill-cli/cli`. Those consumers own command
 parsing, terminal output and executable distribution.
 
@@ -13,13 +13,13 @@ parsing, terminal output and executable distribution.
 - **AgentsSkills**: `SKILL.md` discovery and frontmatter, well-known artifacts,
   installation, updates, removal, listing, initialization and diagnostics. It
   depends on `AgentsCore` and Yams.
-- **AgentsInstructions**: in-memory validation and rendering of instruction
-  sources, managed Markdown blocks, drift reports, Claude forwarding, and
-  ChatGPT prompts. It uses `AgentsCore` for hashing and `swift-markdown` for
-  CommonMark structure; callers own files and instruction lifecycle state.
+- **AgentsInstructions**: instruction discovery, lifecycle operations, audits,
+  managed Markdown blocks, Claude forwarding and named ChatGPT prompts. It uses
+  `AgentsCore` for sources, state and transactions, and `swift-markdown` for
+  CommonMark structure. Pure text APIs remain available separately.
 
-`AgentsCore` defines the instruction declaration and lock models. Instruction
-lifecycle integration and watch subscriptions are separate implementation work.
+`AgentsCore` defines the instruction declaration and lock models. Watch
+subscriptions are separate implementation work.
 Skill operations preserve the instruction and watch declarations and the locked
 instruction records.
 
@@ -66,9 +66,37 @@ removals, entry types and symbolic link destinations. Installed inventory valida
 skill metadata and excludes missing entries; managed inventory retains those
 records for diagnosis.
 
-State operations recover interrupted transactions before proceeding and report
+Mutating state operations recover interrupted transactions before proceeding and report
 `CoreError.transactionRecovered` when the command should be retried. The durable
 scope journal covers installations, declaration, lock and cache pruning.
+
+`InstructionOperations` manages ordered sections from committed `.md` files
+under a source's `instructions/` or `.agents/instructions/` search root:
+
+- `add(_:)` selects sections and writes every recipient together. Conflicting
+  custom sections stop the operation unless `replace` is enabled.
+- `list(source:...)` inspects a source; `listManaged(...)` returns locked sections,
+  prompts and physical targets.
+- `updateInstalled(...)` previews resolutions, target differences and changed
+  ChatGPT prompts. With `apply: true`, a throwing `beforeApply` callback can show
+  differences or cancel before files and state change.
+- `installResolvedReport(...)` restores locked sections, offsets and targets.
+  `remove(...)` preserves custom content and deletes empty files only when their
+  lock records that the tool created them.
+- `renderChatGPT(prompt:...)` renders locked sections plus a custom append file
+  without markers. Prompts live in `instructions.chatgpt`.
+- `doctor(...)` checks drift, scope duplication, Claude forwarding, Codex
+  overrides and size limits, and uncommitted sources. Its `projectRoots`
+  overload audits explicit projects without writing.
+- `initializeInstructions(named:directory:)` creates a valid source skeleton.
+
+Project recipients share `AGENTS.md` except Gemini CLI, which uses `GEMINI.md`.
+Claude project files receive only a managed import when forwarding is needed.
+User locations honor `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and `XDG_CONFIG_HOME`;
+Codex and Claude use separate files. Lost-lock update reports the comparison;
+apply reconstructs the lock without claiming ownership of pre-existing files.
+See [instruction lifecycle](Documentation/Architecture/Instructions.md) for API
+contracts, target paths, read-only inspection and deletion rules.
 
 ## Dependency
 
@@ -119,8 +147,9 @@ git diff --check origin/master
 
 Tests are organized in `Tests/AgentsCoreTests`, `Tests/AgentsSkillsTests`, and
 `Tests/AgentsInstructionsTests`. Filesystem tests use isolated runtime homes and
-disposable local Git fixtures with explicit initial branches; instruction tests
-use in-memory fixtures. Public API tests import the libraries normally.
+disposable local Git fixtures with explicit initial branches. Instruction text
+tests use in-memory fixtures; lifecycle tests use isolated homes and Git
+repositories. Public API tests import the libraries normally.
 
 See [package architecture](Documentation/Architecture/Package.md),
 [state and cache](Documentation/Architecture/State.md), and the

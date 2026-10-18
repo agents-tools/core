@@ -76,6 +76,9 @@ Instruction section records carry name, source, revision or artifact, path and
 hash. Prompts hold ordered locked sections and optional append paths. Physical
 targets record agents, heading offset or import, block hash, and whether the
 file was created by the tool. Skill writes retain these records unchanged.
+Instruction lifecycle writes preserve skill records. Target keys are project
+relative or user-home relative; configured user files outside home use absolute
+keys checked against the runtime's registered instruction locations.
 
 Maps are key sorted. Unordered selections and agent lists are sorted; section
 arrays and each prompt's section order are preserved. Files have a trailing
@@ -94,7 +97,9 @@ operation.
 
 A durable `transaction.json` in the scope state directory records target, state
 file and pruning replacements before mutation. Paths are relative to named
-roots in that scope: `state` and registered agent installation directories. The
+roots in that scope: `state`, registered agent installation directories, and
+registered instruction destinations. Instruction roots permit fixed project
+files, configured user files and named Markdown authoring files. The
 journal binds the state directory and each used root to its physical location
 and filesystem identity. Configured agent containers are resolved at the
 registry boundary; recovery opens journal descendants without following links.
@@ -129,8 +134,10 @@ storage flush.
 
 Recovery throws `CoreError.transactionRecovered` after completing, reporting
 the scope and asking the caller to retry against the recovered generation.
-This also applies to inventory, previews and doctor. Corrupt journals stop the
-operation without guessing a recovery plan. Tests interrupt writers between
+Skill inventory, previews and doctor also recover. Instruction read operations
+instead take an existing shared lock and report pending recovery without
+replaying it, so explicit multi-root instruction audits never write. Corrupt
+journals stop the operation without guessing a recovery plan. Tests interrupt writers between
 rename and parent fsync, interrupt rollback and terminal cleanup, and verify
 that a competing reader waits for the recovering process's lock.
 
