@@ -22,8 +22,10 @@ optional alias, requirement, search path, ordered names and recipients. With
 several units and neither names nor `all`, it returns the units without changing
 the scope, including its cache and lock files. This selection discovery takes the
 read path and stops if recovery is pending. `listOnly` always uses that path.
-A single discovered unit is selected automatically, then rediscovered and
-revalidated under the writer lock before applying. Explicit names and `all`
+A single discovered unit is selected automatically by its normalized source ID
+and exact section name, separately from user-entered names. Writer-lock rediscovery
+must match that identity or fail with an error asking the caller to retry. Content
+and pins can refresh for the same identity. Explicit names and `all`
 enter the writer path directly. Explicit order is preserved;
 `all` adds current units in name order. Add preserves unrelated section and
 skill pins. Source aliases remain shared across kinds.

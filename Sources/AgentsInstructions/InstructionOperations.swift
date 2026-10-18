@@ -8,24 +8,36 @@ public enum InstructionOperations {
     _ options: InstructionAddOptions,
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionAddOutcome {
-    var applying = options
+    var automaticSelection: (sourceID: String, name: String)?
     if options.listOnly || (options.names.isEmpty && !options.all) {
       let outcome = try add(options, apply: false, beforeApply: nil)
       if options.listOnly || outcome.available.count > 1 { return outcome }
-      applying.names = outcome.available.map(\.record.name)
+      automaticSelection = outcome.available.first.map { (outcome.sourceID, $0.record.name) }
     }
-    return try add(applying, apply: true, beforeApply: beforeApply)
+    return try add(
+      options, apply: true, automaticSelection: automaticSelection, beforeApply: beforeApply)
   }
 
   private static func add(
     _ options: InstructionAddOptions, apply: Bool,
+    automaticSelection: (sourceID: String, name: String)? = nil,
     beforeApply: ((InstructionUpdateReport) throws -> Void)?
   ) throws -> InstructionAddOutcome {
     let store = StateStore(scope: options.scope, environment: options.environment)
     return try operate(store, apply: apply) { previousDeclaration, previous in
       var declaration = previousDeclaration
-      let source = try sourceDeclaration(options, declaration: declaration)
-      let id = try source.identity(environment: options.environment)
+      let selectionChanged = CoreError.invalidState(
+        "automatic instruction selection changed during discovery; retry the command")
+      let source: SourceDeclaration
+      let id: String
+      do {
+        source = try sourceDeclaration(options, declaration: declaration)
+        id = try source.identity(environment: options.environment)
+      } catch {
+        if automaticSelection != nil { throw selectionChanged }
+        throw error
+      }
+      if let automaticSelection, automaticSelection.sourceID != id { throw selectionChanged }
       let existing = try declaration.sources.keys.sorted().first {
         try declaration.sources[$0]?.identity(environment: options.environment) == id
       }
@@ -42,21 +54,27 @@ public enum InstructionOperations {
       try declaration.validate(environment: options.environment)
       let sources = InstructionSources(store: store)
       let available = try sources.discover(source, cacheSource: apply)
-      guard options.listOnly || !available.isEmpty else {
+      guard options.listOnly || automaticSelection != nil || !available.isEmpty else {
         throw CoreError.notFound("source provides no instructions")
       }
       if !apply {
         return InstructionAddOutcome(sourceID: id, available: available, result: nil)
       }
-      let selected =
-        try options.names.isEmpty
-        ? available
-        : options.names.map { name in
+      let selected: [InstructionUnit]
+      if let automaticSelection {
+        guard let unit = available.first(where: { $0.record.name == automaticSelection.name })
+        else { throw selectionChanged }
+        selected = [unit]
+      } else if options.names.isEmpty {
+        selected = available
+      } else {
+        selected = try options.names.map { name in
           guard let unit = available.first(where: { $0.record.name == name }) else {
             throw CoreError.notFound("instruction section: \(name)")
           }
           return unit
         }
+      }
       guard !selected.isEmpty else { throw CoreError.notFound("source provides no instructions") }
       var instructions = declaration.instructions ?? InstructionsDeclaration()
       if let agents = options.agents { instructions.agents = agents }

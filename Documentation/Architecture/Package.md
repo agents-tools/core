@@ -110,7 +110,9 @@ selections that have no explicit recipients.
 `add` discovers choices through the read path for `listOnly` and when neither
 names nor `all` are supplied. Selection discovery leaves the scope, caches and
 lock files unchanged and stops when recovery is pending. An automatic single-item
-addition rediscovers and revalidates its selected name under the writer lock.
+addition carries its normalized source ID and exact discovered name separately
+from user-entered names. Writer-lock rediscovery must match that identity or fail
+with an error asking the caller to retry. Content can refresh for the same identity.
 Explicit names and `all` use the writer path directly.
 
 Skill initialization is an authoring write: it takes the writer path and recovers

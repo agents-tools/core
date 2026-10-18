@@ -244,8 +244,10 @@ path when no names or `all` are supplied, and for `listOnly`. Their discovery
 uses disposable mirrors and locks, leaving the scope unchanged. Exact cached
 commits can be extracted under an existing mirror lock without fetching. Pending
 recovery stops selection discovery before source access. An automatic single-item
-addition carries the selected name into the writer path and rediscovers and
-revalidates it there; explicit names and `all` enter the writer path directly.
+addition carries the normalized source ID and exact discovered name into the
+writer path separately from user-entered names. Rediscovery must match that
+identity or fail with an error asking the caller to retry; its content and pin
+can refresh. Explicit names and `all` enter the writer path directly.
 Applying prepares all selected content, computes differences,
 stages replacements, and commits target changes and state under the scope lock.
 Pruning participates in that transaction. Pins referenced by skills, instruction

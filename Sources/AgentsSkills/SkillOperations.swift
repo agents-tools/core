@@ -7,24 +7,35 @@ public enum SkillOperations {
   }
 
   static func add(_ options: AddOptions, provider: WellKnownProvider) throws -> AddOutcome {
-    var applying = options
+    var automaticSelection: (sourceID: String, name: String)?
     if options.listOnly || (options.skillNames.isEmpty && !options.all) {
       let outcome = try add(options, provider: provider, apply: false)
       if options.listOnly || outcome.availableSkills.count > 1 { return outcome }
-      applying.skillNames = outcome.availableSkills.map(\.name)
+      automaticSelection = outcome.availableSkills.first.map { (outcome.sourceID, $0.name) }
     }
-    return try add(applying, provider: provider, apply: true)
+    return try add(options, provider: provider, apply: true, automaticSelection: automaticSelection)
   }
 
-  private static func add(_ options: AddOptions, provider: WellKnownProvider, apply: Bool) throws
-    -> AddOutcome
-  {
+  private static func add(
+    _ options: AddOptions, provider: WellKnownProvider, apply: Bool,
+    automaticSelection: (sourceID: String, name: String)? = nil
+  ) throws -> AddOutcome {
     let store = StateStore(scope: options.scope, environment: options.environment)
     return try operate(store, apply: apply) { declaration, lock in
       let lifecycle = try SkillLifecycle(store: store, provider: provider)
       var declaration = declaration
-      let source = try sourceDeclaration(options, declaration: declaration)
-      let id = try source.identity(environment: options.environment)
+      let selectionChanged = CoreError.invalidState(
+        "automatic skill selection changed during discovery; retry the command")
+      let source: SourceDeclaration
+      let id: String
+      do {
+        source = try sourceDeclaration(options, declaration: declaration)
+        id = try source.identity(environment: options.environment)
+      } catch {
+        if automaticSelection != nil { throw selectionChanged }
+        throw error
+      }
+      if let automaticSelection, automaticSelection.sourceID != id { throw selectionChanged }
       let existing = try declaration.sources.keys.sorted().first {
         try declaration.sources[$0]?.identity(environment: options.environment) == id
       }
@@ -44,7 +55,14 @@ public enum SkillOperations {
         live: options.mode == .edit
           || (options.listOnly && source.kind == .local && source.requirement == nil),
         fullDepth: options.fullDepth, cacheSource: apply)
-      let selected = try lifecycle.select(available.skills, names: options.skillNames)
+      let selected: [Skill]
+      if let automaticSelection {
+        guard let skill = available.skills.first(where: { $0.name == automaticSelection.name })
+        else { throw selectionChanged }
+        selected = [skill]
+      } else {
+        selected = try lifecycle.select(available.skills, names: options.skillNames)
+      }
       guard options.listOnly || !selected.isEmpty else {
         throw CoreError.notFound("no skills found in \(options.source)")
       }
