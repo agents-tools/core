@@ -26,8 +26,9 @@ final class InstructionSources {
     }
     if source.kind == .local {
       let directory = source.localURL(environment: store.environment)
-      let root = try ProcessRunner.run(
-        "/usr/bin/env", arguments: ["git", "-C", directory.path, "rev-parse", "--show-toplevel"]
+      let root = try ProcessRunner.git(
+        ["-C", directory.path, "rev-parse", "--show-toplevel"],
+        operation: .findRepositoryRoot, source: source.location
       ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
       guard
         URL(fileURLWithPath: root).resolvingSymlinksInPath() == directory.resolvingSymlinksInPath()

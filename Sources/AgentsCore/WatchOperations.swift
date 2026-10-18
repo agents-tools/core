@@ -185,7 +185,7 @@ public struct WatchOperations: Sendable {
     if source.kind != .wellKnown {
       let head = try cache.watchRevision(source, revision: revision)
       try checkpoint("watch.mirror.fetched")
-      try cache.retainWatchRevision(sourceID: id, revision: head)
+      try cache.retainWatchRevision(sourceID: id, source: source.location, revision: head)
       return .revision(head)
     }
     guard revision == nil else {
@@ -267,7 +267,8 @@ public struct WatchOperations: Sendable {
       guard source.kind != .wellKnown else { throw CoreError.invalidState("watch kind mismatch") }
       let head = try cache.watchRevision(source)
       current = .revision(head)
-      count = try cache.watchCommitCount(sourceID: id, seen: revision, current: head)
+      count = try cache.watchCommitCount(
+        sourceID: id, source: source.location, seen: revision, current: head)
       before = try units(source, revision: revision, cache: cache)
       after = revision == head ? before : try units(source, revision: head, cache: cache)
     case .artifacts(let digests):

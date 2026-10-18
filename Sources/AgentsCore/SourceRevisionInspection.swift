@@ -11,26 +11,32 @@ extension SourceCache {
     }
     if source.kind == .local {
       let root = source.localURL(environment: store.environment)
-      func git(_ arguments: [String]) throws -> String {
-        try ProcessRunner.run(
-          "/usr/bin/env", arguments: ["git", "--no-optional-locks", "-C", root.path] + arguments
+      func git(_ arguments: [String], operation: GitError.Operation) throws -> String {
+        try ProcessRunner.git(
+          ["--no-optional-locks", "-C", root.path] + arguments,
+          operation: operation, source: source.location
         ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
       }
-      let tags = try git(["tag", "--list"]).split(separator: "\n").map(String.init)
+      let tags = try git(["tag", "--list"], operation: .listTags).split(separator: "\n").map(
+        String.init)
       let ref = try SourceReference(requirement: source.requirement, tags: tags)
       return try SourceRevision(
-        revision: git(["rev-parse", "--verify", ref.name + "^{commit}"]), version: ref.version)
+        revision: git(
+          ["rev-parse", "--verify", ref.name + "^{commit}"],
+          operation: .resolveRevision(revision: ref.name)),
+        version: ref.version)
     }
     func cachedCommit(_ object: String) throws -> String? {
-      try? inspectCommit(object, sourceID: id)
+      try? inspectCommit(object, sourceID: id, source: source.location)
     }
     if case .revision(let object) = source.requirement, Self.isObjectID(object),
       let commit = try cachedCommit(object)
     {
       return SourceRevision(revision: commit)
     }
-    let output = try ProcessRunner.run(
-      "/usr/bin/env", arguments: ["git", "--no-optional-locks", "ls-remote", "--", source.gitURL]
+    let output = try ProcessRunner.git(
+      ["--no-optional-locks", "ls-remote", "--", source.gitURL],
+      operation: .listRemoteReferences, source: source.location
     ).stdout
     var refs: [String: String] = [:]
     for line in output.split(separator: "\n") {

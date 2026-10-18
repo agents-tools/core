@@ -53,12 +53,11 @@ enum InstructionSourceDiagnostics {
       if let root {
         do {
           let paths = Set(pins.map(\.path)).sorted()
-          let output = try ProcessRunner.run(
-            "/usr/bin/env",
-            arguments: [
-              "git", "--no-optional-locks", "-C", root.path, "status", "--porcelain",
+          let output = try ProcessRunner.git(
+            [
+              "--no-optional-locks", "-C", root.path, "status", "--porcelain",
               "--untracked-files=all", "--",
-            ] + paths
+            ] + paths, operation: .readStatus, source: root.path
           ).stdout
           if !output.isEmpty {
             diagnostics.append(

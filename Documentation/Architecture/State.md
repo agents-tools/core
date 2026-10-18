@@ -172,6 +172,12 @@ deletions before retrying Git; the pending marker also covers interruption of
 this cleanup. Live mirror users and surviving Git children block recovery, so
 their Git locks and refs cannot be removed or recreated beneath them.
 
+Git runs with terminal and Git Credential Manager prompting disabled while
+preserving the rest of the inherited environment. Failures identify the action
+and source location rather than its mirror, staging or extraction paths; see
+[process execution and errors](Package.md#process-execution-and-errors) for the
+consumer error contract.
+
 Each mutating state operation first checks for an abandoned journal under the
 scope lock, then validates watch state and finishes pending ref cleanup before
 proceeding. An applying journal rolls back every replacement, including watch

@@ -442,13 +442,12 @@ public enum SkillOperations {
           guard !skills.isEmpty else { continue }
           if source.kind == .local {
             let paths = skills.compactMap(\.path)
-            let output = try? ProcessRunner.run(
-              "/usr/bin/env",
-              arguments: [
-                "git", "--no-optional-locks", "-C", source.localURL(environment: environment).path,
+            let output = try? ProcessRunner.git(
+              [
+                "--no-optional-locks", "-C", source.localURL(environment: environment).path,
                 "status", "--porcelain",
                 "--",
-              ] + paths
+              ] + paths, operation: .readStatus, source: source.location
             ).stdout
             if let output, !output.isEmpty {
               checks.append(

@@ -24,7 +24,36 @@ func signalContention() throws {
   defer { try? signal.close() }
   try signal.write(contentsOf: Data("contended\n".utf8))
 }
-if arguments[2] == "locked-git" {
+if arguments[2] == "git-environment" {
+  let before = ProcessInfo.processInfo.environment
+  let cache = SourceCache(store: store)
+  let source = SourceDeclaration(kind: .local, location: root.appendingPathComponent("source").path)
+  _ = try cache.resolve(source)
+  _ = try cache.inspectRevision(source)
+  _ = try cache.resolve(source)
+  let helper = root.appendingPathComponent("ssh-helper")
+  try Data(
+    """
+    #!/bin/sh
+    printf 'protocol=https\\nhost=example.invalid\\n\\n' | \
+      git -c credential.helper= \
+      -c "credential.helper=!printf 'username=fixture\\npassword=fixture\\n'" credential fill >&2
+    exit 1
+    """.utf8
+  ).write(to: helper)
+  let quotedHelper = "'" + helper.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+  do {
+    try ProcessRunner.git(
+      [
+        "-c", "core.sshCommand=/bin/sh " + quotedHelper, "-c", "ssh.variant=ssh",
+        "ls-remote", "--", "ssh://git@example.invalid/source.git",
+      ], operation: .listRemoteReferences, source: "ssh://git@example.invalid/source.git")
+    preconditionFailure("SSH helper must fail after reading credentials")
+  } catch let error as GitError {
+    precondition(error.stderr.contains("username=fixture\npassword=fixture"), error.description)
+  }
+  precondition(ProcessInfo.processInfo.environment == before)
+} else if arguments[2] == "locked-git" {
   close(STDOUT_FILENO)
   close(STDERR_FILENO)
   if arguments[4] == "all" { close(STDIN_FILENO) }
