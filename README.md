@@ -5,9 +5,9 @@
 <h1 align="center">core</h1>
 
 Swift libraries for managing agent skills and instructions from declared
-sources. The package provides the engine for `agents` in
-`agents-tools/cli`; `skill` in `skill-cli/cli` is moving onto it. Consumers own
-command parsing, terminal output and executable distribution.
+sources. Both `agents` in `agents-tools/cli` and `skill` in `skill-cli/cli`
+consume this package. Consumers own command parsing, terminal output and
+executable distribution.
 
 ## Modules
 
