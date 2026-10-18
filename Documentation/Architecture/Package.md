@@ -114,11 +114,20 @@ Splicing uses physical line boundaries. The adapter verifies ATX syntax on the
 start line: one through six hashes followed by a space, tab, or end of line,
 with at most three leading spaces at the top level. Within AST-confirmed
 containers, a small prefix scan locates the opening run after list and quote
-prefixes. A top-level Setext span ends at a physically verified underline:
+prefixes. A top-level Setext span starts after any leading link reference
+definitions consumed from its paragraph block. Because those definitions have
+no AST nodes, the adapter reparses original physical prefixes and identifies
+complete definition-only prefixes by their empty document trees. This also
+handles multiline labels, destinations, and titles. Definition lines remain
+custom bytes and are excluded from section comparisons and replacement ranges,
+including when a selected parent section contains the Setext heading.
+A top-level Setext span ends at a physically verified underline:
 up to three leading spaces, a nonempty run of the appropriate `=` or `-`, and
 optional trailing spaces or tabs. Inline source coordinates are not physical
 positions and are never used to slice target bytes. Setext end coordinates are
-also unsuitable because they can extend into the next block.
+also unsuitable because they can extend into the next block. Prefix verification
+is limited to Setext paragraph blocks that could begin with a reference
+definition; CommonMark remains responsible for recognizing the definitions.
 
 Because the AST does not expose fence or HTML closure state, source validation
 reparses a continuation token in the terminal block's container and checks
@@ -148,12 +157,22 @@ and content lines, including the final LF. Drift detection accepts an optional
 reconstructed locked block for a textual difference; a hash alone establishes
 drift but cannot recover the old text.
 
-`ClaudeForwarding` renders import blocks, recognizes equivalent unquoted
-`@path` tokens in AST text-node strings, skipping code spans, code blocks, and
-HTML nodes. It classifies existing project Claude files from caller-supplied
-bytes and symbolic-link metadata. Imports resolve relative to the containing file;
-backslash-escaped spaces are supported and quoted paths are not imports, as
-specified by [Claude Code's import syntax](https://code.claude.com/docs/en/memory#import-additional-files).
+`ClaudeForwarding` renders import blocks and classifies existing project Claude
+files from caller-supplied bytes and symbolic-link metadata. Forwarding requires
+a standalone, unquoted and unformatted line containing only an equivalent
+import of the project's `AGENTS.md` outside code and HTML, with optional
+surrounding whitespace, or the tool's managed import block. Paths resolve
+relative to the containing file; backslash-escaped spaces are supported.
+Inline prose, formatting, and quoted tokens do not suppress the caller's
+managed import. A duplicate import is acceptable to ensure loading.
+
+Recognition starts with complete physical lines. Candidate lines are replaced
+in memory with unique plain-text tokens, preserving their whitespace and line
+endings. A token must parse as direct text in a top-level paragraph to qualify;
+code, HTML, headings, containers, and inline formatting cannot establish
+forwarding. This verifies context for multiline constructs without using
+inline source coordinates or treating an inline-node boundary as a path end.
+The probe is never emitted. Malformed managed markers still produce errors.
 Callers own ancestor-file warnings, actual filesystem access, declaration and lock updates, and deletion decisions using
 the lock's `created` flag. This target performs no I/O.
 

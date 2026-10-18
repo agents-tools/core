@@ -19,6 +19,11 @@ repositories.
   ChatGPT prompts. It uses `AgentsCore` for hashing and `swift-markdown` for
   CommonMark structure; callers own files and instruction lifecycle state.
 
+Claude forwarding recognizes standalone, unquoted and unformatted imports of
+that project's `AGENTS.md` outside code and HTML, including managed import
+blocks. Inline mentions do not suppress the caller's managed import block;
+a duplicate import is acceptable to ensure the instructions load.
+
 `SkillOperations` exposes skill workflows. `SkillOperations.watches` supplies
 watch operations with support for both the current JSON ledger and legacy YAML
 ledgers. Pass a `RuntimeEnvironment` to select the project, home directory, and

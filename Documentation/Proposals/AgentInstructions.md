@@ -417,7 +417,11 @@ above it. When `claude-code` is a target in project scope:
   `CLAUDE.local.md`, the tool writes a managed block containing an import of
   the project's `AGENTS.md` into the first of them that exists, with the path
   relative to that file (`@AGENTS.md`, or `@../AGENTS.md` in
-  `.claude/CLAUDE.md`). An existing equivalent import counts as forwarding;
+  `.claude/CLAUDE.md`). An existing import of the project's `AGENTS.md`, resolved
+  relative to the containing file, counts as forwarding only as the tool's
+  managed import block or as a standalone, unquoted and unformatted import line
+  outside code and HTML, with optional surrounding whitespace; inline prose,
+  formatted tokens, and quoted tokens do not count;
 - a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` in a directory above
   the project root is outside the project; `doctor` warns about it and nothing
   is written. User-level and managed-policy files do not count.
