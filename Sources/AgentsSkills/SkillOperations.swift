@@ -96,7 +96,17 @@ public enum SkillOperations {
       for skill in selected {
         let name = PathSafety.sanitizeName(skill.name)
         if let current = lock.skills[name], current.source != id {
-          throw CoreError.invalidSkill("skill '\(name)' already belongs to \(current.source)")
+          let ownerAlias = try declaration.sources.keys.sorted().first {
+            try declaration.sources[$0]?.identity(environment: options.environment)
+              == current.source
+          }
+          let owner = ownerAlias.map { "'\($0)' (\(current.source))" } ?? current.source
+          let locations = AgentID.allCases.filter { current.installs[$0.rawValue] != nil }.map {
+            "\($0.rawValue) at \(SkillLifecycle.target(name: name, agent: $0, store: store).path)"
+          }.joined(separator: ", ")
+          throw CoreError.invalidSkill(
+            "skill '\(name)' in \(options.scope.rawValue) scope already belongs to source \(owner); "
+              + "cannot add from source '\(alias)' (\(id)). Existing installations: \(locations)")
         }
         let item = try lifecycle.prepare(
           skill, in: available, declaration: selection, defaultAgents: declaration.defaultAgents)

@@ -6,6 +6,53 @@ import Testing
 
 @Suite("Installation safety")
 struct InstallationSafetyTests {
+  @Test(arguments: [InstallScope.project, .user], [InstallMode.link, .copy, .edit])
+  func conflictingOwnersPreserveStateAndInstallations(_ scope: InstallScope, _ mode: InstallMode)
+    throws
+  {
+    let fixture = try SkillFixture()
+    try fixture.skill("Demo Skill", body: "existing owner")
+    try fixture.commit()
+    let agents: [AgentID] = [.codex, .claudeCode]
+    let installed = try SkillOperations.add(
+      AddOptions(
+        source: fixture.repo.path, alias: "existing", agents: agents, skillNames: ["Demo Skill"],
+        scope: scope, mode: mode, environment: fixture.environment))
+    let other = try SkillFixture()
+    try other.skill("demo-skill", body: "requested owner")
+    try other.commit()
+    let requestedID = try SourceDeclaration(kind: .local, location: other.repo.path).identity(
+      environment: fixture.environment)
+    let store = fixture.store(scope)
+    let stateFiles = [store.declarationURL, store.resolvedURL]
+    let stateBefore = try stateFiles.map { try Data(contentsOf: $0) }
+    let targets = installed.installed.map { URL(fileURLWithPath: $0.path) }
+    let contentBefore = try targets.map { try FileHash.folderHash($0) }
+    let entriesBefore = try targets.map { try FileHash.folderHash($0.deletingLastPathComponent()) }
+
+    #expect {
+      try SkillOperations.add(
+        AddOptions(
+          source: other.repo.path, alias: "requested", agents: agents, skillNames: ["demo-skill"],
+          scope: scope, mode: mode, environment: fixture.environment))
+    } throws: { error in
+      guard case CoreError.invalidSkill(let message) = error else { return false }
+      #expect(message.contains("demo-skill"))
+      #expect(message.contains("'existing' (\(installed.sourceID))"))
+      #expect(message.contains("'requested' (\(requestedID))"))
+      #expect(message.contains("\(scope.rawValue) scope"))
+      for installation in installed.installed {
+        #expect(message.contains("\(installation.agent.rawValue) at \(installation.path)"))
+      }
+      return true
+    }
+
+    #expect(try stateFiles.map { try Data(contentsOf: $0) } == stateBefore)
+    #expect(try targets.map { try FileHash.folderHash($0) } == contentBefore)
+    #expect(
+      try targets.map { try FileHash.folderHash($0.deletingLastPathComponent()) } == entriesBefore)
+  }
+
   @Test func liveEditSourceRetainsSharedMaterializationAndFailureCleanup() throws {
     let fixture = try SkillFixture()
     try fixture.skill("one", body: "A")
