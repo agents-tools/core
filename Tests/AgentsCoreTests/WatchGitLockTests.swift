@@ -72,6 +72,14 @@ struct WatchGitLockTests {
     try FileManager.default.removeItem(at: ready)
     try FileManager.default.removeItem(at: hook)
     for lock in locks { #expect(FileManager.default.fileExists(atPath: lock.path)) }
+    // Pruning the disappeared upstream branch would need the abandoned packed-refs lock.
+    try fixture.rewrite("later")
+    let before = try FileHash.folderHash(fixture.store.directory)
+    let pending = CoreError.invalidState("transaction recovery is required before inspection")
+    #expect(throws: pending) { try fixture.watch.status(environment: fixture.environment) }
+    #expect(try FileHash.folderHash(fixture.store.directory) == before)
+    #expect(throws: pending) { try fixture.watch.diff("source", environment: fixture.environment) }
+    #expect(try FileHash.folderHash(fixture.store.directory) == before)
     let committed = try fixture.stateBytes()
 
     let additional = ["config.lock", "objects/pack/abandoned.lock"].map {

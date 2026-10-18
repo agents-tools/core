@@ -118,10 +118,13 @@ blocks mutations before fetching, cache publication, installation or state
 replacement.
 
 Status and diff take an existing shared scope lock without creating state files
-or replaying recovery. A pending transaction journal fails inspection with
+or replaying recovery. When a first writer creates the scope lock during an
+unlocked read, inspection discards that attempt, including any error, and retries
+under the shared lock. A pending transaction journal or watch-ref cleanup marker
+fails inspection with
 `CoreError.invalidState` ("transaction recovery is required before inspection").
-A pending watch-ref cleanup marker does not block inspection or trigger cleanup;
-comparisons use the committed baseline while obsolete refs remain retained.
+Inspection leaves pending cleanup and retained refs untouched for the next
+mutating operation to recover.
 Status and diff may fetch into mirrors under each mirror's lock and download
 current index artifacts for inspection. They use disposable snapshots and memory,
 leave retained artifact content unchanged, and do not write declaration, lock,

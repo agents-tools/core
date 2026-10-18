@@ -32,12 +32,12 @@ extension StateStore {
         }
       }
       defer { if descriptor >= 0 { flock(descriptor, LOCK_UN) } }
-      if try hasPendingRecovery(in: directory) { return try onPendingRecovery() }
-      let result = Result(catching: body)
+      let pending = try hasPendingRecovery(in: directory)
+      let result = Result { try pending ? onPendingRecovery() : body() }
       // Writers create the lock before mutation and never remove it. A failed
       // unlocked read also needs revalidation before its error can be trusted.
       if descriptor < 0, let current = try openDirectoryIfPresent(),
-        try current.info(".agents.lock") != nil || hasPendingRecovery(in: current)
+        try current.info(".agents.lock") != nil || (!pending && hasPendingRecovery(in: current))
       {
         continue
       }
@@ -47,5 +47,6 @@ extension StateStore {
 
   private func hasPendingRecovery(in directory: DirectoryHandle?) throws -> Bool {
     try directory?.info("transaction.json") != nil || directory?.info("transaction.new") != nil
+      || directory?.info("watch-refs.pending") != nil
   }
 }

@@ -25,7 +25,7 @@ struct WatchInspectionTests {
   }
 
   @Test(arguments: ["journal.removed", "watch.references.deleted"])
-  func pendingRefCleanupReadsTheCommittedBaseline(_ step: String) throws {
+  func pendingRefCleanupLeavesStateUnchanged(_ step: String) throws {
     let fixture = try WatchGitFixture()
     let first = try fixture.head()
     try fixture.watch.add("source", environment: fixture.environment)
@@ -43,32 +43,12 @@ struct WatchInspectionTests {
     let refs: Set<String> = step == "journal.removed" ? [first, committed] : [committed]
     try #require(try fixture.watchRefs() == refs)
     try fixture.rewrite("later")
-    let current = try fixture.head()
-    // Fetch the new head before snapshotting so permitted mirror updates are already present.
-    _ = try SourceCache(store: fixture.store).resolve(
-      SourceDeclaration(kind: .local, location: fixture.repo.path))
     let before = try FileHash.folderHash(fixture.store.directory)
+    let pending = CoreError.invalidState("transaction recovery is required before inspection")
 
-    let statuses = try fixture.watch.status(environment: fixture.environment)
+    #expect(throws: pending) { try fixture.watch.status(environment: fixture.environment) }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
-    try #require(statuses.count == 1)
-    let status = try #require(statuses.first)
-    #expect(status.seen == .revision(committed))
-    #expect(status.current == .revision(current))
-    #expect(status.commitCount == 1)
-    try #require(status.changes.count == 1)
-    let change = try #require(status.changes.first)
-    #expect(change.name == "rule")
-    #expect(change.kind == .instructions)
-    #expect(change.change == .changed)
-    try #require(change.files.count == 1)
-    let file = try #require(change.files.first)
-    #expect(file.path == "rule.md")
-    #expect(file.before == .file(Data("# Rule\nreplacement\n".utf8), executable: false))
-    #expect(file.after == .file(Data("# Rule\nlater\n".utf8), executable: false))
-
-    let diff = try fixture.watch.diff("source", environment: fixture.environment)
-    #expect(diff == status)
+    #expect(throws: pending) { try fixture.watch.diff("source", environment: fixture.environment) }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
     #expect(try fixture.watchRefs() == refs)
   }

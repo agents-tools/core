@@ -32,8 +32,10 @@ struct ReadOnlyInspectionTests {
         let descriptor = open(lock.path, O_RDONLY | O_CLOEXEC)
         try #require(descriptor >= 0)
         defer { close(descriptor) }
-        #expect(flock(descriptor, LOCK_EX | LOCK_NB) == -1)
-        #expect(errno == EWOULDBLOCK)
+        let acquired = flock(descriptor, LOCK_EX | LOCK_NB)
+        let lockError = errno
+        #expect(acquired == -1)
+        #expect(lockError == EWOULDBLOCK)
       }
       return skills
     }
@@ -41,6 +43,21 @@ struct ReadOnlyInspectionTests {
     #expect(skills.keys.sorted() == ["demo"])
     #expect(skills["demo"]?.revision == (try fixture.head()))
     #expect(try fixture.body(fixture.target("demo")).contains("Committed content"))
+  }
+
+  @Test(arguments: [InstallScope.project, .user])
+  func pendingRefCleanupSurvivesDoctorsListingsAndPreviews(_ scope: InstallScope) throws {
+    let fixture = try SkillFixture()
+    try fixture.skill("demo", body: "Original")
+    try fixture.commit()
+    _ = try fixture.add(mode: .copy, scope: scope)
+    try SkillOperations.watchOperations().add(
+      "fixture", scope: scope, environment: fixture.environment)
+    try Data().write(
+      to: fixture.store(scope).directory.appendingPathComponent("watch-refs.pending"))
+
+    try inspectPendingRecovery(
+      root: fixture.root, scope: scope, environment: fixture.environment, source: fixture.repo.path)
   }
 
   @Test(arguments: [InstallScope.project, .user])
@@ -99,57 +116,8 @@ struct ReadOnlyInspectionTests {
     try #require(
       FileManager.default.fileExists(
         atPath: store.directory.appendingPathComponent("transaction.json").path))
-    let before = try snapshot(root)
-
-    let skills = try SkillOperations.doctor(scope: scope, environment: environment)
-    #expect(skills.checks.map(\.id) == ["pending-recovery"])
-    #expect(skills.checks.first?.status == .warning)
-    #expect(skills.ok)
-    #expect(skills.checks.first?.path == store.directory.path)
-    #expect(skills.checks.first?.message.contains("next command that changes this scope") == true)
-    #expect(try snapshot(root) == before)
-    let report = try InstructionOperations.doctor(scope: scope, environment: environment)
-    #expect(report.diagnostics.map(\.kind) == [.pendingRecovery])
-    #expect(report.diagnostics.first?.path == store.directory)
-    #expect(
-      report.diagnostics.first?.message.contains("next command that changes this scope") == true)
-    #expect(try snapshot(root) == before)
-
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
-    #expect(throws: pending) {
-      try SkillOperations.listManaged(scope: scope, environment: environment)
-    }
-    #expect(try snapshot(root) == before)
-    #expect(throws: pending) {
-      try SkillOperations.listInstalled(scope: scope, environment: environment)
-    }
-    #expect(try snapshot(root) == before)
-    #expect(throws: pending) {
-      try SkillOperations.removableSkillNames(scope: scope, environment: environment)
-    }
-    for listOnly in [false, true] {
-      #expect(throws: pending) {
-        try SkillOperations.add(
-          AddOptions(source: new.path, scope: scope, listOnly: listOnly, environment: environment))
-      }
-      #expect(try snapshot(root) == before)
-      #expect(throws: pending) {
-        try InstructionOperations.add(
-          InstructionAddOptions(
-            source: new.path, listOnly: listOnly, scope: scope, environment: environment))
-      }
-      #expect(try snapshot(root) == before)
-    }
-    #expect(throws: pending) {
-      try SkillOperations.updateInstalled(scope: scope, environment: environment)
-    }
-    #expect(throws: pending) {
-      try InstructionOperations.listManaged(scope: scope, environment: environment)
-    }
-    #expect(throws: pending) {
-      try InstructionOperations.updateInstalled(scope: scope, environment: environment)
-    }
-    #expect(try snapshot(root) == before)
+    try inspectPendingRecovery(
+      root: root, scope: scope, environment: environment, source: new.path)
     #expect(throws: CoreError.transactionRecovered(store.directory.path)) {
       if initialize {
         _ = try SkillOperations.initializeSkill(named: "authored", directory: root)
@@ -353,6 +321,74 @@ struct ReadOnlyInspectionTests {
         $0.kind == .sourceResolutionFailed || $0.kind == .sourceUpdateAvailable
       })
     #expect(try snapshot(fixture.root) == before)
+  }
+
+  private func inspectPendingRecovery(
+    root: URL, scope: InstallScope, environment: RuntimeEnvironment, source: String
+  ) throws {
+    let store = StateStore(scope: scope, environment: environment)
+    let before = try snapshot(root)
+
+    let skills = try SkillOperations.doctor(scope: scope, environment: environment)
+    #expect(skills.checks.map(\.id) == ["pending-recovery"])
+    #expect(skills.checks.first?.status == .warning)
+    #expect(skills.ok)
+    #expect(skills.checks.first?.path == store.directory.path)
+    #expect(skills.checks.first?.message.contains("next command that changes this scope") == true)
+    #expect(try snapshot(root) == before)
+    let report = try InstructionOperations.doctor(scope: scope, environment: environment)
+    #expect(report.diagnostics.map(\.kind) == [.pendingRecovery])
+    #expect(report.diagnostics.first?.path == store.directory)
+    #expect(
+      report.diagnostics.first?.message.contains("next command that changes this scope") == true)
+    #expect(try snapshot(root) == before)
+
+    let pending = CoreError.invalidState("transaction recovery is required before inspection")
+    #expect(throws: pending) {
+      try SkillOperations.listManaged(scope: scope, environment: environment)
+    }
+    #expect(try snapshot(root) == before)
+    #expect(throws: pending) {
+      try SkillOperations.listInstalled(scope: scope, environment: environment)
+    }
+    #expect(try snapshot(root) == before)
+    #expect(throws: pending) {
+      try SkillOperations.removableSkillNames(scope: scope, environment: environment)
+    }
+    for listOnly in [false, true] {
+      #expect(throws: pending) {
+        try SkillOperations.add(
+          AddOptions(source: source, scope: scope, listOnly: listOnly, environment: environment))
+      }
+      #expect(try snapshot(root) == before)
+      #expect(throws: pending) {
+        try InstructionOperations.add(
+          InstructionAddOptions(
+            source: source, listOnly: listOnly, scope: scope, environment: environment))
+      }
+      #expect(try snapshot(root) == before)
+    }
+    #expect(throws: pending) {
+      try SkillOperations.updateInstalled(scope: scope, environment: environment)
+    }
+    #expect(throws: pending) {
+      try InstructionOperations.listManaged(scope: scope, environment: environment)
+    }
+    #expect(throws: pending) {
+      try InstructionOperations.updateInstalled(scope: scope, environment: environment)
+    }
+    #expect(try snapshot(root) == before)
+    #expect(throws: pending) {
+      try InstructionOperations.list(
+        source: SourceDeclaration(kind: .local, location: source),
+        scope: scope, environment: environment)
+    }
+    #expect(try snapshot(root) == before)
+    let watch = SkillOperations.watchOperations()
+    #expect(throws: pending) { try watch.status(scope: scope, environment: environment) }
+    #expect(try snapshot(root) == before)
+    #expect(throws: pending) { try watch.diff(source, scope: scope, environment: environment) }
+    #expect(try snapshot(root) == before)
   }
 
   private func snapshot(_ directory: URL) throws -> [String: SkillFileEntry] {

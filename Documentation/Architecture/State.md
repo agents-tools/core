@@ -195,13 +195,14 @@ for a lock or pending recovery before returning either a result or an error.
 If a writer appeared, inspection discards that attempt and retries under the
 shared lock. Writers create the scope lock before mutation and never remove it.
 Listings, previews, watch status and watch diff fail with `CoreError.invalidState`
-when a transaction journal is pending. A pending watch-ref cleanup marker does
-not block these reads or trigger reconciliation: comparisons use the committed
-baseline while obsolete refs remain retained until the next mutating access.
+when a transaction journal or watch-ref cleanup marker is pending. Inspection
+leaves recovery material, state and retained refs untouched; pending Git ref
+cleanup can also leave mirror locks that prevent fetching safely.
 Each doctor instead reports one pending-recovery diagnostic per affected scope
-and skips checks that require that scope's consistent state. The diagnostic explains that the next
-command changing the scope will recover it. Explicit multi-root instruction audits
-never write. Corrupt journals stop mutations without guessing a recovery plan.
+and skips checks that require that scope's consistent state. The diagnostic
+explains that the next command changing the scope will recover it. Explicit
+multi-root instruction audits never write. Corrupt journals stop mutations
+without guessing a recovery plan.
 Tests interrupt writers between rename and parent fsync, interrupt rollback and terminal cleanup, and verify
 that a competing reader waits for the recovering process's lock.
 
