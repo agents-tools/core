@@ -1,10 +1,6 @@
 # Reference
 
-This directory holds supporting reference material for `skill-cli`.
-
-## Files
-
-- `CLI.md`: current command reference
+This directory holds supporting reference material for `core`.
 
 ## Placement
 

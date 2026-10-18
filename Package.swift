@@ -4,38 +4,22 @@
 import PackageDescription
 
 let package = Package(
-  name: "skill-cli",
+  name: "core",
   platforms: [
     .macOS(.v13)
   ],
   products: [
-    .executable(name: "skill", targets: ["CLI"])
+    .library(name: "AgentsCore", targets: ["AgentsCore"]),
+    .library(name: "AgentsSkills", targets: ["AgentsSkills"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/apple/swift-argument-parser", from: "1.6.1"),
-    .package(url: "https://github.com/jpsim/Yams", from: "6.0.0"),
+    .package(url: "https://github.com/jpsim/Yams", from: "6.0.0")
   ],
   targets: [
-    .target(
-      name: "Core",
-      dependencies: [
-        "Yams"
-      ]
-    ),
-    .executableTarget(
-      name: "CLI",
-      dependencies: [
-        "Core",
-        .product(name: "ArgumentParser", package: "swift-argument-parser"),
-      ]
-    ),
-    .testTarget(
-      name: "CoreTests",
-      dependencies: [
-        "Core",
-        "Yams",
-      ]
-    ),
+    .target(name: "AgentsCore"),
+    .target(name: "AgentsSkills", dependencies: ["AgentsCore", "Yams"]),
+    .testTarget(name: "AgentsCoreTests", dependencies: ["AgentsCore"]),
+    .testTarget(name: "AgentsSkillsTests", dependencies: ["AgentsSkills", "AgentsCore", "Yams"]),
   ],
   swiftLanguageModes: [.v6]
 )

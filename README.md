@@ -1,153 +1,76 @@
-# skill-cli
+# core
 
-A native `skill` CLI for installing and watching agent skills.
+Shared Swift libraries for managing agent skills and their sources. The package
+provides the engine for `agents` in `agents-tools/cli` and for `skill` in
+`skill-cli/cli`. The consumers own command parsing, terminal output, and their
+executable releases; integration with these libraries happens in those
+repositories.
 
-The implementation is scoped to Codex, Claude Code, Cursor, Gemini CLI, and
-OpenCode.
+## Modules
 
-## Requirements
+- **AgentsCore**: source parsing and identity, requirements and semantic
+  versions, process and Git execution, hashing, path safety, agent registry,
+  resolved-state storage, and watch bookkeeping.
+- **AgentsSkills**: `SKILL.md` discovery and frontmatter, well-known skill
+  sources, installation, listing, removal, updates, restoration, initialization,
+  and diagnostics. It depends on `AgentsCore` and Yams.
 
-- Swift 6.3 or newer
-- macOS 13 or newer
+`SkillOperations` exposes skill workflows. `SkillOperations.watches` supplies
+watch operations with support for both the current JSON ledger and legacy YAML
+ledgers. Pass a `RuntimeEnvironment` to select the project, home directory, and
+environment used by an operation. Supported agents are Codex, Claude Code,
+Cursor, Gemini CLI, and OpenCode.
 
-## Build
+## Dependency
+
+Requires Swift 6.3 or newer and macOS 13 or newer, using Swift 6 language mode.
+Add the package and the products needed by your target:
+
+```swift
+// In your Package.swift:
+dependencies: [
+  .package(url: "https://github.com/agents-tools/core.git", branch: "master")
+],
+targets: [
+  .executableTarget(
+    name: "YourCLI",
+    dependencies: [
+      .product(name: "AgentsCore", package: "core"),
+      .product(name: "AgentsSkills", package: "core"),
+    ]
+  )
+]
+```
+
+For local development, use `.package(path: "../core")` instead of the remote
+dependency. Pin a reviewed revision when reproducibility is required.
+
+```swift
+import AgentsCore
+import AgentsSkills
+
+let environment = RuntimeEnvironment()
+let skills = try SkillOperations.listManaged(
+  scope: .project,
+  agents: [.codex],
+  environment: environment
+)
+```
+
+## Development
 
 ```bash
 swift build
-swift test
+env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME swift test
+swift build -c release
+xcrun swift-format lint --configuration .swift-format --recursive Package.swift Sources Tests
+git diff --check
 ```
 
-From a source checkout, `swift run` is the development equivalent of the
-installed `skill` executable:
+Tests are organized by the module they exercise in `Tests/AgentsCoreTests` and
+`Tests/AgentsSkillsTests`. Public workflow tests import the libraries normally
+to check the API available to consumers.
 
-```bash
-swift run skill --help
-swift run skill list
-swift run skill list --all
-swift run skill add <source> --mode copy
-swift run skill add <local-source> --mode edit
-swift run skill doctor --json
-swift run skill install
-```
-
-## Install CLI
-
-Install from the Homebrew tap:
-
-```bash
-brew install --HEAD skill-cli/tap/skill-cli
-skill --help
-```
-
-The tap formula installs the main executable as `skill` and also provides the
-Swift-prefixed executable `swift-skill`.
-
-Use these installed entrypoints for portable CLI usage:
-
-```bash
-skill --help
-swift-skill --help
-```
-
-`swift-skill` is an executable name, not a separate root command. The spelling
-`swift skill` is only a Swift driver convenience when the active toolchain
-dispatches external `swift-*` executables. Apple/Xcode toolchains can dispatch
-that form through `xcrun swift skill`. When the active `swift` comes from a
-Swiftly-managed toolchain, this dispatch may fail with an unknown or missing
-subcommand error; use `swift-skill` directly in that case.
-
-## Install Skills
-
-```bash
-skill install
-skill list <source>
-skill add <source> --agent codex --skill my-skill
-skill add larksuite/cli@branch:main@skill:lark-base --watch --scope user
-skill list --agent codex --json
-skill list --all --scope user
-skill doctor --scope user --json
-skill update my-skill --apply
-skill remove my-skill --agent codex
-```
-
-`skill install` reads resolved state and materializes pinned skills into the
-selected scope's canonical installed-skill surface and agent projections. It
-defaults to project scope; pass `--scope user` to restore user-scope installs.
-`skill add <source>` adds or changes selected-scope skill dependencies and
-updates the resolved file.
-`skill list` reports managed skills from the resolved file and checks whether
-their installed directories still exist. Use `skill list --all` to scan all
-installed skill directories, including unmanaged skills.
-
-Project source checkouts are cached under `.agent/cache`; project installed
-skills are materialized under `.agents/skills`. User-scope source checkouts use
-`$XDG_CACHE_HOME/skill-cli` when set, otherwise `~/Library/Caches/skill-cli` on
-macOS or `~/.cache/skill-cli` on other platforms. User-scope default link-mode
-installs materialize canonical installed copies under `~/.agents/skills`. Agents
-whose configured project skill directory is `.agents/skills` use the canonical
-user directory directly; native-only agents receive projections into their own
-skill directories.
-
-Install modes:
-
-- `--mode link` is the default managed install: skill-cli owns canonical copies
-  and agent projections.
-- `--mode copy` writes physical copies to the selected install surfaces.
-- `--mode edit` is for local development only: the canonical installed skill
-  entry is a live symlink to the local source skill directory, and agent
-  projections link through that canonical entry. It requires an unpinned local
-  source and is rejected for remote sources, source requirements, and watch
-  installs.
-
-`skill doctor` diagnoses resolved state, missing installs, broken links,
-copy drift, source-missing edit installs, fallback copies, and unmanaged
-installed-only skills without mutating skill state.
-
-Supported source shapes include local paths, GitHub/GitLab URLs and shorthand,
-direct git URLs, and well-known skill discovery. Well-known discovery supports
-compatibility `files[]` indexes, v0.2 `skill-md`, and digest-verified archive
-artifacts.
-Source requirements can be expressed with SwiftPM-style flags such as
-`--branch`, `--revision`, `--exact`, `--from`, `--up-to-next-minor-from`, and
-`--to`, or with typed shorthand such as `owner/repo@branch:main@skill:name`.
-
-## Bundled Companion Skill
-
-This repository includes a `skill-cli` companion skill that teaches agents to
-use this CLI for skill lifecycle management. It covers adding, restoring,
-listing, updating, removing, watching, and reviewing skills across project and
-user scopes.
-
-Install it from the published repository:
-
-```bash
-skill add skill-cli/cli@branch:master --path skills/skill-cli --scope user --agent codex
-```
-
-From a source checkout, install the local version for development:
-
-```bash
-skill add . --path skills/skill-cli --scope user --agent codex --mode edit
-```
-
-## Watch Sources
-
-Managed watch mode records source/path state and gates installs through the
-watched baseline or reviewed commit:
-
-```bash
-skill add <source> --watch-only --skill my-skill
-skill add <source> --watch --skill my-skill
-skill diff <source> --watch --path skills/my-skill
-skill review check <source> --watch --path skills/my-skill
-skill review done <source> --watch --path skills/my-skill --note "reviewed"
-skill update <source> --from-watch --path skills/my-skill --apply
-```
-
-Watch state lives in `.agent/skills-state.json`. The CLI owns this file; it is
-readable and diffable, but not a hand-edited config contract.
-
-## Documentation
-
-- `Documentation/Reference/CLI.md`: command reference
-- `Documentation/Decisions/SPMInspiredRegistry.md`: registry design rationale
+See [package architecture](Documentation/Architecture/Package.md) for module
+ownership, API entry points, and persisted-state behavior, and the
+[documentation index](Documentation/README.md) for rationale and proposals.

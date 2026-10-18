@@ -1,6 +1,6 @@
-# skill-cli Agent Guide
+# core Agent Guide
 
-Read `README.md` first for repository purpose, command surface, and development
+Read `README.md` first for repository purpose, library API, and development
 entry points.
 
 ## First-Principles Work
@@ -41,13 +41,17 @@ entry points.
   automation.
 - If a value changes by input or environment, pass it in, configure it, derive
   it, or link to the owning artifact.
-- Keep CLI parsing and terminal behavior in the CLI owner, and reusable logic
-  in the core owner.
+- Keep command parsing and terminal behavior in consuming repositories.
+- Keep shared source, registry, lock, and watch behavior in `AgentsCore`; skill
+  discovery and lifecycle behavior belongs in `AgentsSkills`.
+- `AgentsCore` must not depend on `AgentsSkills`. Yams belongs to `AgentsSkills`.
 
 ## Operating Notes
 
 - Keep package-domain prefixes out of internal target names unless the package
   boundary stops making that context clear.
-- Keep CLI parsing and terminal behavior in `Sources/CLI`.
-- Keep reusable behavior in `Sources/Core`.
+- Keep shared primitives and source resolution in `Sources/AgentsCore`.
+- Keep skill discovery, installation, and orchestration in `Sources/AgentsSkills`.
+- Expose consumer operations and their models publicly; keep implementation
+  details internal or package-visible when shared between the two targets.
 - Run `swift test` before handing off behavior changes.
