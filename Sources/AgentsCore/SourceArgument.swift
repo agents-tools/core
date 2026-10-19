@@ -60,33 +60,30 @@ package struct SourceArgument: Equatable, Sendable {
     guard !location.isEmpty else { throw CoreError.invalidSource("empty or invalid source") }
   }
 
-  /// Resolves the location to a declared alias or a parsed source, and combines the
-  /// requirement and path given by the location, the selectors and explicit options.
-  /// A value given more than once must agree.
+  /// Resolves the location to a declared alias or a parsed source. Selectors and explicit
+  /// options must agree with each other; they replace the branch and path that a hosted
+  /// tree URL implies.
   package func selection(
     in declaration: Declaration, requirement explicitRequirement: SourceRequirement?,
     path explicitPath: String?, environment: RuntimeEnvironment
   ) throws -> SourceSelection {
-    var requirements = [requirement, explicitRequirement].compactMap { $0 }
-    var paths = try [path, explicitPath.map(PathSafety.sanitizeSubpath)].compactMap { $0 }
-    let source: SourceDeclaration
-    if let declared = declaration.sources[location] {
-      source = declared
-    } else {
-      let parsed = try SourceParser.parse(
-        location, currentDirectory: environment.projectDirectory,
-        homeDirectory: environment.homeDirectory)
-      source = SourceDeclaration(kind: parsed.type, location: parsed.localPath ?? parsed.url)
-      requirements.insert(contentsOf: [parsed.requirement].compactMap { $0 }, at: 0)
-      paths.insert(contentsOf: [parsed.subpath].compactMap { $0 }, at: 0)
-    }
+    let requirements = [requirement, explicitRequirement].compactMap { $0 }
+    let paths = try [path, explicitPath.map(PathSafety.sanitizeSubpath)].compactMap { $0 }
     guard requirements.allSatisfy({ $0 == requirements.first }) else {
-      throw CoreError.invalidSource("the source is given conflicting requirements")
+      throw CoreError.invalidSource("the source selector and option give different requirements")
     }
     guard paths.allSatisfy({ $0 == paths.first }) else {
-      throw CoreError.invalidSource("the source is given conflicting paths")
+      throw CoreError.invalidSource("the source selector and option give different paths")
     }
-    return SourceSelection(source: source, requirement: requirements.first, path: paths.first)
+    if let declared = declaration.sources[location] {
+      return SourceSelection(source: declared, requirement: requirements.first, path: paths.first)
+    }
+    let parsed = try SourceParser.parse(
+      location, currentDirectory: environment.projectDirectory,
+      homeDirectory: environment.homeDirectory)
+    return SourceSelection(
+      source: SourceDeclaration(kind: parsed.type, location: parsed.localPath ?? parsed.url),
+      requirement: requirements.first ?? parsed.requirement, path: paths.first ?? parsed.subpath)
   }
 
   private static func selectorStart(in input: String) -> String.Index? {

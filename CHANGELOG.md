@@ -15,11 +15,6 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
   `anthropics/skills` and `sketch-hq/skills`, can share a scope: the later one
   is declared under a prefixed alias such as `anthropics-skills`.
 
-### Changed
-
-- A requirement or path that a hosted tree URL gives must agree with explicit
-  options instead of being replaced by them.
-
 ## [0.1.0] - 2026-10-19
 
 The first release of the libraries behind `agents` and `skill`.

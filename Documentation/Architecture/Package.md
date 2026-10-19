@@ -41,9 +41,9 @@ this dependency graph.
   `minor` (next minor), `path` and `skill`; each kind appears at most once.
   Selectors start at the first `@` followed by a label and `:`, so SSH locations
   keep their `@`, and values are percent-decoded. A selection resolves the
-  location to a declared alias or a parsed source and combines the requirement
-  and path of a hosted tree URL, the selectors and explicit options; repeated
-  values must agree. Skill add and source listing add `@skill:` to the named
+  location to a declared alias or a parsed source. Selectors and explicit
+  options must agree with each other and replace the branch and path that a
+  hosted tree URL implies. Skill add and source listing add `@skill:` to the named
   skills; instruction add and watch add reject it.
 - `SourceRequirement` expresses branch, revision, exact version, next-major,
   next-minor and half-open version ranges. Semantic-version comparison governs

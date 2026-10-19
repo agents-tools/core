@@ -73,11 +73,17 @@ struct SourceArgumentTests {
       try argument.selection(
         in: Declaration(), requirement: nil, path: "other", environment: environment)
     }
-    // A hosted tree URL carries its own branch and path.
-    #expect(throws: CoreError.self) {
-      try SourceArgument("https://github.com/owner/repo/tree/main/skills@branch:dev").selection(
-        in: Declaration(), requirement: nil, path: nil, environment: environment)
-    }
+  }
+
+  @Test func explicitValuesReplaceATreeURLsBranchAndPath() throws {
+    let tree = try SourceArgument("https://github.com/owner/repo/tree/main/skills")
+    let implied = try tree.selection(
+      in: Declaration(), requirement: nil, path: nil, environment: environment)
+    #expect(implied.requirement == .branch("main") && implied.path == "skills")
+    let replaced = try SourceArgument(
+      "https://github.com/owner/repo/tree/main/skills@branch:dev"
+    ).selection(in: Declaration(), requirement: nil, path: "rules", environment: environment)
+    #expect(replaced.requirement == .branch("dev") && replaced.path == "rules")
   }
 
   @Test func selectorsApplyToADeclaredAlias() throws {
