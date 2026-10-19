@@ -46,14 +46,11 @@ public enum SkillOperations {
       let existing = try declaration.sources.keys.sorted().first {
         try declaration.sources[$0]?.identity(environment: options.environment) == id
       }
-      let alias =
-        options.alias ?? existing
-        ?? PathSafety.sanitizeName(
-          URL(fileURLWithPath: source.location).deletingPathExtension().lastPathComponent)
+      let alias = options.alias ?? existing ?? declaration.derivedAlias(for: source.location)
       if let current = declaration.sources[alias],
         try current.identity(environment: options.environment) != id
       {
-        throw CoreError.invalidState("source alias already refers to another source: \(alias)")
+        throw CoreError.invalidSource("source alias already refers to another source: \(alias)")
       }
       declaration.sources[alias] = source
       try declaration.validate(environment: options.environment)

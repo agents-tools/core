@@ -46,14 +46,11 @@ public struct WatchOperations: Sendable {
       let existing = try declaration.sources.keys.sorted().first {
         try declaration.sources[$0]?.identity(environment: environment) == id
       }
-      let name =
-        alias ?? existing
-        ?? PathSafety.sanitizeName(
-          URL(fileURLWithPath: parsed.location).deletingPathExtension().lastPathComponent)
+      let name = alias ?? existing ?? declaration.derivedAlias(for: parsed.location)
       if let current = declaration.sources[name],
         try current.identity(environment: environment) != id
       {
-        throw CoreError.invalidState("source alias already refers to another source: \(name)")
+        throw CoreError.invalidSource("source alias already refers to another source: \(name)")
       }
       let declared = selection.applied(to: existing.flatMap { declaration.sources[$0] } ?? parsed)
       declaration.sources[name] = declared
