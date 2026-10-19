@@ -110,7 +110,10 @@ underlying platform error.
 content and transactions. Before a mutation, declaration, lock and watch state are validated.
 Preparation completes before installed paths are replaced; every item in a
 restoration must be available and verified. Installation has no agent or mode
-argument because those choices belong to the lock.
+argument because those choices belong to the lock. Only paths the scope's lock
+already manages are replaced: a directory, file or resolvable link at a new
+target is left untouched and the operation fails with `CoreError.invalidSkill`
+naming the path. Dangling or looping links hold no content and are replaced.
 
 Update results include old and new hashes and revisions and per-file bytes for
 CLI diff presentation. The optional `beforeApply` callback runs before any

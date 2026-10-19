@@ -28,6 +28,9 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 - Reject unreadable resolved state before changing installed content.
 - Keep inspection, watch status and diffs read-only; include physical recipient
   changes in update previews.
+- Never replace a skill directory, file or resolvable link that the scope's lock
+  does not manage; adding or installing over one fails and leaves it and the
+  state unchanged.
 - Diagnose shared installations correctly and allow removing managed records
   whose files are missing.
 - Drain subprocess output concurrently and make Git operations non-interactive,
