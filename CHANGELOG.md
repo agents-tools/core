@@ -11,6 +11,9 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 - Source arguments accept typed selectors again, such as
   `owner/repo@branch:main@path:skills@skill:pdf`, in skill add and listing,
   instruction add and watch add. `@ref:` is a revision.
+- Sources whose locations end in the same component, such as
+  `anthropics/skills` and `sketch-hq/skills`, can share a scope: the later one
+  is declared under a prefixed alias such as `anthropics-skills`.
 
 ### Changed
 

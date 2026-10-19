@@ -15,7 +15,10 @@ independently of installed pins; [Watch](Watch.md) describes the operations.
 
 `agents.json` records user intent. `agents` defaults to `codex` and
 `claude-code`. Source aliases name exactly one `git`, `local` or `well-known`
-location, an optional requirement, and an optional search `path`.
+location, an optional requirement, and an optional search `path`. A source added
+by location keeps the alias already declaring it, or receives its location's last
+path component; while another source holds that name, preceding components are
+prefixed (`anthropics-skills`), then a number is appended.
 
 ```json
 {

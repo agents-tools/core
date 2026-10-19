@@ -269,3 +269,26 @@ public struct Declaration: Codable, Equatable, Sendable {
     return result
   }
 }
+
+extension Declaration {
+  /// The alias a newly declared source receives: the location's last path component,
+  /// prefixed by preceding components and then numbered while another source holds it.
+  package func derivedAlias(for location: String) -> String {
+    var candidate = PathSafety.sanitizeName(
+      URL(fileURLWithPath: location).deletingPathExtension().lastPathComponent)
+    var parents = location.replacingOccurrences(
+      of: #"^[A-Za-z][A-Za-z0-9+.-]*://"#, with: "", options: .regularExpression
+    )
+    .split(whereSeparator: { $0 == "/" || $0 == ":" }).map(String.init).dropLast()
+    while sources[candidate] != nil, let parent = parents.popLast() {
+      candidate = PathSafety.sanitizeName(parent + "-" + candidate)
+    }
+    let base = candidate
+    var number = 2
+    while sources[candidate] != nil {
+      candidate = "\(base)-\(number)"
+      number += 1
+    }
+    return candidate
+  }
+}
