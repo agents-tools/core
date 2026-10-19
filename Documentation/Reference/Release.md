@@ -5,17 +5,40 @@
 taps**. Each CLI owns its version and executable release; each tap distributes
 its CLI release.
 
-## Preflight
+Follow the organization [versioning standard][versioning] and
+[maintenance change flow][maintenance]. Release notes are maintained in
+[CHANGELOG.md](../../CHANGELOG.md).
 
-- [ ] Start in an up-to-date `master` checkout of `agents-tools/core`. Confirm
-  the branch is `master` and the tree has no staged, modified, or untracked
-  files before updating it:
+## Version and Notes
+
+- [ ] Choose the next version from the changes in `Unreleased` using the
+  organization [versioning standard][versioning].
+- [ ] Use a tag named exactly `X.Y.Z`, with **no `v` prefix**. Published tags
+  are never moved, replaced, or reused; corrections require a new version.
+  Replace `X.Y.Z` below with the chosen version and confirm the tag is unused:
 
   ```bash
-  git branch --show-current
+  version=X.Y.Z
+  git tag --list "$version"
+  ```
+
+- [ ] Move the shipped `Unreleased` changes into a dated version section in
+  `CHANGELOG.md`, retaining `Unreleased` for subsequent work. Include public API
+  additions, changes and removals, fixes, and migration steps for both CLI
+  consumers. Merge the notes before selecting the release commit and running
+  preflight. Set `notes_file` to the prepared release notes file.
+- [ ] Use the repository's local SSH signing configuration for commits and
+  tags, with the configured key available.
+
+## Preflight
+
+- [ ] Start in a clean task-owned or detached worktree of `agents-tools/core`
+  at the accepted `origin/master` commit. Confirm there are no staged,
+  modified or untracked files, then resolve the current default-branch head:
+
+  ```bash
   git status --short
-  git fetch origin --tags
-  git pull --ff-only origin master
+  git fetch origin master --tags
   release_commit=$(git rev-parse HEAD)
   git rev-parse origin/master
   ```
@@ -23,15 +46,22 @@ its CLI release.
   Confirm `release_commit` equals `origin/master`. Keep this checkout at that
   commit throughout preflight and publication.
 
-- [ ] Confirm the CI workflow is green on that exact release commit on
-  `master`, including Format, Test, Diff Check, and Release Build. A passing
-  PR run does not establish the status of the squash-merged release commit.
-- [ ] Run the local release checks. All commands must exit zero, and formatting
-  must produce no warnings. CI uses strict lint so any finding fails the job.
+- [ ] Confirm `policy / policy` and `validate / swift-package` succeeded on
+  that exact release commit on `master`. A passing PR run does not establish
+  the status of the squash-merged release commit.
+- [ ] Run the local release checks below from a fresh build path with dependency
+  and manifest caches disabled. Let this validation finish independently of
+  superseding development CI runs; development CI is not release validation.
+  All commands must exit zero, and strict formatting must produce no warnings.
 
   ```bash
-  swift build -c release
-  env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME swift test
+  rm -rf .build/release-validation
+  swift build -c release --scratch-path .build/release-validation \
+    --disable-dependency-cache --manifest-cache none
+  env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME \
+    -u XDG_STATE_HOME -u XDG_CACHE_HOME swift test \
+    --scratch-path .build/release-validation \
+    --disable-dependency-cache --manifest-cache none
   xcrun swift-format lint --strict --configuration .swift-format --recursive Package.swift Sources Tests
   git diff --check
   ```
@@ -42,41 +72,19 @@ its CLI release.
 - [ ] Recheck `git status --short` for a clean tree and `git rev-parse HEAD`
   against `release_commit`. If the release commit changes, repeat preflight.
 
-## Version and Notes
-
-- [ ] Choose the next version using SemVer and the changes since the last
-  release. Bump patch for backward-compatible fixes and minor for
-  backward-compatible functionality. Breaking changes bump major starting at
-  `1.0.0`; during `0.x`, they bump minor. Reset lower components when bumping a
-  higher component.
-- [ ] Use a tag named exactly `X.Y.Z`, with **no `v` prefix**. Published tags
-  are never moved, replaced, or reused; corrections require a new version.
-  Replace `X.Y.Z` below with the chosen version and confirm the tag is unused:
-
-  ```bash
-  version=X.Y.Z
-  git tag --list "$version"
-  ```
-
-- [ ] Prepare release notes covering public API additions, changes and
-  removals, fixes, and any migration steps for the two CLI consumers. Set
-  `notes_file` to the path of the prepared notes file.
-- [ ] Use the repository's local SSH signing configuration for commits and
-  tags, with the configured key available. Release-related PR titles use
-  Conventional Commits: PRs are squash-merged with the PR title as the commit
-  subject.
-
 ## Publish Core
 
 - [ ] Create a signed annotated tag on the checked release commit. `-s`
   creates the annotated signature using the configured SSH signing key:
 
   ```bash
-  git tag -s "$version" "$release_commit" -m "Release $version"
-  git rev-parse "$version^{commit}"
+  git tag -s "$version" "$release_commit" -m "Release $version" &&
+    git verify-tag "$version" &&
+    tag_commit=$(git rev-parse "$version^{commit}") &&
+    test "$tag_commit" = "$release_commit"
   ```
 
-  Confirm the tag resolves to `release_commit`.
+  Confirm the signature is valid and the tag resolves to `release_commit`.
 
 - [ ] Push that tag and verify its remote target before creating the GitHub
   release with the prepared notes:
@@ -154,3 +162,9 @@ its CLI release.
 
   All commands must pass for both formulae before publishing the tap updates.
   Discard the disposable test environment after validation.
+
+- [ ] Remove `.build/release-validation` and retire the release worktree after
+  recording the accepted commit, tag and validation results in the release.
+
+[versioning]: https://github.com/agents-tools/.github/blob/master/VERSIONING.md
+[maintenance]: https://github.com/agents-tools/.github/blob/master/MAINTENANCE.md#change-flow

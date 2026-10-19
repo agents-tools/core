@@ -22,8 +22,9 @@ entry points.
 - For retired material, use `Documentation/Archive/*`.
 - For supporting details and examples, use `Documentation/Reference/*`.
 - Community files and templates are organization defaults in
-  `agents-tools/.github`; this repository keeps only `CODEOWNERS` and workflows
-  under `.github/`.
+  `agents-tools/.github`; this repository keeps `CODEOWNERS`, Dependabot
+  configuration and workflow callers under `.github/`.
+- Follow the organization [maintenance change flow](https://github.com/agents-tools/.github/blob/master/MAINTENANCE.md#change-flow).
 
 ## Authority
 
@@ -49,6 +50,11 @@ entry points.
 
 ## Tests
 
+- Run the build, test, strict formatting and diff checks in
+  [README.md](README.md#development) before handoff. The required CI contexts
+  are `policy / policy` and `validate / swift-package`; keep their caller job
+  IDs and shared workflow pins consistent with the organization
+  [integration guide](https://github.com/agents-tools/.github/blob/master/Documentation/Reference/WorkflowIntegration.md).
 - Pass an explicit initial branch when creating Git fixtures.
 - Disable automatic maintenance and gc in fixture Git repositories.
 - Each test that creates a temporary directory removes it.
