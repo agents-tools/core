@@ -1,36 +1,23 @@
 name: CI
 
 on:
-  pull_request:
   push:
-    branches: [master]
+    branches: ['**']
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  swift:
-    name: Swift Package
-    runs-on: macos-26
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Toolchain
-        run: |
-          swift --version
-          xcrun swift-format --version
-
-      - name: Format
-        run: xcrun swift-format lint --strict --configuration .swift-format --recursive Package.swift Sources Tests
-
-      - name: Test
-        run: swift test
-
-      - name: Diff Check
-        run: git diff --check
-
-      - name: Release Build
-        run: swift build -c release
+  validate:
+    uses: agents-tools/.github/.github/workflows/swift-package-ci.yml@301c132794cbee950bfca6ba83987975d1ea6917
+    with:
+      runner: macos-26
+      package-directory: .
+      format-configuration: .swift-format

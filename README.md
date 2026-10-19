@@ -230,11 +230,13 @@ contracts, target paths, read-only inspection and deletion rules.
   and seen baselines.
 - [Release checklist](Documentation/Reference/Release.md): package releases and
   downstream updates.
+- [Changelog](CHANGELOG.md): unreleased and published consumer-facing changes.
 
 ## Contributing
 
 Read the [organization contributing guide][contributing] and the
-[development checks](#development) before submitting changes.
+[maintenance change flow][maintenance] before submitting changes. Run the
+[development checks](#development) for the candidate you submit.
 
 ### Development
 
@@ -247,7 +249,20 @@ env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME \
 swift build -c release
 xcrun swift-format lint --strict --configuration .swift-format \
   --recursive Package.swift Sources Tests
+git diff --check origin/master
 ```
+
+The required checks are `policy / policy` and `validate / swift-package`,
+provided by full-SHA-pinned reusable workflows from `agents-tools/.github`.
+Source policy validates PR titles, new commit messages and added lines. Swift
+validation runs strict formatting, debug build, tests with the environment
+overrides above unset, release build and a diff check on `macos-26`.
+Both run on branch pushes and PRs; only source policy reruns on PR title edits.
+CI also supports manual dispatch. Source policy declares a manual trigger, but
+the pinned shared policy accepts only push and PR events: manually dispatching
+Source policy fails. Use a branch push to run both checks. See the organization
+[workflow integration guide][workflow-integration] for the shared interfaces
+and pin update process.
 
 ## License
 
@@ -255,3 +270,7 @@ core is available under the [MIT License](LICENSE).
 
 [contributing]:
   https://github.com/agents-tools/.github/blob/master/CONTRIBUTING.md
+[maintenance]:
+  https://github.com/agents-tools/.github/blob/master/MAINTENANCE.md#change-flow
+[workflow-integration]:
+  https://github.com/agents-tools/.github/blob/master/Documentation/Reference/WorkflowIntegration.md
