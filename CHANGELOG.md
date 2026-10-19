@@ -6,6 +6,8 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ## Unreleased
 
+## [0.1.1] - 2026-10-20
+
 ### Fixed
 
 - Source arguments accept typed selectors again, such as
@@ -53,4 +55,5 @@ The first release of the libraries behind `agents` and `skill`.
 - Drain subprocess output concurrently and make Git operations non-interactive,
   with concise source-specific failures.
 
+[0.1.1]: https://github.com/agents-tools/core/releases/tag/0.1.1
 [0.1.0]: https://github.com/agents-tools/core/releases/tag/0.1.0
