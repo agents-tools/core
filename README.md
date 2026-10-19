@@ -258,9 +258,8 @@ Source policy validates PR titles, new commit messages and added lines. Swift
 validation runs strict formatting, debug build, tests with the environment
 overrides above unset, release build and a diff check on `macos-26`.
 Both run on branch pushes and PRs; only source policy reruns on PR title edits.
-CI also supports manual dispatch. Source policy declares a manual trigger, but
-the pinned shared policy accepts only push and PR events: manually dispatching
-Source policy fails. Use a branch push to run both checks. See the organization
+Both also support manual dispatch; source policy validates the selected ref's
+head commit. See the organization
 [workflow integration guide][workflow-integration] for the shared interfaces
 and pin update process.
 
