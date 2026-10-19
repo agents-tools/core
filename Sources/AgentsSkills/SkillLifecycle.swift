@@ -194,6 +194,16 @@ final class SkillLifecycle {
     let transaction = FileTransaction(store: store)
     let oldTargets = try targets(previous)
     let newTargets = try targets(next)
+    // A path this scope's lock never managed may hold the user's own skill. Dangling or
+    // looping links hold no content and are replaced.
+    for (path, target) in newTargets.sorted(by: { $0.key < $1.key })
+    where names.contains(target.name) && oldTargets[path] == nil
+      && Self.holdsContent(atPath: path)
+    {
+      throw CoreError.invalidSkill(
+        "skill '\(target.name)' in \(store.scope.rawValue) scope cannot be installed at \(path): "
+          + "an entry this scope does not manage already exists there; move or remove it first")
+    }
     var results: [InstallResult] = []
     var retained: [String: URL] = [:]
     do {
@@ -307,6 +317,14 @@ final class SkillLifecycle {
     AgentRegistry.installSkillsDirectory(
       for: agent, scope: store.scope, environment: store.environment
     ).appendingPathComponent(name).standardizedFileURL
+  }
+
+  static func holdsContent(atPath path: String) -> Bool {
+    guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else {
+      return false
+    }
+    return attributes[.type] as? FileAttributeType != .typeSymbolicLink
+      || FileManager.default.fileExists(atPath: path)
   }
 
   static func physicalTarget(_ url: URL) -> URL {
