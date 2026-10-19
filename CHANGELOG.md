@@ -6,6 +6,14 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ## Unreleased
 
+## [0.1.0] - 2026-10-19
+
+The first release of the libraries behind `agents` and `skill`.
+
+### Migration
+
+- Consumers depend on `"0.1.0"..<"0.2.0"` instead of the `master` branch.
+
 ### Added
 
 - Public `AgentsCore`, `AgentsSkills` and `AgentsInstructions` libraries for
@@ -35,3 +43,5 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
   whose files are missing.
 - Drain subprocess output concurrently and make Git operations non-interactive,
   with concise source-specific failures.
+
+[0.1.0]: https://github.com/agents-tools/core/releases/tag/0.1.0
