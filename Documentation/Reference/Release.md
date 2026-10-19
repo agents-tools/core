@@ -28,9 +28,7 @@ Follow the organization [versioning standard][versioning] and
   consumers. Merge the notes before selecting the release commit and running
   preflight. Set `notes_file` to the prepared release notes file.
 - [ ] Use the repository's local SSH signing configuration for commits and
-  tags, with the configured key available. Release-related PR titles use
-  Conventional Commits: PRs are squash-merged with the PR title as the commit
-  subject.
+  tags, with the configured key available.
 
 ## Preflight
 
@@ -80,11 +78,13 @@ Follow the organization [versioning standard][versioning] and
   creates the annotated signature using the configured SSH signing key:
 
   ```bash
-  git tag -s "$version" "$release_commit" -m "Release $version"
-  git rev-parse "$version^{commit}"
+  git tag -s "$version" "$release_commit" -m "Release $version" &&
+    git verify-tag "$version" &&
+    tag_commit=$(git rev-parse "$version^{commit}") &&
+    test "$tag_commit" = "$release_commit"
   ```
 
-  Confirm the tag resolves to `release_commit`.
+  Confirm the signature is valid and the tag resolves to `release_commit`.
 
 - [ ] Push that tag and verify its remote target before creating the GitHub
   release with the prepared notes:
