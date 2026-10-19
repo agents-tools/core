@@ -57,7 +57,8 @@ public enum SourceParser {
     }
     if !input.contains("://") {
       guard !input.contains("@") else {
-        throw CoreError.invalidSource("pass skill names separately")
+        throw CoreError.invalidSource(
+          "pass skill names separately or use a typed selector such as @branch:main")
       }
       let parts = input.split(separator: "/")
       guard parts.count >= 2 else {
