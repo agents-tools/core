@@ -397,19 +397,13 @@ public enum InstructionOperations {
   private static func sourceDeclaration(_ options: InstructionAddOptions, declaration: Declaration)
     throws -> SourceDeclaration
   {
-    var source: SourceDeclaration
-    if let existing = declaration.sources[options.source] {
-      source = existing
-    } else {
-      let parsed = try SourceParser.parse(
-        options.source, currentDirectory: options.environment.projectDirectory,
-        homeDirectory: options.environment.homeDirectory)
-      source = SourceDeclaration(
-        kind: parsed.type, location: parsed.localPath ?? parsed.url,
-        requirement: parsed.requirement, path: parsed.subpath)
+    let argument = try SourceArgument(options.source)
+    guard argument.name == nil else {
+      throw CoreError.invalidSource("@skill: selects skills; pass section names separately")
     }
-    if let path = options.path { source.path = try PathSafety.sanitizeSubpath(path) }
-    if let requirement = options.sourceRequirement { source.requirement = requirement }
-    return source
+    let selection = try argument.selection(
+      in: declaration, requirement: options.sourceRequirement, path: options.path,
+      environment: options.environment)
+    return selection.applied(to: selection.source)
   }
 }

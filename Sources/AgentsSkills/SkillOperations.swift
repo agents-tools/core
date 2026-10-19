@@ -7,6 +7,13 @@ public enum SkillOperations {
   }
 
   static func add(_ options: AddOptions, provider: WellKnownProvider) throws -> AddOutcome {
+    var options = options
+    if let name = try SourceArgument(options.source).name {
+      guard !options.all else {
+        throw CoreError.invalidSource("@skill: names one skill and cannot be combined with all")
+      }
+      if !options.skillNames.contains(name) { options.skillNames.append(name) }
+    }
     var automaticSelection: (sourceID: String, name: String)?
     if options.listOnly || (options.skillNames.isEmpty && !options.all) {
       let outcome = try add(options, provider: provider, apply: false)
@@ -514,20 +521,10 @@ public enum SkillOperations {
   private static func sourceDeclaration(_ options: AddOptions, declaration: Declaration) throws
     -> SourceDeclaration
   {
-    var source: SourceDeclaration
-    if let existing = declaration.sources[options.source] {
-      source = existing
-    } else {
-      let parsed = try SourceParser.parse(
-        options.source, currentDirectory: options.environment.projectDirectory,
-        homeDirectory: options.environment.homeDirectory)
-      source = SourceDeclaration(
-        kind: parsed.type,
-        location: parsed.localPath ?? parsed.url, requirement: parsed.requirement,
-        path: parsed.subpath)
-    }
-    if let path = options.path { source.path = try PathSafety.sanitizeSubpath(path) }
-    if let requirement = options.sourceRequirement { source.requirement = requirement }
+    let selection = try SourceArgument(options.source).selection(
+      in: declaration, requirement: options.sourceRequirement, path: options.path,
+      environment: options.environment)
+    let source = selection.applied(to: selection.source)
     if options.mode == .edit, source.kind != .local || source.requirement != nil {
       throw CoreError.invalidSource("edit requires a local source with no requirement")
     }

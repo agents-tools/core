@@ -35,7 +35,13 @@ public struct WatchOperations: Sendable {
       var declaration = try store.readDeclaration()
       let lock = try store.readResolved()
       var watch = try store.readWatch()
-      let parsed = try sourceDeclaration(source, declaration: declaration, environment: environment)
+      let argument = try SourceArgument(source)
+      guard argument.name == nil else {
+        throw CoreError.invalidSource("@skill: selects skills; watch subscribes to whole sources")
+      }
+      let selection = try argument.selection(
+        in: declaration, requirement: requirement, path: path, environment: environment)
+      let parsed = selection.source
       let id = try parsed.identity(environment: environment)
       let existing = try declaration.sources.keys.sorted().first {
         try declaration.sources[$0]?.identity(environment: environment) == id
@@ -49,9 +55,7 @@ public struct WatchOperations: Sendable {
       {
         throw CoreError.invalidState("source alias already refers to another source: \(name)")
       }
-      var declared = existing.flatMap { declaration.sources[$0] } ?? parsed
-      if let requirement { declared.requirement = requirement }
-      if let path { declared.path = try PathSafety.sanitizeSubpath(path) }
+      let declared = selection.applied(to: existing.flatMap { declaration.sources[$0] } ?? parsed)
       declaration.sources[name] = declared
       declaration.watch = Array(Set((declaration.watch ?? []) + [name])).sorted()
       try declaration.validate(environment: environment)

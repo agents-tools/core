@@ -35,6 +35,16 @@ this dependency graph.
 
 - `SourceParser` and `ParsedSource` parse local paths, Git URLs and HTTP indexes.
   `SourceDeclaration` owns normalized source identity and discovery roots.
+- `SourceArgument` splits a source argument into its location and typed
+  selectors, such as `owner/repo@branch:main@path:skills@skill:pdf`. Labels are
+  `branch`, `revision`, `ref` (a revision), `exact`, `from` (next major),
+  `minor` (next minor), `path` and `skill`; each kind appears at most once.
+  Selectors start at the first `@` followed by a label and `:`, so SSH locations
+  keep their `@`, and values are percent-decoded. A selection resolves the
+  location to a declared alias or a parsed source and combines the requirement
+  and path of a hosted tree URL, the selectors and explicit options; repeated
+  values must agree. Skill add and source listing add `@skill:` to the named
+  skills; instruction add and watch add reject it.
 - `SourceRequirement` expresses branch, revision, exact version, next-major,
   next-minor and half-open version ranges. Semantic-version comparison governs
   Git tag selection, including prerelease bounds.
