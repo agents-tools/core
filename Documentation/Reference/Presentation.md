@@ -8,8 +8,9 @@ short description for the tagline, repository About field and social card:
 
 ## Header
 
-The linked framework logo is generated from the `core` icon entry in the
-[organization DESIGN][design]. Static badges use its Presentation palette:
+The linked [framework logo](../../.github/assets/logo/logo.svg) is generated
+from the `core` icon entry in the [organization DESIGN][design]. Static badges
+use its Presentation palette:
 `card-ink` for the value background and `card-muted` for the label background.
 CI uses the workflow's live status badge. Badge labels and links derive from
 `.github/workflows/ci.yml`, `Package.swift` and `LICENSE`.
