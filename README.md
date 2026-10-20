@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/agents-tools/core">
-    <img src="Documentation/Assets/Logo.svg" width="160" alt="core logo">
+    <img src=".github/assets/logo/logo.svg" width="160" alt="core logo">
   </a>
 </p>
 

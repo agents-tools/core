@@ -4,8 +4,6 @@ This directory indexes repository-native documentation for `core`.
 
 ## Areas
 
-- `Assets/`: generated logo files; the source of truth is the `core` entry in
-  [the organization DESIGN][design].
 - `Architecture/`: current truth for package structure and documentation
   placement
 - `Proposals/`: design-in-progress and open alternatives
@@ -14,6 +12,9 @@ This directory indexes repository-native documentation for `core`.
 - `Archive/`: retired or superseded material kept for record
 - `Reference/`: supporting reference material and examples, including
   [presentation reproduction](Reference/Presentation.md)
+
+The [README logos](../.github/assets/logo/) are generated from the `core` entry
+in [the organization DESIGN][design].
 
 Target-level API documentation belongs with the SwiftPM target it documents,
 normally under `Sources/<Target>/<Target>.docc/`. Link to those catalogs from
