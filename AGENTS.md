@@ -55,6 +55,10 @@ entry points.
   are `policy / policy` and `validate / swift-package`; keep their caller job
   IDs and shared workflow pins consistent with the organization
   [integration guide](https://github.com/agents-tools/.github/blob/master/Documentation/Reference/WorkflowIntegration.md).
+  The `presentation` caller checks the social preview without executable inputs;
+  reproduce it with `Documentation/Reference/Presentation.md`. Activate its
+  required context only after the real PR run passes. For workflow edits, also
+  run `actionlint` or parse every workflow as YAML.
 - Pass an explicit initial branch when creating Git fixtures.
 - Disable automatic maintenance and gc in fixture Git repositories.
 - Each test that creates a temporary directory removes it.

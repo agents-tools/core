@@ -10,8 +10,8 @@ short description for the tagline, repository About field and social card:
 
 The linked [framework logo](../../.github/assets/logo/logo.svg) is generated
 from the `core` icon entry in the [organization DESIGN][design]. Static badges
-use its Presentation palette:
-`card-ink` for the value background and `card-muted` for the label background.
+use its `ink` token for the value background and `social-preview-muted` for
+the label background.
 CI uses the workflow's live status badge. Badge labels and links derive from
 `.github/workflows/ci.yml`, `Package.swift` and `LICENSE`.
 
@@ -55,3 +55,32 @@ The expected stdout is `review` followed by a newline. Verify that
 `.build/presentation/` after validation.
 
 [design]: https://github.com/agents-tools/.github/blob/master/DESIGN.md
+
+## Social preview
+
+The committed [PNG](../../.github/assets/social-preview/social-preview.png) is
+rendered from the DESIGN, fonts and catalog at the `agents-tools/.github`
+presentation workflow pin in [CI](../../.github/workflows/ci.yml). The catalog's
+light-page icon resolves to this checkout's framework logo SVG.
+
+Follow the pinned toolchain's [local regeneration procedure][toolchain]. Use
+`standard_dir` for the standard inputs at the CI pin and `toolchain_dir` for
+that package, keeping temporary inputs under ignored `.build/`:
+
+```sh
+node "$toolchain_dir/src/cli.ts" social-preview render \
+  --design "$standard_dir/DESIGN.md" --fonts "$standard_dir/Brand/Fonts" \
+  --catalog "$standard_dir/profile/catalog.json" --repository core \
+  --icon .github/assets/logo/logo.svg \
+  --out .github/assets/social-preview/social-preview.png
+node "$toolchain_dir/src/cli.ts" social-preview check \
+  --design "$standard_dir/DESIGN.md" --fonts "$standard_dir/Brand/Fonts" \
+  --catalog "$standard_dir/profile/catalog.json" --repository core \
+  --icon .github/assets/logo/logo.svg --assets .github/assets/social-preview
+```
+
+CI's `presentation` caller takes no inputs. On drift, artifact `presentation`
+contains `presentation.tar`; extract it with
+`tar -xf presentation.tar -C .github/assets`, review and commit the PNG.
+
+[toolchain]: https://github.com/showxu/skills/blob/e5a50c34bf66264a436288f96e44db9caa305912/skills/github-readme-design/references/renderers.md#local-regeneration

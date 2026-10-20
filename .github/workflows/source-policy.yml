@@ -17,4 +17,4 @@ concurrency:
 jobs:
   policy:
     if: github.event_name != 'push' || !github.event.deleted
-    uses: agents-tools/.github/.github/workflows/policy.yml@12f1ad84bd9536d6311f7c3e2c92feef54e34a9e
+    uses: agents-tools/.github/.github/workflows/policy.yml@c748c42410ded7d6419b92b2603e7882e6087311
