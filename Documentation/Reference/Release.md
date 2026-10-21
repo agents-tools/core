@@ -11,6 +11,10 @@ Follow the organization [versioning standard][versioning] and
 
 ## Version and Notes
 
+Release timing follows the organization [versioning standard][versioning],
+which defers to the governing delivery workflow. Include the version change and
+changelog entry in the requirement's final delivery candidate.
+
 - [ ] Choose the next version from the changes in `Unreleased` using the
   organization [versioning standard][versioning].
 - [ ] Use a tag named exactly `X.Y.Z`, with **no `v` prefix**. Published tags
@@ -25,8 +29,8 @@ Follow the organization [versioning standard][versioning] and
 - [ ] Move the shipped `Unreleased` changes into a dated version section in
   `CHANGELOG.md`, retaining `Unreleased` for subsequent work. Include public API
   additions, changes and removals, fixes, and migration steps for both CLI
-  consumers. Merge the notes before selecting the release commit and running
-  preflight. Set `notes_file` to the prepared release notes file.
+  consumers. Merge the final delivery candidate before selecting the release
+  commit and running preflight. Set `notes_file` to the prepared release notes file.
 - [ ] Use the repository's local SSH signing configuration for commits and
   tags, with the configured key available.
 

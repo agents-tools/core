@@ -54,7 +54,7 @@ entry points.
   [README.md](README.md#development) before handoff. The required CI contexts
   are `policy / policy` and `validate / swift-package`; keep their caller job
   IDs and shared workflow pins consistent with the organization
-  [integration guide](https://github.com/agents-tools/.github/blob/master/Documentation/Reference/WorkflowIntegration.md).
+  [integration guide](https://github.com/agents-tools/.github/blob/master/docs/reference/workflow-integration.md).
   The `presentation` caller checks the social preview without executable inputs;
   reproduce it with `Documentation/Reference/Presentation.md`. Activate its
   required context only after the real PR run passes. For workflow edits, also

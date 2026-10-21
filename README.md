@@ -280,4 +280,4 @@ core is available under the [MIT License](LICENSE).
 [maintenance]:
   https://github.com/agents-tools/.github/blob/master/MAINTENANCE.md#change-flow
 [workflow-integration]:
-  https://github.com/agents-tools/.github/blob/master/Documentation/Reference/WorkflowIntegration.md
+  https://github.com/agents-tools/.github/blob/master/docs/reference/workflow-integration.md
