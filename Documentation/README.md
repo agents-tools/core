@@ -14,7 +14,9 @@ This directory indexes repository-native documentation for `core`.
   [presentation reproduction](Reference/Presentation.md)
 
 The [README logos](../.github/assets/logo/) are generated from the `core` entry
-in [the organization DESIGN][design].
+in [the organization DESIGN][design]. The committed
+[social preview](../.github/assets/social-preview/social-preview.png) uses the
+same logo and the catalog at the pinned presentation standard.
 
 Target-level API documentation belongs with the SwiftPM target it documents,
 normally under `Sources/<Target>/<Target>.docc/`. Link to those catalogs from

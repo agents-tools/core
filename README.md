@@ -257,9 +257,17 @@ provided by full-SHA-pinned reusable workflows from `agents-tools/.github`.
 Source policy validates PR titles, new commit messages and added lines. Swift
 validation runs strict formatting, debug build, tests with the environment
 overrides above unset, release build and a diff check on `macos-26`.
-Both run on branch pushes and PRs; only source policy reruns on PR title edits.
-Both also support manual dispatch; source policy validates the selected ref's
-head commit. See the organization
+
+The `presentation / presentation` job checks the committed
+[social preview](.github/assets/social-preview/social-preview.png) against the
+standard's DESIGN, fonts, catalog and this repository's framework logo. See
+[presentation reproduction](Documentation/Reference/Presentation.md#social-preview).
+It calls the shared presentation workflow without executable inputs. Its required
+context is activated separately after a passing real PR run.
+
+All workflows run on branch pushes and PRs; only source policy reruns on PR
+title edits. They also support manual dispatch; source policy validates the
+selected ref's head commit. See the organization
 [workflow integration guide][workflow-integration] for the shared interfaces
 and pin update process.
 
