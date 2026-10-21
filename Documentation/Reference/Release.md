@@ -26,7 +26,7 @@ changelog entry in the requirement's final delivery candidate.
   git tag --list "$version"
   ```
 
-- [ ] Move the shipped `Unreleased` changes into a dated version section in
+- [ ] Move the shipped `Unreleased` changes into a `## X.Y.Z` section in
   `CHANGELOG.md`, retaining `Unreleased` for subsequent work. Include public API
   additions, changes and removals, fixes, and migration steps for both CLI
   consumers. Merge the final delivery candidate before selecting the release
