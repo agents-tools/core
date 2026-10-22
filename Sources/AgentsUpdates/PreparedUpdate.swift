@@ -25,7 +25,7 @@ public final class PreparedUpdate {
   }
 
   public func apply() throws -> UpdateApplyResult {
-    let plan = try gate.withLock {
+    let pending = try gate.withLock {
       guard active, !attempted, let plan else {
         throw CoreError.invalidState("prepared update is inactive, consumed or on another thread")
       }
@@ -36,9 +36,9 @@ public final class PreparedUpdate {
       return plan
     }
     do {
-      return try plan.apply(outcome: outcome)
+      return try pending.apply(outcome: outcome)
     } catch {
-      plan.recover(outcome: outcome)
+      pending.recover(outcome: outcome)
       throw UpdateApplyError(outcome: outcome, underlyingError: error)
     }
   }
