@@ -62,6 +62,8 @@ command parsing, terminal output and executable distribution.
   managed Markdown blocks, Claude forwarding and named ChatGPT prompts. It uses
   `AgentsCore` for sources, state and transactions, and `swift-markdown` for
   CommonMark structure. Pure text APIs remain available separately.
+- **AgentsUpdates**: shared preparation, reporting and one recoverable apply
+  for all declared skills and instructions in a scope.
 
 ## Quick look
 
@@ -98,6 +100,7 @@ targets: [
       .product(name: "AgentsCore", package: "core"),
       .product(name: "AgentsSkills", package: "core"),
       .product(name: "AgentsInstructions", package: "core"),
+      .product(name: "AgentsUpdates", package: "core"),
     ]
   )
 ]
@@ -173,6 +176,22 @@ even when installations use a version requirement. Well-known subscriptions
 compare artifact digests and retain seen content for later diffs. Status and
 diff leave declaration, lock, watch state and installed content unchanged.
 
+### Combined updates
+
+`UpdateOperations.preview(...)` returns both kinds under one shared scope lock.
+For application, `withPreparedUpdate(...)` prepares both kinds and holds the
+writer lock while the consumer renders `update.report` and calls
+`update.apply()`. Apply commits both kinds, changed state and pruning together.
+The handle is valid only on its preparing thread inside that synchronous
+closure and accepts one attempt. Do not re-enter scope operations there.
+
+Skill reports include resolved versions, executable flags, missing-lock status
+and per-agent managed membership, independent of physical presence. Combined
+`hasChanges` also includes state-only updates. `UpdateApplyError` distinguishes
+confirmed unchanged, committed and recovery-required outcomes. See
+[combined updates](Documentation/Architecture/Updates.md) for cancellation,
+recovery and callback contracts.
+
 ### Instructions
 
 `InstructionOperations` manages ordered sections from committed `.md` files
@@ -228,6 +247,8 @@ contracts, target paths, read-only inspection and deletion rules.
   selection, targets, prompts and diagnostics.
 - [Watch API](Documentation/Architecture/Watch.md): subscriptions, comparisons
   and seen baselines.
+- [Combined updates](Documentation/Architecture/Updates.md): reports, preparation,
+  one-use handles and transaction outcomes.
 - [Release checklist](Documentation/Reference/Release.md): package releases and
   downstream updates.
 - [Changelog](CHANGELOG.md): unreleased and published consumer-facing changes.

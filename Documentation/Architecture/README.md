@@ -5,7 +5,8 @@ This directory holds the current truth for `core`, a SwiftPM library package.
 `AgentsSkills` owns skill discovery and lifecycle operations and depends on
 `AgentsCore` and Yams. `AgentsInstructions` owns instruction lifecycle and text
 transformations. It depends on `AgentsCore` for sources and state, and on
-`swift-markdown` for CommonMark structure. Tests follow those module boundaries.
+`swift-markdown` for CommonMark structure. `AgentsUpdates` composes both domains
+above those modules. Tests follow those module boundaries.
 
 ## Belongs Here
 
@@ -27,3 +28,4 @@ transformations. It depends on `AgentsCore` for sources and state, and on
 - `State.md`: declaration, resolved state, source cache and installation invariants
 - `Instructions.md`: instruction discovery, targets, lifecycle, prompts and diagnostics
 - `Watch.md`: subscription operations, upstream comparisons and seen-state retention
+- `Updates.md`: combined preparation, report semantics, handle lifetime and apply outcomes

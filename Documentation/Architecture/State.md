@@ -93,6 +93,11 @@ fields that would be discarded by decoding cause an error. Tree hashes use
 length-prefixed paths and typed entry payloads, including empty
 directories and symbolic link destinations.
 
+Tree hashes intentionally exclude permissions. Skill update snapshots compare
+the any-execute-bit Boolean separately for regular files. Preparation,
+retention and transaction staging verify that dimension without changing
+stored hashes, pins or the version 1 declaration, lock and watch schemas.
+
 Readers and writers serialize through `.agents.lock`. Missing scope and target
 ancestry is created with descriptor-relative operations; each parent directory
 is fsynced before target mutation, including when an interrupted creator left a
@@ -267,6 +272,33 @@ identity or fail with an error asking the caller to retry; its content and pin
 can refresh. Explicit names and `all` enter the writer path directly.
 Applying prepares all selected content, computes differences,
 stages replacements, and commits target changes and state under the scope lock.
+Combined updates share a source-resolution session and baseline across skills
+and instructions. The coordinator merges their owned records and rejects
+incompatible source records and overlapping targets before exposing an apply
+handle. It holds the writer lock while the consumer renders, revalidates
+state-file bytes/presence and target/source identities, then retains pinned
+content before the combined journal starts. Live edit content remains live;
+its source identity and usable metadata are checked instead of a content pin.
+
+After retention, preconditions are checked again. One transaction queues
+physical skill targets, instruction/forwarding targets, changed declaration
+and lock files, and pruning against the merged lock and existing watch state.
+Paths are sorted within target groups. No-change combined apply returns
+receipts without rewriting state. Cancellation before apply publishes no
+targets, state or retained trees; fetched mirror objects and the scope
+container/lock may remain.
+
+Commit outcome tracking is bound to the combined journal's UUID. Recovering
+a separate cache publication cannot claim that the combined generation
+committed. An uncertain commit-marker write is classified by validated
+recovery. `UpdateApplyError` distinguishes confirmed unchanged and committed
+generations from unresolved recovery, including failures during enclosing
+watch-reference cleanup. A committed error must not be described as rollback.
+After process death the next writer recovers and raises
+`CoreError.transactionRecovered`; consumers retry the whole preparation.
+Previews reject pending recovery without replay. See [Updates](Updates.md)
+for the public handle and error contracts.
+
 Pruning participates in that transaction. Pins referenced by skills, instruction
 sections or prompt sections remain cached, as do artifact contents referenced
 by watch state and trees containing live edit sources. Pruning opens directory

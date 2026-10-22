@@ -6,6 +6,35 @@ import Testing
 
 @Suite("State transactions")
 struct StateTransactionTests {
+  @Test func recoveringACacheJournalDoesNotCommitTheCombinedOutcome() throws {
+    let fixture = try TransactionFixture()
+    let combined = TransactionOutcome()
+    let parent = fixture.store.cacheDirectory.appendingPathComponent("artifact-content")
+    let moved = fixture.root.appendingPathComponent("displaced-cache")
+    try fixture.store.withLock {
+      let transaction = FileTransaction(store: fixture.store) { step in
+        if step == "journal.committed.renamed" {
+          try FileManager.default.moveItem(at: parent, to: moved)
+          throw CoreError.invalidState("cache cleanup interrupted")
+        }
+      }
+      try transaction.replace(
+        parent.appendingPathComponent("pruned"),
+        content: fixture.root.appendingPathComponent("new"))
+      #expect(throws: CoreError.self) { try transaction.commit() }
+      #expect(
+        FileManager.default.fileExists(
+          atPath:
+            fixture.store.directory.appendingPathComponent("transaction.json").path))
+      try FileManager.default.moveItem(at: moved, to: parent)
+      #expect(try FileTransaction.recover(store: fixture.store, outcome: combined))
+      #expect(combined.disposition == .unchanged)
+      #expect(
+        try String(contentsOf: parent.appendingPathComponent("pruned/SKILL.md"), encoding: .utf8)
+          == "new")
+    }
+  }
+
   @Test func failuresAtEveryCheckpointRecoverOneGeneration() throws {
     var checkpoints: [String] = []
     do {
@@ -35,7 +64,8 @@ struct StateTransactionTests {
     "journal.preparing", "journal.preparing.renamed", "stage.0", "stage.4", "journal.applying",
     "replace.0",
     "replace.1", "replace.2",
-    "replace.3", "replace.4", "replace.0.renamed", "journal.applying.renamed",
+    "replace.3", "replace.4", "replace.5", "replace.5.renamed", "replace.0.renamed",
+    "journal.applying.renamed",
     "journal.committed.renamed", "journal.committed", "cleanup.0",
   ])
   func killedWriterRecoversOnNextStateRead(_ step: String) throws {
@@ -94,6 +124,7 @@ final class TransactionFixture {
         homeDirectory: root.appendingPathComponent("home"), environment: [:]))
     do {
       try store.save(declaration: Declaration(), resolved: ResolvedState())
+      try Data("old instructions".utf8).write(to: root.appendingPathComponent("AGENTS.md"))
       for name in [".agents/skills/target", "new", ".agent/cache/artifact-content/pruned"] {
         let directory = root.appendingPathComponent(name)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -123,10 +154,16 @@ final class TransactionFixture {
         root.appendingPathComponent(".claude/skills/created"),
         content: root.appendingPathComponent("new"),
         link: true)
+      try transaction.replace(
+        root.appendingPathComponent("AGENTS.md"), content: nil,
+        data: Data("new instructions".utf8))
       try transaction.commit()
     }
   }
   func check(committed: Bool) throws {
+    #expect(
+      try Data(contentsOf: root.appendingPathComponent("AGENTS.md"))
+        == Data((committed ? "new instructions" : "old instructions").utf8))
     #expect(
       try String(
         contentsOf: root.appendingPathComponent(".agents/skills/target/SKILL.md"), encoding: .utf8)

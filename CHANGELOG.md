@@ -6,6 +6,43 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ## Unreleased
 
+### Added
+
+- `AgentsUpdates` composes skill and instruction updates from one scope
+  generation. `UpdateOperations.preview` returns a combined report;
+  `withPreparedUpdate` holds the writer lock through preparation, rendering
+  and a single recoverable apply. Its one-use handle expires at closure exit.
+- Skill update results include `oldVersion`, `newVersion`, `lockMissing` and
+  per-agent `SkillMembershipChange` rows, including unchanged and pinless
+  live installations. Missing lock records do not grant ownership of existing
+  targets.
+- `UpdateApplyError` distinguishes confirmed unchanged, committed and
+  recovery-required outcomes and preserves the underlying error.
+
+### Changed
+
+- **Breaking:** `SkillFileEntry.file(Data)` becomes
+  `file(Data, executable: Bool)`. Upgrade constructors and pattern matches to
+  supply or read the Boolean, which means any execute bit is set. Render it
+  separately from content; it is not a complete permission mask.
+- **Breaking:** synthesized `Codable` reports have a new file-case payload
+  and required `UpdateResult.lockMissing` and `membership` fields. Update
+  serialized report fixtures and custom codecs; old reports are not reusable
+  apply plans. CLI JSON adapters remain owned by their consumer repositories.
+- Standalone update callbacks retain their signatures and receipt semantics.
+  Updates now reject changes to state, target identities, skill content/mode,
+  instruction bytes and forwarding inputs made during the callback. Live
+  source contents remain live, with identity and skill metadata revalidated.
+
+### Fixed
+
+- Report and apply executable-only changes, including local copy drift at an
+  unchanged pin. Verify prepared, cached and staged modes separately from the
+  unchanged persistent tree hashes and version 1 state formats.
+- Resolve shared sources once during combined planning, merge domain-owned
+  lock records, and include state-only changes in `CombinedUpdateReport.hasChanges`.
+  Both kinds, changed state files and pruning commit or recover together.
+
 ## [0.1.1] - 2026-10-20
 
 ### Fixed

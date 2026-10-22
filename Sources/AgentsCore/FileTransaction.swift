@@ -22,26 +22,32 @@ package final class FileTransaction {
     var link: Bool
     var data: Data?
     var expectedHash: String?
+    var executableFlags: [String: Bool]?
     var prepare: ((URL) throws -> URL)?
   }
   private let store: StateStore
   private let checkpoint: (String) throws -> Void
+  private let outcome: TransactionOutcome
   private var entries: [Entry] = []
   private var contents: [Content] = []
 
-  package init(store: StateStore, checkpoint: @escaping (String) throws -> Void = { _ in }) {
+  package init(
+    store: StateStore, outcome: TransactionOutcome = TransactionOutcome(),
+    checkpoint: @escaping (String) throws -> Void = { _ in }
+  ) {
     self.store = store
     self.checkpoint = checkpoint
+    self.outcome = outcome
   }
 
   package func replace(
     _ destination: URL, content: URL?, link: Bool = false, data: Data? = nil,
-    expectedHash: String? = nil
+    expectedHash: String? = nil, executableFlags: [String: Bool]? = nil
   ) throws {
     if let expectedHash {
       try StateValidation.digest(expectedHash)
-      guard !link, content != nil || data != nil else {
-        throw CoreError.invalidState("verification requires copied content")
+      guard content != nil || data != nil else {
+        throw CoreError.invalidState("verification requires content")
       }
     }
     let path = try TransactionPaths(store: store).path(for: destination)
@@ -50,7 +56,9 @@ package final class FileTransaction {
     }
     entries.append(Entry(path: path, existed: false, replacement: content != nil || data != nil))
     contents.append(
-      Content(url: content, link: link, data: data, expectedHash: expectedHash, prepare: nil))
+      Content(
+        url: content, link: link, data: data, expectedHash: expectedHash,
+        executableFlags: executableFlags, prepare: nil))
   }
 
   /// Builds source content inside journal-owned scratch storage before verified copying.
@@ -93,6 +101,7 @@ package final class FileTransaction {
     var journal = Journal(
       id: UUID(), scope: try directory.identity,
       roots: try roots.mapValues { try $0.identity }, phase: .preparing, entries: entries)
+    outcome.journalID = journal.id
     do {
       try Self.persist(journal, directory: directory, checkpoint: checkpoint)
       try checkpoint("journal.preparing")
@@ -114,6 +123,7 @@ package final class FileTransaction {
           }
           content.url = source
           content.expectedHash = "sha256:" + (try FileHash.folderHash(source))
+          content.executableFlags = try FileHash.executableFlags(source)
           try checkpoint("prepare.\(index).ready")
         }
         if let data = content.data {
@@ -132,19 +142,34 @@ package final class FileTransaction {
               checkpoint: { try checkpoint("stage.\(index).copy.\($0)") })
           }
         }
+        try checkpoint("stage.\(index).ready")
         if let expectedHash = content.expectedHash {
-          let hash =
-            try content.data == nil
-            ? FileHash.folderHash(parent.child(staged))
-            : FileHash.sha256Hex(data: parent.read(staged))
+          let hash: String
+          if content.link, let source = content.url {
+            hash = try FileHash.folderHash(source)
+          } else if content.data == nil {
+            hash = try FileHash.folderHash(parent.child(staged))
+          } else {
+            hash = try FileHash.sha256Hex(data: parent.read(staged))
+          }
           guard "sha256:" + hash == expectedHash else {
             throw CoreError.invalidState("staged content digest mismatch")
           }
           try checkpoint("stage.\(index).verified")
         }
+        if let flags = content.executableFlags {
+          let actual =
+            try content.link
+            ? FileHash.executableFlags(content.url!)
+            : FileHash.executableFlags(parent.child(staged))
+          guard actual == flags else {
+            throw CoreError.invalidState("staged content executable mode mismatch")
+          }
+        }
         try checkpoint("stage.\(index)")
       }
       journal.phase = .applying
+      outcome.disposition = .recoveryRequired
       try Self.persist(journal, directory: directory, checkpoint: checkpoint)
       try checkpoint("journal.applying")
       for (index, entry) in entries.enumerated() {
@@ -164,16 +189,24 @@ package final class FileTransaction {
       }
       journal.phase = .committed
       try Self.persist(journal, directory: directory, checkpoint: checkpoint)
+      outcome.disposition = .committed
       try checkpoint("journal.committed")
       try Self.cleanup(journal, directory: directory, parents: parents, checkpoint: checkpoint)
     } catch {
-      _ = try Self.recover(store: store)
+      do {
+        _ = try Self.recover(store: store, outcome: outcome)
+      } catch {
+        outcome.disposition = .recoveryRequired
+      }
       throw error
     }
   }
 
   /// Recovers only after validating and pinning every parent in the journal.
-  package static func recover(store: StateStore, checkpoint: (String) throws -> Void = { _ in })
+  package static func recover(
+    store: StateStore, outcome: TransactionOutcome? = nil,
+    checkpoint: (String) throws -> Void = { _ in }
+  )
     throws -> Bool
   {
     guard let directory = try store.openDirectoryIfPresent() else { return false }
@@ -233,6 +266,9 @@ package final class FileTransaction {
       try persist(journal, directory: directory, checkpoint: checkpoint)
     }
     try cleanup(journal, directory: directory, parents: parents, checkpoint: checkpoint)
+    if outcome?.journalID == journal.id {
+      outcome?.disposition = journal.phase == .committed ? .committed : .unchanged
+    }
     return true
   }
 

@@ -15,6 +15,28 @@ package enum FileHash {
     try folderHash(DirectoryHandle(at: directory.resolvingSymlinksInPath()))
   }
 
+  /// Execute permission is compared separately from the persistent content hash.
+  package static func executableFlags(_ directory: URL) throws -> [String: Bool] {
+    try executableFlags(DirectoryHandle(at: directory.resolvingSymlinksInPath()))
+  }
+
+  static func executableFlags(_ directory: DirectoryHandle) throws -> [String: Bool] {
+    var flags: [String: Bool] = [:]
+    func collect(_ directory: DirectoryHandle, prefix: String) throws {
+      for name in try directory.names() {
+        guard let info = try directory.info(name) else { throw CoreError.notFound(prefix + name) }
+        switch info.st_mode & 0o170000 {
+        case 0o040000: try collect(directory.child(name), prefix: prefix + name + "/")
+        case 0o100000: flags[prefix + name] = info.st_mode & 0o111 != 0
+        case 0o120000: break
+        default: throw CoreError.invalidState("unsupported content entry: \(prefix + name)")
+        }
+      }
+    }
+    try collect(directory, prefix: "")
+    return flags
+  }
+
   static func folderHash(_ directory: DirectoryHandle) throws -> String {
     var entries: [(String, Data)] = []
     func collect(_ directory: DirectoryHandle, prefix: String) throws {

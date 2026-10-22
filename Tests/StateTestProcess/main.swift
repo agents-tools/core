@@ -1,6 +1,7 @@
 import AgentsCore
 import AgentsInstructions
 import AgentsSkills
+import AgentsUpdates
 import Darwin
 import Foundation
 
@@ -155,6 +156,44 @@ if arguments[2] == "git-environment" {
     _ = try store.loadResolved()
   }
   try Data().write(to: root.appendingPathComponent("reader-finished"))
+} else if arguments[2] == "combined-crash" {
+  _ = try UpdateOperations.withPreparedUpdate(
+    scope: scope, environment: store.environment,
+    checkpoint: { step in
+      if arguments[3] == "between-kinds", step.hasPrefix("replace.") {
+        let journal =
+          try JSONSerialization.jsonObject(
+            with: Data(contentsOf: store.directory.appendingPathComponent("transaction.json")))
+          as! [String: Any]
+        let entries = journal["entries"] as! [[String: Any]]
+        let firstInstruction = entries.firstIndex {
+          ($0["path"] as! String).hasPrefix("instructions-")
+        }!
+        if step == "replace.\(firstInstruction - 1)" { try stop("between-kinds") }
+      } else {
+        try stop(step)
+      }
+    },
+    { update in
+      try stop("prepared")
+      return try update.apply()
+    })
+} else if arguments[2] == "combined-contender" {
+  try Data().write(to: root.appendingPathComponent("contender-started"))
+  switch arguments[3] {
+  case "skills":
+    _ = try SkillOperations.updateInstalled(
+      scope: scope, environment: store.environment, apply: true)
+  case "instructions":
+    _ = try InstructionOperations.updateInstalled(
+      scope: scope, environment: store.environment, apply: true)
+  case "watch":
+    _ = try SkillOperations.watchOperations().remove(
+      "fixture", scope: scope, environment: store.environment)
+  case "preview": _ = try UpdateOperations.preview(scope: scope, environment: store.environment)
+  default: _ = try store.loadResolved()
+  }
+  try Data().write(to: root.appendingPathComponent("contender-finished"))
 } else if arguments[2] == "create-scope" {
   try FileLock.withLock(
     at: store.directory.appendingPathComponent(".agents.lock"), checkpoint: { try stop($0) },
@@ -244,6 +283,9 @@ if arguments[2] == "git-environment" {
         ).appendingPathComponent("created"),
         content: root.appendingPathComponent("new"),
         link: true)
+      try transaction.replace(
+        InstructionLocations.file(for: .codex, scope: scope, environment: store.environment)!,
+        content: nil, data: Data("new instructions".utf8))
       try transaction.commit()
     }
   }

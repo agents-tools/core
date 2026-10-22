@@ -401,7 +401,11 @@ struct ReadOnlyInspectionTests {
       if let link = try? FileManager.default.destinationOfSymbolicLink(atPath: file.path) {
         result[path] = .symbolicLink(link)
       } else if try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
-        result[path] = .file(try Data(contentsOf: file))
+        let mode =
+          try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions]
+          as? NSNumber
+        result[path] = .file(
+          try Data(contentsOf: file), executable: (mode?.uint16Value ?? 0) & 0o111 != 0)
       } else {
         result[path] = .directory
       }

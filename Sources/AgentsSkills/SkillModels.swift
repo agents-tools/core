@@ -78,7 +78,7 @@ public struct InstalledSkill: Codable, Equatable, Sendable {
 
 /// The physical entry type and payload shown in an update preview.
 public enum SkillFileEntry: Codable, Equatable, Sendable {
-  case file(Data)
+  case file(Data, executable: Bool)
   case directory
   case symbolicLink(String)
 }
@@ -90,14 +90,31 @@ public struct SkillFileChange: Codable, Equatable, Sendable {
   public var after: SkillFileEntry?
 }
 
+/// Membership recorded by the lock, independent of filesystem presence.
+public enum SkillMembership: Codable, Equatable, Sendable {
+  case absent
+  case installed(mode: InstallMode)
+}
+
+public struct SkillMembershipChange: Codable, Equatable, Sendable {
+  public let agent: AgentID
+  public let path: String
+  public let before: SkillMembership
+  public let after: SkillMembership
+}
+
 public struct UpdateResult: Codable, Equatable, Sendable {
   public var skill: String
   public var sourceIdentity: String
   public var changed: Bool
   public var oldRevision: String?
   public var newRevision: String?
+  public var oldVersion: String?
+  public var newVersion: String?
   public var oldHash: String?
   public var newHash: String?
+  public var lockMissing: Bool
+  public var membership: [SkillMembershipChange]
   public var changes: [SkillFileChange]
   public var installed: [InstallResult]
 }

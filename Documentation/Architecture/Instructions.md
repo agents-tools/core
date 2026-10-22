@@ -90,7 +90,12 @@ A recipient change such as Codex to Cursor is reported even when both use the
 same unchanged `AGENTS.md`.
 The optional throwing `beforeApply` callback runs before replacements so a
 consumer can show differences or cancel. Target bytes are checked again after
-the callback; intervening edits stop the commit. Add throws conflict differences
+the callback; intervening edits stop the commit. Update also revalidates state
+bytes/presence, target ancestry and all Claude forwarding decision inputs
+before and after retention. `InstructionUpdatePlan` supplies package-visible
+planning, validation, retention and staging to both standalone updates and
+`AgentsUpdates`; the latter commits both kinds together as described in
+[Updates](Updates.md). Add throws conflict differences
 unless `replace` is enabled. Update previews conflicts and applies newly resolved
 content. Install restores drift but stops on a conflicting custom section.
 

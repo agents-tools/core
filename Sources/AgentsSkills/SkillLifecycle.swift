@@ -14,6 +14,18 @@ struct PreparedSkill {
   var lock: LockedSkill
   var directory: URL
   var payloads: [String: Data]
+  let executableFlags: [String: Bool]?
+  let identity: PathIdentity
+  let sourceIdentity: PathIdentity
+
+  init(lock: LockedSkill, directory: URL, payloads: [String: Data], sourcePath: URL? = nil) throws {
+    self.lock = lock
+    self.directory = directory
+    self.payloads = payloads
+    executableFlags = try lock.hash == nil ? nil : FileHash.executableFlags(directory)
+    identity = try PathIdentity(directory.resolvingSymlinksInPath())
+    sourceIdentity = try PathIdentity(sourcePath ?? directory)
+  }
 }
 
 final class SkillLifecycle {
@@ -21,8 +33,12 @@ final class SkillLifecycle {
   let cache: SourceCache
   let provider: WellKnownProvider
   let workspace: URL
+  let resolutions: SourceResolutionSession?
 
-  init(store: StateStore, provider: WellKnownProvider) throws {
+  init(
+    store: StateStore, provider: WellKnownProvider, resolutions: SourceResolutionSession? = nil
+  ) throws {
+    self.resolutions = resolutions
     self.store = store
     self.cache = SourceCache(store: store)
     self.provider = provider
@@ -66,9 +82,14 @@ final class SkillLifecycle {
       root = source.localURL(environment: store.environment)
     } else {
       root = workspace.appendingPathComponent(UUID().uuidString)
-      try cache.withResolvedSnapshot(source, cacheSource: cacheSource) { resolved, snapshot in
+      func copy(_ resolved: SourceRevision, _ snapshot: URL) throws {
         pin = resolved
         try FileManager.default.copyItem(at: snapshot, to: root)
+      }
+      if let resolutions {
+        try resolutions.withSnapshot(source, copy)
+      } else {
+        try cache.withResolvedSnapshot(source, cacheSource: cacheSource, copy)
       }
     }
     let skills = try Discovery.discover(
@@ -139,7 +160,9 @@ final class SkillLifecycle {
         hash: "sha256:" + (try FileHash.folderHash(directory)),
         installs: Dictionary(uniqueKeysWithValues: Set(agents).map { ($0.rawValue, mode) }))
     }
-    return PreparedSkill(lock: lock, directory: directory, payloads: artifact?.payloads ?? [:])
+    return try PreparedSkill(
+      lock: lock, directory: directory, payloads: artifact?.payloads ?? [:],
+      sourcePath: mode == .edit ? URL(fileURLWithPath: skill.path) : nil)
   }
 
   func restore(name: String, skill: LockedSkill, sources: [String: LockedSource]) throws
@@ -182,7 +205,7 @@ final class SkillLifecycle {
     if let hash = skill.hash, try "sha256:" + FileHash.folderHash(directory) != hash {
       throw CoreError.invalidState("locked skill digest mismatch: \(name)")
     }
-    return PreparedSkill(lock: skill, directory: directory, payloads: payloads)
+    return try PreparedSkill(lock: skill, directory: directory, payloads: payloads)
   }
 
   func apply(
@@ -191,86 +214,127 @@ final class SkillLifecycle {
   ) throws -> [InstallResult] {
     try declaration.validate(environment: store.environment)
     try next.validate()
+    try validateOwnership(previous: previous, next: next, names: names)
+    let retained = try retain(prepared: prepared, next: next)
     let transaction = FileTransaction(store: store)
+    try stage(
+      previous: previous, next: next, prepared: prepared, retained: retained,
+      names: names, transaction: transaction)
+    if writeState {
+      try transaction.replace(
+        store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
+      try transaction.replace(
+        store.resolvedURL, content: nil, data: StateStore.encode(next.normalized))
+    }
+    try cache.prune(referencedBy: next, transaction: transaction)
+    try transaction.commit()
+    return receipts(next: next, names: names)
+  }
+
+  func validateOwnership(previous: ResolvedState, next: ResolvedState, names: Set<String>) throws {
     let oldTargets = try targets(previous)
     let newTargets = try targets(next)
-    // A path this scope's lock never managed may hold the user's own skill. Dangling or
-    // looping links hold no content and are replaced.
+    // Only recorded targets belong to this scope. Dangling or looping links hold no content.
     for (path, target) in newTargets.sorted(by: { $0.key < $1.key })
-    where names.contains(target.name) && oldTargets[path] == nil
-      && Self.holdsContent(atPath: path)
+    where names.contains(target.name) && oldTargets[path] == nil && Self.holdsContent(atPath: path)
     {
       throw CoreError.invalidSkill(
         "skill '\(target.name)' in \(store.scope.rawValue) scope cannot be installed at \(path): "
           + "an entry this scope does not manage already exists there; move or remove it first")
     }
-    var results: [InstallResult] = []
+  }
+
+  func retain(prepared: [String: PreparedSkill], next: ResolvedState) throws -> [String: URL] {
     var retained: [String: URL] = [:]
-    do {
-      // Verify every source before preparing any installed replacement.
-      for (name, item) in prepared {
-        let skill = item.lock
-        if let hash = skill.hash, try "sha256:" + FileHash.folderHash(item.directory) != hash {
-          throw CoreError.invalidState("prepared skill changed: \(name)")
+    for (name, item) in prepared.sorted(by: { $0.key < $1.key }) {
+      try validate(item, name: name)
+      let skill = item.lock
+      let path: URL
+      if let revision = skill.revision, let source = next.sources[skill.source] {
+        let root = try cache.materialize(sourceID: skill.source, source: source, revision: revision)
+        path = try PathSafety.resolvedChild(base: root, subpath: skill.path ?? ".")
+      } else if let artifact = skill.artifact {
+        for (digest, data) in item.payloads { _ = try cache.storeArtifact(data, digest: digest) }
+        guard let hash = skill.hash else {
+          throw CoreError.invalidState("missing artifact content hash")
         }
-        if let revision = skill.revision, let source = next.sources[skill.source] {
-          let root = try cache.materialize(
-            sourceID: skill.source, source: source, revision: revision)
-          let path = try PathSafety.resolvedChild(base: root, subpath: skill.path ?? ".")
-          guard try "sha256:" + FileHash.folderHash(path) == skill.hash else {
-            throw CoreError.invalidState("cached skill digest mismatch: \(name)")
-          }
-          retained[name] = path
-        } else if let artifact = skill.artifact {
-          for (digest, data) in item.payloads { _ = try cache.storeArtifact(data, digest: digest) }
-          guard let hash = skill.hash else {
-            throw CoreError.invalidState("missing artifact content hash")
-          }
-          retained[name] = try cache.materializeArtifact(
-            item.directory, digest: artifact.digest, hash: hash)
-        } else {
-          retained[name] = item.directory
+        path = try cache.materializeArtifact(item.directory, digest: artifact.digest, hash: hash)
+      } else {
+        path = item.directory
+      }
+      if let hash = skill.hash {
+        guard try "sha256:" + FileHash.folderHash(path) == hash,
+          try FileHash.executableFlags(path) == item.executableFlags
+        else {
+          throw CoreError.invalidState("cached skill content or executable mode mismatch: \(name)")
         }
       }
-      for (path, target) in oldTargets where names.contains(target.name) && newTargets[path] == nil
+      retained[name] = path
+    }
+    return retained
+  }
+
+  func validate(_ item: PreparedSkill, name: String) throws {
+    try item.identity.validate()
+    try item.sourceIdentity.validate()
+    if let hash = item.lock.hash {
+      guard try "sha256:" + FileHash.folderHash(item.directory) == hash,
+        try FileHash.executableFlags(item.directory) == item.executableFlags
+      else { throw CoreError.invalidState("prepared skill changed: \(name)") }
+    } else {
+      guard
+        let skill = try Discovery.parseSkill(
+          at: item.directory.appendingPathComponent("SKILL.md"), includeInternal: true),
+        PathSafety.sanitizeName(skill.name) == name
+      else { throw CoreError.invalidSkill("live skill is unavailable: \(name)") }
+    }
+  }
+
+  func stage(
+    previous: ResolvedState, next: ResolvedState, prepared: [String: PreparedSkill],
+    retained: [String: URL], names: Set<String>, transaction: FileTransaction
+  ) throws {
+    let oldTargets = try targets(previous)
+    let newTargets = try targets(next)
+    for path in Set(oldTargets.keys).union(newTargets.keys).sorted() {
+      if let target = newTargets[path], names.contains(target.name),
+        let content = retained[target.name], let item = prepared[target.name]
       {
-        try transaction.replace(URL(fileURLWithPath: path), content: nil)
-      }
-      for (path, target) in newTargets.sorted(by: { $0.key < $1.key })
-      where names.contains(target.name) {
-        guard let content = retained[target.name] else { continue }
         guard
           !PathSafety.isContained(
             content.resolvingSymlinksInPath(), in: URL(fileURLWithPath: path).standardizedFileURL)
-        else {
-          throw CoreError.unsafePath("installation would replace its own source")
-        }
+        else { throw CoreError.unsafePath("installation would replace its own source") }
         try transaction.replace(
-          URL(fileURLWithPath: path), content: content, link: target.mode != .copy)
-      }
-      if writeState {
-        try transaction.replace(
-          store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
-        try transaction.replace(
-          store.resolvedURL, content: nil, data: StateStore.encode(next.normalized))
-      }
-      try cache.prune(referencedBy: next, transaction: transaction)
-      try transaction.commit()
-    } catch {
-      if let recovered = try? store.readResolved() { try? cache.prune(referencedBy: recovered) }
-      throw error
-    }
-    for name in names.sorted() {
-      guard let skill = next.skills[name], prepared[name] != nil else { continue }
-      for (raw, mode) in skill.installs.sorted(by: { $0.key < $1.key }) {
-        guard let agent = AgentID(rawValue: raw) else { continue }
-        results.append(
-          InstallResult(
-            skill: name, agent: agent, scope: store.scope, mode: mode,
-            path: Self.target(name: name, agent: agent, store: store).path))
+          URL(fileURLWithPath: path), content: content, link: target.mode != .copy,
+          expectedHash: item.lock.hash,
+          executableFlags: item.executableFlags)
+      } else if let target = oldTargets[path], names.contains(target.name), newTargets[path] == nil
+      {
+        try transaction.replace(URL(fileURLWithPath: path), content: nil)
       }
     }
-    return results
+  }
+
+  func receipts(next: ResolvedState, names: Set<String>) -> [InstallResult] {
+    names.sorted().flatMap { name in
+      (next.skills[name]?.installs ?? [:]).sorted(by: { $0.key < $1.key }).compactMap { raw, mode in
+        guard let agent = AgentID(rawValue: raw) else { return nil }
+        return InstallResult(
+          skill: name, agent: agent, scope: store.scope, mode: mode,
+          path: Self.target(name: name, agent: agent, store: store).path)
+      }
+    }
+  }
+
+  func membership(name: String, old: LockedSkill?, new: LockedSkill?) -> [SkillMembershipChange] {
+    Set((old?.installs ?? [:]).keys).union((new?.installs ?? [:]).keys).sorted().compactMap { raw in
+      guard let agent = AgentID(rawValue: raw) else { return nil }
+      return SkillMembershipChange(
+        agent: agent,
+        path: Self.physicalTarget(Self.target(name: name, agent: agent, store: store)).path,
+        before: old?.installs[raw].map { .installed(mode: $0) } ?? .absent,
+        after: new?.installs[raw].map { .installed(mode: $0) } ?? .absent)
+    }
   }
 
   func changes(name: String, old: LockedSkill?, new: PreparedSkill?) throws -> [SkillFileChange] {
@@ -332,8 +396,7 @@ final class SkillLifecycle {
       .appendingPathComponent(url.lastPathComponent).standardizedFileURL
   }
 
-  private func targets(_ lock: ResolvedState) throws -> [String: (name: String, mode: InstallMode)]
-  {
+  func targets(_ lock: ResolvedState) throws -> [String: (name: String, mode: InstallMode)] {
     var result: [String: (name: String, mode: InstallMode)] = [:]
     for (name, skill) in lock.skills {
       for (raw, mode) in skill.installs {
@@ -361,7 +424,7 @@ final class SkillLifecycle {
     }
   }
 
-  private func entries(_ directory: URL) throws -> [String: SkillFileEntry] {
+  func entries(_ directory: URL, followRoot: Bool = true) throws -> [String: SkillFileEntry] {
     func entry(_ url: URL) throws -> SkillFileEntry? {
       guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
         return nil
@@ -370,12 +433,15 @@ final class SkillLifecycle {
       case .typeSymbolicLink:
         return .symbolicLink(try FileManager.default.destinationOfSymbolicLink(atPath: url.path))
       case .typeDirectory: return .directory
-      case .typeRegular: return .file(try Data(contentsOf: url))
+      case .typeRegular:
+        let mode = (attributes[.posixPermissions] as? NSNumber)?.uint16Value ?? 0
+        return .file(try Data(contentsOf: url), executable: mode & 0o111 != 0)
       default: throw CoreError.unsafePath("unsupported installed entry: \(url.path)")
       }
     }
     guard let root = try entry(directory) else { return [:] }
     var result = [".": root]
+    if !followRoot, case .symbolicLink = root { return result }
     let resolved = directory.resolvingSymlinksInPath()
     guard (try? resolved.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
       let enumerator = FileManager.default.enumerator(

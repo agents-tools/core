@@ -129,9 +129,10 @@ extension LockedArtifactLifecycleTests {
       }
       return changed
     }
-    _ = try SkillOperations.update(
+    let updated = try SkillOperations.update(
       scope: .project, environment: fixture.environment, skillNames: ["one"], apply: true,
       provider: selectedOnly)
+    #expect(updated.allSatisfy { $0.oldVersion == nil && $0.newVersion == nil })
     #expect(try fixture.store().loadResolved().skills["two"] == old)
     let empty = WellKnownProvider { _ in Data(#"{"skills":[]}"#.utf8) }
     _ = try SkillOperations.update(
