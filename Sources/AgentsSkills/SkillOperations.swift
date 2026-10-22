@@ -147,6 +147,7 @@ public enum SkillOperations {
       let plan = try prepareUpdate(
         store: store, declaration: declaration, previous: previous, resolutions: resolutions,
         skillNames: skillNames, provider: provider)
+      try plan.next.validate()
       var results = plan.results
       if apply {
         try plan.validateOwnership()
@@ -173,6 +174,7 @@ public enum SkillOperations {
     }
   }
 
+  /// Prepares skill-owned records; the caller validates the complete generation after assembly.
   package static func prepareUpdate(
     store: StateStore, declaration: Declaration, previous: ResolvedState,
     resolutions: SourceResolutionSession, skillNames: [String] = []
@@ -265,7 +267,6 @@ public enum SkillOperations {
       throw CoreError.notFound("requested skill is not declared or is missing upstream")
     }
     if requested.isEmpty { next.skills = prepared.mapValues(\.lock) }
-    try next.validate()
     let affected = requested.isEmpty ? Set(previous.skills.keys).union(prepared.keys) : requested
     let results = try affected.sorted().map { name in
       let old = previous.skills[name]

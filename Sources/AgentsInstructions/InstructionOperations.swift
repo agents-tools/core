@@ -86,6 +86,7 @@ public enum InstructionOperations {
         declaration: declaration, previousDeclaration: previousDeclaration,
         previous: previous, prepared: prepared, store: store,
         replace: options.replace)
+      try plan.lock.validate()
       try beforeApply?(plan.report)
       try Self.apply(
         declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
@@ -133,6 +134,7 @@ public enum InstructionOperations {
       let plan = try prepareUpdate(
         store: store, declaration: declaration, previousDeclaration: previousDeclaration,
         previous: previous, resolutions: resolutions)
+      try plan.next.validate()
       if apply {
         try beforeApply?(plan.report)
         try baseline.validate()
@@ -153,6 +155,7 @@ public enum InstructionOperations {
     }
   }
 
+  /// Prepares instruction-owned records; the caller validates the complete generation after assembly.
   package static func prepareUpdate(
     store: StateStore, declaration: Declaration, previousDeclaration: Declaration,
     previous: ResolvedState, resolutions: SourceResolutionSession
@@ -229,6 +232,7 @@ public enum InstructionOperations {
         declaration: declaration, previousDeclaration: previousDeclaration,
         previous: previous, prepared: prepared, store: store,
         replace: false)
+      try plan.lock.validate()
       try beforeApply?(plan.report)
       try apply(declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
       return plan.report
@@ -333,7 +337,6 @@ public enum InstructionOperations {
       previous: previous.instructions, replace: replace)
     next.instructions.targets = targets.targets
     try InstructionTargets.validateSourceDirectories(targets.changes, sources: next.sources)
-    try next.validate()
     let before = previous.instructions.sections
     let after = next.instructions.sections
     let identities = Set((before + after).map(InstructionSources.identity))

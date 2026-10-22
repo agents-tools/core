@@ -8,6 +8,88 @@ import Testing
 
 @Suite("Combined updates")
 struct CombinedUpdateTests {
+  @Test func sharedSourceRequirementAndEditToCopyTransitionUseMergedState() throws {
+    let fixture = try UpdateFixture()
+    try fixture.install(mode: .edit, agents: [.codex])
+    try fixture.advance()
+    var declaration = try fixture.store.loadDeclaration()
+    declaration.skills?["fixture"]?.mode = .copy
+    declaration.sources["fixture"]?.requirement = .branch("main")
+    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    let before = try fixture.snapshot()
+    let preview = try fixture.preview()
+    let skill = try #require(preview.skills.first)
+    #expect(preview.hasChanges && preview.instructions.hasChanges)
+    #expect(skill.membership.map(\.before) == [.installed(mode: .edit)])
+    #expect(skill.membership.map(\.after) == [.installed(mode: .copy)])
+    #expect(try fixture.snapshot() == before)
+    let receipt = try UpdateOperations.withPreparedUpdate(environment: fixture.environment) {
+      update in
+      #expect(update.report == preview)
+      #expect(try fixture.snapshot() == before)
+      return try update.apply()
+    }
+    #expect(receipt.report == preview && receipt.installedSkills.count == 1)
+    let lock = try fixture.store.loadResolved()
+    let installed = try #require(lock.skills["demo"])
+    let revision = try fixture.git(["rev-parse", "main"])
+    #expect(lock.sources[installed.source]?.requirement == .branch("main"))
+    #expect(installed.installs == [AgentID.codex.rawValue: .copy])
+    #expect(installed.revision == revision)
+    #expect(lock.instructions.sections.first?.revision == revision)
+    #expect(lock.instructions.chatgpt["weekly"]?.sections.first?.revision == revision)
+    #expect(
+      try FileManager.default.attributesOfItem(atPath: fixture.target().path)[.type]
+        as? FileAttributeType == .typeDirectory)
+    #expect(
+      try fixture.bytes(fixture.target().appendingPathComponent("SKILL.md"))
+        == fixture.bytes(fixture.repo.appendingPathComponent("skills/demo/SKILL.md")))
+    #expect(
+      String(decoding: try fixture.bytes(fixture.instruction()), as: UTF8.self).contains("new"))
+    #expect(try !fixture.preview().hasChanges)
+  }
+
+  @Test(arguments: [false, true])
+  func standaloneInstructionsValidateRetainedSkills(_ apply: Bool) throws {
+    let fixture = try UpdateFixture()
+    try fixture.install(mode: .edit, agents: [.codex])
+    var declaration = try fixture.store.loadDeclaration()
+    declaration.skills?["fixture"]?.mode = .copy
+    declaration.sources["fixture"]?.requirement = .branch("main")
+    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    let before = try fixture.snapshot()
+    var called = false
+    #expect(throws: CoreError.invalidState("edit installs must be local, unpinned live links")) {
+      try InstructionOperations.updateInstalled(
+        environment: fixture.environment, apply: apply, beforeApply: { _ in called = true })
+    }
+    #expect(!called)
+    #expect(try fixture.snapshot() == before)
+  }
+
+  @Test(arguments: [false, true])
+  func standaloneNamedSkillsValidateRetainedSkills(_ apply: Bool) throws {
+    let fixture = try UpdateFixture()
+    try fixture.write(
+      "---\nname: other\ndescription: fixture\n---\nother\n",
+      to: fixture.repo.appendingPathComponent("skills/other/SKILL.md"))
+    try fixture.commit()
+    try fixture.install(mode: .edit, agents: [.codex])
+    var declaration = try fixture.store.loadDeclaration()
+    declaration.skills?["fixture"]?.mode = .copy
+    declaration.sources["fixture"]?.requirement = .branch("main")
+    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    let before = try fixture.snapshot()
+    var called = false
+    #expect(throws: CoreError.invalidState("edit installs must be local, unpinned live links")) {
+      try SkillOperations.updateInstalled(
+        environment: fixture.environment, skillNames: ["demo"], apply: apply,
+        beforeApply: { _ in called = true })
+    }
+    #expect(!called)
+    #expect(try fixture.snapshot() == before)
+  }
+
   @Test func exchangingALiveSymlinkDestinationInvalidatesPreparation() throws {
     let fixture = try UpdateFixture()
     try fixture.install(mode: .edit)

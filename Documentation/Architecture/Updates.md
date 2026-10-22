@@ -23,10 +23,14 @@ Independent sources are not promised a simultaneous upstream snapshot.
 
 The combined lock takes skills from the skill plan and instruction records
 from the instruction plan. It merges compatible source updates and retained
-baseline records, preserves declaration and watch data, and validates the
-complete prospective state. Applying preparation checks ownership and physical
-path collisions before the closure. Preview can report prospective membership
-that an applying preparation rejects as unmanaged.
+baseline records, preserves declaration and watch data, and then validates the
+complete prospective state. Domain preparation defers whole-state validation
+until this merge so shared source changes are checked against both domains'
+prospective records. Standalone operations validate their complete resulting
+state before returning a preview or invoking a consumer callback. Applying
+preparation checks ownership and physical path collisions before the closure.
+Preview can report prospective membership that an applying preparation rejects
+as unmanaged.
 
 The report contains `scope`, `skills`, `instructions`, `lockMissing` and
 `hasChanges`. The last includes normalized lock changes, physical differences
