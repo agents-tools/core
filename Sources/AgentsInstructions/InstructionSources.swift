@@ -4,10 +4,12 @@ import Foundation
 final class InstructionSources {
   let store: StateStore
   let cache: SourceCache
+  let resolutions: SourceResolutionSession?
   private var discovered: [String: [InstructionUnit]] = [:]
   private var restored: [String: InstructionSection] = [:]
 
-  init(store: StateStore) {
+  init(store: StateStore, resolutions: SourceResolutionSession? = nil) {
+    self.resolutions = resolutions
     self.store = store
     cache = SourceCache(store: store)
   }
@@ -34,7 +36,7 @@ final class InstructionSources {
         URL(fileURLWithPath: root).resolvingSymlinksInPath() == directory.resolvingSymlinksInPath()
       else { throw CoreError.invalidSource("use the local Git root and a search path") }
     }
-    let units = try cache.withResolvedSnapshot(source, cacheSource: cacheSource) { pin, tree in
+    func read(_ pin: SourceRevision, _ tree: URL) throws -> [InstructionUnit] {
       let root = try PathSafety.resolvedChild(base: tree, subpath: source.path ?? ".")
       var units: [InstructionUnit] = []
       var names = Set<String>()
@@ -65,6 +67,9 @@ final class InstructionSources {
       }
       return units.sorted { $0.record.name < $1.record.name }
     }
+    let units =
+      try resolutions.map { try $0.withSnapshot(source, read) }
+      ?? cache.withResolvedSnapshot(source, cacheSource: cacheSource, read)
     discovered[id] = units
     return units
   }

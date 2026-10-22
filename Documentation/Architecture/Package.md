@@ -11,6 +11,8 @@ Swift 6.3, Swift 6 language mode, and a macOS 13 minimum deployment platform.
 ## Products and Dependencies
 
 ```text
+AgentsUpdates ──> AgentsCore, AgentsSkills, AgentsInstructions
+
 AgentsSkills ──> AgentsCore
       │
       └───────> Yams
@@ -19,13 +21,14 @@ AgentsInstructions ──> AgentsCore
          │
          └───────> Markdown (swift-markdown) ──> cmark-gfm
 
-StateTestProcess ──> AgentsCore
+StateTestProcess ──> AgentsCore, AgentsSkills, AgentsInstructions, AgentsUpdates
 AgentsCoreTests ──> AgentsCore, StateTestProcess
 AgentsSkillsTests ──> AgentsSkills, AgentsCore, Yams, StateTestProcess
 AgentsInstructionsTests ──> AgentsInstructions
+AgentsUpdatesTests ──> AgentsUpdates, StateTestProcess
 ```
 
-`AgentsCore`, `AgentsSkills`, and `AgentsInstructions` are library products with
+`AgentsCore`, `AgentsSkills`, `AgentsInstructions` and `AgentsUpdates` are library products with
 matching targets under `Sources/` and test targets under `Tests/`. Shared
 implementation uses `package` access; consumers receive the
 workflow APIs and the state and result models they need. `Package.swift` owns
@@ -57,6 +60,10 @@ this dependency graph.
   [State and cache](State.md).
 - `SourceCache` owns bare Git mirrors, requirement resolution, exact snapshots,
   digest-addressed downloads and pruning across skill, instruction and watch pins.
+  `SourceResolutionSession` shares disposable exact snapshots between domain
+  planners during one update. `StatePrecondition` and `PathIdentity` validate
+  the rendered generation before application. `TransactionOutcome` follows
+  its owning journal through commit and recovery.
   `ProcessRunner` executes subprocesses.
 - `WatchOperations` owns source subscriptions, seen baselines, branch tracking
   and file comparisons. `WatchState` defines version 1 of `agents.watch`.
@@ -125,10 +132,21 @@ already manages are replaced: a directory, file or resolvable link at a new
 target is left untouched and the operation fails with `CoreError.invalidSkill`
 naming the path. Dangling or looping links hold no content and are replaced.
 
-Update results include old and new hashes and revisions and per-file bytes for
-CLI diff presentation. The optional `beforeApply` callback runs before any
-replacement, and a thrown error cancels the operation. A CLI auditing several
-projects calls `doctor` with an explicit environment for each root.
+Update results include old/new resolved versions, full revisions, hashes and
+typed file entries with bytes and executable flags. `membership` reports the
+old/new managed mode or absence for every affected agent, sorted by raw value;
+paths are physical installation paths with the final entry unfollowed. Shared
+paths retain distinct recipient rows and one physical diff. `lockMissing`
+means the before membership is unrecorded, not that files were absent.
+`installed` is a post-apply receipt. Persistent hashes exclude permissions;
+equal hashes do not suppress mode-only changes.
+
+The optional `beforeApply` callback runs before any replacement, and a thrown
+error cancels the operation. The extracted `SkillUpdatePlan` validates state
+and target preconditions around content retention, including execute flags.
+Prepared, cached and staged skill content must agree in bytes and mode.
+A CLI auditing several projects calls `doctor` with an explicit environment
+for each root.
 
 `Discovery` retains root skills, direct children, conventional containers,
 plugin and marketplace manifests, recursive fallback and `fullDepth` discovery.
@@ -260,6 +278,25 @@ The probe is never emitted. Malformed managed markers still produce errors.
 `InstructionOperations` owns ancestor-file warnings, filesystem access,
 declaration and lock updates, and deletion decisions using the lock's `created`
 flag. The `Instructions` and `ClaudeForwarding` text APIs perform no I/O.
+
+## AgentsUpdates
+
+`UpdateOperations.preview` plans all declared skills, instruction targets and
+prompts under one shared scope lock. `withPreparedUpdate` holds one writer
+lock through preparation and the synchronous consumer closure. Its
+`PreparedUpdate` exposes an immutable `CombinedUpdateReport` and applies once;
+retained or reused handles fail before I/O after closure exit. Reports cannot
+be reconstructed into applicable plans.
+
+Package-visible `SkillUpdatePlan` and `InstructionUpdatePlan` own discovery,
+reports, preconditions, retention and staging for their domains. Standalone
+updates use those same plans and preserve the other domain. Neither domain
+depends on the other or on `AgentsUpdates`. The composition target merges
+owned records and commits both kinds, changed state and cache pruning in one
+`FileTransaction`; the skill-only consumer need not link Markdown.
+
+See [combined updates](Updates.md) for callback restrictions, state-only
+changes, cancellation, failure dispositions and recovery.
 
 ## Validation and Documentation
 

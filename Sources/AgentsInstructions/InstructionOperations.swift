@@ -86,6 +86,7 @@ public enum InstructionOperations {
         declaration: declaration, previousDeclaration: previousDeclaration,
         previous: previous, prepared: prepared, store: store,
         replace: options.replace)
+      try plan.lock.validate()
       try beforeApply?(plan.report)
       try Self.apply(
         declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
@@ -128,19 +129,43 @@ public enum InstructionOperations {
         instructions.agents = agents
         declaration.instructions = instructions
       }
-      let sources = InstructionSources(store: store)
-      let prepared = try prepare(declaration: declaration, previous: previous, sources: sources)
-      let plan = try plan(
-        declaration: declaration, previousDeclaration: previousDeclaration,
-        previous: previous, prepared: prepared, store: store,
-        replace: true)
+      let baseline = try StatePrecondition(store: store)
+      let resolutions = try SourceResolutionSession(store: store)
+      let plan = try prepareUpdate(
+        store: store, declaration: declaration, previousDeclaration: previousDeclaration,
+        previous: previous, resolutions: resolutions)
+      try plan.next.validate()
       if apply {
         try beforeApply?(plan.report)
-        try self.apply(
-          declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
+        try baseline.validate()
+        try plan.validate()
+        try plan.retain()
+        try baseline.validate()
+        try plan.validate()
+        let transaction = FileTransaction(store: store)
+        try plan.stage(transaction: transaction)
+        try transaction.replace(
+          store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
+        try transaction.replace(
+          store.resolvedURL, content: nil, data: StateStore.encode(plan.next.normalized))
+        try SourceCache(store: store).prune(referencedBy: plan.next, transaction: transaction)
+        try transaction.commit()
       }
       return plan.report
     }
+  }
+
+  /// Prepares instruction-owned records; the caller validates the complete generation after assembly.
+  package static func prepareUpdate(
+    store: StateStore, declaration: Declaration, previousDeclaration: Declaration,
+    previous: ResolvedState, resolutions: SourceResolutionSession
+  ) throws -> InstructionUpdatePlan {
+    let sources = InstructionSources(store: store, resolutions: resolutions)
+    let prepared = try prepare(declaration: declaration, previous: previous, sources: sources)
+    let plan = try plan(
+      declaration: declaration, previousDeclaration: previousDeclaration,
+      previous: previous, prepared: prepared, store: store, replace: true)
+    return try InstructionUpdatePlan(next: plan.lock, report: plan.report, sources: sources)
   }
 
   /// Restores only recorded pins, targets and heading offsets, without changing either state file.
@@ -207,6 +232,7 @@ public enum InstructionOperations {
         declaration: declaration, previousDeclaration: previousDeclaration,
         previous: previous, prepared: prepared, store: store,
         replace: false)
+      try plan.lock.validate()
       try beforeApply?(plan.report)
       try apply(declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
       return plan.report
@@ -311,7 +337,6 @@ public enum InstructionOperations {
       previous: previous.instructions, replace: replace)
     next.instructions.targets = targets.targets
     try InstructionTargets.validateSourceDirectories(targets.changes, sources: next.sources)
-    try next.validate()
     let before = previous.instructions.sections
     let after = next.instructions.sections
     let identities = Set((before + after).map(InstructionSources.identity))

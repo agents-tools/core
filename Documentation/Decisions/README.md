@@ -4,6 +4,7 @@ This directory holds durable decision records for `skill-cli`.
 
 ## Records
 
+- `UpdateReporting.md`: metadata, membership, composition and transaction rationale
 - `CLIIdentity.md`: executable, package, distribution, and Swift-prefixed
   command identity
 - `SPMInspiredRegistry.md`: SPM-inspired first-party skill registry schema

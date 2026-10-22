@@ -142,107 +142,148 @@ public enum SkillOperations {
   ) throws -> [UpdateResult] {
     let store = StateStore(scope: scope, environment: environment)
     return try operate(store, apply: apply) { declaration, previous in
-      let lifecycle = try SkillLifecycle(store: store, provider: provider)
-      let requested = Set(skillNames.map(PathSafety.sanitizeName))
-      var next = previous
-      var prepared: [String: PreparedSkill] = [:]
-      for alias in (declaration.skills ?? [:]).keys.sorted() {
-        guard let selection = declaration.skills?[alias], let source = declaration.sources[alias]
-        else { continue }
-        let id = try source.identity(environment: environment)
-        let requestedHere = requested.filter { name in
-          if let installed = previous.skills[name] { return installed.source == id }
-          if case .names(let names) = selection.select { return names.contains(name) }
-          return !(selection.exclude ?? []).contains(name)
-        }
-        if !requested.isEmpty && requestedHere.isEmpty { continue }
-        if case .names(let names) = selection.select, names.isEmpty { continue }
-        func mode(_ name: String) -> InstallMode {
-          selection.overrides?[name]?.mode ?? selection.mode ?? .link
-        }
-        let explicit: [String]?
-        if !requested.isEmpty {
-          explicit = requestedHere.sorted()
-        } else if case .names(let names) = selection.select {
-          explicit = names
-        } else {
-          explicit = nil
-        }
-        let primaryLive =
-          explicit.map { $0.allSatisfy { mode($0) == .edit } } ?? (selection.mode == .edit)
-        var liveSource: DiscoveredSource?
-        var pinnedSource: DiscoveredSource?
-        func discover(live: Bool) throws -> DiscoveredSource {
-          if live, let liveSource { return liveSource }
-          if !live, let pinnedSource { return pinnedSource }
-          let result = try lifecycle.discover(
-            source, live: live, fullDepth: explicit != nil, names: explicit,
-            exclude: selection.exclude ?? [])
-          if live { liveSource = result } else { pinnedSource = result }
-          return result
-        }
-        let primary = try discover(live: primaryLive)
-        var names = explicit ?? primary.skills.map { PathSafety.sanitizeName($0.name) }
-        if explicit == nil {
-          let overrides = (selection.overrides ?? [:]).keys.filter {
-            (mode($0) == .edit) != primaryLive
-          }
-          for name in overrides {
-            let alternate = try discover(live: mode(name) == .edit)
-            if !Discovery.filter(alternate.skills, names: [name]).isEmpty { names.append(name) }
-          }
-          names = Array(Set(names)).filter { !(selection.exclude ?? []).contains($0) }.sorted()
-        }
-        for name in names {
-          let discovered = try discover(live: mode(name) == .edit)
-          let matches = Discovery.filter(discovered.skills, names: [name])
-          if matches.isEmpty, explicit == nil { continue }
-          if matches.isEmpty, previous.skills[name] == nil, !requested.isEmpty,
-            !selection.hasNamedSelection
-          {
-            continue
-          }
-          let skill = try lifecycle.select(discovered.skills, names: [name])[0]
-          if let current = prepared[name], current.lock.source != id {
-            throw CoreError.invalidSkill("duplicate skill name: \(name)")
-          }
-          if let current = previous.skills[name], current.source != id {
-            throw CoreError.invalidSkill("skill '\(name)' already belongs to \(current.source)")
-          }
-          let item = try lifecycle.prepare(
-            skill, in: discovered, declaration: selection, defaultAgents: declaration.defaultAgents)
-          prepared[name] = item
-          next.skills[name] = item.lock
-        }
-        next.sources[id] = lifecycle.lockedSource(source)
-      }
-      guard requested.isSubset(of: Set(prepared.keys)) else {
-        throw CoreError.notFound("requested skill is not declared or is missing upstream")
-      }
-      if requested.isEmpty { next.skills = prepared.mapValues(\.lock) }
-      try next.validate()
-      let affected = requested.isEmpty ? Set(previous.skills.keys).union(prepared.keys) : requested
-      var results = try affected.sorted().map { name in
-        let old = previous.skills[name]
-        let new = next.skills[name]
-        let changes = try lifecycle.changes(name: name, old: old, new: prepared[name])
-        return UpdateResult(
-          skill: name, sourceIdentity: new?.source ?? old?.source ?? "",
-          changed: old != new || !changes.isEmpty, oldRevision: old?.revision,
-          newRevision: new?.revision, oldHash: old?.hash, newHash: new?.hash, changes: changes,
-          installed: [])
-      }
+      let baseline = try StatePrecondition(store: store)
+      let resolutions = try SourceResolutionSession(store: store)
+      let plan = try prepareUpdate(
+        store: store, declaration: declaration, previous: previous, resolutions: resolutions,
+        skillNames: skillNames, provider: provider)
+      try plan.next.validate()
+      var results = plan.results
       if apply {
+        try plan.validateOwnership()
         try beforeApply?(results)
-        let installed = try lifecycle.apply(
-          declaration: declaration, previous: previous, next: next, prepared: prepared,
-          names: affected)
+        try baseline.validate()
+        try plan.validate()
+        let retained = try plan.retain()
+        try baseline.validate()
+        try plan.validate()
+        let transaction = FileTransaction(store: store)
+        try plan.stage(retained: retained, transaction: transaction)
+        try transaction.replace(
+          store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
+        try transaction.replace(
+          store.resolvedURL, content: nil, data: StateStore.encode(plan.next.normalized))
+        try SourceCache(store: store).prune(referencedBy: plan.next, transaction: transaction)
+        try transaction.commit()
+        let installed = plan.receipts
         for index in results.indices {
           results[index].installed = installed.filter { $0.skill == results[index].skill }
         }
       }
       return results
     }
+  }
+
+  /// Prepares skill-owned records; the caller validates the complete generation after assembly.
+  package static func prepareUpdate(
+    store: StateStore, declaration: Declaration, previous: ResolvedState,
+    resolutions: SourceResolutionSession, skillNames: [String] = []
+  ) throws -> SkillUpdatePlan {
+    try prepareUpdate(
+      store: store, declaration: declaration, previous: previous, resolutions: resolutions,
+      skillNames: skillNames, provider: WellKnownProvider())
+  }
+
+  private static func prepareUpdate(
+    store: StateStore, declaration: Declaration, previous: ResolvedState,
+    resolutions: SourceResolutionSession, skillNames: [String], provider: WellKnownProvider
+  ) throws -> SkillUpdatePlan {
+    let environment = store.environment
+    let lifecycle = try SkillLifecycle(store: store, provider: provider, resolutions: resolutions)
+    let requested = Set(skillNames.map(PathSafety.sanitizeName))
+    var next = previous
+    var prepared: [String: PreparedSkill] = [:]
+    for alias in (declaration.skills ?? [:]).keys.sorted() {
+      guard let selection = declaration.skills?[alias], let source = declaration.sources[alias]
+      else { continue }
+      let id = try source.identity(environment: environment)
+      let requestedHere = requested.filter { name in
+        if let installed = previous.skills[name] { return installed.source == id }
+        if case .names(let names) = selection.select { return names.contains(name) }
+        return !(selection.exclude ?? []).contains(name)
+      }
+      if !requested.isEmpty && requestedHere.isEmpty { continue }
+      if case .names(let names) = selection.select, names.isEmpty { continue }
+      func mode(_ name: String) -> InstallMode {
+        selection.overrides?[name]?.mode ?? selection.mode ?? .link
+      }
+      let explicit: [String]?
+      if !requested.isEmpty {
+        explicit = requestedHere.sorted()
+      } else if case .names(let names) = selection.select {
+        explicit = names
+      } else {
+        explicit = nil
+      }
+      let primaryLive =
+        explicit.map { $0.allSatisfy { mode($0) == .edit } } ?? (selection.mode == .edit)
+      var liveSource: DiscoveredSource?
+      var pinnedSource: DiscoveredSource?
+      func discover(live: Bool) throws -> DiscoveredSource {
+        if live, let liveSource { return liveSource }
+        if !live, let pinnedSource { return pinnedSource }
+        let result = try lifecycle.discover(
+          source, live: live, fullDepth: explicit != nil, names: explicit,
+          exclude: selection.exclude ?? [])
+        if live { liveSource = result } else { pinnedSource = result }
+        return result
+      }
+      let primary = try discover(live: primaryLive)
+      var names = explicit ?? primary.skills.map { PathSafety.sanitizeName($0.name) }
+      if explicit == nil {
+        let overrides = (selection.overrides ?? [:]).keys.filter {
+          (mode($0) == .edit) != primaryLive
+        }
+        for name in overrides {
+          let alternate = try discover(live: mode(name) == .edit)
+          if !Discovery.filter(alternate.skills, names: [name]).isEmpty { names.append(name) }
+        }
+        names = Array(Set(names)).filter { !(selection.exclude ?? []).contains($0) }.sorted()
+      }
+      for name in names {
+        let discovered = try discover(live: mode(name) == .edit)
+        let matches = Discovery.filter(discovered.skills, names: [name])
+        if matches.isEmpty, explicit == nil { continue }
+        if matches.isEmpty, previous.skills[name] == nil, !requested.isEmpty,
+          !selection.hasNamedSelection
+        {
+          continue
+        }
+        let skill = try lifecycle.select(discovered.skills, names: [name])[0]
+        if let current = prepared[name], current.lock.source != id {
+          throw CoreError.invalidSkill("duplicate skill name: \(name)")
+        }
+        if let current = previous.skills[name], current.source != id {
+          throw CoreError.invalidSkill("skill '\(name)' already belongs to \(current.source)")
+        }
+        let item = try lifecycle.prepare(
+          skill, in: discovered, declaration: selection, defaultAgents: declaration.defaultAgents)
+        prepared[name] = item
+        next.skills[name] = item.lock
+      }
+      next.sources[id] = lifecycle.lockedSource(source)
+    }
+    guard requested.isSubset(of: Set(prepared.keys)) else {
+      throw CoreError.notFound("requested skill is not declared or is missing upstream")
+    }
+    if requested.isEmpty { next.skills = prepared.mapValues(\.lock) }
+    let affected = requested.isEmpty ? Set(previous.skills.keys).union(prepared.keys) : requested
+    let results = try affected.sorted().map { name in
+      let old = previous.skills[name]
+      let new = next.skills[name]
+      let changes = try lifecycle.changes(name: name, old: old, new: prepared[name])
+      return UpdateResult(
+        skill: name, sourceIdentity: new?.source ?? old?.source ?? "",
+        changed: old != new || !changes.isEmpty, oldRevision: old?.revision,
+        newRevision: new?.revision, oldVersion: old?.version, newVersion: new?.version,
+        oldHash: old?.hash, newHash: new?.hash,
+        lockMissing: !FileManager.default.fileExists(atPath: store.resolvedURL.path),
+        membership: lifecycle.membership(name: name, old: old, new: new), changes: changes,
+        installed: [])
+    }
+    return try SkillUpdatePlan(
+      lifecycle: lifecycle, previous: previous, next: next, prepared: prepared,
+      names: affected, results: results)
   }
 
   /// Restores each locked pin and recipient. Never resolves requirements or consults an index.

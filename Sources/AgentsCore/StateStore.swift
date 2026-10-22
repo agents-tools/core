@@ -73,6 +73,7 @@ public struct StateStore: Sendable {
 
   package func withLock<T>(
     createIfMissing: Bool = true, checkpoint: @escaping (String) throws -> Void = { _ in },
+    outcome: TransactionOutcome? = nil,
     _ body: () throws -> T
   ) throws -> T {
     if try openDirectoryIfPresent() == nil, !createIfMissing {
@@ -104,8 +105,11 @@ public struct StateStore: Sendable {
       } catch {
         // A handled failure can finish rollback now. A killed process leaves the marker
         // for the next access, which must recover the journal before releasing any ref.
-        if (try? FileTransaction.recover(store: self)) != nil {
-          _ = try? SourceCache(store: self).recoverWatchReferences()
+        do {
+          _ = try FileTransaction.recover(store: self, outcome: outcome)
+          _ = try SourceCache(store: self).recoverWatchReferences()
+        } catch {
+          outcome?.disposition = .recoveryRequired
         }
         throw error
       }
@@ -165,7 +169,7 @@ public struct StateStore: Sendable {
     }
   }
 
-  private func existingData(_ url: URL) throws -> Data? {
+  package func existingData(_ url: URL) throws -> Data? {
     guard let directory = try openDirectoryIfPresent(),
       try directory.info(url.lastPathComponent) != nil
     else { return nil }

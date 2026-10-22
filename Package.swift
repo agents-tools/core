@@ -12,6 +12,7 @@ let package = Package(
     .library(name: "AgentsCore", targets: ["AgentsCore"]),
     .library(name: "AgentsSkills", targets: ["AgentsSkills"]),
     .library(name: "AgentsInstructions", targets: ["AgentsInstructions"]),
+    .library(name: "AgentsUpdates", targets: ["AgentsUpdates"]),
   ],
   dependencies: [
     .package(url: "https://github.com/jpsim/Yams", from: "6.0.0"),
@@ -24,11 +25,15 @@ let package = Package(
       dependencies: ["AgentsCore", .product(name: "Markdown", package: "swift-markdown")]
     ),
     .target(name: "AgentsSkills", dependencies: ["AgentsCore", "Yams"]),
+    .target(
+      name: "AgentsUpdates", dependencies: ["AgentsCore", "AgentsSkills", "AgentsInstructions"]),
     .executableTarget(
-      name: "StateTestProcess", dependencies: ["AgentsCore", "AgentsInstructions", "AgentsSkills"],
+      name: "StateTestProcess",
+      dependencies: ["AgentsCore", "AgentsInstructions", "AgentsSkills", "AgentsUpdates"],
       path: "Tests/StateTestProcess"),
     .testTarget(name: "AgentsCoreTests", dependencies: ["AgentsCore", "StateTestProcess"]),
     .testTarget(name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions"]),
+    .testTarget(name: "AgentsUpdatesTests", dependencies: ["AgentsUpdates", "StateTestProcess"]),
     .testTarget(
       name: "AgentsSkillsTests",
       dependencies: [
