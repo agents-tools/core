@@ -55,6 +55,8 @@ entry points.
   are `policy / policy` and `validate / result`; keep their caller job
   IDs and shared workflow pins consistent with the
   [shared workflow reference](https://github.com/agents-tools/github-workflows#configuration).
+  Shared CI compiles and tests only with the latest stable Xcode selected in
+  `.github/swift-package.json`.
   Render and check the social preview locally with the github-readme-design
   toolchain against `agents-tools/.github`'s DESIGN, fonts and catalog; see
   `Documentation/Reference/Presentation.md`. Commit the resulting assets.

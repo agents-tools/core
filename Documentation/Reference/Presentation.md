@@ -38,7 +38,7 @@ Check the proposed changes against their requirements.
 
 Validate the exact README snippet in a scratch SwiftPM executable under the
 checkout's ignored `.build/presentation/consumer/` directory. Its manifest uses
-Swift tools 6.3, a macOS 13 minimum, and `.package(path: "../../..")` to depend on
+Swift tools 6.3, a macOS 15 minimum, and `.package(path: "../../..")` to depend on
 this checkout. Add the `AgentsCore` and `AgentsSkills` products to the executable
 target; the local dependency's package identity is the checkout directory's
 name.

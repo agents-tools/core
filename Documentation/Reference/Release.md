@@ -36,6 +36,9 @@ changelog entry in the requirement's final delivery candidate.
 
 ## Preflight
 
+- [ ] Confirm Swift tools 6.3 and the macOS 15 minimum in `Package.swift`, and
+  the single latest stable Xcode compiler in
+  [the validation configuration](../../.github/swift-package.json).
 - [ ] Start in a clean task-owned or detached worktree of `agents-tools/core`
   at the accepted `origin/master` commit. Confirm there are no staged,
   modified or untracked files, then resolve the current default-branch head:
