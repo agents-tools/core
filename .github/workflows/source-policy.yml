@@ -17,7 +17,7 @@ concurrency:
 jobs:
   policy:
     if: github.event_name != 'push' || !github.event.deleted
-    uses: agents-tools/github-workflows/.github/workflows/policy.yml@0000000000000000000000000000000000000000
+    uses: agents-tools/github-workflows/.github/workflows/policy.yml@2ce48fb8834304acf010fa1b47a05db6148ab6c4
     with:
       allow-terms: |
         ChatGPT
