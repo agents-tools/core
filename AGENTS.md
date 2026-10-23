@@ -50,15 +50,15 @@ entry points.
 
 ## Tests
 
-- Run the build, test, strict formatting and diff checks in
+- Run the build, test and strict formatting checks in
   [README.md](README.md#development) before handoff. The required CI contexts
-  are `policy / policy` and `validate / swift-package`; keep their caller job
-  IDs and shared workflow pins consistent with the organization
-  [integration guide](https://github.com/agents-tools/.github/blob/master/docs/reference/workflow-integration.md).
-  The `presentation` caller checks the social preview without executable inputs;
-  reproduce it with `Documentation/Reference/Presentation.md`. Activate its
-  required context only after the real PR run passes. For workflow edits, also
-  run `actionlint` or parse every workflow as YAML.
+  are `policy / policy` and `validate / result`; keep their caller job
+  IDs and shared workflow pins consistent with the
+  [shared workflow reference](https://github.com/agents-tools/github-workflows#configuration).
+  Render and check the social preview locally with the github-readme-design
+  toolchain against `agents-tools/.github`'s DESIGN, fonts and catalog; see
+  `Documentation/Reference/Presentation.md`. Commit the resulting assets.
+  For workflow edits, also run `actionlint` on every workflow.
 - Pass an explicit initial branch when creating Git fixtures.
 - Disable automatic maintenance and gc in fixture Git repositories.
 - Each test that creates a temporary directory removes it.
