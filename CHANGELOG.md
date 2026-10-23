@@ -21,6 +21,8 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ### Changed
 
+- **Breaking:** Require Swift 6.3 or newer and macOS 15 or newer. Upgrade the
+  consumer toolchain and raise downstream macOS deployment targets to 15.
 - **Breaking:** `SkillFileEntry.file(Data)` becomes
   `file(Data, executable: Bool)`. Upgrade constructors and pattern matches to
   supply or read the Boolean, which means any execute bit is set. Render it

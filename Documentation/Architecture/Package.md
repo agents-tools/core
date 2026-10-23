@@ -6,7 +6,7 @@
 transformations. Both `agents` in `agents-tools/cli` and `skill` in
 `skill-cli/cli` consume this package. Consumers own command trees, argument
 parsing, terminal presentation, and executable distribution. The package uses
-Swift 6.3, Swift 6 language mode, and a macOS 13 minimum deployment platform.
+Swift 6.3, Swift 6 language mode, and a macOS 15 minimum deployment platform.
 
 ## Products and Dependencies
 

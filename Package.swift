@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
   name: "core",
   platforms: [
-    .macOS(.v13)
+    .macOS(.v15)
   ],
   products: [
     .library(name: "AgentsCore", targets: ["AgentsCore"]),

@@ -22,8 +22,8 @@
       alt="Swift 6.3+">
   </a>
   <a href="Package.swift">
-    <img src="https://img.shields.io/static/v1?label=platforms&amp;message=macOS%2013%2B&amp;color=16143D&amp;labelColor=4F4C7A"
-      alt="Platforms: macOS 13+">
+    <img src="https://img.shields.io/static/v1?label=platforms&amp;message=macOS%2015%2B&amp;color=16143D&amp;labelColor=4F4C7A"
+      alt="Platforms: macOS 15+">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/static/v1?label=license&amp;message=MIT&amp;color=16143D&amp;labelColor=4F4C7A" alt="License: MIT">
@@ -233,7 +233,7 @@ contracts, target paths, read-only inspection and deletion rules.
 ## Requirements
 
 - Swift 6.3 or newer, using Swift 6 language mode.
-- macOS 13 or newer, as declared in [Package.swift](Package.swift).
+- macOS 15 or newer, as declared in [Package.swift](Package.swift).
 
 ## Documentation
 
@@ -275,9 +275,10 @@ swift format lint --strict --configuration .swift-format \
 The required checks are `policy / policy` and `validate / result`, provided by
 full-SHA-pinned reusable workflows from `agents-tools/github-workflows`.
 Source policy validates PR titles, new commit messages and added lines.
-[Package validation configuration](.github/swift-package.json) selects Xcode
-26.6 on `macos-26`. Validation runs tests and a release build, plus strict
-formatting with `.swift-format` over `Package.swift`, `Sources` and `Tests`.
+[Package validation configuration](.github/swift-package.json) selects one
+compiler: the latest stable Xcode, 26.6, on `macos-26`. Validation runs tests
+and a release build, plus strict formatting with `.swift-format` over
+`Package.swift`, `Sources` and `Tests`.
 
 Render and check the committed
 [social preview](.github/assets/social-preview/social-preview.png) locally with
