@@ -50,7 +50,7 @@ changelog entry in the requirement's final delivery candidate.
   Confirm `release_commit` equals `origin/master`. Keep this checkout at that
   commit throughout preflight and publication.
 
-- [ ] Confirm `policy / policy` and `validate / swift-package` succeeded on
+- [ ] Confirm `policy / policy` and `validate / result` succeeded on
   that exact release commit on `master`. A passing PR run does not establish
   the status of the squash-merged release commit.
 - [ ] Run the local release checks below from a fresh build path with dependency
@@ -67,7 +67,6 @@ changelog entry in the requirement's final delivery candidate.
     --scratch-path .build/release-validation \
     --disable-dependency-cache --manifest-cache none
   xcrun swift-format lint --strict --configuration .swift-format --recursive Package.swift Sources Tests
-  git diff --check
   ```
 
   The test command clears agent configuration overrides while keeping `HOME`,

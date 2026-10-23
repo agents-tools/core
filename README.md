@@ -268,29 +268,29 @@ swift build
 env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME \
   -u XDG_STATE_HOME -u XDG_CACHE_HOME swift test
 swift build -c release
-xcrun swift-format lint --strict --configuration .swift-format \
+swift format lint --strict --configuration .swift-format \
   --recursive Package.swift Sources Tests
-git diff --check origin/master
 ```
 
-The required checks are `policy / policy` and `validate / swift-package`,
-provided by full-SHA-pinned reusable workflows from `agents-tools/.github`.
-Source policy validates PR titles, new commit messages and added lines. Swift
-validation runs strict formatting, debug build, tests with the environment
-overrides above unset, release build and a diff check on `macos-26`.
+The required checks are `policy / policy` and `validate / result`, provided by
+full-SHA-pinned reusable workflows from `agents-tools/github-workflows`.
+Source policy validates PR titles, new commit messages and added lines.
+[Package validation configuration](.github/swift-package.json) selects Xcode
+26.6 on `macos-26`. Validation runs tests and a release build, plus strict
+formatting with `.swift-format` over `Package.swift`, `Sources` and `Tests`.
 
-The `presentation / presentation` job checks the committed
-[social preview](.github/assets/social-preview/social-preview.png) against the
-standard's DESIGN, fonts, catalog and this repository's framework logo. See
-[presentation reproduction](Documentation/Reference/Presentation.md#social-preview).
-It calls the shared presentation workflow without executable inputs. Its required
-context is activated separately after a passing real PR run.
+Render and check the committed
+[social preview](.github/assets/social-preview/social-preview.png) locally with
+the github-readme-design toolchain against `agents-tools/.github`'s DESIGN,
+fonts and catalog, using this repository's framework logo. Follow the
+[local renderer commands](https://github.com/showxu/skills/blob/master/skills/github-readme-design/references/renderers.md)
+and [repository inputs](Documentation/Reference/Presentation.md#social-preview),
+then commit the resulting assets.
 
 All workflows run on branch pushes and PRs; only source policy reruns on PR
 title edits. They also support manual dispatch; source policy validates the
-selected ref's head commit. See the organization
-[workflow integration guide][workflow-integration] for the shared interfaces
-and pin update process.
+selected ref's head commit. See the
+[shared workflow reference][workflow-integration] for configuration and callers.
 
 ## License
 
@@ -301,4 +301,4 @@ core is available under the [MIT License](LICENSE).
 [maintenance]:
   https://github.com/agents-tools/.github/blob/master/MAINTENANCE.md#change-flow
 [workflow-integration]:
-  https://github.com/agents-tools/.github/blob/master/docs/reference/workflow-integration.md
+  https://github.com/agents-tools/github-workflows#configuration

@@ -59,28 +59,14 @@ The expected stdout is `review` followed by a newline. Verify that
 ## Social preview
 
 The committed [PNG](../../.github/assets/social-preview/social-preview.png) is
-rendered from the DESIGN, fonts and catalog at the `agents-tools/.github`
-presentation workflow pin in [CI](../../.github/workflows/ci.yml). The catalog's
-light-page icon resolves to this checkout's framework logo SVG.
+rendered and checked locally with the github-readme-design toolchain against
+`agents-tools/.github`'s `DESIGN.md`, `.github/design/fonts` and
+`profile/catalog.json`. The catalog's light-page icon resolves to this
+checkout's framework logo SVG at `.github/assets/logo/logo.svg`.
 
-Follow the pinned toolchain's [local regeneration procedure][toolchain]. Use
-`standard_dir` for the standard inputs at the CI pin and `toolchain_dir` for
-that package, keeping temporary inputs under ignored `.build/`:
+Follow the toolchain's [local renderer commands][toolchain], selecting repository
+`core` and output directory `.github/assets/social-preview`. Keep temporary
+inputs under ignored `.build/`, review and commit the rendered PNG, then remove
+the temporary inputs.
 
-```sh
-node "$toolchain_dir/src/cli.ts" social-preview render \
-  --design "$standard_dir/DESIGN.md" --fonts "$standard_dir/.github/design/fonts" \
-  --catalog "$standard_dir/profile/catalog.json" --repository core \
-  --icon .github/assets/logo/logo.svg \
-  --out .github/assets/social-preview/social-preview.png
-node "$toolchain_dir/src/cli.ts" social-preview check \
-  --design "$standard_dir/DESIGN.md" --fonts "$standard_dir/.github/design/fonts" \
-  --catalog "$standard_dir/profile/catalog.json" --repository core \
-  --icon .github/assets/logo/logo.svg --assets .github/assets/social-preview
-```
-
-CI's `presentation` caller takes no inputs. On drift, artifact `presentation`
-contains `presentation.tar`; extract it with
-`tar -xf presentation.tar -C .github/assets`, review and commit the PNG.
-
-[toolchain]: https://github.com/showxu/skills/blob/9e5d7268232b78f5fbef21ccfb9e3a079f2ef7e3/skills/github-readme-design/references/renderers.md#local-regeneration
+[toolchain]: https://github.com/showxu/skills/blob/master/skills/github-readme-design/references/renderers.md

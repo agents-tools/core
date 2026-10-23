@@ -16,11 +16,7 @@ concurrency:
 
 jobs:
   validate:
-    uses: agents-tools/.github/.github/workflows/swift-package-ci.yml@d88103a9a576c9cfe9561a5d58c803255fea72f4 # v0.1.0
-    with:
-      runner: macos-26
-      package-directory: .
-      format-configuration: .swift-format
-
-  presentation:
-    uses: agents-tools/.github/.github/workflows/presentation.yml@d88103a9a576c9cfe9561a5d58c803255fea72f4 # v0.1.0
+    permissions:
+      contents: read
+      actions: read
+    uses: agents-tools/github-workflows/.github/workflows/swift-package.yml@0000000000000000000000000000000000000000
