@@ -6,6 +6,8 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ## Unreleased
 
+## 0.1.2 - 2026-10-25
+
 ### Added
 
 - `AgentsUpdates` composes skill and instruction updates from one scope
