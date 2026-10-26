@@ -99,7 +99,7 @@ struct StateModelTests {
     #expect(try Data(contentsOf: store.declarationURL) == firstDeclaration)
     #expect(try store.loadDeclaration() == declaration)
     #expect(try store.loadResolved() == lock)
-    #expect(String(decoding: first, as: UTF8.self).contains("\"from\" : \"1.0.0\""))
+    #expect(String(decoding: first, as: UTF8.self).contains("\"from\": \"1.0.0\""))
   }
 
   @Test func rejectsCorruptionWithoutReplacingFiles() throws {

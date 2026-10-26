@@ -20,9 +20,18 @@ location, an optional requirement, and an optional search `path`. A source added
 by location keeps the alias already declaring it, or receives its location's last
 path component; while another source holds that name, preceding components are
 prefixed (`anthropics-skills`), then a number is appended. `sources` may be
-omitted. An operation writes `agents.json`, in normalized form, only when it
-changes the declaration's content, so a hand-written declaration keeps its
-formatting otherwise.
+omitted.
+
+`agents.json` and `agents.resolved` are written with sorted keys in Prettier's
+default JSON layout: two-space indentation, `"key": value`, every non-empty
+object expanded, empty containers as `{}` and `[]`, and an array without objects
+on one line when it fits in 80 columns. A repository whose Prettier
+configuration uses another print width may lay out an array between the two
+widths differently. An operation that writes state rewrites either file when
+its bytes differ from that layout, even when its content is unchanged. Empty
+lock sections such as `"skills": {}` remain, because earlier readers require
+them. Journals, `agents.watch` and content hashes keep the encoder's fixed
+layout.
 
 ```json
 {

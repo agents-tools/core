@@ -355,8 +355,9 @@ Commands edit the declaration; editing it by hand is possible.
   each pin. A pin that cannot be fetched, content whose digest does not match,
   or an own instructions file whose hash changed since the lock is an error,
   never a substitution.
-- Output is sorted, except section order, and has no timestamps. Writes take a
-  file lock and replace the file atomically.
+- Output is sorted, except section order, and has no timestamps. The declaration
+  and lock use Prettier's default JSON layout. Writes take a file lock and
+  replace the file atomically.
 
 ### Watch State
 

@@ -43,9 +43,13 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
   `initializeInstructions(named:directory:)` and creates
   `.agent/instructions/<name>.md` in the project, using the project's state
   lock.
-- A declaration may omit `sources`. Operations that leave a declaration's
-  content unchanged no longer rewrite `agents.json`, so a committed
-  declaration keeps its formatting.
+- A declaration may omit `sources`.
+- `agents.json` and `agents.resolved` are written in Prettier's default JSON
+  layout: two-space indentation, `"key": value`, expanded objects, empty
+  containers as `{}` and `[]`, and an array on one line when it fits in 80
+  columns. Any operation that writes state rewrites a file in another layout,
+  such as the one earlier versions wrote, even when its content is unchanged.
+  Empty lock sections remain so earlier readers decode the lock.
 - A local link in a section must resolve, from the target, to a file in the
   checkout being written; user targets accept no local links.
 - Removing a name that equals a declared reference removes that reference, so

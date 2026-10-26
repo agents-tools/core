@@ -169,7 +169,7 @@ public enum InstructionOperations {
         try plan.stage(transaction: transaction)
         try store.stageDeclaration(declaration, in: transaction)
         try transaction.replace(
-          store.resolvedURL, content: nil, data: StateStore.encode(plan.next.normalized))
+          store.resolvedURL, content: nil, data: StateStore.encodeState(plan.next.normalized))
         try SourceCache(store: store).prune(referencedBy: plan.next, transaction: transaction)
         try transaction.commit()
       }
@@ -433,7 +433,7 @@ public enum InstructionOperations {
       if writeState {
         try store.stageDeclaration(declaration, in: transaction)
         try transaction.replace(
-          store.resolvedURL, content: nil, data: StateStore.encode(next.normalized))
+          store.resolvedURL, content: nil, data: StateStore.encodeState(next.normalized))
       }
       try sources.cache.prune(referencedBy: next, transaction: transaction)
       try transaction.commit()

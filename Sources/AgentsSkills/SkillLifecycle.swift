@@ -223,7 +223,7 @@ final class SkillLifecycle {
     if writeState {
       try store.stageDeclaration(declaration, in: transaction)
       try transaction.replace(
-        store.resolvedURL, content: nil, data: StateStore.encode(next.normalized))
+        store.resolvedURL, content: nil, data: StateStore.encodeState(next.normalized))
     }
     try cache.prune(referencedBy: next, transaction: transaction)
     try transaction.commit()

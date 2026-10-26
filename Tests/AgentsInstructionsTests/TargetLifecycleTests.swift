@@ -45,21 +45,30 @@ struct TargetLifecycleTests {
       })
   }
 
-  @Test func updatesKeepADeclarationWhoseContentIsUnchanged() throws {
+  @Test func updateApplyWritesStateInTheStandardLayout() throws {
     let fixture = try InstructionFixture()
     try fixture.own("guide")
-    let declaration =
-      "{\n  \"instructions\": {\"agents\": [\"codex\"], \"sections\": [\"guide\"]}\n}\n"
-    let file = fixture.store().declarationURL
-    try fixture.write(declaration, to: file)
-    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
-    #expect(try String(contentsOf: file, encoding: .utf8) == declaration)
-    #expect(try fixture.text() == generated(["# guide\n\nOriginal"]))
-    _ = try InstructionOperations.updateInstalled(
-      agents: [.codex, .geminiCLI], environment: fixture.environment, apply: true)
+    try fixture.addOwn(names: ["guide"], agents: [.codex])
+    let declarationFile = fixture.store().declarationURL
+    let lockFile = fixture.store().resolvedURL
+    let declaration = try Data(contentsOf: declarationFile)
+    let lock = try Data(contentsOf: lockFile)
     #expect(
-      try fixture.store().loadDeclaration().instructions?.agents == [.codex, .geminiCLI])
-    #expect(try String(contentsOf: file, encoding: .utf8) != declaration)
+      String(decoding: declaration, as: UTF8.self)
+        == "{\n  \"instructions\": {\n    \"agents\": [\"codex\"],\n    \"sections\": [\"guide\"]\n  },\n  \"sources\": {}\n}\n"
+    )
+    let lockText = String(decoding: lock, as: UTF8.self)
+    #expect(lockText.contains("\"chatgpt\": {}") && lockText.contains("\"skills\": {}"))
+    #expect(!lockText.contains(" : "))
+    // An earlier version wrote this content in Foundation's layout.
+    try StateStore.encode(fixture.store().loadDeclaration()).write(to: declarationFile)
+    try StateStore.encode(fixture.store().loadResolved()).write(to: lockFile)
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+    #expect(try Data(contentsOf: declarationFile) == declaration)
+    #expect(try Data(contentsOf: lockFile) == lock)
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+    #expect(try Data(contentsOf: declarationFile) == declaration)
+    #expect(try Data(contentsOf: lockFile) == lock)
   }
 
   @Test func pathsPlaceSectionsInNestedTargets() throws {

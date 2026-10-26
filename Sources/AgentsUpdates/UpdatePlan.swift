@@ -81,7 +81,7 @@ final class UpdatePlan {
       try skills.stage(retained: retained, transaction: transaction)
       try instructions.stage(transaction: transaction)
       try store.stageDeclaration(declaration, in: transaction)
-      let resolvedBytes = try StateStore.encode(next.normalized)
+      let resolvedBytes = try StateStore.encodeState(next.normalized)
       if try store.existingData(store.resolvedURL) != resolvedBytes {
         try transaction.replace(store.resolvedURL, content: nil, data: resolvedBytes)
       }
