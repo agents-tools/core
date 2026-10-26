@@ -77,9 +77,11 @@ Restoration reads these recorded URLs or verified digest cache entries and
 never reads an index. Missing pins or mismatched content stop restoration.
 
 Instruction section records carry name, source, revision or artifact, path and
-hash. Prompts hold ordered locked sections and optional append paths. Physical
-targets record agents, heading offset or import, block hash, and whether the
-file was created by the tool. Skill writes retain these records unchanged.
+hash; a project's own files use source `.`, their project-relative path and hash,
+and no revision. Prompts hold ordered locked sections and optional append paths.
+Physical targets record agents, heading offset 0 or import, the hash of the
+generated file or import block, and `created`, which unit targets always record
+as false. Skill writes retain these records unchanged.
 Instruction lifecycle writes preserve skill records. Target keys are project
 relative or user-home relative; configured user files outside home use absolute
 keys checked against the runtime's registered instruction locations.

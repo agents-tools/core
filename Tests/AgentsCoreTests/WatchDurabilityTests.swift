@@ -157,7 +157,7 @@ final class WatchGitFixture {
     do {
       try FileManager.default.createDirectory(
         at: repo.appendingPathComponent("instructions"), withIntermediateDirectories: true)
-      try Data("# Rule\ninitial\n".utf8).write(
+      try Data("---\ndescription: Fixture instructions.\n---\n# Rule\ninitial\n".utf8).write(
         to: repo.appendingPathComponent("instructions/rule.md"))
       try initGitRepo(repo)
       try store.save(
@@ -179,7 +179,7 @@ final class WatchGitFixture {
     try git(["rm", "-rf", "."])
     try FileManager.default.createDirectory(
       at: repo.appendingPathComponent("instructions"), withIntermediateDirectories: true)
-    try Data("# Rule\n\(name)\n".utf8).write(
+    try Data("---\ndescription: Fixture instructions.\n---\n# Rule\n\(name)\n".utf8).write(
       to: repo.appendingPathComponent("instructions/rule.md"))
     try git(["add", "."])
     try git(["commit", "-m", name])

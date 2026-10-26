@@ -11,7 +11,8 @@ struct AutomaticSelectionTests {
     try fixture.skill("demo", body: "Original")
     let instructions = fixture.repo.appendingPathComponent("instructions")
     try FileManager.default.createDirectory(at: instructions, withIntermediateDirectories: true)
-    try Data("# Demo\n\nOriginal\n".utf8).write(to: instructions.appendingPathComponent("demo.md"))
+    try Data("---\ndescription: Fixture instructions.\n---\n# Demo\n\nOriginal\n".utf8).write(
+      to: instructions.appendingPathComponent("demo.md"))
     try fixture.commit()
     let store = fixture.store()
     try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
@@ -62,7 +63,7 @@ struct AutomaticSelectionTests {
           at: instructions.appendingPathComponent("demo.md"),
           to: instructions.appendingPathComponent("replacement.md"))
       } else {
-        try Data("# Demo\n\nCurrent\n".utf8).write(
+        try Data("---\ndescription: Fixture instructions.\n---\n# Demo\n\nCurrent\n".utf8).write(
           to: instructions.appendingPathComponent("demo.md"))
       }
       try fixture.commit()

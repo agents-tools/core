@@ -6,6 +6,19 @@ package enum InstructionLocations {
     "AGENTS.md", "GEMINI.md", "CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md",
   ]
 
+  /// Whether a project-relative path is a root instruction file, or a generated `AGENTS.md` or
+  /// `GEMINI.md` in a project directory outside `.git` and `.agent`.
+  package static func isProjectTarget(_ relative: String) -> Bool {
+    if projectPaths.contains(relative) { return true }
+    let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
+    guard parts.count >= 2, let name = parts.last, ["AGENTS.md", "GEMINI.md"].contains(name)
+    else { return false }
+    let directories = parts.dropLast()
+    return directories.allSatisfy {
+      !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\") && !$0.contains("\0")
+    } && directories.first != ".git" && directories.first != ".agent"
+  }
+
   package static func file(
     for agent: AgentID, scope: InstallScope, environment: RuntimeEnvironment
   ) -> URL? {
@@ -53,7 +66,10 @@ package enum InstructionLocations {
     }
     let allowed: [URL]
     if store.scope == .project {
-      allowed = projectPaths.map { store.environment.projectDirectory.appendingPathComponent($0) }
+      guard isProjectTarget(key) else {
+        throw CoreError.unsafePath("unregistered instruction target: \(key)")
+      }
+      allowed = [store.environment.projectDirectory.appendingPathComponent(key)]
     } else {
       allowed = AgentID.allCases.compactMap {
         self.file(for: $0, scope: .user, environment: store.environment)

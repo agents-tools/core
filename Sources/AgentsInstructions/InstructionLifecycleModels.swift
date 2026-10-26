@@ -35,7 +35,8 @@ public struct InstructionAddOptions: Sendable {
   }
 }
 
-/// A validated unit discovered in the committed tree, with its immutable coordinates.
+/// A validated instructions file and its coordinates: a committed source file with its pin, or a
+/// project's own file with its hash.
 public struct InstructionUnit: Sendable, Equatable {
   public let record: LockedSection
   public let section: InstructionSection
@@ -64,9 +65,11 @@ public struct InstructionTargetChange: Sendable, Equatable {
   public let beforeAgents: [AgentID]?
   /// Planned recipients in raw-value order; empty when the target is no longer managed.
   public let afterAgents: [AgentID]
-  public let assembly: InstructionAssembly
-  /// Nil when no previous lock entry exists. Missing files report `missingBlock`.
+  /// Nil when no previous lock entry exists.
   public let drift: InstructionDrift?
+  /// Whether the write replaces an existing file that agents did not generate, which needs
+  /// `replace`.
+  public let foreign: Bool
   /// Whether the file bytes differ; recipient-only changes do not affect this value.
   /// Use `InstructionUpdateReport.hasChanges` to detect any update in the report.
   public var changed: Bool { before != after }
@@ -78,7 +81,7 @@ public struct InstructionTargetChange: Sendable, Equatable {
 
 public struct InstructionUpdateReport: Sendable, Equatable {
   public let sections: [InstructionSectionChange]
-  /// Every affected target, including unchanged adoptions after loss of a lock.
+  /// Every affected target, including unchanged files recorded again after loss of a lock.
   public let targets: [InstructionTargetChange]
   /// Prompts whose section bytes, order, membership or append path changed.
   public let changedPrompts: [String]
@@ -92,12 +95,13 @@ public struct InstructionUpdateReport: Sendable, Equatable {
 
 public struct InstructionDiagnostic: Sendable, Equatable {
   public enum Kind: String, Sendable {
-    case missingBlock
+    case missingTarget
     case drift
+    case foreignTarget
+    case ownChanged
+    case invalidLink
     case invalidTarget
     case missingLock
-    case adoption
-    case conflict
     case duplicateScope
     case claudeForwarding
     case claudeAncestor

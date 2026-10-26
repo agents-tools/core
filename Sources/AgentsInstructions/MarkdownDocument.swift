@@ -43,17 +43,6 @@ struct MarkdownHeading: Sendable, Equatable {
   var key: String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 }
 
-struct HeadingIdentity: Hashable, Sendable {
-  let level: Int
-  let text: String
-}
-
-struct MarkdownSection: Sendable, Equatable {
-  let headingLine: Int
-  /// Physical ranges omit reference definitions consumed before Setext headings.
-  let contentRanges: [Range<Int>]
-}
-
 struct MarkdownDocument: Sendable, Equatable {
   static let begin =
     "<!-- BEGIN managed by agents: do not edit this block. Edit its sources and run `agents update`. -->"
@@ -64,8 +53,6 @@ struct MarkdownDocument: Sendable, Equatable {
   var headings: [MarkdownHeading] = []
   var topLevelHeadings: [MarkdownHeading] = []
   var markers: [Int] = []
-  var sections: [HeadingIdentity: [MarkdownSection]] = [:]
-  private var referenceDefinitionLines: Set<Int> = []
   var endsInCode = false
   var endsInHTML = false
 
@@ -93,7 +80,6 @@ struct MarkdownDocument: Sendable, Equatable {
         } else if topLevel {
           let contentStart = firstContentLine(
             afterDefinitionsAt: first, before: min(range.upperBound.line, lines.count))
-          referenceDefinitionLines.formUnion(first..<contentStart)
           first = contentStart
           // A Setext range can extend into the following block. Verify the physical underline.
           end =
@@ -123,7 +109,6 @@ struct MarkdownDocument: Sendable, Equatable {
         pending.append((child, node is Document))
       }
     }
-    indexSections()
     inspectEnd(of: parsed, text: normalized)
   }
 
@@ -147,12 +132,6 @@ struct MarkdownDocument: Sendable, Equatable {
 
   func normalized(_ range: Range<Int>) -> String {
     lines[range].map { $0.text + ($0.ending.isEmpty ? "" : "\n") }.joined()
-  }
-
-  static func content(_ lines: ArraySlice<MarkdownLine>) -> String {
-    var trimmed = lines
-    while trimmed.last?.isBlank == true { trimmed = trimmed.dropLast() }
-    return trimmed.map(\.text).joined(separator: "\n")
   }
 
   /// Physical prefix verification is used only for blocks already identified by CommonMark.
@@ -219,33 +198,6 @@ struct MarkdownDocument: Sendable, Equatable {
       }
     }
     return contentStart
-  }
-
-  private mutating func indexSections() {
-    var nextAtLevel = Array(repeating: lines.count, count: 7)
-    var markerIndex = markers.count
-    var nextMarker = lines.count
-    var ranges: [Range<Int>] = []
-    for heading in topLevelHeadings.reversed() {
-      while markerIndex > 0, markers[markerIndex - 1] > heading.lines.lowerBound {
-        markerIndex -= 1
-        nextMarker = markers[markerIndex]
-      }
-      let end = min(nextAtLevel[1...heading.level].min()!, nextMarker)
-      ranges.append(heading.lines.lowerBound..<end)
-      nextAtLevel[heading.level] = heading.lines.lowerBound
-    }
-    for (heading, range) in zip(topLevelHeadings, ranges.reversed()) {
-      var contentRanges: [Range<Int>] = []
-      var start = range.lowerBound
-      for line in range where referenceDefinitionLines.contains(line) {
-        if start < line { contentRanges.append(start..<line) }
-        start = line + 1
-      }
-      if start < range.upperBound { contentRanges.append(start..<range.upperBound) }
-      sections[HeadingIdentity(level: heading.level, text: heading.key), default: []].append(
-        MarkdownSection(headingLine: heading.lines.lowerBound, contentRanges: contentRanges))
-    }
   }
 
   private static func terminalBlock(_ document: Markup) -> Markup {

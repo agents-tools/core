@@ -5,6 +5,56 @@ import Testing
 
 @Suite("Declared state")
 struct StateModelTests {
+  @Test func validatesOwnInstructionRecordsAndReferences() throws {
+    let digest = "sha256:" + String(repeating: "a", count: 64)
+    func lock(_ section: LockedSection) -> ResolvedState {
+      ResolvedState(instructions: LockedInstructions(sections: [section]))
+    }
+    #expect(throws: Never.self) {
+      try lock(
+        LockedSection(
+          name: "guide", source: ".", path: ".agent/instructions/guide.md", hash: digest)
+      )
+      .validate()
+    }
+    #expect(throws: (any Error).self) {
+      try lock(
+        LockedSection(
+          name: "guide", source: ".", revision: String(repeating: "b", count: 40),
+          path: ".agent/instructions/guide.md", hash: digest)
+      ).validate()
+    }
+    #expect(throws: (any Error).self) {
+      try lock(LockedSection(name: "guide", source: ".", path: "guide.md", hash: digest)).validate()
+    }
+    #expect(throws: (any Error).self) {
+      try lock(
+        LockedSection(
+          name: "Guide", source: ".", path: ".agent/instructions/Guide.md", hash: digest)
+      )
+      .validate()
+    }
+    let environment = RuntimeEnvironment(
+      projectDirectory: URL(fileURLWithPath: "/project"),
+      homeDirectory: URL(fileURLWithPath: "/home"),
+      environment: [:])
+    let source = SourceDeclaration(kind: .git, location: "github.com/owner/repo")
+    for references in [["guide"], ["epd/review", "rules:auto-review/swift"]] {
+      #expect(throws: Never.self) {
+        try Declaration(
+          sources: ["rules": source], instructions: InstructionsDeclaration(sections: references)
+        ).validate(environment: environment)
+      }
+    }
+    for reference in ["Guide", "rules:Review", "missing:review", "rules:", "a//b", "a:b:c"] {
+      #expect(throws: (any Error).self) {
+        try Declaration(
+          sources: ["rules": source], instructions: InstructionsDeclaration(sections: [reference])
+        ).validate(environment: environment)
+      }
+    }
+  }
+
   @Test func roundTripsCompleteStateDeterministically() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }

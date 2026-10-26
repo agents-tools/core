@@ -5,30 +5,54 @@
 `InstructionOperations` connects them to `AgentsCore` state, source cache and
 transactions. Consumers own command parsing, presentation and confirmation.
 
+## Instructions Files
+
+`Instructions.validateSource` accepts one file format. The file starts with
+front matter between `---` lines: a required `description` and an optional
+`paths` list. Front matter is a strict subset of YAML: plain, double-quoted or
+single-quoted scalars, and `paths` as a flow list of double-quoted strings or a
+block list; unknown or repeated keys are errors. The body, with a leading byte
+order mark, line endings and leading and trailing blank lines normalized, starts
+with an ATX heading of any level; every other heading is a deeper ATX heading,
+and the body does not end inside a code or HTML block. A section's `hash` covers
+the original bytes.
+
+`paths` patterns are project-relative and use `*`, `**` as a whole segment, and
+`?`. With patterns, the rendered body gets the line "Applies when working on
+files matching `…`." after its first heading. `Instructions.directory(for:)`
+returns the longest directory shared by the patterns' literal prefixes; a
+pattern without wildcards names a file, so its prefix is that file's directory,
+and a pattern that starts with a wildcard yields the project root.
+
 ## Sources and Selection
 
-Discovery reads `.md` files directly inside `instructions/` and
-`.agents/instructions/`, relative to the source's search `path`. Every unit is
-validated by `Instructions.validateSource`. Names are filenames without `.md`;
-duplicate names across containers are errors. Nested files are not discovered.
-
+Discovery reads `.md` files below `instructions/` and `.agents/instructions/`
+of the source's search `path`, recursively. A name is the container-relative
+path without `.md`; each segment uses lowercase letters, digits and hyphens.
+Symbolic links, invalid names and a name in both containers are errors.
 Instructions require Git sources. Local sources identify the repository root;
 use `path` to move its search root. Discovery reads committed trees even when
-the working tree is dirty. Each section and prompt section has its own revision,
-path and original-byte hash. Source instruction directories cannot be targets.
+the working tree is dirty. Each section and prompt section has its own
+revision, path and original-byte hash. Source containers cannot hold targets.
+
+A project's own files live in `.agent/instructions/` and are referenced by bare
+name; `alias:name` references a declared source. Own files are read from the
+working tree as it is. Their lock records have source `.`, the project-relative
+path and the hash, and no revision. Restoring a lock fails when an own file's
+hash changed; update reads the current file.
 
 `add(InstructionAddOptions, beforeApply:)` accepts a source alias or string,
-optional alias, requirement, search path, ordered names and recipients. With
-several units and neither names nor `all`, it returns the units without changing
-the scope, including its cache and lock files. This selection discovery takes the
-read path and stops if recovery is pending. `listOnly` always uses that path.
-A single discovered unit is selected automatically by its normalized source ID
-and exact section name, separately from user-entered names. Writer-lock rediscovery
-must match that identity or fail with an error asking the caller to retry. Content
-and pins can refresh for the same identity. Explicit names and `all`
-enter the writer path directly. Explicit order is preserved;
-`all` adds current units in name order. Add preserves unrelated section and
-skill pins. Source aliases remain shared across kinds.
+or `.` for own files, plus an optional alias, requirement, search path, ordered
+names and recipients. With several units and neither names nor `all`, it
+returns the units without changing the scope, including its cache and lock
+files. This selection discovery takes the read path and stops if recovery is
+pending. `listOnly` always uses that path. A single discovered unit is selected
+automatically by its normalized source ID and exact name, separately from
+user-entered names. Writer-lock rediscovery must match that identity or fail
+with an error asking the caller to retry. Explicit names and `all` enter the
+writer path directly. Explicit order is preserved; `all` adds current units in
+name order. Add preserves unrelated section and skill pins. Source aliases
+remain shared across kinds.
 
 ## Targets
 
@@ -40,36 +64,63 @@ skill pins. Source aliases remain shared across kinds.
 | OpenCode | `$XDG_CONFIG_HOME/opencode/AGENTS.md`, default `~/.config/opencode/AGENTS.md` | `AGENTS.md` |
 | Gemini CLI | `~/.gemini/GEMINI.md` | `GEMINI.md` |
 
-Locations come from `RuntimeEnvironment`. Selected agents receive the same
-ordered sections. Agents sharing a physical file share one lock entry and one
-replacement. Project keys are relative to the project root; user keys are
-`~/`-relative to the supplied home. Configured user locations outside home use
-absolute keys. Locked destinations must remain registered instruction locations
-in the runtime environment; lock contents cannot authorize arbitrary writes.
+Every target is generated in full by `Instructions.render`: the notice line
+`Instructions.notice`, a blank line, and the sections in declared order
+separated by one blank line, ending with a newline. Rendering rejects two
+sections whose first headings share level and whitespace-collapsed text, and
+parses the result to confirm that every section's first heading is still a
+document heading.
+
+In project scope, sections are grouped by `directory`: each group renders into
+the `AGENTS.md`, or `GEMINI.md`, of that directory, which must already exist.
+User scope renders all sections into each recipient's file. Project keys are
+relative to the project root, and a nested key names `AGENTS.md` or `GEMINI.md`
+in a directory outside `.git` and `.agent`; user keys are `~/`-relative to the
+supplied home, and configured user locations outside home use absolute keys.
+Locked destinations must remain registered instruction locations in the
+runtime environment; lock contents cannot authorize arbitrary writes.
 Configured user containers may resolve through symlinks. Journal validation
 opens project descendants without following links.
 
+A file is owned when the lock records it or `Instructions.isGenerated` finds the
+notice on its first line. A planned write over an existing file that is not
+owned marks the change `foreign`; add, update apply and combined apply stop with
+`InstructionError.unownedTargets` unless `replace` is set. A locked target that
+no longer receives sections is deleted while its bytes equal the locked
+rendering and kept otherwise. Unit targets lock `headingOffset: 0`,
+`created: false` and the rendered file's hash as `blockHash`.
+
+Links in a rendered target are checked by `Instructions.localLinks`: links,
+images, autolinks and reference definitions outside code with a destination
+that is relative, absolute or a `file:` URL, and raw HTML `href` and `src`
+attributes. A local destination must resolve, from the target file, to an
+existing regular file inside the checkout being written and outside any nested
+repository or worktree; user targets accept no local destination. Problems stop
+the operation with `InstructionError.invalidLinks`.
+
 A root `CLAUDE.md` symlink to `AGENTS.md` needs no write, including before
 `AGENTS.md` exists. A recognized standalone import in any project Claude file
-also suffices. Otherwise the first existing file in `CLAUDE.md`,
-`.claude/CLAUDE.md`, `CLAUDE.local.md` order receives a managed import block:
-`@AGENTS.md` or `@../AGENTS.md`, relative to its containing file. No project
-Claude file means automatic forwarding. Ancestor files are reported and never
-modified.
+also suffices. Otherwise, when the root `AGENTS.md` is a target, the first
+existing file in `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` order
+receives a managed import block: `@AGENTS.md` or `@../AGENTS.md`, relative to
+its containing file. No project Claude file means automatic forwarding.
+Ancestor files are reported and never modified.
 
 ## Operations and Mutation Contract
 
 | Consumer operation | Behavior |
 | --- | --- |
-| `list(source:scope:environment:)` | Inspect committed, validated units |
+| `list(source:scope:environment:)` | Inspect committed, validated files of a source |
+| `listOwn(environment:)` | Inspect the project's own files in the working tree |
 | `listManaged(scope:environment:)` | Return locked sections, prompts and targets, including missing targets |
-| `updateInstalled(..., apply:beforeApply:)` | Resolve the declaration and preview or apply all targets together |
-| `installResolvedReport(scope:environment:)` | Restore locked pins, targets and offsets without changing state bytes |
+| `updateInstalled(..., apply:replace:beforeApply:)` | Resolve the declaration and preview or apply all targets together |
+| `installResolvedReport(scope:environment:)` | Restore locked renderings without changing state bytes |
 | `remove(names:scope:agents:environment:beforeApply:)` | Remove sections from file and prompt selections and lock records |
 | `renderChatGPT(prompt:scope:environment:)` | Return locked sections followed by the prompt's current custom file |
-| `initializeInstructions(named:directory:)` | Create a validated `<name>.md`, refusing an existing entry |
+| `initializeInstructions(named:directory:)` | Create a validated `<name>.md` with front matter, refusing an existing entry |
 | `doctor(scope:environment:codexConfiguration:)` | Inspect one scope and compare sections against the other scope |
 | `doctor(projectRoots:environment:codexConfiguration:)` | Audit explicit project roots without writing |
+| `export(projectRoots:environment:)` | Map the user scope's and each root's locked targets to their sections without writing |
 
 An `agents` argument sets the complete instruction recipient list. Removing
 names accepts `alias:name` references or unambiguous bare names and removes
@@ -77,8 +128,8 @@ those sections from prompts as well. Empty prompts are removed. Other source
 declarations and skill records remain available to their owners.
 
 Planning validates required content before applying. Reports include old and
-new section records, target before/after bytes and recipients, drift, custom-section
-adoptions and conflicts, block differences, missing-lock status and changed prompt names.
+new section records, target before/after bytes and recipients, drift, foreign
+targets, a missing-lock status and changed prompt names.
 `InstructionTargetChange.beforeAgents` is nil when the previous lock has no target
 entry; `afterAgents` is empty when the target is no longer managed. Both recipient
 arrays are sorted by agent raw value. `agentsChanged` compares those recipients,
@@ -95,17 +146,16 @@ bytes/presence, target ancestry and all Claude forwarding decision inputs
 before and after retention. `InstructionUpdatePlan` supplies package-visible
 planning, validation, retention and staging to both standalone updates and
 `AgentsUpdates`; the latter commits both kinds together as described in
-[Updates](Updates.md). Add throws conflict differences
-unless `replace` is enabled. Update previews conflicts and applies newly resolved
-content. Install restores drift but stops on a conflicting custom section.
+[Updates](Updates.md).
 
 Mutations hold the scope writer lock and use the durable journal for instruction
 files, forwarding files, declaration, lock and cache pruning. Exact source
 materializations are verified and published through cache transactions before
 the target/state transaction. The journal has fixed project instruction paths,
-configured user instruction roots and an authoring root restricted to named
-Markdown files. Initialization uses a project state lock and journal in the
-supplied directory without creating a declaration or resolved file.
+nested project `AGENTS.md` and `GEMINI.md` paths, configured user instruction
+roots and an authoring root restricted to named Markdown files. Initialization
+uses a project state lock and journal in the supplied directory without
+creating a declaration or resolved file.
 
 Read operations take an existing shared scope lock without creating one or
 replaying recovery. Pending recovery stops listings and previews. Doctor reports
@@ -115,17 +165,15 @@ from that scope. A pending other scope suppresses cross-scope comparisons while
 the current scope can still be audited. A mutating state operation recovers the
 transaction and asks the caller to retry. Source inspection and update
 preview may fetch mirror objects and use disposable snapshots, but never
-publish materializations, declaration, lock or targets. Doctor reads remote ref
-advertisements but does not fetch objects or create files, including in projects
-with no state directory.
+publish materializations, declaration, lock or targets. Doctor and export read
+remote ref advertisements at most and do not fetch objects or create files,
+including in projects with no state directory.
 
-Install reconstructs and verifies locked blocks before replacement, using
-recorded heading offsets even if custom titles changed. Update recomputes
-offsets. Removing the last section removes its block and deletes a file only
-when its previous lock says `created: true` and no custom content remains.
-Without a lock entry a file is never deleted. Lost-lock update reports the
-comparison; apply adopts identical blocks or replaces differing content and
-records existing files as `created: false`.
+Install renders the locked sections, verifies every rendering against its
+locked hash before replacement, and restores drifted files. Lost-lock update
+reports the comparison; apply keeps identical files, replaces differing
+generated files, takes over others only with `replace`, and records targets as
+`created: false`. Without a lock entry a file is never deleted.
 
 ## ChatGPT Prompts
 
@@ -136,14 +184,16 @@ revision change with identical section hashes alone does not mark a prompt
 changed. Append files remain live owner content; their independent edits do not
 require a lock update.
 
-Render verifies locked hashes, keeps source heading levels, omits markers and
-appends the custom file's bytes. It fails without locked sections or if an append
-path escapes the scope through a symlink. It never writes to ChatGPT.
+Render verifies locked hashes, renders sections as in targets without the
+notice, and appends the custom file's bytes. It fails without locked sections or
+if an append path escapes the scope through a symlink. It never writes to
+ChatGPT.
 
 ## Diagnostics
 
-Doctor reports missing or drifted blocks, malformed targets, missing locks,
-custom-section adoptions and conflicts using cached locked content, duplicate
+Doctor reports missing targets, drifted targets, files in target locations that
+agents did not generate, own files changed since the lock, links in the locked
+renderings that no longer resolve, invalid targets, missing locks, duplicate
 source-qualified sections across scopes, Claude forwarding and ancestor
 problems, and uncommitted selected local source paths. Git status uses
 `--no-optional-locks` to avoid index refresh writes. File and ChatGPT prompt pins
@@ -162,15 +212,21 @@ a cached commit or an advertised branch head;
 otherwise inspection reports an unresolved source. Doctor does not fetch to
 resolve missing objects or validate upstream content.
 
-Codex checks report a nonempty `AGENTS.override.md` hiding managed content and
-sum loaded instruction bytes and separators along the global and
-root-to-project chain, honoring `project_root_markers` (default `.git`) and
-`project_doc_fallback_filenames`. With no root marker, only the project directory
-is checked. Consumers supply `CodexInstructionConfiguration` with the effective
-byte limit, fallback filenames and root markers after resolving Codex trust,
-profiles and policy. Multi-root audit accepts a configuration resolver per root.
-The TOML initializer can merge trusted layers in precedence order, preserving
-omitted settings; trust decisions and layer selection belong to the consumer.
+Codex checks follow how Codex loads instructions. The user file is loaded
+separately without a size limit; a non-blank `AGENTS.override.md` beside it
+hides a managed user file. In project scope, each chain runs from the nearest
+directory with a `project_root_markers` entry (default `.git`), or only the
+directory itself without one, down to the project directory and to each
+directory holding a generated `AGENTS.md`. In every directory of a chain, the
+first regular file among `AGENTS.override.md`, `AGENTS.md` and
+`project_doc_fallback_filenames` is loaded, even when empty, so an existing
+override hides a managed `AGENTS.md`. A chain's budget counts loaded file bytes,
+skips whitespace-only files and adds no separators. Consumers supply
+`CodexInstructionConfiguration` with the effective byte limit, fallback filenames
+and root markers after resolving Codex trust, profiles and policy. Multi-root
+audit accepts a configuration resolver per root. The TOML initializer can merge
+trusted layers in precedence order, preserving omitted settings; trust decisions
+and layer selection belong to the consumer.
 Trusted `.codex/config.toml` layers override user settings, with the closest to
 the working directory taking precedence, following
 [Codex configuration rules](https://learn.chatgpt.com/docs/config-file/config-advanced).
@@ -179,6 +235,6 @@ defaulting to 32 KiB. Table fields and multiline string contents cannot override
 it; invalid budgets produce a diagnostic. Discovery
 follows the [Codex instruction guide](https://developers.openai.com/codex/guides/agents-md).
 
-Multi-root audit deduplicates explicit roots, reports unavailable or pending
-scopes without repairing them, and continues with other roots. It never
-searches the user's filesystem for projects.
+Multi-root audit and export deduplicate explicit roots, report unavailable or
+pending scopes without repairing them, and continue with other roots. They never
+search the user's filesystem for projects.

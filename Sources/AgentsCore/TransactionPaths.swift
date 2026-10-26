@@ -13,7 +13,7 @@ struct TransactionPaths {
     if store.scope == .project {
       let relative = PathSafety.relativePath(
         destination.path, to: base.resolvingSymlinksInPath().path)
-      if InstructionLocations.projectPaths.contains(relative) {
+      if InstructionLocations.isProjectTarget(relative) {
         return "instructions-project/" + relative
       }
       if destination.deletingLastPathComponent().standardizedFileURL
@@ -106,7 +106,7 @@ struct TransactionPaths {
         throw CoreError.unsafePath("unmanaged state transaction path")
       }
     } else if key == "instructions-project", store.scope == .project {
-      guard InstructionLocations.projectPaths.contains(descendants.joined(separator: "/")) else {
+      guard InstructionLocations.isProjectTarget(descendants.joined(separator: "/")) else {
         throw CoreError.unsafePath("unmanaged project instruction path")
       }
     } else if key == "instructions-authoring", store.scope == .project {

@@ -6,6 +6,48 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ## Unreleased
 
+### Added
+
+- Instructions files may sit in subdirectories of `instructions/` and
+  `.agents/instructions/`; a file's name is its container-relative path, such
+  as `epd/review`.
+- A project's own instructions in `.agent/instructions/` are selected by bare
+  name and read from the working tree. `InstructionAddOptions(source: ".")`
+  adds them; `listOwn(environment:)` lists them.
+- Front matter `paths` scopes a section: its patterns are named after its first
+  heading, and in project scope the section is written to the `AGENTS.md` of
+  the directory the patterns share.
+- `InstructionOperations.export(projectRoots:environment:)` maps the locked
+  targets of the user scope and given projects to their sections.
+- Doctor reports hand-written files in target locations, own files changed
+  since the lock, and links in generated targets that no longer resolve.
+
+### Changed
+
+- **Breaking:** an instructions file needs front matter with a `description`,
+  and its body may start at any heading level. Add front matter to existing
+  files; headings are written as authored.
+- **Breaking:** targets are generated in full: a notice line followed by the
+  sections. Custom content in targets, managed blocks, title detection, heading
+  offsets and adoption of matching custom sections are gone. Move hand-written
+  content into instructions files. Writing over a file that agents did not
+  generate needs `replace`; `InstructionError.unownedTargets` names it.
+- **Breaking:** `InstructionTargetChange.assembly` is replaced by `foreign`,
+  and `InstructionDrift` is `clean`, `drifted` or `missing`. Diagnostic kinds
+  `missingBlock`, `adoption` and `conflict` become `missingTarget`,
+  `foreignTarget`, `ownChanged` and `invalidLink`.
+- A local link in a section must resolve, from the target, to a file in the
+  checkout being written; user targets accept no local links.
+- A target that no longer receives sections is deleted only while it equals its
+  locked rendering.
+
+### Fixed
+
+- Doctor's Codex size check counts only the project chain, as Codex does: the
+  user file is loaded separately without a limit, separators are not counted,
+  whitespace-only files add nothing, fallback names apply in every directory,
+  and an existing `AGENTS.override.md`, even an empty one, hides `AGENTS.md`.
+
 ## 0.1.2 - 2026-10-25
 
 ### Added

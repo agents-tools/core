@@ -28,29 +28,38 @@ public enum InstructionOperations {
       var declaration = previousDeclaration
       let selectionChanged = CoreError.invalidState(
         "automatic instruction selection changed during discovery; retry the command")
-      let source: SourceDeclaration
-      let id: String
-      do {
-        source = try sourceDeclaration(options, declaration: declaration)
-        id = try source.identity(environment: options.environment)
-      } catch {
-        if automaticSelection != nil { throw selectionChanged }
-        throw error
-      }
-      if let automaticSelection, automaticSelection.sourceID != id { throw selectionChanged }
-      let existing = try declaration.sources.keys.sorted().first {
-        try declaration.sources[$0]?.identity(environment: options.environment) == id
-      }
-      let alias = options.alias ?? existing ?? declaration.derivedAlias(for: source.location)
-      if let current = declaration.sources[alias],
-        try current.identity(environment: options.environment) != id
-      {
-        throw CoreError.invalidSource("source alias already refers to another source: \(alias)")
-      }
-      declaration.sources[alias] = source
-      try declaration.validate(environment: options.environment)
       let sources = InstructionSources(store: store)
-      let available = try sources.discover(source, cacheSource: apply)
+      let id: String
+      let alias: String?
+      let available: [InstructionUnit]
+      if options.source == InstructionSources.own {
+        id = InstructionSources.own
+        alias = nil
+        available = try sources.own()
+      } else {
+        let source: SourceDeclaration
+        do {
+          source = try sourceDeclaration(options, declaration: declaration)
+          id = try source.identity(environment: options.environment)
+        } catch {
+          if automaticSelection != nil { throw selectionChanged }
+          throw error
+        }
+        if let automaticSelection, automaticSelection.sourceID != id { throw selectionChanged }
+        let existing = try declaration.sources.keys.sorted().first {
+          try declaration.sources[$0]?.identity(environment: options.environment) == id
+        }
+        let name = options.alias ?? existing ?? declaration.derivedAlias(for: source.location)
+        if let current = declaration.sources[name],
+          try current.identity(environment: options.environment) != id
+        {
+          throw CoreError.invalidSource("source alias already refers to another source: \(name)")
+        }
+        declaration.sources[name] = source
+        try declaration.validate(environment: options.environment)
+        alias = name
+        available = try sources.discover(source, cacheSource: apply)
+      }
       guard options.listOnly || automaticSelection != nil || !available.isEmpty else {
         throw CoreError.notFound("source provides no instructions")
       }
@@ -75,7 +84,7 @@ public enum InstructionOperations {
       guard !selected.isEmpty else { throw CoreError.notFound("source provides no instructions") }
       var instructions = declaration.instructions ?? InstructionsDeclaration()
       if let agents = options.agents { instructions.agents = agents }
-      let references = selected.map { alias + ":" + $0.record.name }
+      let references = selected.map { (alias.map { $0 + ":" } ?? "") + $0.record.name }
       for reference in references where !instructions.sections.contains(reference) {
         instructions.sections.append(reference)
       }
@@ -84,9 +93,9 @@ public enum InstructionOperations {
         declaration: declaration, previous: previous, sources: sources, resolving: Set(references))
       let plan = try plan(
         declaration: declaration, previousDeclaration: previousDeclaration,
-        previous: previous, prepared: prepared, store: store,
-        replace: options.replace)
+        previous: previous, prepared: prepared, store: store)
       try plan.lock.validate()
+      if !options.replace { try requireOwnership(plan.report) }
       try beforeApply?(plan.report)
       try Self.apply(
         declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
@@ -105,6 +114,14 @@ public enum InstructionOperations {
     }
   }
 
+  /// The project's own instructions in `.agent/instructions/`, read from the working tree.
+  public static func listOwn(environment: RuntimeEnvironment = RuntimeEnvironment()) throws
+    -> [InstructionUnit]
+  {
+    let store = StateStore(scope: .project, environment: environment)
+    return try operate(store, apply: false) { _, _ in try InstructionSources(store: store).own() }
+  }
+
   /// Includes missing targets; doctor supplies their disk status.
   public static func listManaged(
     scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
@@ -115,10 +132,12 @@ public enum InstructionOperations {
   }
 
   /// Resolves declared content and reports every affected target before any replacement.
-  /// `agents` replaces the scope's instruction recipients when applying.
+  /// `agents` replaces the scope's instruction recipients when applying. Applying over a file that
+  /// agents did not generate requires `replace`.
   public static func updateInstalled(
     scope: InstallScope = .project, agents: [AgentID]? = nil,
     environment: RuntimeEnvironment = RuntimeEnvironment(), apply: Bool = false,
+    replace: Bool = false,
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
@@ -133,9 +152,10 @@ public enum InstructionOperations {
       let resolutions = try SourceResolutionSession(store: store)
       let plan = try prepareUpdate(
         store: store, declaration: declaration, previousDeclaration: previousDeclaration,
-        previous: previous, resolutions: resolutions)
+        previous: previous, resolutions: resolutions, replace: replace)
       try plan.next.validate()
       if apply {
+        if !replace { try requireOwnership(plan.report) }
         try beforeApply?(plan.report)
         try baseline.validate()
         try plan.validate()
@@ -156,19 +176,21 @@ public enum InstructionOperations {
   }
 
   /// Prepares instruction-owned records; the caller validates the complete generation after assembly.
+  /// Validation fails when the plan writes over a file agents did not generate without `replace`.
   package static func prepareUpdate(
     store: StateStore, declaration: Declaration, previousDeclaration: Declaration,
-    previous: ResolvedState, resolutions: SourceResolutionSession
+    previous: ResolvedState, resolutions: SourceResolutionSession, replace: Bool = false
   ) throws -> InstructionUpdatePlan {
     let sources = InstructionSources(store: store, resolutions: resolutions)
     let prepared = try prepare(declaration: declaration, previous: previous, sources: sources)
     let plan = try plan(
       declaration: declaration, previousDeclaration: previousDeclaration,
-      previous: previous, prepared: prepared, store: store, replace: true)
-    return try InstructionUpdatePlan(next: plan.lock, report: plan.report, sources: sources)
+      previous: previous, prepared: prepared, store: store)
+    return try InstructionUpdatePlan(
+      next: plan.lock, report: plan.report, sources: sources, replace: replace)
   }
 
-  /// Restores only recorded pins, targets and heading offsets, without changing either state file.
+  /// Restores only recorded pins and targets, without changing either state file.
   public static func installResolvedReport(
     scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> InstructionUpdateReport {
@@ -181,7 +203,7 @@ public enum InstructionOperations {
           sections: sources.restore(prompt.sections, sources: lock.sources).map(\.section))
       }
       let targets = try InstructionTargets(store: store).plan(
-        sections: sections.map(\.section), agents: [], previous: lock.instructions, replace: false,
+        sections: sections.map(\.section), agents: [], previous: lock.instructions,
         restoring: true)
       let report = InstructionUpdateReport(
         sections: [], targets: targets.changes, changedPrompts: [],
@@ -230,9 +252,9 @@ public enum InstructionOperations {
         declaration: declaration, previous: previous, sources: sources, resolving: [])
       let plan = try plan(
         declaration: declaration, previousDeclaration: previousDeclaration,
-        previous: previous, prepared: prepared, store: store,
-        replace: false)
+        previous: previous, prepared: prepared, store: store)
       try plan.lock.validate()
+      try requireOwnership(plan.report)
       try beforeApply?(plan.report)
       try apply(declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
       return plan.report
@@ -263,11 +285,13 @@ public enum InstructionOperations {
     }
   }
 
-  /// Creates `<name>.md` in the supplied directory without replacing an existing entry.
+  /// Creates `<name>.md` with the required front matter in the supplied directory, without
+  /// replacing an existing entry.
   @discardableResult
   public static func initializeInstructions(named name: String, directory: URL) throws -> URL {
-    guard name == PathSafety.sanitizeName(name) else {
-      throw CoreError.invalidSource("instruction name must be a filesystem identity")
+    guard Declaration.isInstructionName(name), !name.contains("/") else {
+      throw CoreError.invalidSource(
+        "instruction names use lowercase letters, digits and hyphens: \(name)")
     }
     let environment = RuntimeEnvironment(
       projectDirectory: directory, homeDirectory: directory, environment: [:])
@@ -277,7 +301,9 @@ public enum InstructionOperations {
       guard try InstructionTargets.read(file) == nil else {
         throw CoreError.invalidSource("instruction file already exists: \(file.path)")
       }
-      let bytes = Data("# \(name)\n\nWrite the instructions here.\n".utf8)
+      let bytes = Data(
+        "---\ndescription: Describe what these instructions make the agent do.\n---\n# \(name)\n\nWrite the instructions here.\n"
+          .utf8)
       _ = try Instructions.validateSource(bytes, id: name)
       let transaction = FileTransaction(store: store)
       try transaction.replace(file, content: nil, data: bytes)
@@ -297,12 +323,14 @@ public enum InstructionOperations {
       previous.instructions.sections + previous.instructions.chatgpt.values.flatMap(\.sections)
     func units(_ references: [String], locked: [LockedSection]) throws -> [InstructionUnit] {
       try references.map { reference in
-        let parts = reference.split(separator: ":").map(String.init)
-        let id = try declaration.sources[parts[0]]!.identity(environment: sources.store.environment)
-        if let resolving, !resolving.contains(reference),
-          let record = (locked + old).first(where: { $0.source == id && $0.name == parts[1] })
+        // Own instructions are never pinned, so they always resolve from the working tree.
+        if let (alias, name) = InstructionSources.split(reference), let resolving,
+          !resolving.contains(reference)
         {
-          return try sources.restore([record], sources: previous.sources)[0]
+          let id = try declaration.sources[alias]!.identity(environment: sources.store.environment)
+          if let record = (locked + old).first(where: { $0.source == id && $0.name == name }) {
+            return try sources.restore([record], sources: previous.sources)[0]
+          }
         }
         return try sources.resolve(references: [reference], declaration: declaration, lock: &next)[
           0]
@@ -324,17 +352,13 @@ public enum InstructionOperations {
 
   private static func plan(
     declaration: Declaration, previousDeclaration: Declaration, previous: ResolvedState,
-    prepared: (lock: ResolvedState, sections: [InstructionSection]), store: StateStore,
-    replace: Bool
+    prepared: (lock: ResolvedState, sections: [InstructionSection]), store: StateStore
   ) throws -> (lock: ResolvedState, report: InstructionUpdateReport) {
     var next = prepared.lock
-    if !prepared.sections.isEmpty {
-      _ = try Instructions.renderChatGPT(sections: prepared.sections)
-    }
     let targets = try InstructionTargets(store: store).plan(
       sections: prepared.sections,
       agents: declaration.instructions?.agents ?? declaration.defaultAgents,
-      previous: previous.instructions, replace: replace)
+      previous: previous.instructions)
     next.instructions.targets = targets.targets
     try InstructionTargets.validateSourceDirectories(targets.changes, sources: next.sources)
     let before = previous.instructions.sections
@@ -364,6 +388,12 @@ public enum InstructionOperations {
         sections: changes, targets: targets.changes, changedPrompts: prompts,
         lockMissing: lockMissing, hasChanges: hasChanges)
     )
+  }
+
+  /// Stops a write over files that agents did not generate, naming them.
+  static func requireOwnership(_ report: InstructionUpdateReport) throws {
+    let foreign = report.targets.filter(\.foreign).map(\.target)
+    guard foreign.isEmpty else { throw InstructionError.unownedTargets(foreign) }
   }
 
   private static func apply(

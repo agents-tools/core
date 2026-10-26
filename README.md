@@ -194,33 +194,42 @@ recovery and callback contracts.
 
 ### Instructions
 
-`InstructionOperations` manages ordered sections from committed `.md` files
-under a source's `instructions/` or `.agents/instructions/` search root:
+An instructions file is one Markdown file in a source's `instructions/` or
+`.agents/instructions/` container, subdirectories included, named by its path
+there without `.md`. It starts with front matter holding a required
+`description` and optional `paths` globs, then a body that begins with one
+heading. A project's own files live in `.agent/instructions/` and are selected
+by bare name. `InstructionOperations` generates whole target files from them:
 
-- `add(_:)` selects sections and writes every recipient together. Conflicting
-  custom sections stop the operation unless `replace` is enabled.
-- `list(source:...)` inspects a source; `listManaged(...)` returns locked
-  sections, prompts and physical targets.
+- `add(_:)` selects files and writes every target together; source `.` selects
+  the project's own files. Writing over a file that agents did not generate
+  needs `replace`.
+- `list(source:...)` and `listOwn(...)` inspect available files;
+  `listManaged(...)` returns locked sections, prompts and physical targets.
 - `updateInstalled(...)` previews resolutions, target differences and changed
   ChatGPT prompts. With `apply: true`, a throwing `beforeApply` callback can
   show differences or cancel before files and state change.
-- `installResolvedReport(...)` restores locked sections, offsets and targets.
-  `remove(...)` preserves custom content and deletes empty files only when their
-  lock records that the tool created them.
-- `renderChatGPT(prompt:...)` renders locked sections plus a custom append file
-  without markers. Prompts live in `instructions.chatgpt`.
-- `doctor(...)` checks drift, scope duplication, Claude forwarding, Codex
-  overrides and size limits, newer matching source revisions and uncommitted
-  sources. Its `projectRoots` overload audits explicit projects without writing.
-- `initializeInstructions(named:directory:)` creates a valid source skeleton.
+- `installResolvedReport(...)` restores the locked renderings. `remove(...)`
+  deletes a target that no longer receives sections while it still equals its
+  locked rendering.
+- `renderChatGPT(prompt:...)` renders locked sections plus a custom append file.
+  Prompts live in `instructions.chatgpt`.
+- `doctor(...)` checks missing, drifted and hand-written targets, changed own
+  files, links, scope duplication, Claude forwarding, Codex overrides and the
+  project size budget, newer matching source revisions and uncommitted sources.
+  Its `projectRoots` overload audits explicit projects without writing.
+- `export(projectRoots:...)` reads the user lock and the given projects' locks
+  into a mapping of targets to sections, without writing.
+- `initializeInstructions(named:directory:)` creates a valid file skeleton.
 
-Project recipients share `AGENTS.md` except Gemini CLI, which uses `GEMINI.md`.
-Claude project files receive only a managed import when forwarding is needed.
-User locations honor `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and `XDG_CONFIG_HOME`;
-Codex and Claude use separate files. Lost-lock update reports the comparison;
-apply reconstructs the lock without claiming ownership of pre-existing files.
-Codex diagnostics accept effective discovery settings from the consumer,
-including trusted project configuration overrides.
+A target is a notice line followed by the sections in declared order. A section
+with `paths` gets a line naming its patterns and, in project scope, is written
+to the `AGENTS.md` of the directory the patterns share. Project recipients
+share `AGENTS.md` except Gemini CLI, which uses `GEMINI.md`. Claude project
+files receive only a managed import when forwarding is needed. User locations
+honor `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and `XDG_CONFIG_HOME`; Codex and Claude
+use separate files. Codex diagnostics accept effective discovery settings from
+the consumer, including trusted project configuration overrides.
 
 Claude forwarding recognizes standalone, unquoted and unformatted imports of
 that project's `AGENTS.md` outside code and HTML, including managed import
@@ -243,8 +252,8 @@ contracts, target paths, read-only inspection and deletion rules.
   module boundaries and public workflows.
 - [State and cache](Documentation/Architecture/State.md): declarations, resolved
   state, transactions and installation invariants.
-- [Instruction lifecycle](Documentation/Architecture/Instructions.md): section
-  selection, targets, prompts and diagnostics.
+- [Instruction lifecycle](Documentation/Architecture/Instructions.md):
+  instructions files, generated targets, prompts and diagnostics.
 - [Watch API](Documentation/Architecture/Watch.md): subscriptions, comparisons
   and seen baselines.
 - [Combined updates](Documentation/Architecture/Updates.md): reports, preparation,

@@ -4,97 +4,194 @@ import Foundation
 struct InstructionTargets {
   let store: StateStore
 
+  /// Plans every generated target from `sections` in declared order, the Claude import, and the
+  /// removal of targets that no longer receive sections. `restoring` keeps the locked recipients
+  /// and requires each rendering to match its locked hash.
   func plan(
     sections: [InstructionSection], agents: [AgentID], previous: LockedInstructions,
-    replace: Bool, restoring: Bool = false
+    restoring: Bool = false
   ) throws -> (targets: [String: LockedTarget], changes: [InstructionTargetChange]) {
     var targets: [String: LockedTarget] = [:]
-    if restoring {
-      targets = previous.targets
-    } else if !sections.isEmpty {
-      for agent in Set(agents) {
-        guard
-          let logical = InstructionLocations.file(
-            for: agent, scope: store.scope, environment: store.environment)
-        else { continue }
-        let file = logical.resolvingSymlinksInPath()
-        let key = InstructionLocations.key(for: file, store: store)
-        _ = try InstructionLocations.file(for: key, store: store)
-        if targets[key] != nil {
-          targets[key]?.agents.append(agent)
-        } else {
-          targets[key] = LockedTarget(
-            agents: [agent], headingOffset: 0, blockHash: "", created: false)
+    var rendered: [String: String] = [:]
+    if !sections.isEmpty {
+      let recipients =
+        restoring
+        ? Array(Set(previous.targets.values.filter { $0.import == nil }.flatMap(\.agents)))
+        : Array(Set(agents))
+      var groups: [String: [InstructionSection]] = [:]
+      var order: [String] = []
+      for section in sections {
+        let directory = store.scope == .project ? section.directory : ""
+        if groups[directory] == nil { order.append(directory) }
+        groups[directory, default: []].append(section)
+      }
+      for directory in order {
+        let text = try Instructions.render(groups[directory]!)
+        for agent in recipients.sorted(by: { $0.rawValue < $1.rawValue }) {
+          guard let file = try location(for: agent, directory: directory) else { continue }
+          let key = InstructionLocations.key(for: file, store: store)
+          _ = try InstructionLocations.file(for: key, store: store)
+          if targets[key] != nil {
+            targets[key]?.agents.append(agent)
+          } else {
+            rendered[key] = text
+            targets[key] = LockedTarget(
+              agents: [agent], headingOffset: 0, blockHash: Instructions.hash(Data(text.utf8)),
+              created: false)
+          }
         }
       }
-      if store.scope == .project, agents.contains(.claudeCode) {
-        let files = try claudeFiles()
-        let forwarding = try ClaudeForwarding.classify(files)
-        let path: ClaudeInstructionPath?
-        switch forwarding {
-        case .automatic: path = nil
-        case .needsImport(let candidate): path = candidate
-        case .forwarding(let candidate):
-          let file = files.first { $0.path == candidate }
-          let managed =
-            try file.map { try MarkdownDocument(bytes: $0.bytes).managedBlock() != nil } ?? false
-          path = file?.isSymbolicLinkToAgents == true || !managed ? nil : candidate
+      if store.scope == .project, recipients.contains(.claudeCode), targets["AGENTS.md"] != nil,
+        let path = try forwardingPath()
+      {
+        let file = store.environment.projectDirectory.appendingPathComponent(path.rawValue)
+        let key = InstructionLocations.key(for: InstructionLocations.physical(file), store: store)
+        guard targets[key] == nil else {
+          throw CoreError.invalidState("forwarding overlaps an instruction target")
         }
-        if let path {
-          let file = store.environment.projectDirectory.appendingPathComponent(path.rawValue)
-          let key = InstructionLocations.key(for: InstructionLocations.physical(file), store: store)
-          guard targets[key] == nil else {
-            throw CoreError.invalidState("forwarding overlaps a section target")
-          }
-          targets[key] = LockedTarget(
-            agents: [.claudeCode], import: String(path.importLine.dropFirst()), blockHash: "",
-            created: false)
-        }
+        targets[key] = LockedTarget(
+          agents: [.claudeCode], import: String(path.importLine.dropFirst()), blockHash: "",
+          created: false)
       }
     }
     var changes: [InstructionTargetChange] = []
+    var problems: [InstructionLinkProblem] = []
     for key in Set(previous.targets.keys).union(targets.keys).sorted() {
       let file = try InstructionLocations.file(for: key, store: store)
       let before = try Self.read(file)
       let old = previous.targets[key]
-      let drift = try old.map {
-        try Instructions.detectDrift(in: before ?? Data(), lockedBlockHash: $0.blockHash)
-      }
-      let assembly: InstructionAssembly
-      if let target = targets[key] {
-        if let reference = target.import {
-          guard store.scope == .project,
-            let path = ClaudeInstructionPath(rawValue: key),
-            reference == String(path.importLine.dropFirst())
-          else { throw CoreError.invalidState("invalid Claude forwarding target") }
-          assembly = try Self.importBlock(in: before ?? Data(), at: path)
-        } else {
-          guard !sections.isEmpty else {
-            throw CoreError.invalidState("instruction target has no locked sections")
-          }
-          assembly = try Instructions.assemble(
-            before ?? Data(), sections: sections,
-            options: InstructionOptions(
-              headingOffset: restoring ? target.headingOffset : nil, replaceConflicts: replace))
-        }
-        guard let blockHash = assembly.blockHash else { throw InstructionError.invalidAssembly }
-        if restoring, blockHash != target.blockHash { throw InstructionError.invalidLockedBlock }
-        targets[key]?.blockHash = blockHash
-        targets[key]?.headingOffset = target.import == nil ? assembly.headingOffset : nil
+      var after: Data?
+      var foreign = false
+      if let target = targets[key], let reference = target.import {
+        guard store.scope == .project, let path = ClaudeInstructionPath(rawValue: key),
+          reference == String(path.importLine.dropFirst())
+        else { throw CoreError.invalidState("invalid Claude forwarding target") }
+        let edit = try Self.importBlock(in: before ?? Data(), at: path)
+        after = edit.bytes
+        targets[key]?.blockHash = edit.blockHash
         targets[key]?.created = old?.created ?? (before == nil)
-        targets[key]?.agents.sort { $0.rawValue < $1.rawValue }
-      } else {
-        assembly = try Instructions.remove(from: before ?? Data())
+      } else if let text = rendered[key] {
+        guard store.scope == .user || directoryExists(of: file) else {
+          throw CoreError.notFound("the directory of instruction target \(key)")
+        }
+        after = Data(text.utf8)
+        foreign =
+          before != nil && before != after && old == nil && !Instructions.isGenerated(before!)
+        if restoring, targets[key]?.blockHash != old?.blockHash {
+          throw InstructionError.invalidLockedBlock
+        }
+        problems += linkProblems(in: text, file: file, key: key)
+      } else if let old, old.import != nil {
+        let edit = try Instructions.removeBlock(from: before ?? Data())
+        let delete = old.created && !edit.hasCustomContent
+        after = delete || before == nil ? nil : edit.bytes
+      } else if let old, let before {
+        // A target that no longer receives sections is deleted only while it is the locked
+        // rendering; a drifted file is kept for its owner to resolve.
+        after = Instructions.hash(before) == old.blockHash ? nil : before
       }
-      let delete = targets[key] == nil && old?.created == true && !assembly.hasCustomContent
-      let after = delete || (before == nil && targets[key] == nil) ? nil : assembly.bytes
+      let drift = try old.map { old -> InstructionDrift in
+        guard let before else { return .missing }
+        if old.import != nil {
+          return try Instructions.detectDrift(in: before, lockedBlockHash: old.blockHash)
+        }
+        return Instructions.hash(before) == old.blockHash ? .clean : .drifted
+      }
+      targets[key]?.agents.sort { $0.rawValue < $1.rawValue }
       changes.append(
         InstructionTargetChange(
           target: key, url: file, before: before, after: after,
           beforeAgents: old?.agents.sorted { $0.rawValue < $1.rawValue },
-          afterAgents: targets[key]?.agents ?? [], assembly: assembly, drift: drift))
+          afterAgents: targets[key]?.agents ?? [], drift: drift, foreign: foreign))
     }
+    guard problems.isEmpty else { throw InstructionError.invalidLinks(problems) }
     return (targets, changes)
+  }
+
+  /// The file an agent reads for sections placed in `directory`, or nil when the agent has no file.
+  private func location(for agent: AgentID, directory: String) throws -> URL? {
+    guard
+      let root = InstructionLocations.file(
+        for: agent, scope: store.scope, environment: store.environment)
+    else { return nil }
+    let file =
+      store.scope == .project && !directory.isEmpty
+      ? store.environment.projectDirectory.appendingPathComponent(directory)
+        .appendingPathComponent(root.lastPathComponent)
+      : root
+    return InstructionLocations.physical(file)
+  }
+
+  private func directoryExists(of file: URL) -> Bool {
+    var isDirectory: ObjCBool = false
+    return FileManager.default.fileExists(
+      atPath: file.deletingLastPathComponent().path, isDirectory: &isDirectory)
+      && isDirectory.boolValue
+  }
+
+  /// The Claude file that needs a managed import of `AGENTS.md`, or nil when Claude Code already
+  /// reads it: no project Claude file, a symbolic link to `AGENTS.md`, or a standalone import.
+  private func forwardingPath() throws -> ClaudeInstructionPath? {
+    let files = try claudeFiles()
+    switch try ClaudeForwarding.classify(files) {
+    case .automatic: return nil
+    case .needsImport(let candidate): return candidate
+    case .forwarding(let candidate):
+      let file = files.first { $0.path == candidate }
+      let managed =
+        try file.map { try MarkdownDocument(bytes: $0.bytes).managedBlock() != nil } ?? false
+      return file?.isSymbolicLinkToAgents == true || !managed ? nil : candidate
+    }
+  }
+
+  /// Links in a rendered target that do not resolve, from the target file, to a regular file in
+  /// the checkout being written. User targets belong to no checkout, so every local link fails.
+  func linkProblems(in text: String, file: URL, key: String) -> [InstructionLinkProblem] {
+    var problems: [InstructionLinkProblem] = []
+    let root = store.environment.projectDirectory.resolvingSymlinksInPath()
+    for link in Instructions.localLinks(in: text) {
+      func problem(_ reason: String) {
+        problems.append(
+          InstructionLinkProblem(target: key, destination: link.destination, reason: reason))
+      }
+      guard link.kind != .html else {
+        problem("is a raw HTML link; use a Markdown link")
+        continue
+      }
+      guard let path = link.path, !path.isEmpty else {
+        problem("has an empty destination")
+        continue
+      }
+      guard store.scope == .project else {
+        problem("points to a local file; user instructions cannot link to local files")
+        continue
+      }
+      let resolved =
+        (path.hasPrefix("/")
+        ? URL(fileURLWithPath: path)
+        : file.deletingLastPathComponent().appendingPathComponent(path))
+        .standardizedFileURL.resolvingSymlinksInPath()
+      guard PathSafety.isContained(resolved, in: root), resolved != root else {
+        problem("points outside the checkout being written")
+        continue
+      }
+      var isDirectory: ObjCBool = false
+      guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &isDirectory),
+        !isDirectory.boolValue
+      else {
+        problem("does not resolve to an existing file")
+        continue
+      }
+      var cursor = resolved.deletingLastPathComponent()
+      while cursor.path.count > root.path.count {
+        if FileManager.default.fileExists(atPath: cursor.appendingPathComponent(".git").path) {
+          problem("points into another repository or worktree")
+          break
+        }
+        cursor.deleteLastPathComponent()
+      }
+    }
+    return problems
   }
 
   func claudeFiles() throws -> [ClaudeInstructionFile] {
@@ -114,18 +211,22 @@ struct InstructionTargets {
     }
   }
 
+  /// Rejects targets inside an instructions container of a local source.
   static func validateSourceDirectories(
     _ changes: [InstructionTargetChange], sources: [String: LockedSource]
   ) throws {
     for source in sources where source.value.kind == .local {
       let root = URL(fileURLWithPath: String(source.key.dropFirst("local:".count)))
       let search = try PathSafety.resolvedChild(base: root, subpath: source.value.path ?? ".")
-      for container in ["instructions", ".agents/instructions"] {
+      for container in InstructionSources.containers {
         let directory = search.appendingPathComponent(container).resolvingSymlinksInPath()
-        guard !changes.contains(where: { $0.url.deletingLastPathComponent() == directory })
+        guard
+          !changes.contains(where: {
+            PathSafety.isContained($0.url.resolvingSymlinksInPath(), in: directory)
+          })
         else {
           throw CoreError.unsafePath(
-            "a source instructions directory cannot be an instruction target")
+            "a source instructions container cannot hold an instruction target")
         }
       }
     }
@@ -143,7 +244,7 @@ struct InstructionTargets {
   }
 
   private static func importBlock(in bytes: Data, at path: ClaudeInstructionPath) throws
-    -> InstructionAssembly
+    -> (bytes: Data, blockHash: String)
   {
     let document = try MarkdownDocument(bytes: bytes)
     let old = try document.managedBlock()
@@ -156,14 +257,6 @@ struct InstructionTargets {
     let block = ClaudeForwarding.renderBlock(for: path)
     let output = Instructions.separatedPrefix(before) + block + (after.isEmpty ? "" : "\n" + after)
     try Instructions.validateAssembly(output, expected: block)
-    let previous = old.map { document.normalized($0) }
-    return InstructionAssembly(
-      bytes: document.byteOrderMark + Data(output.utf8), headingOffset: 0,
-      block: block, blockHash: Instructions.hash(Data(block.utf8)), adoptedSections: [],
-      conflicts: [],
-      blockDifference: previous.flatMap {
-        $0 == block ? nil : Instructions.difference(from: $0, to: block)
-      },
-      hasCustomContent: !before.isEmpty || !after.isEmpty)
+    return (document.byteOrderMark + Data(output.utf8), Instructions.hash(Data(block.utf8)))
   }
 }

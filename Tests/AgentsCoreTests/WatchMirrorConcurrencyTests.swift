@@ -65,7 +65,7 @@ struct WatchMirrorConcurrencyTests {
       try #require(!exists(scopeLock))
       try FileManager.default.removeItem(
         at: fixture.root.appendingPathComponent("listing-finished"))
-      try Data("# Rule\nupdated\n".utf8).write(
+      try Data("---\ndescription: Fixture instructions.\n---\n# Rule\nupdated\n".utf8).write(
         to: fixture.repo.appendingPathComponent("instructions/rule.md"))
       try fixture.git(["commit", "-am", "update"])
     }

@@ -140,8 +140,9 @@ struct ReadOnlyInspectionTests {
     let instructions = fixture.repo.appendingPathComponent("instructions")
     try FileManager.default.createDirectory(at: instructions, withIntermediateDirectories: true)
     for name in ["one", "two"] {
-      try Data("# \(name)\n\nInstructions\n".utf8).write(
-        to: instructions.appendingPathComponent(name + ".md"))
+      try Data("---\ndescription: Fixture instructions.\n---\n# \(name)\n\nInstructions\n".utf8)
+        .write(
+          to: instructions.appendingPathComponent(name + ".md"))
     }
     try fixture.commit()
     for directory in [fixture.environment.projectDirectory, fixture.environment.homeDirectory] {
@@ -206,8 +207,9 @@ struct ReadOnlyInspectionTests {
     let instructions = fixture.repo.appendingPathComponent("instructions")
     try FileManager.default.createDirectory(at: instructions, withIntermediateDirectories: true)
     for name in ["one", "two"] {
-      try Data("# \(name)\n\nInstructions\n".utf8).write(
-        to: instructions.appendingPathComponent(name + ".md"))
+      try Data("---\ndescription: Fixture instructions.\n---\n# \(name)\n\nInstructions\n".utf8)
+        .write(
+          to: instructions.appendingPathComponent(name + ".md"))
     }
     try fixture.commit()
     let revision = try fixture.head()
@@ -292,7 +294,7 @@ struct ReadOnlyInspectionTests {
     try fixture.skill("demo", body: "Original")
     let instructions = fixture.repo.appendingPathComponent("instructions")
     try FileManager.default.createDirectory(at: instructions, withIntermediateDirectories: true)
-    try Data("# Rules\n\nInstructions\n".utf8).write(
+    try Data("---\ndescription: Fixture instructions.\n---\n# Rules\n\nInstructions\n".utf8).write(
       to: instructions.appendingPathComponent("rules.md"))
     try fixture.commit()
     let source = SourceDeclaration(

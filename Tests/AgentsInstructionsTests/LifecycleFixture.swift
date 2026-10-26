@@ -45,10 +45,33 @@ final class InstructionFixture {
     try Data(text.utf8).write(to: file)
   }
 
-  func section(_ name: String, body: String = "Original", container: String = "instructions") throws
+  func section(
+    _ name: String, body: String = "Original", container: String = "instructions",
+    heading: String? = nil, paths: [String] = []
+  ) throws {
+    try write(
+      unitText(name, body: body, heading: heading, paths: paths),
+      to: repo.appendingPathComponent(container + "/" + name + ".md"))
+  }
+
+  /// Writes one of the project's own instructions files in `.agent/instructions/`.
+  func own(_ name: String, body: String = "Original", heading: String? = nil, paths: [String] = [])
+    throws
   {
     try write(
-      "# \(name)\n\n\(body)\n", to: repo.appendingPathComponent(container + "/" + name + ".md"))
+      unitText(name, body: body, heading: heading, paths: paths),
+      to: project.appendingPathComponent(".agent/instructions/" + name + ".md"))
+  }
+
+  @discardableResult
+  func addOwn(
+    names: [String], agents: [AgentID]? = nil, replace: Bool = false,
+    environment: RuntimeEnvironment? = nil
+  ) throws -> InstructionAddOutcome {
+    try InstructionOperations.add(
+      InstructionAddOptions(
+        source: ".", names: names, replace: replace, agents: agents,
+        environment: environment ?? self.environment))
   }
 
   @discardableResult
@@ -107,6 +130,23 @@ final class InstructionFixture {
     }
     return result
   }
+}
+
+/// An instructions file: front matter, then the body under `heading`, by default `# <name>`.
+func unitText(
+  _ name: String, body: String = "Original", heading: String? = nil, paths: [String] = [],
+  description: String? = nil
+) -> String {
+  var front = "---\ndescription: \(description ?? "Instructions for \(name).")\n"
+  if !paths.isEmpty {
+    front += "paths: [" + paths.map { "\"\($0)\"" }.joined(separator: ", ") + "]\n"
+  }
+  return front + "---\n" + (heading ?? "# \(name)") + "\n\n" + body + "\n"
+}
+
+/// A generated target: the notice, then each section body, one blank line apart.
+func generated(_ bodies: [String]) -> String {
+  ([Instructions.notice] + bodies).joined(separator: "\n\n") + "\n"
 }
 
 private func removeTemporaryDirectory(_ directory: URL) {

@@ -148,6 +148,21 @@ struct WatchSubscriptionTests {
     #expect(Set(status.changes.map(\.name)) == ["inside", "rule"])
   }
 
+  @Test func namesNestedInstructionsByTheirContainerPath() throws {
+    let fixture = try SkillFixture()
+    try write(fixture.repo.appendingPathComponent("instructions/epd/review.md"), "old")
+    try write(fixture.repo.appendingPathComponent("instructions/notes.txt"), "ignored")
+    try fixture.commit()
+    let watch = SkillOperations.watchOperations()
+    try watch.add(fixture.repo.path, alias: "source", environment: fixture.environment)
+    try write(fixture.repo.appendingPathComponent("instructions/epd/review.md"), "new")
+    try write(fixture.repo.appendingPathComponent("instructions/notes.txt"), "still ignored")
+    try fixture.commit()
+    let status = try #require(watch.status(environment: fixture.environment).first)
+    #expect(status.changes.map(\.name) == ["epd/review"])
+    #expect(status.changes.first?.newPath == "instructions/epd/review.md")
+  }
+
   @Test func retainsSeenHistoryAcrossForcePushAndMirrorGarbageCollection() throws {
     let fixture = try SkillFixture()
     try fixture.skill("old", body: "old")
