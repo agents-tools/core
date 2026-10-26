@@ -80,7 +80,7 @@ public enum InstructionError: Error, Sendable, Equatable, CustomStringConvertibl
     case .invalidAssembly:
       return "The assembled Markdown does not have the expected structure."
     case .invalidLockedBlock:
-      return "The locked content does not match its recorded hash."
+      return "The lock's targets or recorded hashes do not match what its sections render."
     case .invalidLinks(let problems):
       return problems.map { "\($0.target): link '\($0.destination)' \($0.reason)" }
         .joined(separator: "\n")

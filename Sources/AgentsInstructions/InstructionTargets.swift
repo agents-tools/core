@@ -73,10 +73,15 @@ struct InstructionTargets {
         guard store.scope == .project, let path = ClaudeInstructionPath(rawValue: key),
           reference == String(path.importLine.dropFirst())
         else { throw CoreError.invalidState("invalid Claude forwarding target") }
-        let edit = try Self.importBlock(in: before ?? Data(), at: path)
-        after = edit.bytes
-        targets[key]?.blockHash = edit.blockHash
-        targets[key]?.created = old?.created ?? (before == nil)
+        if restoring, before == nil {
+          // The owner deleted the Claude file; install does not recreate it.
+          after = nil
+        } else {
+          let edit = try Self.importBlock(in: before ?? Data(), at: path)
+          after = edit.bytes
+          targets[key]?.blockHash = edit.blockHash
+          targets[key]?.created = old?.created ?? (before == nil)
+        }
       } else if let text = rendered[key] {
         guard store.scope == .user || directoryExists(of: file) else {
           throw CoreError.notFound("the directory of instruction target \(key)")

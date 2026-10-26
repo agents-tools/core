@@ -29,20 +29,22 @@ and a pattern that starts with a wildcard yields the project root.
 Discovery reads `.md` files below `instructions/` and `.agents/instructions/`
 of the source's search `path`, recursively. A name is the container-relative
 path without `.md`; each segment uses lowercase letters, digits and hyphens.
-`AGENTS.md` and `GEMINI.md` are target names, so discovery skips them; a
-project can scope sections to its own container. A symbolic link at or below
+`AGENTS.md` and `GEMINI.md` are target names, so discovery and watch skip them;
+a file another scope generated in a container is never read as an instructions
+file. A symbolic link at or below
 the search path, an invalid name and a name in both containers are errors.
 Instructions require Git sources. Local sources identify the repository root;
 use `path` to move its search root. Discovery reads committed trees even when
 the working tree is dirty. Each section and prompt section has its own
-revision, path and original-byte hash. Source containers cannot hold targets.
+revision, path and original-byte hash. A container of a local source declared
+in the same scope cannot hold a target.
 
 A project's own files live in `.agent/instructions/` and are referenced by bare
 name; `alias:name` references a declared source. Own files are read from the
 working tree as it is. Their lock records have source `.`, the project-relative
 path and the hash, and no revision. Resolution and restore read only the named
-file, `.agent/instructions/<name>.md`, so other files in the container do not
-affect them. Restoring a lock fails with `InstructionError.ownChanged` when an
+file, `.agent/instructions/<name>.md`, and so does adding named files, so other
+files in the container affect only listing. Restoring a lock fails with `InstructionError.ownChanged` when an
 own file's hash changed; update reads the current file.
 
 `add(InstructionAddOptions, beforeApply:)` accepts a source alias or string,
@@ -136,12 +138,14 @@ are not modified, and doctor reports one that hides a generated target.
 An `agents` argument sets the complete instruction recipient list. A name to
 remove that equals a declared reference, such as an own file's bare name or
 `alias:name`, selects that reference; another bare name must match exactly one
-source reference. Removal also removes those sections from prompts.
+source reference. Removal also removes those sections from prompts. Empty
+prompts are removed. Other source declarations and skill records remain
+available to their owners.
+
 Export maps a user target to every locked section from the lock alone. A
 project section's placement needs its `paths`, read from the working tree or
 the cache without fetching; a section whose content is unavailable is listed as
-unplaced. Empty prompts are removed. Other source
-declarations and skill records remain available to their owners.
+unplaced.
 
 Planning validates required content before applying. Reports include old and
 new section records, target before/after bytes and recipients, drift, foreign
@@ -187,7 +191,8 @@ including in projects with no state directory.
 
 Install renders the locked sections into the locked targets and Claude import
 files, verifies every rendering against its locked hash before replacement, and
-restores drifted files; it never recomputes forwarding or placement. Lost-lock update
+restores drifted files; it never recomputes forwarding or placement, and a
+locked Claude import file the owner deleted stays deleted. Lost-lock update
 reports the comparison; apply keeps identical files, replaces differing
 generated files, takes over others only with `replace`, and records targets as
 `created: false`. Without a lock entry a file is never deleted.

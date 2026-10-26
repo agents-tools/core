@@ -30,6 +30,19 @@ struct OwnershipAndPlacementTests {
     #expect(try fixture.text() == generated(["# rules\n\nOriginal"]))
   }
 
+  @Test func retiringATargetNeverWritesOverAFileThatDiffersFromItsLock() throws {
+    let fixture = try InstructionFixture()
+    try fixture.own("guide")
+    try fixture.addOwn(names: ["guide"])
+    let handWritten = "# Project\n\nHand notes.\n"
+    try fixture.write(handWritten, to: fixture.project.appendingPathComponent("AGENTS.md"))
+    let report = try InstructionOperations.remove(
+      names: ["guide"], environment: fixture.environment)
+    #expect(report.targets.first?.changed == false)
+    #expect(try fixture.text() == handWritten)
+    #expect(try fixture.store().loadResolved().instructions.targets.isEmpty)
+  }
+
   @Test func removeSelectsTheDeclaredReferenceBeforeASourceName() throws {
     let fixture = try InstructionFixture()
     try fixture.section("guide", heading: "# Shared Guide")
@@ -62,7 +75,7 @@ struct OwnershipAndPlacementTests {
     }
   }
 
-  @Test func installRestoresTheLockedClaudeImport() throws {
+  @Test func installKeepsTheLockedClaudeImportWithoutRecomputingIt() throws {
     let fixture = try InstructionFixture()
     try fixture.section("rules")
     try fixture.commit()
@@ -75,9 +88,10 @@ struct OwnershipAndPlacementTests {
     try FileManager.default.removeItem(at: directory)
     let root = fixture.project.appendingPathComponent("CLAUDE.md")
     try fixture.write("# Root\n", to: root)
-    _ = try InstructionOperations.installResolvedReport(environment: fixture.environment)
+    let report = try InstructionOperations.installResolvedReport(environment: fixture.environment)
+    #expect(report.targets.first { $0.target == ".claude/CLAUDE.md" }?.drift == .missing)
     #expect(try String(contentsOf: root, encoding: .utf8) == "# Root\n")
-    #expect(try String(contentsOf: directory, encoding: .utf8).contains("@../AGENTS.md"))
+    #expect(!FileManager.default.fileExists(atPath: directory.path))
   }
 
   @Test func unrelatedOwnFilesDoNotAffectLockedOrSelectedOnes() throws {
@@ -94,10 +108,13 @@ struct OwnershipAndPlacementTests {
     #expect(throws: InstructionError.self) {
       try InstructionOperations.listOwn(environment: fixture.environment)
     }
+    try fixture.own("second")
+    try fixture.addOwn(names: ["second"])
+    #expect(throws: InstructionError.self) { try fixture.addOwn(names: []) }
     let mapping = InstructionOperations.export(
       projectRoots: [fixture.project], environment: fixture.environment)[1]
     #expect(mapping.unplaced.isEmpty)
-    #expect(mapping.targets.map { $0.sections.map(\.name) } == [["guide"]])
+    #expect(mapping.targets.map { $0.sections.map(\.name) } == [["guide", "second"]])
   }
 
   @Test func ownInstructionsContainerCannotBeASymbolicLink() throws {

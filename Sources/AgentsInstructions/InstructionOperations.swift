@@ -35,7 +35,10 @@ public enum InstructionOperations {
       if options.source == InstructionSources.own {
         id = InstructionSources.own
         alias = nil
-        available = try sources.own()
+        // Named files are read alone, so an unfinished draft beside them does not stop the add.
+        available =
+          options.names.isEmpty || options.listOnly
+          ? try sources.own() : try options.names.map(sources.own(named:))
       } else {
         let source: SourceDeclaration
         do {

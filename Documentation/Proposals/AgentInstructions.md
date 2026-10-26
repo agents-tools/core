@@ -136,7 +136,9 @@ paths: ["Sources/**/*.swift"]
   names a file, such as "run the checks in `CONTRIBUTING.md`", refers to the
   target's own files.
 
-A source's instructions container is never itself a target location.
+A container of a local source declared in the same scope is never a target
+location. Discovery skips `AGENTS.md` and `GEMINI.md`, so a file another scope
+generates in a container is never read as an instructions file.
 
 | Source kind | Pinned by | Notes |
 | --- | --- | --- |

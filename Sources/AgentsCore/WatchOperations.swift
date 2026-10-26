@@ -349,7 +349,10 @@ public struct WatchOperations: Sendable {
               try collect(handle.child(file), prefix: prefix + file + "/")
               continue
             }
-            guard file.hasSuffix(".md") else { continue }
+            // Target names are never instructions files, as in discovery.
+            guard file.hasSuffix(".md"), !["AGENTS.md", "GEMINI.md"].contains(file) else {
+              continue
+            }
             let key = WatchItemKey(kind: .instructions, name: prefix + String(file.dropLast(3)))
             guard result[key] == nil else {
               throw CoreError.invalidSource("duplicate instructions name: \(key.name)")
