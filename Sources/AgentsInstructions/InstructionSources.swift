@@ -88,15 +88,30 @@ final class InstructionSources {
     return units
   }
 
+  /// One of the project's own instructions, read from the working tree as it is. Other files in
+  /// the container are not read, so an unfinished draft affects only operations that list them.
+  func own(named name: String) throws -> InstructionUnit {
+    guard store.scope == .project else {
+      throw CoreError.invalidState("own instructions exist only in project scope")
+    }
+    let project = store.environment.projectDirectory.resolvingSymlinksInPath()
+    let path = Self.ownContainer + "/" + name + ".md"
+    let file = project.appendingPathComponent(path)
+    guard Declaration.isInstructionName(name), FileManager.default.fileExists(atPath: file.path)
+    else { throw CoreError.notFound("own instructions file: \(name)") }
+    try Self.requireNoLinks(file, below: project)
+    let section = try Instructions.validateSource(Data(contentsOf: file), id: name)
+    return InstructionUnit(
+      record: LockedSection(name: name, source: Self.own, path: path, hash: section.hash),
+      section: section)
+  }
+
   func resolve(
     references: [String], declaration: Declaration, lock: inout ResolvedState
   ) throws -> [InstructionUnit] {
     try references.map { reference in
       guard let (alias, name) = Self.split(reference) else {
-        guard let unit = try own().first(where: { $0.record.name == reference }) else {
-          throw CoreError.notFound("own instructions file: \(reference)")
-        }
-        return unit
+        return try own(named: reference)
       }
       guard let source = declaration.sources[alias] else {
         throw CoreError.invalidState("invalid instruction reference: \(reference)")
@@ -116,7 +131,7 @@ final class InstructionSources {
   {
     try records.map { record in
       if record.source == Self.own {
-        guard let unit = try own().first(where: { $0.record.path == record.path }),
+        guard let unit = try? own(named: record.name), unit.record.path == record.path,
           unit.record.hash == record.hash
         else { throw InstructionError.ownChanged(name: record.name) }
         return unit
@@ -184,10 +199,25 @@ final class InstructionSources {
     }
   }
 
-  /// The `.md` files below a container, by name. Symbolic links and invalid names are errors.
+  /// Rejects a symbolic link at `url` or at any directory between `tree` and it.
+  private static func requireNoLinks(_ url: URL, below tree: URL) throws {
+    var cursor = tree
+    for component in PathSafety.relativePath(url.path, to: tree.path).split(separator: "/") {
+      cursor.appendPathComponent(String(component))
+      if (try? FileManager.default.destinationOfSymbolicLink(atPath: cursor.path)) != nil {
+        throw CoreError.invalidSource(
+          "instructions containers hold no symbolic links: \(PathSafety.relativePath(cursor.path, to: tree.path))"
+        )
+      }
+    }
+  }
+
+  /// The `.md` files below a container, by name, except the target names `AGENTS.md` and
+  /// `GEMINI.md`, which a project may generate there. Symbolic links and invalid names are errors.
   private static func files(in directory: URL, tree: URL) throws -> [(String, URL)] {
     guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
     try contained(directory, in: tree)
+    try requireNoLinks(directory, below: tree)
     var result: [(String, URL)] = []
     func walk(_ directory: URL, prefix: String) throws {
       let keys: [URLResourceKey] = [.isSymbolicLinkKey, .isDirectoryKey, .isRegularFileKey]
@@ -202,7 +232,9 @@ final class InstructionSources {
         }
         if values.isDirectory == true {
           try walk(entry, prefix: prefix + component + "/")
-        } else if values.isRegularFile == true, entry.pathExtension == "md" {
+        } else if values.isRegularFile == true, entry.pathExtension == "md",
+          !["AGENTS.md", "GEMINI.md"].contains(component)
+        {
           let name = prefix + entry.deletingPathExtension().lastPathComponent
           guard Declaration.isInstructionName(name) else {
             throw CoreError.invalidSource(

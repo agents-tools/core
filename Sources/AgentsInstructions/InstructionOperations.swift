@@ -164,8 +164,7 @@ public enum InstructionOperations {
         try plan.validate()
         let transaction = FileTransaction(store: store)
         try plan.stage(transaction: transaction)
-        try transaction.replace(
-          store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
+        try store.stageDeclaration(declaration, in: transaction)
         try transaction.replace(
           store.resolvedURL, content: nil, data: StateStore.encode(plan.next.normalized))
         try SourceCache(store: store).prune(referencedBy: plan.next, transaction: transaction)
@@ -209,13 +208,15 @@ public enum InstructionOperations {
         sections: [], targets: targets.changes, changedPrompts: [],
         lockMissing: !FileManager.default.fileExists(atPath: store.resolvedURL.path),
         hasChanges: targets.changes.contains(where: \.changed))
+      try requireOwnership(report)
       try apply(
         declaration: declaration, next: lock, report: report, sources: sources, writeState: false)
       return report
     }
   }
 
-  /// Removes selected identities from file targets and named prompts. Bare names must be unambiguous.
+  /// Removes selected references from file targets and named prompts. A name equal to a declared
+  /// reference selects it; another bare name must match exactly one source reference.
   @discardableResult
   public static func remove(
     names: [String], scope: InstallScope = .project, agents: [AgentID]? = nil,
@@ -230,9 +231,12 @@ public enum InstructionOperations {
         instructions.sections + (instructions.chatgpt ?? [:]).values.flatMap(\.sections))
       var removed = Set<String>()
       for name in names {
-        let matches = references.filter {
-          $0 == name || $0.split(separator: ":").last.map(String.init) == name
-        }
+        // A declared reference matches itself, such as an own file's bare name; otherwise a bare
+        // name matches a source reference with that name.
+        let exact = references.filter { $0 == name }
+        let matches =
+          exact.isEmpty
+          ? references.filter { InstructionSources.split($0)?.name == name } : exact
         guard matches.count == 1, let reference = matches.first else {
           throw CoreError.notFound("instruction name is missing or ambiguous: \(name)")
         }
@@ -424,8 +428,7 @@ public enum InstructionOperations {
         if change.changed { try transaction.replace(change.url, content: nil, data: change.after) }
       }
       if writeState {
-        try transaction.replace(
-          store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
+        try store.stageDeclaration(declaration, in: transaction)
         try transaction.replace(
           store.resolvedURL, content: nil, data: StateStore.encode(next.normalized))
       }

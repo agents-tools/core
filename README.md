@@ -214,7 +214,7 @@ by bare name. `InstructionOperations` generates whole target files from them:
   locked rendering.
 - `renderChatGPT(prompt:...)` renders locked sections plus a custom append file.
   Prompts live in `instructions.chatgpt`.
-- `doctor(...)` checks missing, drifted and hand-written targets, changed own
+- `doctor(...)` checks missing, drifted and unowned locked targets, changed own
   files, links, scope duplication, Claude forwarding, Codex overrides and the
   project size budget, newer matching source revisions and uncommitted sources.
   Its `projectRoots` overload audits explicit projects without writing.

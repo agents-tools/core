@@ -56,7 +56,8 @@ struct InstructionLifecycleSafetyTests {
     _ = try InstructionOperations.installResolvedReport(environment: fixture.environment)
     #expect(try fixture.bytes() == locked)
     try fixture.write(
-      "## rules\n\nEdited.\n", to: fixture.project.appendingPathComponent("AGENTS.md"))
+      Instructions.notice + "\n\n## rules\n\nEdited.\n",
+      to: fixture.project.appendingPathComponent("AGENTS.md"))
     let report = try InstructionOperations.installResolvedReport(environment: fixture.environment)
     #expect(report.targets.first?.drift == .drifted)
     #expect(try fixture.bytes() == locked)

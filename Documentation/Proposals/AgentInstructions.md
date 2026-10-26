@@ -442,8 +442,8 @@ target or checked-out revision. They may fetch new objects into a source
 mirror.
 
 `doctor` reports missing installs, drifted skill copies, missing or drifted
-targets, existing files in target locations that agents did not generate, own
-instructions changed since the lock, invalid instructions files and links,
+targets, locked targets that agents did not generate, own instructions changed
+since the lock, links in the locked renderings that no longer resolve,
 sources with newer matching versions, local sources with uncommitted changes in
 selected paths, sections installed at both scopes, Claude Code forwarding
 problems, and a Codex `AGENTS.override.md` that hides a managed `AGENTS.md`.
@@ -491,7 +491,11 @@ above it. When `claude-code` is a target in project scope:
   formatted tokens, and quoted tokens do not count;
 - a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` in a directory above
   the project root is outside the project; `doctor` warns about it and nothing
-  is written. User-level and managed-policy files do not count.
+  is written. User-level and managed-policy files do not count;
+- Claude Code reads a nested `AGENTS.md` only while no such file exists at the
+  project root or in that directory, unless the directory's own Claude file
+  imports it. Nested Claude files are not written; `doctor` reports one, or a
+  root Claude file, that keeps a generated nested `AGENTS.md` from loading.
 
 ## Writing Targets
 
@@ -529,10 +533,10 @@ Read `README.md` first.
 4. The assembled target is parsed before it is written. Each section's first
    heading must remain a document-level heading, and its links must satisfy
    the rules under Sources; otherwise nothing is written.
-5. A file is owned when the lock records it as a target or its first line is
-   the notice. Writing over an existing file that is not owned requires
-   `--replace`, after its difference is shown; otherwise `add` and
-   `update --apply` stop and name the file.
+5. A file is owned when it is blank or its first line is the notice; a lock
+   entry alone does not make it owned. Writing over an existing file that is
+   not owned requires `--replace`, after its difference is shown; otherwise
+   `add`, `update --apply`, `remove` and `install` stop and name the file.
 6. A section's `hash` covers the instructions file's bytes. `blockHash` covers
    the rendered target with LF endings. Any difference between a target and its
    locked rendering is drift: `doctor` reports it, `install` restores the

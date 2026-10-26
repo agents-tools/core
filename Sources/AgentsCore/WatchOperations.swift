@@ -170,8 +170,7 @@ public struct WatchOperations: Sendable {
     try watch.validate()
     let transaction = FileTransaction(store: store, checkpoint: checkpoint)
     if let declaration {
-      try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
+      try store.stageDeclaration(declaration, in: transaction)
     }
     try transaction.replace(store.watchURL, content: nil, data: StateStore.encode(watch))
     try SourceCache(store: store).prune(referencedBy: lock, watch: watch, transaction: transaction)

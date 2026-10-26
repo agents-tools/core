@@ -275,11 +275,11 @@ state, transactions, concurrency, requirements, mirrors, snapshots, hashes and
 agent paths. Skill tests cover discovery, artifact formats and the full declared
 lifecycle, including public consumer calls and failed-operation preservation.
 Fixtures create isolated homes and explicit Git initial branches and remove
-their temporary roots. Instruction tests cover source validation, managed-block
-assembly and removal, byte preservation, drift, Claude forwarding, and ChatGPT
-rendering through public APIs with in-memory fixtures. Lifecycle tests cover
-pinned sources, physical targets, transactional writes, conflict stops, lost
-locks, prompts, deletion ownership and read-only multi-root audits.
+their temporary roots. Instruction tests cover the instructions file format,
+generation, link checks, Claude forwarding and ChatGPT rendering through public
+APIs with in-memory fixtures. Lifecycle tests cover pinned sources, own
+instructions, nested and physical targets, transactional writes, ownership
+stops, lost locks, prompts, deletion, export and read-only multi-root audits.
 
 [State and cache](State.md) describes persisted data and lifecycle invariants.
 `../Proposals/` holds design work; `../Decisions/`, `../Migrations/` and

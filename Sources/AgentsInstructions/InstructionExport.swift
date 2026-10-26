@@ -24,7 +24,8 @@ public struct InstructionMapping: Sendable, Equatable {
   public let root: URL
   public let status: Status
   public let targets: [Target]
-  /// Locked sections whose placement cannot be read, such as an own file changed since the lock.
+  /// Project sections whose placement needs content that is not available without fetching: an
+  /// own file changed since the lock, or a source section missing from the cache.
   public let unplaced: [LockedSection]
   public let prompts: [String: [LockedSection]]
 }
@@ -66,12 +67,14 @@ extension InstructionOperations {
           let sources = InstructionSources(store: store)
           var directories: [String: String] = [:]
           var unplaced: [LockedSection] = []
+          // User targets receive every section, so their placement needs no content.
           for record in lock.instructions.sections {
-            if let unit = try? sources.restore([record], sources: lock.sources, cachedOnly: true)
-              .first
-            {
-              directories[InstructionSources.identity(record)] =
-                scope == .project ? unit.section.directory : ""
+            if scope == .user {
+              directories[InstructionSources.identity(record)] = ""
+            } else if let unit = try? sources.restore(
+              [record], sources: lock.sources, cachedOnly: true
+            ).first {
+              directories[InstructionSources.identity(record)] = unit.section.directory
             } else {
               unplaced.append(record)
             }

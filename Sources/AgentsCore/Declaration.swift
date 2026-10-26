@@ -198,6 +198,19 @@ public struct Declaration: Codable, Equatable, Sendable {
     self.watch = watch
   }
 
+  /// A missing `sources` key means no declared sources, as in a project that selects only its
+  /// own instructions.
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    agents = try container.decodeIfPresent([AgentID].self, forKey: .agents)
+    sources =
+      try container.decodeIfPresent([String: SourceDeclaration].self, forKey: .sources) ?? [:]
+    skills = try container.decodeIfPresent([String: SkillDeclaration].self, forKey: .skills)
+    instructions = try container.decodeIfPresent(
+      InstructionsDeclaration.self, forKey: .instructions)
+    watch = try container.decodeIfPresent([String].self, forKey: .watch)
+  }
+
   public var defaultAgents: [AgentID] { agents ?? [.codex, .claudeCode] }
 
   public func validate(environment: RuntimeEnvironment) throws {

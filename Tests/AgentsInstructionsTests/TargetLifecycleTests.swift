@@ -45,6 +45,23 @@ struct TargetLifecycleTests {
       })
   }
 
+  @Test func updatesKeepADeclarationWhoseContentIsUnchanged() throws {
+    let fixture = try InstructionFixture()
+    try fixture.own("guide")
+    let declaration =
+      "{\n  \"instructions\": {\"agents\": [\"codex\"], \"sections\": [\"guide\"]}\n}\n"
+    let file = fixture.store().declarationURL
+    try fixture.write(declaration, to: file)
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+    #expect(try String(contentsOf: file, encoding: .utf8) == declaration)
+    #expect(try fixture.text() == generated(["# guide\n\nOriginal"]))
+    _ = try InstructionOperations.updateInstalled(
+      agents: [.codex, .geminiCLI], environment: fixture.environment, apply: true)
+    #expect(
+      try fixture.store().loadDeclaration().instructions?.agents == [.codex, .geminiCLI])
+    #expect(try String(contentsOf: file, encoding: .utf8) != declaration)
+  }
+
   @Test func pathsPlaceSectionsInNestedTargets() throws {
     let fixture = try InstructionFixture()
     try FileManager.default.createDirectory(

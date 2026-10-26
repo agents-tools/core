@@ -29,7 +29,9 @@ and a pattern that starts with a wildcard yields the project root.
 Discovery reads `.md` files below `instructions/` and `.agents/instructions/`
 of the source's search `path`, recursively. A name is the container-relative
 path without `.md`; each segment uses lowercase letters, digits and hyphens.
-Symbolic links, invalid names and a name in both containers are errors.
+`AGENTS.md` and `GEMINI.md` are target names, so discovery skips them; a
+project can scope sections to its own container. A symbolic link at or below
+the search path, an invalid name and a name in both containers are errors.
 Instructions require Git sources. Local sources identify the repository root;
 use `path` to move its search root. Discovery reads committed trees even when
 the working tree is dirty. Each section and prompt section has its own
@@ -38,9 +40,10 @@ revision, path and original-byte hash. Source containers cannot hold targets.
 A project's own files live in `.agent/instructions/` and are referenced by bare
 name; `alias:name` references a declared source. Own files are read from the
 working tree as it is. Their lock records have source `.`, the project-relative
-path and the hash, and no revision. Restoring a lock fails with
-`InstructionError.ownChanged` when an own file's hash changed; update reads the
-current file.
+path and the hash, and no revision. Resolution and restore read only the named
+file, `.agent/instructions/<name>.md`, so other files in the container do not
+affect them. Restoring a lock fails with `InstructionError.ownChanged` when an
+own file's hash changed; update reads the current file.
 
 `add(InstructionAddOptions, beforeApply:)` accepts a source alias or string,
 or `.` for own files, plus an optional alias, requirement, search path, ordered
@@ -74,19 +77,23 @@ document heading.
 
 In project scope, sections are grouped by `directory`: each group renders into
 the `AGENTS.md`, or `GEMINI.md`, of that directory, which must already exist.
+No component of a nested target's directory may be a symbolic link or `.git`,
+or hold another repository or worktree.
 User scope renders all sections into each recipient's file. Project keys are
 relative to the project root, and a nested key names `AGENTS.md` or `GEMINI.md`
-in a directory outside `.git` and `.agent`; user keys are `~/`-relative to the
+in a directory outside any `.git` and the top-level `.agent`; user keys are `~/`-relative to the
 supplied home, and configured user locations outside home use absolute keys.
 Locked destinations must remain registered instruction locations in the
 runtime environment; lock contents cannot authorize arbitrary writes.
 Configured user containers may resolve through symlinks. Journal validation
 opens project descendants without following links.
 
-A file is owned when the lock records it or `Instructions.isGenerated` finds the
-notice on its first line. A planned write over an existing file that is not
-owned marks the change `foreign`; add, update apply and combined apply stop with
-`InstructionError.unownedTargets` unless `replace` is set. A locked target that
+A file is owned when `Instructions.isOwned` finds it blank or finds the notice
+on its first line; a lock entry alone does not make a file owned. A planned
+write over an existing file that is not owned marks the change `foreign`; add,
+update apply, combined apply, remove and install stop with
+`InstructionError.unownedTargets` unless `replace` is set, which install does
+not offer. A locked target that
 no longer receives sections is deleted while its bytes equal the locked
 rendering and kept otherwise. Unit targets lock `headingOffset: 0`,
 `created: false` and the rendered file's hash as `blockHash`.
@@ -105,7 +112,10 @@ also suffices. Otherwise, when the root `AGENTS.md` is a target, the first
 existing file in `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` order
 receives a managed import block: `@AGENTS.md` or `@../AGENTS.md`, relative to
 its containing file. No project Claude file means automatic forwarding.
-Ancestor files are reported and never modified.
+Ancestor files are reported and never modified. Claude Code reads a nested
+`AGENTS.md` only while no Claude file exists at the project root or in that
+directory, unless that directory's Claude file imports it; nested Claude files
+are not modified, and doctor reports one that hides a generated target.
 
 ## Operations and Mutation Contract
 
@@ -123,9 +133,14 @@ Ancestor files are reported and never modified.
 | `doctor(projectRoots:environment:codexConfiguration:)` | Audit explicit project roots without writing |
 | `export(projectRoots:environment:)` | Map the user scope's and each root's locked targets to their sections without writing |
 
-An `agents` argument sets the complete instruction recipient list. Removing
-names accepts `alias:name` references or unambiguous bare names and removes
-those sections from prompts as well. Empty prompts are removed. Other source
+An `agents` argument sets the complete instruction recipient list. A name to
+remove that equals a declared reference, such as an own file's bare name or
+`alias:name`, selects that reference; another bare name must match exactly one
+source reference. Removal also removes those sections from prompts.
+Export maps a user target to every locked section from the lock alone. A
+project section's placement needs its `paths`, read from the working tree or
+the cache without fetching; a section whose content is unavailable is listed as
+unplaced. Empty prompts are removed. Other source
 declarations and skill records remain available to their owners.
 
 Planning validates required content before applying. Reports include old and
@@ -170,8 +185,9 @@ publish materializations, declaration, lock or targets. Doctor and export read
 remote ref advertisements at most and do not fetch objects or create files,
 including in projects with no state directory.
 
-Install renders the locked sections, verifies every rendering against its
-locked hash before replacement, and restores drifted files. Lost-lock update
+Install renders the locked sections into the locked targets and Claude import
+files, verifies every rendering against its locked hash before replacement, and
+restores drifted files; it never recomputes forwarding or placement. Lost-lock update
 reports the comparison; apply keeps identical files, replaces differing
 generated files, takes over others only with `replace`, and records targets as
 `created: false`. Without a lock entry a file is never deleted.
@@ -192,9 +208,9 @@ ChatGPT.
 
 ## Diagnostics
 
-Doctor reports missing targets, drifted targets, files in target locations that
-agents did not generate, own files changed since the lock, links in the locked
-renderings that no longer resolve, invalid targets, missing locks, duplicate
+Doctor reports missing targets, drifted targets, locked targets that agents
+does not own, own files changed since the lock (including those only prompts
+use), links in the locked renderings that no longer resolve, invalid targets, missing locks, duplicate
 source-qualified sections across scopes, Claude forwarding and ancestor
 problems, and uncommitted selected local source paths. Git status uses
 `--no-optional-locks` to avoid index refresh writes. File and ChatGPT prompt pins

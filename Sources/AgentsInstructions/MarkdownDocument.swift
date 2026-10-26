@@ -36,7 +36,8 @@ struct MarkdownLine: Sendable, Equatable {
 struct MarkdownHeading: Sendable, Equatable {
   let level: Int
   let text: String
-  let lines: Range<Int>
+  /// The line where CommonMark starts the heading.
+  let line: Int
   /// UTF-8 offset of the ATX opening run, including container prefixes; nil for Setext.
   let openingOffset: Int?
   var isATX: Bool { openingOffset != nil }
@@ -72,27 +73,10 @@ struct MarkdownDocument: Sendable, Equatable {
     var pending: [(Markup, Bool)] = [(parsed, false)]
     while let (node, topLevel) = pending.popLast() {
       if let range = node.range, let heading = node as? Heading {
-        var first = range.lowerBound.line - 1
-        let opening = Self.atxOpening(in: lines[first].text, inContainer: !topLevel)
-        let end: Int
-        if opening != nil {
-          end = first + 1
-        } else if topLevel {
-          let contentStart = firstContentLine(
-            afterDefinitionsAt: first, before: min(range.upperBound.line, lines.count))
-          first = contentStart
-          // A Setext range can extend into the following block. Verify the physical underline.
-          end =
-            ((first + 1)..<lines.count).first {
-              Self.isSetextUnderline(lines[$0].text, level: heading.level)
-            }.map { $0 + 1 } ?? first + 1
-        } else {
-          // Container headings are never target boundaries; source validation rejects Setext.
-          end = first + 1
-        }
+        let first = range.lowerBound.line - 1
         let item = MarkdownHeading(
-          level: heading.level, text: heading.plainText, lines: first..<end,
-          openingOffset: opening)
+          level: heading.level, text: heading.plainText, line: first,
+          openingOffset: Self.atxOpening(in: lines[first].text, inContainer: !topLevel))
         headings.append(item)
         if topLevel { topLevelHeadings.append(item) }
       } else if let html = node as? HTMLBlock, topLevel, let range = html.range {
@@ -172,32 +156,6 @@ struct MarkdownDocument: Sendable, Equatable {
       end == bytes.count || bytes[end] == 32 || bytes[end] == 9
     else { return nil }
     return start
-  }
-
-  private static func isSetextUnderline(_ line: String, level: Int) -> Bool {
-    let bytes = Array(line.utf8)
-    let indentation = bytes.prefix(while: { $0 == 32 }).count
-    guard indentation <= 3 else { return false }
-    let marker: UInt8 = level == 1 ? 61 : 45
-    let run = bytes.dropFirst(indentation).prefix(while: { $0 == marker }).count
-    return run > 0 && bytes.dropFirst(indentation + run).allSatisfy { $0 == 32 || $0 == 9 }
-  }
-
-  private func firstContentLine(afterDefinitionsAt first: Int, before end: Int) -> Int {
-    guard lines[first].text.trimmingCharacters(in: .whitespaces).hasPrefix("[") else {
-      return first
-    }
-    // Complete definition-only prefixes produce no AST blocks. Testing physical prefixes also
-    // handles destinations and titles on later lines, without relying on logical inline ranges.
-    var prefix = ""
-    var contentStart = first
-    for line in first..<end {
-      prefix += lines[line].raw
-      if Document(parsing: prefix, options: [.disableSmartOpts]).childCount == 0 {
-        contentStart = line + 1
-      }
-    }
-    return contentStart
   }
 
   private static func terminalBlock(_ document: Markup) -> Markup {

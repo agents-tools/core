@@ -7,7 +7,7 @@ package enum InstructionLocations {
   ]
 
   /// Whether a project-relative path is a root instruction file, or a generated `AGENTS.md` or
-  /// `GEMINI.md` in a project directory outside `.git` and `.agent`.
+  /// `GEMINI.md` in a project directory outside any `.git` and the top-level `.agent`.
   package static func isProjectTarget(_ relative: String) -> Bool {
     if projectPaths.contains(relative) { return true }
     let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
@@ -15,8 +15,9 @@ package enum InstructionLocations {
     else { return false }
     let directories = parts.dropLast()
     return directories.allSatisfy {
-      !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\") && !$0.contains("\0")
-    } && directories.first != ".git" && directories.first != ".agent"
+      !$0.isEmpty && $0 != "." && $0 != ".." && $0 != ".git" && !$0.contains("\\")
+        && !$0.contains("\0")
+    } && directories.first != ".agent"
   }
 
   package static func file(

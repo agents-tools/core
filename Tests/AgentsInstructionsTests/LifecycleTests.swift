@@ -138,7 +138,13 @@ struct InstructionLifecycleTests {
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(try fixture.text() == generated(["# two\n\nOriginal", "# one\n\nUpstream"]))
     let applied = try fixture.bytes()
-    try fixture.write("Drift\n", to: fixture.project.appendingPathComponent("AGENTS.md"))
+    let file = fixture.project.appendingPathComponent("AGENTS.md")
+    try fixture.write("Drift\n", to: file)
+    #expect(throws: InstructionError.unownedTargets(["AGENTS.md"])) {
+      try InstructionOperations.installResolvedReport(environment: fixture.environment)
+    }
+    #expect(try fixture.text() == "Drift\n")
+    try fixture.write("\n", to: file)
     _ = try InstructionOperations.installResolvedReport(environment: fixture.environment)
     #expect(try fixture.bytes() == applied)
   }
@@ -253,7 +259,7 @@ struct InstructionLifecycleTests {
     }
   }
 
-  @Test func lostLockIsReportedAndIdenticalBlocksAreAdoptedWithoutDeletionOwnership() throws {
+  @Test func lostLockIsReportedAndUpdateRelocksIdenticalTargets() throws {
     let fixture = try InstructionFixture()
     try fixture.section("rules")
     try fixture.commit()

@@ -31,18 +31,33 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 - **Breaking:** targets are generated in full: a notice line followed by the
   sections. Custom content in targets, managed blocks, title detection, heading
   offsets and adoption of matching custom sections are gone. Move hand-written
-  content into instructions files. Writing over a file that agents did not
-  generate needs `replace`; `InstructionError.unownedTargets` names it.
+  content into instructions files. A file is owned when it is blank or starts
+  with the notice; writing over any other file needs `replace`, and
+  `InstructionError.unownedTargets` names it. Upgrading from 0.1.2 therefore
+  takes over targets that kept custom content only with `replace`.
 - **Breaking:** `InstructionTargetChange.assembly` is replaced by `foreign`,
   and `InstructionDrift` is `clean`, `drifted` or `missing`. Diagnostic kinds
   `missingBlock`, `adoption` and `conflict` are removed; `missingTarget`,
-  `ownChanged` and `invalidLink` are added.
+  `foreignTarget`, `ownChanged` and `invalidLink` are added.
 - **Breaking:** `initializeInstructions(named:environment:)` replaces
   `initializeInstructions(named:directory:)` and creates
   `.agent/instructions/<name>.md` in the project, using the project's state
   lock.
+- A declaration may omit `sources`. Operations that leave a declaration's
+  content unchanged no longer rewrite `agents.json`, so a committed
+  declaration keeps its formatting.
 - A local link in a section must resolve, from the target, to a file in the
   checkout being written; user targets accept no local links.
+- Removing a name that equals a declared reference removes that reference, so
+  an own file's bare name no longer collides with a source's same-named file.
+- Install restores the locked Claude import files instead of recomputing them.
+- A nested target's directory cannot be a symbolic link, `.git`, or inside
+  another repository. Discovery skips `AGENTS.md` and `GEMINI.md` in
+  containers, and a symbolic link at or below a source's search path is an
+  error.
+- Doctor reports a Claude file that keeps Claude Code from reading a generated
+  nested `AGENTS.md`, and checks root forwarding only when the root
+  `AGENTS.md` is a Claude target.
 - A target that no longer receives sections is deleted only while it equals its
   locked rendering.
 

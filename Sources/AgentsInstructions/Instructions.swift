@@ -32,13 +32,13 @@ public enum Instructions {
     while body.first.map(isBlank) == true { body.removeFirst() }
     while body.last.map(isBlank) == true { body.removeLast() }
     let document = MarkdownDocument(body.joined(separator: "\n"))
-    guard let first = document.topLevelHeadings.first, first.isATX, first.lines.lowerBound == 0
+    guard let first = document.topLevelHeadings.first, first.isATX, first.line == 0
     else { throw invalid("the body must start with an ATX heading.") }
     guard document.headings.allSatisfy(\.isATX) else {
       throw invalid("Setext headings are not allowed; use ATX headings.")
     }
     guard
-      document.headings.allSatisfy({ $0.lines.lowerBound == 0 || $0.level > first.level })
+      document.headings.allSatisfy({ $0.line == 0 || $0.level > first.level })
     else { throw invalid("every heading after the first must be deeper than the first.") }
     guard !document.endsInCode else { throw invalid("the body ends inside a code block.") }
     guard !document.endsInHTML else { throw invalid("the body ends inside an HTML block.") }
@@ -89,7 +89,7 @@ public enum Instructions {
     for heading in expected {
       guard
         document.topLevelHeadings.contains(where: {
-          $0.lines.lowerBound == heading.line && $0.level == heading.level
+          $0.line == heading.line && $0.level == heading.level
         })
       else { throw InstructionError.invalidAssembly }
     }
@@ -101,6 +101,12 @@ public enum Instructions {
     var text = String(decoding: bytes, as: UTF8.self)
     if text.first == "\u{FEFF}" { text.removeFirst() }
     return MarkdownLine.parse(text).first?.text == notice
+  }
+
+  /// Whether agents may write over a file without `replace`: it is blank, or its first line is the
+  /// notice.
+  public static func isOwned(_ bytes: Data) -> Bool {
+    isGenerated(bytes) || String(decoding: bytes, as: UTF8.self).allSatisfy(\.isWhitespace)
   }
 
   /// Sections render as in targets, without the notice. Custom text follows after one blank line.

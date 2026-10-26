@@ -5,8 +5,8 @@ struct InstructionTargets {
   let store: StateStore
 
   /// Plans every generated target from `sections` in declared order, the Claude import, and the
-  /// removal of targets that no longer receive sections. `restoring` keeps the locked recipients
-  /// and requires each rendering to match its locked hash.
+  /// removal of targets that no longer receive sections. `restoring` keeps the locked targets,
+  /// recipients and Claude imports, and requires each rendering to match its locked hash.
   func plan(
     sections: [InstructionSection], agents: [AgentID], previous: LockedInstructions,
     restoring: Bool = false
@@ -26,6 +26,7 @@ struct InstructionTargets {
         groups[directory, default: []].append(section)
       }
       for directory in order {
+        if !directory.isEmpty { try validateNested(directory) }
         let text = try Instructions.render(groups[directory]!)
         for agent in recipients.sorted(by: { $0.rawValue < $1.rawValue }) {
           guard let file = try location(for: agent, directory: directory) else { continue }
@@ -41,8 +42,8 @@ struct InstructionTargets {
           }
         }
       }
-      if store.scope == .project, recipients.contains(.claudeCode), targets["AGENTS.md"] != nil,
-        let path = try forwardingPath()
+      if !restoring, store.scope == .project, recipients.contains(.claudeCode),
+        targets["AGENTS.md"] != nil, let path = try forwardingPath()
       {
         let file = store.environment.projectDirectory.appendingPathComponent(path.rawValue)
         let key = InstructionLocations.key(for: InstructionLocations.physical(file), store: store)
@@ -53,6 +54,12 @@ struct InstructionTargets {
           agents: [.claudeCode], import: String(path.importLine.dropFirst()), blockHash: "",
           created: false)
       }
+    }
+    if restoring {
+      guard
+        Set(targets.keys) == Set(previous.targets.filter { $0.value.import == nil }.keys)
+      else { throw InstructionError.invalidLockedBlock }
+      for (key, target) in previous.targets where target.import != nil { targets[key] = target }
     }
     var changes: [InstructionTargetChange] = []
     var problems: [InstructionLinkProblem] = []
@@ -75,8 +82,7 @@ struct InstructionTargets {
           throw CoreError.notFound("the directory of instruction target \(key)")
         }
         after = Data(text.utf8)
-        foreign =
-          before != nil && before != after && old == nil && !Instructions.isGenerated(before!)
+        foreign = before.map { $0 != after && !Instructions.isOwned($0) } ?? false
         if restoring, targets[key]?.blockHash != old?.blockHash {
           throw InstructionError.invalidLockedBlock
         }
@@ -122,6 +128,25 @@ struct InstructionTargets {
     return InstructionLocations.physical(file)
   }
 
+  /// A nested target's directory is a real directory of this checkout: no component is a symbolic
+  /// link or `.git`, and none holds another repository or worktree.
+  private func validateNested(_ directory: String) throws {
+    var cursor = store.environment.projectDirectory.resolvingSymlinksInPath()
+    for component in directory.split(separator: "/").map(String.init) {
+      cursor.appendPathComponent(component)
+      if component == ".git"
+        || (try? FileManager.default.destinationOfSymbolicLink(atPath: cursor.path)) != nil
+      {
+        throw CoreError.unsafePath(
+          "an instruction target directory cannot be a symbolic link or Git metadata: \(directory)")
+      }
+      if FileManager.default.fileExists(atPath: cursor.appendingPathComponent(".git").path) {
+        throw CoreError.unsafePath(
+          "an instruction target directory cannot be inside another repository: \(directory)")
+      }
+    }
+  }
+
   private func directoryExists(of file: URL) -> Bool {
     var isDirectory: ObjCBool = false
     return FileManager.default.fileExists(
@@ -148,7 +173,9 @@ struct InstructionTargets {
   /// the checkout being written. User targets belong to no checkout, so every local link fails.
   func linkProblems(in text: String, file: URL, key: String) -> [InstructionLinkProblem] {
     var problems: [InstructionLinkProblem] = []
-    let root = store.environment.projectDirectory.resolvingSymlinksInPath()
+    let root =
+      Self.realPath(store.environment.projectDirectory.path)
+      ?? store.environment.projectDirectory.resolvingSymlinksInPath()
     for link in Instructions.localLinks(in: text) {
       func problem(_ reason: String) {
         problems.append(
@@ -166,11 +193,18 @@ struct InstructionTargets {
         problem("points to a local file; user instructions cannot link to local files")
         continue
       }
-      let resolved =
-        (path.hasPrefix("/")
-        ? URL(fileURLWithPath: path)
-        : file.deletingLastPathComponent().appendingPathComponent(path))
-        .standardizedFileURL.resolvingSymlinksInPath()
+      let destination =
+        path.hasPrefix("/") ? path : file.deletingLastPathComponent().path + "/" + path
+      guard let resolved = Self.realPath(destination) else {
+        let lexical = URL(fileURLWithPath: destination).standardizedFileURL
+        let project = store.environment.projectDirectory
+        let inside = [root, project.standardizedFileURL, project.resolvingSymlinksInPath()]
+          .contains { PathSafety.isContained(lexical, in: $0) }
+        problem(
+          inside
+            ? "does not resolve to an existing file" : "points outside the checkout being written")
+        continue
+      }
       guard PathSafety.isContained(resolved, in: root), resolved != root else {
         problem("points outside the checkout being written")
         continue
@@ -194,11 +228,20 @@ struct InstructionTargets {
     return problems
   }
 
-  func claudeFiles() throws -> [ClaudeInstructionFile] {
-    let agents = store.environment.projectDirectory.appendingPathComponent("AGENTS.md")
-      .resolvingSymlinksInPath()
+  /// The path with each symbolic link resolved before a following `..`, as the kernel resolves it
+  /// for a reader, or nil when it does not exist.
+  private static func realPath(_ path: String) -> URL? {
+    guard let real = realpath(path, nil) else { return nil }
+    defer { free(real) }
+    return URL(fileURLWithPath: String(cString: real))
+  }
+
+  /// The Claude files in `directory`, the project root by default, beside its `AGENTS.md`.
+  func claudeFiles(in directory: URL? = nil) throws -> [ClaudeInstructionFile] {
+    let directory = directory ?? store.environment.projectDirectory
+    let agents = directory.appendingPathComponent("AGENTS.md").resolvingSymlinksInPath()
     return try ClaudeInstructionPath.allCases.compactMap { path in
-      let file = store.environment.projectDirectory.appendingPathComponent(path.rawValue)
+      let file = directory.appendingPathComponent(path.rawValue)
       let link = try? FileManager.default.destinationOfSymbolicLink(atPath: file.path)
       guard link != nil || FileManager.default.fileExists(atPath: file.path) else { return nil }
       if let link,

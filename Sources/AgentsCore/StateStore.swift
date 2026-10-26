@@ -61,14 +61,22 @@ public struct StateStore: Sendable {
       _ = try readDeclaration()
       _ = try readResolved()
       let transaction = FileTransaction(store: self)
-      try transaction.replace(
-        declarationURL, content: nil, data: Self.encode(declaration.normalized))
+      try stageDeclaration(declaration, in: transaction)
       try transaction.replace(resolvedURL, content: nil, data: Self.encode(resolved.normalized))
       if let watch {
         try transaction.replace(watchURL, content: nil, data: Self.encode(watch))
       }
       try transaction.commit()
     }
+  }
+
+  /// Stages the declaration only when its content differs from the file's, so a declaration
+  /// whose content an operation leaves unchanged keeps its author's formatting.
+  package func stageDeclaration(_ declaration: Declaration, in transaction: FileTransaction) throws
+  {
+    let current: Declaration? = try load(declarationURL)
+    guard current?.normalized != declaration.normalized else { return }
+    try transaction.replace(declarationURL, content: nil, data: Self.encode(declaration.normalized))
   }
 
   package func withLock<T>(

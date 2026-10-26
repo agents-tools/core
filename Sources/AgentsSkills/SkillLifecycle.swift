@@ -221,8 +221,7 @@ final class SkillLifecycle {
       previous: previous, next: next, prepared: prepared, retained: retained,
       names: names, transaction: transaction)
     if writeState {
-      try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
+      try store.stageDeclaration(declaration, in: transaction)
       try transaction.replace(
         store.resolvedURL, content: nil, data: StateStore.encode(next.normalized))
     }

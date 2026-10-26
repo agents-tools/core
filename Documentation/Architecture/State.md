@@ -8,7 +8,8 @@
 | User | `~/.agents/agents.json` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | `~/.agents/cache/` |
 
 User paths are relative to `RuntimeEnvironment.homeDirectory`. State files belong
-to their scope and are local state. `agents.watch` stores subscription baselines
+to their scope. A project may commit its declaration and lock; the cache, the
+writer lock and the journal stay local. `agents.watch` stores subscription baselines
 independently of installed pins; [Watch](Watch.md) describes the operations.
 
 ## Declaration
@@ -18,7 +19,10 @@ independently of installed pins; [Watch](Watch.md) describes the operations.
 location, an optional requirement, and an optional search `path`. A source added
 by location keeps the alias already declaring it, or receives its location's last
 path component; while another source holds that name, preceding components are
-prefixed (`anthropics-skills`), then a number is appended.
+prefixed (`anthropics-skills`), then a number is appended. `sources` may be
+omitted. An operation writes `agents.json`, in normalized form, only when it
+changes the declaration's content, so a hand-written declaration keeps its
+formatting otherwise.
 
 ```json
 {
@@ -54,7 +58,8 @@ Source IDs are Git `host[:port]/path` with a lowercase host and without user,
 scheme or `.git`; `local:` plus an absolute path; or a well-known URL retaining
 its scheme. Declaring two aliases for one normalized ID is an error.
 
-`instructions` holds recipients, ordered `source:name` section references, and
+`instructions` holds recipients, ordered section references (`alias:name`, or a
+bare name for the project's own instructions), and
 named `chatgpt` prompts with ordered sections and optional relative `append`
 paths. `watch` is a unique alias array. Skill operations preserve both fields
 and existing watch-state bytes.
