@@ -38,6 +38,38 @@ public enum PathSafety {
     return target
   }
 
+  /// Whether the symbolic link at `link` stays within the real directory `root`: its target,
+  /// applied to the link's real directory, does not leave `root`, and it does not resolve to an
+  /// existing path outside `root`. A dangling link inside `root` cannot be followed.
+  package static func linkStaysInside(_ link: URL, root: String) throws -> Bool {
+    let destination = try FileManager.default.destinationOfSymbolicLink(atPath: link.path)
+    guard let directory = realPath(link.deletingLastPathComponent().path) else { return false }
+    func inside(_ path: String) -> Bool { path == root || path.hasPrefix(root + "/") }
+    let lexical = lexicallyNormalized(
+      destination.hasPrefix("/") ? destination : directory + "/" + destination)
+    return inside(lexical) && (realPath(link.path).map(inside) ?? true)
+  }
+
+  /// The path as the kernel resolves it for a reader, or nil when it does not exist.
+  package static func realPath(_ path: String) -> String? {
+    guard let real = realpath(path, nil) else { return nil }
+    defer { free(real) }
+    return String(cString: real)
+  }
+
+  /// An absolute path with `.` and `..` segments applied without consulting the filesystem.
+  private static func lexicallyNormalized(_ path: String) -> String {
+    var parts: [Substring] = []
+    for part in path.split(separator: "/") where part != "." {
+      if part == ".." {
+        _ = parts.popLast()
+      } else {
+        parts.append(part)
+      }
+    }
+    return "/" + parts.joined(separator: "/")
+  }
+
   package static func isContained(_ target: URL, in base: URL) -> Bool {
     let basePath = base.standardizedFileURL.path
     let targetPath = target.standardizedFileURL.path

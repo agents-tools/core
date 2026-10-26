@@ -707,18 +707,17 @@ package struct SourceCache {
       + FileHash.sha256Hex(data: Data(sourceID.utf8))
   }
 
+  /// Rejects a symbolic link that can lead outside the extracted tree. A dangling link that stays
+  /// inside, such as one to an uncommitted file, cannot be followed and is kept.
   private func validateTree(_ tree: URL) throws {
-    guard
+    guard let root = PathSafety.realPath(tree.path),
       let enumerator = FileManager.default.enumerator(
         at: tree, includingPropertiesForKeys: [.isSymbolicLinkKey])
     else { return }
-    for case let url as URL in enumerator {
-      if try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
-        guard
-          PathSafety.isContained(url.resolvingSymlinksInPath(), in: tree.resolvingSymlinksInPath())
-        else {
-          throw CoreError.unsafePath("source symlink escapes committed tree")
-        }
+    for case let url as URL in enumerator
+    where try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+      guard try PathSafety.linkStaysInside(url, root: root) else {
+        throw CoreError.unsafePath("source symlink escapes committed tree")
       }
     }
   }

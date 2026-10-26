@@ -49,6 +49,44 @@ struct SourceCacheTests {
     #expect(!FileManager.default.fileExists(atPath: tree.path))
   }
 
+  @Test(arguments: [
+    ("../missing/file.pdf", true), ("missing", true), ("../sub/file", true), ("../sub", true),
+    ("../../outside", false), ("/etc/hosts", false), ("/nonexistent/file", false),
+  ])
+  func materializationKeepsInTreeLinksAndRejectsEscapes(_ destination: String, _ kept: Bool)
+    throws
+  {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let repo = root.appendingPathComponent("repo")
+    try FileManager.default.createDirectory(
+      at: repo.appendingPathComponent("sub"), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: repo.appendingPathComponent("docs"), withIntermediateDirectories: true)
+    try Data("file".utf8).write(to: repo.appendingPathComponent("sub/file"))
+    try FileManager.default.createSymbolicLink(
+      atPath: repo.appendingPathComponent("docs/link").path, withDestinationPath: destination)
+    try initGitRepo(repo)
+    let environment = RuntimeEnvironment(
+      projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:])
+    let cache = SourceCache(store: StateStore(scope: .project, environment: environment))
+    let source = SourceDeclaration(kind: .local, location: repo.path)
+    let pin = try cache.resolve(source)
+    let materialize = {
+      try cache.materialize(
+        sourceID: source.identity(environment: environment), source: LockedSource(kind: .local),
+        revision: pin.revision)
+    }
+    if kept {
+      let tree = try materialize()
+      #expect(
+        try FileManager.default.destinationOfSymbolicLink(
+          atPath: tree.appendingPathComponent("docs/link").path) == destination)
+    } else {
+      #expect(throws: CoreError.self) { try materialize() }
+    }
+  }
+
   @Test func resolvesBoundsAndIgnoresWorkingTreeChanges() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }

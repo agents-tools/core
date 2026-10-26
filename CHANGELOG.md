@@ -63,6 +63,9 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ### Fixed
 
+- Materializing a source and copying a subtree keep a dangling symbolic link
+  that stays inside, such as one to an uncommitted file, instead of rejecting
+  the whole source; a link that leaves the tree is still rejected.
 - Doctor's Codex size check counts only the project chain, as Codex does: the
   user file is loaded separately without a limit, separators are not counted,
   whitespace-only files add nothing, fallback names apply in every directory,
