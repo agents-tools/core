@@ -117,8 +117,10 @@ requirement. Pin a reviewed revision when reproducibility is required. Use
 
 Project state lives in `.agent/agents.json`, `.agent/agents.resolved` and
 `.agent/agents.watch`. User state uses the same filenames under `~/.agents/`.
-The respective `cache/` directory holds source mirrors and exact content. State
-is local to its scope and should be ignored by version control.
+The respective `cache/` directory holds source mirrors and exact content. A
+project commits its `agents.json` declaration and `agents.resolved` lock; keep
+`agents.watch`, `cache/`, `.agents.lock` and `transaction.json` out of version
+control.
 
 The declaration records source aliases, requirements, skill selections and
 recipients. The version 1 lock records each skill's independent revision or
