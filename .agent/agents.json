@@ -9,9 +9,9 @@
   },
   "sources": {
     "agents-tools": {
+      "branch": "master",
       "git": "github.com/agents-tools/.github",
-      "path": ".agent",
-      "revision": "6c0f3fe6f1400e230dea9e3e21a59362df2ec9a6"
+      "path": ".agent"
     }
   }
 }
