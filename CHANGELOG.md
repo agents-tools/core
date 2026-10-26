@@ -6,6 +6,8 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-27
+
 ### Added
 
 - Instructions files may sit in subdirectories of `instructions/` and
