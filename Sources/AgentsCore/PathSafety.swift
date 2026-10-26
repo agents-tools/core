@@ -40,20 +40,23 @@ public enum PathSafety {
 
   /// Whether the symbolic link at `link` stays inside the real directory `root` wherever that
   /// tree is placed. Its destination is resolved from the link's directory as the kernel does,
-  /// following links inside `root`; the link stays inside when resolution reaches a missing entry,
-  /// which the tree lacks in any placement, or ends without leaving `root`. An absolute
-  /// destination, a step above `root` and a link loop leave it.
+  /// byte by byte and following links inside `root`. An absolute destination, a step above `root`
+  /// and a link loop leave it. Resolution may stop at a missing entry, since the kernel cannot pass
+  /// it, but only when no `..` follows: another filesystem may look the name up differently, as
+  /// another entry of the same directory, which is itself checked.
   package static func linkStaysInside(_ link: URL, root: String) throws -> Bool {
     guard let directory = realPath(link.deletingLastPathComponent().path),
-      directory == root || directory.hasPrefix(root + "/")
+      directory.utf8.elementsEqual(root.utf8) || directory.utf8.starts(with: (root + "/").utf8)
     else { return false }
-    var current = directory.dropFirst(root.count).split(separator: "/").map(String.init)
+    let relative = directory.utf8.dropFirst(min(root.utf8.count + 1, directory.utf8.count))
+    var current = components(String(decoding: relative, as: UTF8.self)).compactMap { $0 }
     var pending = try components(FileManager.default.destinationOfSymbolicLink(atPath: link.path))
     var expansions = 0
+    func isParent(_ component: String?) -> Bool { component?.utf8.elementsEqual("..".utf8) == true }
     while !pending.isEmpty {
       guard let next = pending.removeFirst() else { return false }
-      if next == "." { continue }
-      if next == ".." {
+      if next.utf8.elementsEqual(".".utf8) { continue }
+      if isParent(next) {
         guard current.popLast() != nil else { return false }
         continue
       }
@@ -64,16 +67,19 @@ public enum PathSafety {
         pending = components(destination) + pending
         continue
       }
-      guard FileManager.default.fileExists(atPath: path) else { return true }
+      guard FileManager.default.fileExists(atPath: path) else {
+        return !pending.contains { $0 == nil || isParent($0) }
+      }
       current.append(next)
     }
     return true
   }
 
-  /// A relative destination's components; nil marks an absolute destination.
-  private static func components(_ destination: String) -> [String?] {
-    guard !destination.hasPrefix("/") else { return [nil] }
-    return destination.split(separator: "/").map(String.init)
+  /// A path's components split at `/` bytes, so no Unicode grapheme hides a separator; an
+  /// absolute path yields a single nil.
+  private static func components(_ path: String) -> [String?] {
+    guard path.utf8.first != UInt8(ascii: "/") else { return [nil] }
+    return path.utf8.split(separator: UInt8(ascii: "/")).map { String(decoding: $0, as: UTF8.self) }
   }
 
   /// The path as the kernel resolves it for a reader, or nil when it does not exist.

@@ -16,7 +16,9 @@ struct PathSafetyAndSanitizationTests {
     let links = [
       "here": ".", "leak": "here/here/../../settings.json", "guide": "here/docs/guide.md",
       "pdf": "../../library/missing.pdf", "up": "../../../outside", "absolute": "/etc/hosts",
-      "loop": "loop-back", "loop-back": "loop",
+      "loop": "loop-back", "loop-back": "loop", "here\u{0600}": ".",
+      "unicode": "here\u{0600}/../../settings.json", "case": "HERE/HERE/../../settings.json",
+      "missing-up": "missing/../docs/guide.md",
     ]
     for (name, destination) in links {
       try FileManager.default.createSymbolicLink(
@@ -27,7 +29,11 @@ struct PathSafetyAndSanitizationTests {
         skill.appendingPathComponent(name), root: try #require(PathSafety.realPath(base.path)))
     }
     for name in ["here", "guide"] { #expect(try stays(name, in: skill)) }
-    for name in ["leak", "pdf", "up", "absolute", "loop"] { #expect(try !stays(name, in: skill)) }
+    // A grapheme cannot hide a separator, and a lookup that differs by case or normalization on
+    // another filesystem cannot turn a missing entry into a step above the root.
+    for name in ["leak", "pdf", "up", "absolute", "loop", "unicode", "case", "missing-up"] {
+      #expect(try !stays(name, in: skill))
+    }
     // In the whole repository, the same dangling links stay inside and cannot be followed out.
     for name in ["leak", "pdf"] { #expect(try stays(name, in: repo)) }
     #expect(try !stays("up", in: repo))
