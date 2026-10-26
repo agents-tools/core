@@ -6,6 +6,7 @@
 
 - Run the build, test and strict formatting checks in `README.md#development`
   before handoff.
+- For workflow changes, run `actionlint` on every workflow.
 - Community files and templates are organization defaults in
   `agents-tools/.github`; this repository keeps `CODEOWNERS`, the Dependabot
   configuration and workflow callers under `.github/`.

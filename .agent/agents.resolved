@@ -5,7 +5,7 @@
     },
     "sections" : [
       {
-        "hash" : "sha256:f173982b030ad0468dbc05b28d223443e21fdcd048b3b663d0ab8098122a776d",
+        "hash" : "sha256:649e05046822eb7cc03e9f0008bb0924134598d163a80224496902208f2c7492",
         "name" : "guide",
         "path" : ".agent/instructions/guide.md",
         "source" : "."
@@ -31,7 +31,7 @@
           "claude-code",
           "codex"
         ],
-        "blockHash" : "sha256:92e390f948a5dbbd9bade19698b6ad22c07f08dd993512005bd7f28a74a672d5",
+        "blockHash" : "sha256:f680afe6322f036457d6f5296738912a482f48319ee11ba47932a9813b870add",
         "created" : false,
         "headingOffset" : 0
       }
