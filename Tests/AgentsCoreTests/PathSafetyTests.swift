@@ -5,6 +5,34 @@ import Testing
 
 @Suite("Path Safety And Sanitization")
 struct PathSafetyAndSanitizationTests {
+  @Test func linksStayInsideOnlyWhenResolutionWithinTheRootCannotLeaveIt() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let repo = root.appendingPathComponent("repo")
+    let skill = repo.appendingPathComponent("skills/demo")
+    try FileManager.default.createDirectory(
+      at: skill.appendingPathComponent("docs"), withIntermediateDirectories: true)
+    try Data("guide".utf8).write(to: skill.appendingPathComponent("docs/guide.md"))
+    let links = [
+      "here": ".", "leak": "here/here/../../settings.json", "guide": "here/docs/guide.md",
+      "pdf": "../../library/missing.pdf", "up": "../../../outside", "absolute": "/etc/hosts",
+      "loop": "loop-back", "loop-back": "loop",
+    ]
+    for (name, destination) in links {
+      try FileManager.default.createSymbolicLink(
+        atPath: skill.appendingPathComponent(name).path, withDestinationPath: destination)
+    }
+    func stays(_ name: String, in base: URL) throws -> Bool {
+      try PathSafety.linkStaysInside(
+        skill.appendingPathComponent(name), root: try #require(PathSafety.realPath(base.path)))
+    }
+    for name in ["here", "guide"] { #expect(try stays(name, in: skill)) }
+    for name in ["leak", "pdf", "up", "absolute", "loop"] { #expect(try !stays(name, in: skill)) }
+    // In the whole repository, the same dangling links stay inside and cannot be followed out.
+    for name in ["leak", "pdf"] { #expect(try stays(name, in: repo)) }
+    #expect(try !stays("up", in: repo))
+  }
+
   @Test func sanitizesSkillNamesForFilesystemPaths() {
     let cases: [(String, String)] = [
       ("MySkill", "myskill"),

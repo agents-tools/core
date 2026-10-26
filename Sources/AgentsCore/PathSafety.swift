@@ -38,16 +38,42 @@ public enum PathSafety {
     return target
   }
 
-  /// Whether the symbolic link at `link` stays within the real directory `root`: its target,
-  /// applied to the link's real directory, does not leave `root`, and it does not resolve to an
-  /// existing path outside `root`. A dangling link inside `root` cannot be followed.
+  /// Whether the symbolic link at `link` stays inside the real directory `root` wherever that
+  /// tree is placed. Its destination is resolved from the link's directory as the kernel does,
+  /// following links inside `root`; the link stays inside when resolution reaches a missing entry,
+  /// which the tree lacks in any placement, or ends without leaving `root`. An absolute
+  /// destination, a step above `root` and a link loop leave it.
   package static func linkStaysInside(_ link: URL, root: String) throws -> Bool {
-    let destination = try FileManager.default.destinationOfSymbolicLink(atPath: link.path)
-    guard let directory = realPath(link.deletingLastPathComponent().path) else { return false }
-    func inside(_ path: String) -> Bool { path == root || path.hasPrefix(root + "/") }
-    let lexical = lexicallyNormalized(
-      destination.hasPrefix("/") ? destination : directory + "/" + destination)
-    return inside(lexical) && (realPath(link.path).map(inside) ?? true)
+    guard let directory = realPath(link.deletingLastPathComponent().path),
+      directory == root || directory.hasPrefix(root + "/")
+    else { return false }
+    var current = directory.dropFirst(root.count).split(separator: "/").map(String.init)
+    var pending = try components(FileManager.default.destinationOfSymbolicLink(atPath: link.path))
+    var expansions = 0
+    while !pending.isEmpty {
+      guard let next = pending.removeFirst() else { return false }
+      if next == "." { continue }
+      if next == ".." {
+        guard current.popLast() != nil else { return false }
+        continue
+      }
+      let path = ([root] + current + [next]).joined(separator: "/")
+      if let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: path) {
+        expansions += 1
+        guard expansions <= 32 else { return false }
+        pending = components(destination) + pending
+        continue
+      }
+      guard FileManager.default.fileExists(atPath: path) else { return true }
+      current.append(next)
+    }
+    return true
+  }
+
+  /// A relative destination's components; nil marks an absolute destination.
+  private static func components(_ destination: String) -> [String?] {
+    guard !destination.hasPrefix("/") else { return [nil] }
+    return destination.split(separator: "/").map(String.init)
   }
 
   /// The path as the kernel resolves it for a reader, or nil when it does not exist.
@@ -55,19 +81,6 @@ public enum PathSafety {
     guard let real = realpath(path, nil) else { return nil }
     defer { free(real) }
     return String(cString: real)
-  }
-
-  /// An absolute path with `.` and `..` segments applied without consulting the filesystem.
-  private static func lexicallyNormalized(_ path: String) -> String {
-    var parts: [Substring] = []
-    for part in path.split(separator: "/") where part != "." {
-      if part == ".." {
-        _ = parts.popLast()
-      } else {
-        parts.append(part)
-      }
-    }
-    return "/" + parts.joined(separator: "/")
   }
 
   package static func isContained(_ target: URL, in base: URL) -> Bool {
