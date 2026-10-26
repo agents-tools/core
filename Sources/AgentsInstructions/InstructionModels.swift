@@ -59,6 +59,7 @@ public enum InstructionError: Error, Sendable, Equatable, CustomStringConvertibl
   case invalidLockedBlock
   case invalidLinks([InstructionLinkProblem])
   case unownedTargets([String])
+  case ownChanged(name: String)
   case emptyPrompt
 
   public var description: String {
@@ -86,6 +87,8 @@ public enum InstructionError: Error, Sendable, Equatable, CustomStringConvertibl
     case .unownedTargets(let targets):
       return
         "Files that agents did not generate are in the way: \(targets.joined(separator: ", "))."
+    case .ownChanged(let name):
+      return "Own instructions file '\(name)' changed since the lock."
     case .emptyPrompt:
       return "A ChatGPT prompt must have at least one locked section."
     }

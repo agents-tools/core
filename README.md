@@ -220,7 +220,8 @@ by bare name. `InstructionOperations` generates whole target files from them:
   Its `projectRoots` overload audits explicit projects without writing.
 - `export(projectRoots:...)` reads the user lock and the given projects' locks
   into a mapping of targets to sections, without writing.
-- `initializeInstructions(named:directory:)` creates a valid file skeleton.
+- `initializeInstructions(named:environment:)` creates a valid file skeleton in
+  the project's `.agent/instructions/`.
 
 A target is a notice line followed by the sections in declared order. A section
 with `paths` gets a line naming its patterns and, in project scope, is written

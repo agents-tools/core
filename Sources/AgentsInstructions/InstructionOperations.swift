@@ -285,19 +285,21 @@ public enum InstructionOperations {
     }
   }
 
-  /// Creates `<name>.md` with the required front matter in the supplied directory, without
-  /// replacing an existing entry.
+  /// Creates the project's own `.agent/instructions/<name>.md` with the required front matter,
+  /// without replacing an existing entry or creating a declaration or lock.
   @discardableResult
-  public static func initializeInstructions(named name: String, directory: URL) throws -> URL {
+  public static func initializeInstructions(
+    named name: String, environment: RuntimeEnvironment = RuntimeEnvironment()
+  ) throws -> URL {
     guard Declaration.isInstructionName(name), !name.contains("/") else {
       throw CoreError.invalidSource(
         "instruction names use lowercase letters, digits and hyphens: \(name)")
     }
-    let environment = RuntimeEnvironment(
-      projectDirectory: directory, homeDirectory: directory, environment: [:])
     let store = StateStore(scope: .project, environment: environment)
     return try store.withLock {
-      let file = directory.resolvingSymlinksInPath().appendingPathComponent(name + ".md")
+      let file = environment.projectDirectory.resolvingSymlinksInPath()
+        .appendingPathComponent(InstructionSources.ownContainer)
+        .appendingPathComponent(name + ".md")
       guard try InstructionTargets.read(file) == nil else {
         throw CoreError.invalidSource("instruction file already exists: \(file.path)")
       }

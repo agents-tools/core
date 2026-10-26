@@ -13,14 +13,15 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
   as `epd/review`.
 - A project's own instructions in `.agent/instructions/` are selected by bare
   name and read from the working tree. `InstructionAddOptions(source: ".")`
-  adds them; `listOwn(environment:)` lists them.
+  adds them; `listOwn(environment:)` lists them. Restoring a lock fails with
+  `InstructionError.ownChanged` when an own file changed since the lock.
 - Front matter `paths` scopes a section: its patterns are named after its first
   heading, and in project scope the section is written to the `AGENTS.md` of
   the directory the patterns share.
 - `InstructionOperations.export(projectRoots:environment:)` maps the locked
   targets of the user scope and given projects to their sections.
-- Doctor reports hand-written files in target locations, own files changed
-  since the lock, and links in generated targets that no longer resolve.
+- Doctor reports own files changed since the lock and links in generated
+  targets that no longer resolve.
 
 ### Changed
 
@@ -34,8 +35,12 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
   generate needs `replace`; `InstructionError.unownedTargets` names it.
 - **Breaking:** `InstructionTargetChange.assembly` is replaced by `foreign`,
   and `InstructionDrift` is `clean`, `drifted` or `missing`. Diagnostic kinds
-  `missingBlock`, `adoption` and `conflict` become `missingTarget`,
-  `foreignTarget`, `ownChanged` and `invalidLink`.
+  `missingBlock`, `adoption` and `conflict` are removed; `missingTarget`,
+  `ownChanged` and `invalidLink` are added.
+- **Breaking:** `initializeInstructions(named:environment:)` replaces
+  `initializeInstructions(named:directory:)` and creates
+  `.agent/instructions/<name>.md` in the project, using the project's state
+  lock.
 - A local link in a section must resolve, from the target, to a file in the
   checkout being written; user targets accept no local links.
 - A target that no longer receives sections is deleted only while it equals its

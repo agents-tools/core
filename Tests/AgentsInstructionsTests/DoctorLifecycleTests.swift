@@ -118,7 +118,7 @@ struct InstructionDoctorTests {
     #expect(!report.diagnostics.contains { $0.kind == .invalidConfiguration })
   }
 
-  @Test func doctorReportsForeignAndDriftedTargetsWithoutWriting() throws {
+  @Test func doctorReportsEveryDifferenceFromALockedTargetAsDrift() throws {
     let fixture = try InstructionFixture()
     try fixture.section("rules")
     try fixture.commit()
@@ -127,7 +127,7 @@ struct InstructionDoctorTests {
     try fixture.write("# rules\n\nOriginal\n", to: file)
     #expect(
       try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
-        $0.kind == .foreignTarget && $0.path == file
+        $0.kind == .drift && $0.path == file
       })
     try fixture.write(generated(["# rules\n\nCustom"]), to: file)
     let report = try InstructionOperations.doctor(environment: fixture.environment)

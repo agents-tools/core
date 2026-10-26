@@ -369,19 +369,28 @@ struct InstructionLifecycleTests {
     }
   }
 
-  @Test func initializeCreatesValidatedSkeletonAndNeverOverwrites() throws {
+  @Test func initializeCreatesAnOwnSkeletonAndNeverOverwrites() throws {
     let fixture = try InstructionFixture()
     let file = try InstructionOperations.initializeInstructions(
-      named: "new-rules", directory: fixture.repo.appendingPathComponent("instructions"))
+      named: "new-rules", environment: fixture.environment)
+    #expect(
+      file.path
+        == fixture.project.resolvingSymlinksInPath()
+        .appendingPathComponent(".agent/instructions/new-rules.md").path)
     let section = try Instructions.validateSource(Data(contentsOf: file), id: "new-rules")
     #expect(section.heading == "new-rules")
     #expect(section.level == 1)
+    #expect(try InstructionOperations.listOwn(environment: fixture.environment).count == 1)
+    #expect(!FileManager.default.fileExists(atPath: fixture.store().declarationURL.path))
     #expect(throws: (any Error).self) {
       try InstructionOperations.initializeInstructions(
-        named: "new-rules", directory: file.deletingLastPathComponent())
+        named: "new-rules", environment: fixture.environment)
     }
-    #expect(throws: (any Error).self) {
-      try InstructionOperations.initializeInstructions(named: "../escape", directory: fixture.repo)
+    for name in ["../escape", "nested/name", "Upper"] {
+      #expect(throws: (any Error).self) {
+        try InstructionOperations.initializeInstructions(
+          named: name, environment: fixture.environment)
+      }
     }
   }
 }

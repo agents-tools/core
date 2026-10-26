@@ -38,8 +38,9 @@ revision, path and original-byte hash. Source containers cannot hold targets.
 A project's own files live in `.agent/instructions/` and are referenced by bare
 name; `alias:name` references a declared source. Own files are read from the
 working tree as it is. Their lock records have source `.`, the project-relative
-path and the hash, and no revision. Restoring a lock fails when an own file's
-hash changed; update reads the current file.
+path and the hash, and no revision. Restoring a lock fails with
+`InstructionError.ownChanged` when an own file's hash changed; update reads the
+current file.
 
 `add(InstructionAddOptions, beforeApply:)` accepts a source alias or string,
 or `.` for own files, plus an optional alias, requirement, search path, ordered
@@ -117,7 +118,7 @@ Ancestor files are reported and never modified.
 | `installResolvedReport(scope:environment:)` | Restore locked renderings without changing state bytes |
 | `remove(names:scope:agents:environment:beforeApply:)` | Remove sections from file and prompt selections and lock records |
 | `renderChatGPT(prompt:scope:environment:)` | Return locked sections followed by the prompt's current custom file |
-| `initializeInstructions(named:directory:)` | Create a validated `<name>.md` with front matter, refusing an existing entry |
+| `initializeInstructions(named:environment:)` | Create a validated `.agent/instructions/<name>.md` with front matter, refusing an existing entry |
 | `doctor(scope:environment:codexConfiguration:)` | Inspect one scope and compare sections against the other scope |
 | `doctor(projectRoots:environment:codexConfiguration:)` | Audit explicit project roots without writing |
 | `export(projectRoots:environment:)` | Map the user scope's and each root's locked targets to their sections without writing |
@@ -153,9 +154,9 @@ files, forwarding files, declaration, lock and cache pruning. Exact source
 materializations are verified and published through cache transactions before
 the target/state transaction. The journal has fixed project instruction paths,
 nested project `AGENTS.md` and `GEMINI.md` paths, configured user instruction
-roots and an authoring root restricted to named Markdown files. Initialization
-uses a project state lock and journal in the supplied directory without
-creating a declaration or resolved file.
+roots and new top-level named Markdown files in `.agent/instructions/`.
+Initialization uses the project's state lock and journal without creating a
+declaration or resolved file.
 
 Read operations take an existing shared scope lock without creating one or
 replaying recovery. Pending recovery stops listings and previews. Doctor reports

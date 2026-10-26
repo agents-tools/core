@@ -110,7 +110,8 @@ A durable `transaction.json` in the scope state directory records target, state
 file and pruning replacements before mutation. Paths are relative to named
 roots in that scope: `state`, registered agent installation directories, and
 registered instruction destinations. Instruction roots permit fixed project
-files, configured user files and named Markdown authoring files. The
+files, configured user files and named Markdown files in the project's own
+instructions container. The
 journal binds the state directory and each used root to its physical location
 and filesystem identity. Configured agent containers are resolved at the
 registry boundary; recovery opens journal descendants without following links.

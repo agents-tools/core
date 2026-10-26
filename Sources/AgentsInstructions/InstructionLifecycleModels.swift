@@ -97,7 +97,6 @@ public struct InstructionDiagnostic: Sendable, Equatable {
   public enum Kind: String, Sendable {
     case missingTarget
     case drift
-    case foreignTarget
     case ownChanged
     case invalidLink
     case invalidTarget

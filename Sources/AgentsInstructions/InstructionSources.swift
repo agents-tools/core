@@ -118,10 +118,7 @@ final class InstructionSources {
       if record.source == Self.own {
         guard let unit = try own().first(where: { $0.record.path == record.path }),
           unit.record.hash == record.hash
-        else {
-          throw CoreError.invalidState(
-            "own instructions file changed since the lock: \(record.name); run 'agents update'")
-        }
+        else { throw InstructionError.ownChanged(name: record.name) }
         return unit
       }
       guard let source = sources[record.source], let revision = record.revision,

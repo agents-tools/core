@@ -16,13 +16,8 @@ struct TransactionPaths {
       if InstructionLocations.isProjectTarget(relative) {
         return "instructions-project/" + relative
       }
-      if destination.deletingLastPathComponent().standardizedFileURL
-        == base.resolvingSymlinksInPath(),
-        destination.pathExtension == "md",
-        destination.deletingPathExtension().lastPathComponent
-          == PathSafety.sanitizeName(destination.deletingPathExtension().lastPathComponent)
-      {
-        return "instructions-authoring/" + destination.lastPathComponent
+      if isAuthoringFile(relative.split(separator: "/").map(String.init)) {
+        return "instructions-authoring/" + relative
       }
     } else {
       for agent in AgentID.allCases {
@@ -85,6 +80,14 @@ struct TransactionPaths {
     return try DirectoryHandle(at: url, create: create, checkpoint: checkpoint)
   }
 
+  /// A top-level file in the project's own instructions container, `.agent/instructions/<name>.md`.
+  private func isAuthoringFile(_ components: [String]) -> Bool {
+    guard components.count == 3, components[0] == store.directory.lastPathComponent,
+      components[1] == "instructions", components[2].hasSuffix(".md")
+    else { return false }
+    return Declaration.isInstructionName(String(components[2].dropLast(3)))
+  }
+
   func components(_ path: String) throws -> (root: String, descendants: [String]) {
     let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
     guard parts.count >= 2,
@@ -110,11 +113,9 @@ struct TransactionPaths {
         throw CoreError.unsafePath("unmanaged project instruction path")
       }
     } else if key == "instructions-authoring", store.scope == .project {
-      let file = URL(fileURLWithPath: descendants[0])
-      guard descendants.count == 1, file.pathExtension == "md",
-        file.deletingPathExtension().lastPathComponent
-          == PathSafety.sanitizeName(file.deletingPathExtension().lastPathComponent)
-      else { throw CoreError.unsafePath("invalid instruction authoring path") }
+      guard isAuthoringFile(descendants) else {
+        throw CoreError.unsafePath("invalid instruction authoring path")
+      }
     } else if key.hasPrefix("instructions-"), store.scope == .user,
       let agent = AgentID(rawValue: String(key.dropFirst("instructions-".count))),
       let file = InstructionLocations.file(for: agent, scope: .user, environment: store.environment)

@@ -34,7 +34,7 @@ struct TargetLifecycleTests {
       try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
         $0.kind == .ownChanged
       })
-    #expect(throws: (any Error).self) {
+    #expect(throws: InstructionError.ownChanged(name: "guide")) {
       try InstructionOperations.installResolvedReport(environment: fixture.environment)
     }
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
