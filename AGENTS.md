@@ -13,13 +13,9 @@
 
 ## Module Boundaries
 
-- Keep shared primitives, source resolution, registry, lock and watch behavior
-  in `Sources/AgentsCore`, and skill discovery, installation and lifecycle in
-  `Sources/AgentsSkills`. `AgentsCore` must not depend on `AgentsSkills`; Yams
-  belongs to `AgentsSkills`.
-- Keep command parsing and terminal behavior in the consuming repositories.
-- Expose consumer operations and their models publicly; keep implementation
-  details internal, or package-visible when shared between targets.
+- Keep each target's responsibilities, dependencies and access levels as
+  `Documentation/Architecture/Package.md` states, and update it with the
+  dependency graph in `Package.swift`.
 - Keep package-domain prefixes out of internal target names unless the package
   boundary stops making that context clear.
 - Disable automatic maintenance and gc in fixture Git repositories.
