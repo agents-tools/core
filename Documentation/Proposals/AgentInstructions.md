@@ -618,7 +618,7 @@ working tree that another operation depends on.
 - Agents keep persistent instructions as one Markdown file per rule in a
   conventional directory: GitHub Copilot's
   [`.github/instructions/`](https://docs.github.com/en/copilot/concepts/prompting-and-context/custom-instructions),
-  Cursor's [`.cursor/rules/`](https://cursor.com/docs/context/rules) and
+  Cursor's `.cursor/rules/` and
   Claude Code's [`.claude/rules/`](https://code.claude.com/docs/en/memory).
   Instructions containers follow the same layout, with front matter as in
   Cursor's `.mdc` rules and `paths` as in Claude Code's path-scoped rules.
