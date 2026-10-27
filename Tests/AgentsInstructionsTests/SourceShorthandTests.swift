@@ -14,7 +14,7 @@ struct InstructionSourceShorthandTests {
         InstructionAddOptions(
           source: fixture.repo.path + "@skill:rules", environment: fixture.environment))
     }
-    try InstructionOperations.add(
+    _ = try InstructionOperations.add(
       InstructionAddOptions(
         source: fixture.repo.path + "@branch:main", names: ["rules"], agents: [.codex],
         environment: fixture.environment))
