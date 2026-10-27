@@ -80,11 +80,8 @@ final class UpdatePlan {
       let transaction = FileTransaction(store: store, outcome: outcome, checkpoint: checkpoint)
       try skills.stage(retained: retained, transaction: transaction)
       try instructions.stage(transaction: transaction)
-      let declarationBytes = try StateStore.encode(declaration.normalized)
-      if try store.existingData(store.declarationURL) != declarationBytes {
-        try transaction.replace(store.declarationURL, content: nil, data: declarationBytes)
-      }
-      let resolvedBytes = try StateStore.encode(next.normalized)
+      try store.stageDeclaration(declaration, in: transaction)
+      let resolvedBytes = try StateStore.encodeState(next.normalized)
       if try store.existingData(store.resolvedURL) != resolvedBytes {
         try transaction.replace(store.resolvedURL, content: nil, data: resolvedBytes)
       }

@@ -159,10 +159,9 @@ public enum SkillOperations {
         try plan.validate()
         let transaction = FileTransaction(store: store)
         try plan.stage(retained: retained, transaction: transaction)
+        try store.stageDeclaration(declaration, in: transaction)
         try transaction.replace(
-          store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
-        try transaction.replace(
-          store.resolvedURL, content: nil, data: StateStore.encode(plan.next.normalized))
+          store.resolvedURL, content: nil, data: StateStore.encodeState(plan.next.normalized))
         try SourceCache(store: store).prune(referencedBy: plan.next, transaction: transaction)
         try transaction.commit()
         let installed = plan.receipts

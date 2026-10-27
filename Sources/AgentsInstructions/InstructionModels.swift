@@ -3,69 +3,63 @@ import Foundation
 public struct InstructionSection: Sendable, Equatable {
   /// Caller-owned, source-qualified identity, used in reports and scope comparisons.
   public let id: String
-  /// The Markdown AST's plain text for the source heading, with whitespace trimmed and collapsed.
+  /// Level of the body's first heading.
+  public let level: Int
+  /// The first heading's Markdown plain text, with whitespace trimmed and collapsed.
   public let heading: String
-  /// SHA-256 of the original source bytes, including their line endings and any UTF-8 byte order mark.
+  public let description: String
+  /// Project-relative glob patterns that scope the section, in source order.
+  public let paths: [String]
+  /// SHA-256 of the original source bytes, including their line endings and any byte order mark.
   public let hash: String
+  /// The body as written into targets: no front matter, LF endings, no leading or trailing
+  /// blank lines, and the `paths` line after the first heading.
   let content: String
-  let document: MarkdownDocument
 
-}
-
-public struct InstructionOptions: Sendable {
-  /// Nil recomputes from the title; install passes the locked value (zero or one).
-  public var headingOffset: Int?
-  /// Applies only to matching custom sections. Existing managed content is rendered anew.
-  public var replaceConflicts: Bool
-
-  public init(headingOffset: Int? = nil, replaceConflicts: Bool = false) {
-    self.headingOffset = headingOffset
-    self.replaceConflicts = replaceConflicts
-  }
-}
-
-public struct InstructionConflict: Sendable, Equatable {
-  public let sectionID: String
-  public let existing: String
-  public let proposed: String
-  public let difference: String
-}
-
-public struct InstructionAssembly: Sendable, Equatable {
-  public let bytes: Data
-  public let headingOffset: Int
-  /// Includes both marker lines and a final LF; nil after removing the block.
-  public let block: String?
-  public let blockHash: String?
-  public let adoptedSections: [String]
-  public let conflicts: [InstructionConflict]
-  /// Difference from the previous managed block, independent of custom-section conflicts.
-  public let blockDifference: String?
-  /// The caller combines this with its locked `created` flag before deleting a file.
-  /// A leading UTF-8 byte order mark is file metadata and does not count as custom content.
-  public let hasCustomContent: Bool
+  /// The project-relative directory whose `AGENTS.md` receives the section; empty for the root.
+  public var directory: String { Instructions.directory(for: paths) }
 }
 
 public enum InstructionDrift: Sendable, Equatable {
   case clean
-  /// A hash cannot reconstruct text. Difference is nil unless the caller supplies the locked block.
-  case drifted(actualBlock: String, difference: String?)
-  case missingBlock
+  case drifted
+  case missing
+}
+
+/// A Markdown destination that needs a filesystem check, or a raw HTML link.
+public struct InstructionLink: Sendable, Equatable {
+  public enum Kind: String, Sendable {
+    case link
+    case image
+    case definition
+    case html
+  }
+
+  public let kind: Kind
+  /// The destination as written; for `html`, the HTML text.
+  public let destination: String
+  /// The decoded local path without query or fragment; nil for `html`.
+  public let path: String?
+}
+
+public struct InstructionLinkProblem: Sendable, Equatable {
+  public let target: String
+  public let destination: String
+  public let reason: String
 }
 
 public enum InstructionError: Error, Sendable, Equatable, CustomStringConvertible, LocalizedError {
   case invalidUTF8
   case invalidSource(id: String, reason: String)
-  case invalidHeadingOffset(Int)
-  case headingOverflow(sectionID: String, level: Int, offset: Int)
   case duplicateHeading(heading: String, sectionIDs: [String])
-  case ambiguousMatch(sectionID: String, lines: [Int])
-  case conflictingSections([InstructionConflict])
   case unpairedMarker(line: Int)
   case nestedMarker(line: Int)
   case multipleBlocks
   case invalidAssembly
   case invalidLockedBlock
+  case invalidLinks([InstructionLinkProblem])
+  case unownedTargets([String])
+  case ownChanged(name: String)
   case emptyPrompt
 
   public var description: String {
@@ -73,30 +67,28 @@ public enum InstructionError: Error, Sendable, Equatable, CustomStringConvertibl
     case .invalidUTF8:
       return "Instructions must be valid UTF-8."
     case .invalidSource(let id, let reason):
-      return "Invalid instructions source '\(id)': \(reason)"
-    case .invalidHeadingOffset(let offset):
-      return "Heading offset must be 0 or 1; got \(offset)."
-    case .headingOverflow(let id, let level, let offset):
-      return
-        "Section '\(id)' has a level-\(level) heading that exceeds level 6 with offset \(offset)."
+      return "Invalid instructions file '\(id)': \(reason)"
     case .duplicateHeading(let heading, let ids):
-      return "Selected sections have the same heading '\(heading)': \(ids.joined(separator: ", "))."
-    case .ambiguousMatch(let id, let lines):
       return
-        "Section '\(id)' matches multiple headings at lines \(lines.map(String.init).joined(separator: ", "))."
-    case .conflictingSections(let conflicts):
-      return conflicts.map { "Conflicting section '\($0.sectionID)':\n\($0.difference)" }
-        .joined(separator: "\n")
+        "Sections in one target have the same heading '\(heading)': \(ids.joined(separator: ", "))."
     case .unpairedMarker(let line):
       return "Unpaired managed marker at line \(line)."
     case .nestedMarker(let line):
       return "Nested managed BEGIN marker at line \(line)."
     case .multipleBlocks:
-      return "The target contains more than one managed block."
+      return "The file contains more than one managed block."
     case .invalidAssembly:
-      return "The assembled Markdown does not contain exactly the expected managed block."
+      return "The assembled Markdown does not have the expected structure."
     case .invalidLockedBlock:
-      return "The supplied locked block does not match its hash or managed-block structure."
+      return "The lock's targets or recorded hashes do not match what its sections render."
+    case .invalidLinks(let problems):
+      return problems.map { "\($0.target): link '\($0.destination)' \($0.reason)" }
+        .joined(separator: "\n")
+    case .unownedTargets(let targets):
+      return
+        "Files that agents did not generate are in the way: \(targets.joined(separator: ", "))."
+    case .ownChanged(let name):
+      return "Own instructions file '\(name)' changed since the lock."
     case .emptyPrompt:
       return "A ChatGPT prompt must have at least one locked section."
     }

@@ -8,11 +8,16 @@ package final class InstructionUpdatePlan {
   private let sources: InstructionSources
   private let identities: [PathIdentity]
   private let forwardingInputs: [(URL, Data?)]
+  private let replace: Bool
 
-  init(next: ResolvedState, report: InstructionUpdateReport, sources: InstructionSources) throws {
+  init(
+    next: ResolvedState, report: InstructionUpdateReport, sources: InstructionSources,
+    replace: Bool
+  ) throws {
     self.next = next
     self.report = report
     self.sources = sources
+    self.replace = replace
     let store = sources.store
     var paths = report.targets.map(\.url)
     for agent in Set(report.targets.flatMap { ($0.beforeAgents ?? []) + $0.afterAgents }) {
@@ -41,6 +46,7 @@ package final class InstructionUpdatePlan {
   }
 
   package func validate() throws {
+    if !replace { try InstructionOperations.requireOwnership(report) }
     for identity in identities { try identity.validate() }
     for (url, bytes) in forwardingInputs {
       guard try InstructionTargets.read(url) == bytes else {

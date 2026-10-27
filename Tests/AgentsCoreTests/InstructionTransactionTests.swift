@@ -57,6 +57,30 @@ struct InstructionTransactionTests {
     #expect(throws: (any Error).self) { try paths.components("instructions-project/other.md") }
     #expect(throws: (any Error).self) { try paths.components("instructions-project/../AGENTS.md") }
     #expect(throws: (any Error).self) { try paths.components("instructions-codex/AGENTS.md") }
+    #expect(throws: (any Error).self) {
+      try paths.components("instructions-project/.git/AGENTS.md")
+    }
+    #expect(throws: (any Error).self) {
+      try paths.components("instructions-project/.agent/instructions/AGENTS.md")
+    }
+    #expect(throws: (any Error).self) {
+      try paths.components("instructions-project/Sources/CLAUDE.md")
+    }
+    #expect(throws: Never.self) {
+      try paths.components("instructions-project/Sources/Render/AGENTS.md")
+    }
+    #expect(throws: Never.self) { try paths.components("instructions-project/Sources/GEMINI.md") }
+    #expect(throws: Never.self) {
+      try paths.components("instructions-authoring/.agent/instructions/new-rules.md")
+    }
+    for path in [
+      "instructions-authoring/new-rules.md", "instructions-authoring/.agent/new-rules.md",
+      "instructions-authoring/.agent/instructions/epd/review.md",
+      "instructions-authoring/.agent/instructions/Rules.md",
+      "instructions-authoring/.agent/instructions/notes.txt",
+    ] {
+      #expect(throws: (any Error).self) { try paths.components(path) }
+    }
     let outside = root.appendingPathComponent("outside")
     try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
     try Data("owner".utf8).write(to: outside.appendingPathComponent("CLAUDE.md"))

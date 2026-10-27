@@ -2,11 +2,18 @@ import AgentsCore
 import Foundation
 
 final class InstructionSources {
+  /// The lock's source for a project's own instructions, which are read live and never pinned.
+  static let own = "."
+  /// The project's own instructions container, relative to the project root.
+  static let ownContainer = ".agent/instructions"
+  static let containers = ["instructions", ".agents/instructions"]
+
   let store: StateStore
   let cache: SourceCache
   let resolutions: SourceResolutionSession?
   private var discovered: [String: [InstructionUnit]] = [:]
   private var restored: [String: InstructionSection] = [:]
+  private var ownUnits: [InstructionUnit]?
 
   init(store: StateStore, resolutions: SourceResolutionSession? = nil) {
     self.resolutions = resolutions
@@ -39,23 +46,9 @@ final class InstructionSources {
     func read(_ pin: SourceRevision, _ tree: URL) throws -> [InstructionUnit] {
       let root = try PathSafety.resolvedChild(base: tree, subpath: source.path ?? ".")
       var units: [InstructionUnit] = []
-      var names = Set<String>()
-      for container in ["instructions", ".agents/instructions"] {
+      for container in Self.containers {
         let directory = root.appendingPathComponent(container)
-        guard FileManager.default.fileExists(atPath: directory.path) else { continue }
-        try Self.contained(directory, in: tree)
-        for file in try FileManager.default.contentsOfDirectory(
-          at: directory, includingPropertiesForKeys: [.isRegularFileKey]
-        ).sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
-        where file.pathExtension == "md" {
-          try Self.contained(file, in: tree)
-          guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
-            continue
-          }
-          let name = file.deletingPathExtension().lastPathComponent
-          guard !name.isEmpty, !name.contains(":"), names.insert(name).inserted else {
-            throw CoreError.invalidSource("duplicate or invalid instruction name: \(name)")
-          }
+        for (name, file) in try Self.files(in: directory, tree: tree) {
           let section = try Instructions.validateSource(Data(contentsOf: file), id: id + ":" + name)
           units.append(
             InstructionUnit(
@@ -65,7 +58,7 @@ final class InstructionSources {
               section: section))
         }
       }
-      return units.sorted { $0.record.name < $1.record.name }
+      return try Self.unique(units)
     }
     let units =
       try resolutions.map { try $0.withSnapshot(source, read) }
@@ -74,16 +67,56 @@ final class InstructionSources {
     return units
   }
 
+  /// The project's own instructions, read from the working tree as it is.
+  func own() throws -> [InstructionUnit] {
+    if let ownUnits { return ownUnits }
+    guard store.scope == .project else {
+      throw CoreError.invalidState("own instructions exist only in project scope")
+    }
+    let project = store.environment.projectDirectory.resolvingSymlinksInPath()
+    let directory = project.appendingPathComponent(Self.ownContainer)
+    let units = try Self.unique(
+      Self.files(in: directory, tree: project).map { name, file in
+        let section = try Instructions.validateSource(Data(contentsOf: file), id: name)
+        return InstructionUnit(
+          record: LockedSection(
+            name: name, source: Self.own,
+            path: PathSafety.relativePath(file.path, to: project.path), hash: section.hash),
+          section: section)
+      })
+    ownUnits = units
+    return units
+  }
+
+  /// One of the project's own instructions, read from the working tree as it is. Other files in
+  /// the container are not read, so an unfinished draft affects only operations that list them.
+  func own(named name: String) throws -> InstructionUnit {
+    guard store.scope == .project else {
+      throw CoreError.invalidState("own instructions exist only in project scope")
+    }
+    let project = store.environment.projectDirectory.resolvingSymlinksInPath()
+    let path = Self.ownContainer + "/" + name + ".md"
+    let file = project.appendingPathComponent(path)
+    guard Declaration.isInstructionName(name), FileManager.default.fileExists(atPath: file.path)
+    else { throw CoreError.notFound("own instructions file: \(name)") }
+    try Self.requireNoLinks(file, below: project)
+    let section = try Instructions.validateSource(Data(contentsOf: file), id: name)
+    return InstructionUnit(
+      record: LockedSection(name: name, source: Self.own, path: path, hash: section.hash),
+      section: section)
+  }
+
   func resolve(
     references: [String], declaration: Declaration, lock: inout ResolvedState
   ) throws -> [InstructionUnit] {
     try references.map { reference in
-      let parts = reference.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
-      guard parts.count == 2, let source = declaration.sources[parts[0]] else {
+      guard let (alias, name) = Self.split(reference) else {
+        return try own(named: reference)
+      }
+      guard let source = declaration.sources[alias] else {
         throw CoreError.invalidState("invalid instruction reference: \(reference)")
       }
-      let units = try discover(source)
-      guard let unit = units.first(where: { $0.record.name == parts[1] }) else {
+      guard let unit = try discover(source).first(where: { $0.record.name == name }) else {
         throw CoreError.notFound("instruction section: \(reference)")
       }
       lock.sources[unit.record.source] = lockedSource(source)
@@ -97,6 +130,12 @@ final class InstructionSources {
     -> [InstructionUnit]
   {
     try records.map { record in
+      if record.source == Self.own {
+        guard let unit = try? own(named: record.name), unit.record.path == record.path,
+          unit.record.hash == record.hash
+        else { throw InstructionError.ownChanged(name: record.name) }
+        return unit
+      }
       guard let source = sources[record.source], let revision = record.revision,
         source.kind != .wellKnown
       else { throw CoreError.invalidState("instruction section requires a locked Git revision") }
@@ -132,7 +171,7 @@ final class InstructionSources {
 
   func retain(_ lock: ResolvedState) throws {
     let records = lock.instructions.sections + lock.instructions.chatgpt.values.flatMap(\.sections)
-    for record in records {
+    for record in records where record.source != Self.own {
       guard let source = lock.sources[record.source], let revision = record.revision else {
         throw CoreError.invalidState("missing instruction pin")
       }
@@ -145,6 +184,12 @@ final class InstructionSources {
     }
   }
 
+  /// `alias:name` for a declared source, or nil for a bare name of the project's own instructions.
+  static func split(_ reference: String) -> (alias: String, name: String)? {
+    guard let colon = reference.firstIndex(of: ":") else { return nil }
+    return (String(reference[..<colon]), String(reference[reference.index(after: colon)...]))
+  }
+
   static func identity(_ record: LockedSection) -> String { record.source + ":" + record.name }
 
   static func contained(_ file: URL, in root: URL) throws {
@@ -152,5 +197,62 @@ final class InstructionSources {
     else {
       throw CoreError.unsafePath("instruction path escapes its root")
     }
+  }
+
+  /// Rejects a symbolic link at `url` or at any directory between `tree` and it.
+  private static func requireNoLinks(_ url: URL, below tree: URL) throws {
+    var cursor = tree
+    for component in PathSafety.relativePath(url.path, to: tree.path).split(separator: "/") {
+      cursor.appendPathComponent(String(component))
+      if (try? FileManager.default.destinationOfSymbolicLink(atPath: cursor.path)) != nil {
+        throw CoreError.invalidSource(
+          "instructions containers hold no symbolic links: \(PathSafety.relativePath(cursor.path, to: tree.path))"
+        )
+      }
+    }
+  }
+
+  /// The `.md` files below a container, by name, except the target names `AGENTS.md` and
+  /// `GEMINI.md`, which a project may generate there. Symbolic links and invalid names are errors.
+  private static func files(in directory: URL, tree: URL) throws -> [(String, URL)] {
+    guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+    try contained(directory, in: tree)
+    try requireNoLinks(directory, below: tree)
+    var result: [(String, URL)] = []
+    func walk(_ directory: URL, prefix: String) throws {
+      let keys: [URLResourceKey] = [.isSymbolicLinkKey, .isDirectoryKey, .isRegularFileKey]
+      for entry in try FileManager.default.contentsOfDirectory(
+        at: directory, includingPropertiesForKeys: keys
+      ).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+        let values = try entry.resourceValues(forKeys: Set(keys))
+        let component = entry.lastPathComponent
+        if values.isSymbolicLink == true {
+          throw CoreError.invalidSource(
+            "instructions containers hold no symbolic links: \(prefix + component)")
+        }
+        if values.isDirectory == true {
+          try walk(entry, prefix: prefix + component + "/")
+        } else if values.isRegularFile == true, entry.pathExtension == "md",
+          !["AGENTS.md", "GEMINI.md"].contains(component)
+        {
+          let name = prefix + entry.deletingPathExtension().lastPathComponent
+          guard Declaration.isInstructionName(name) else {
+            throw CoreError.invalidSource(
+              "instruction names use lowercase letters, digits and hyphens: \(name)")
+          }
+          result.append((name, entry))
+        }
+      }
+    }
+    try walk(directory, prefix: "")
+    return result
+  }
+
+  private static func unique(_ units: [InstructionUnit]) throws -> [InstructionUnit] {
+    var names = Set<String>()
+    for unit in units where !names.insert(unit.record.name).inserted {
+      throw CoreError.invalidSource("duplicate instruction name: \(unit.record.name)")
+    }
+    return units.sorted { $0.record.name < $1.record.name }
   }
 }

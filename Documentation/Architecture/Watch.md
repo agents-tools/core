@@ -39,8 +39,9 @@ Unchanged items are omitted. A name can exist in both skills and instructions;
 the optional kind filter disambiguates it.
 
 Git comparisons discover skills in disposable snapshots through the supplied
-discovery function. Instruction units are Markdown files directly inside
-`instructions/` or `.agents/instructions/`, named by their filename stem.
+discovery function. Instruction units are Markdown files below
+`instructions/` or `.agents/instructions/`, subdirectories included, named by
+their container-relative path without `.md`.
 The declared search path applies to both. Duplicate instruction names are an
 error. Watch compares source bytes without validating, rendering or installing
 instruction sections. Uncommitted working-tree content is ignored.

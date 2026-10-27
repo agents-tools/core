@@ -58,7 +58,9 @@ final class UpdateFixture {
       "---\nname: demo\ndescription: fixture\n---\n\n\(text)\n",
       to: repo.appendingPathComponent("skills/demo/SKILL.md"))
     try write("#!/bin/sh\necho fixture\n", to: repo.appendingPathComponent("skills/demo/run.sh"))
-    try write("# Rules\n\n\(text)\n", to: repo.appendingPathComponent("instructions/rules.md"))
+    try write(
+      "---\ndescription: Fixture instructions.\n---\n# Rules\n\n\(text)\n",
+      to: repo.appendingPathComponent("instructions/rules.md"))
   }
 
   func commit() throws {

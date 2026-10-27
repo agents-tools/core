@@ -36,22 +36,12 @@ struct MarkdownLine: Sendable, Equatable {
 struct MarkdownHeading: Sendable, Equatable {
   let level: Int
   let text: String
-  let lines: Range<Int>
+  /// The line where CommonMark starts the heading.
+  let line: Int
   /// UTF-8 offset of the ATX opening run, including container prefixes; nil for Setext.
   let openingOffset: Int?
   var isATX: Bool { openingOffset != nil }
   var key: String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-}
-
-struct HeadingIdentity: Hashable, Sendable {
-  let level: Int
-  let text: String
-}
-
-struct MarkdownSection: Sendable, Equatable {
-  let headingLine: Int
-  /// Physical ranges omit reference definitions consumed before Setext headings.
-  let contentRanges: [Range<Int>]
 }
 
 struct MarkdownDocument: Sendable, Equatable {
@@ -64,8 +54,6 @@ struct MarkdownDocument: Sendable, Equatable {
   var headings: [MarkdownHeading] = []
   var topLevelHeadings: [MarkdownHeading] = []
   var markers: [Int] = []
-  var sections: [HeadingIdentity: [MarkdownSection]] = [:]
-  private var referenceDefinitionLines: Set<Int> = []
   var endsInCode = false
   var endsInHTML = false
 
@@ -85,28 +73,10 @@ struct MarkdownDocument: Sendable, Equatable {
     var pending: [(Markup, Bool)] = [(parsed, false)]
     while let (node, topLevel) = pending.popLast() {
       if let range = node.range, let heading = node as? Heading {
-        var first = range.lowerBound.line - 1
-        let opening = Self.atxOpening(in: lines[first].text, inContainer: !topLevel)
-        let end: Int
-        if opening != nil {
-          end = first + 1
-        } else if topLevel {
-          let contentStart = firstContentLine(
-            afterDefinitionsAt: first, before: min(range.upperBound.line, lines.count))
-          referenceDefinitionLines.formUnion(first..<contentStart)
-          first = contentStart
-          // A Setext range can extend into the following block. Verify the physical underline.
-          end =
-            ((first + 1)..<lines.count).first {
-              Self.isSetextUnderline(lines[$0].text, level: heading.level)
-            }.map { $0 + 1 } ?? first + 1
-        } else {
-          // Container headings are never target boundaries; source validation rejects Setext.
-          end = first + 1
-        }
+        let first = range.lowerBound.line - 1
         let item = MarkdownHeading(
-          level: heading.level, text: heading.plainText, lines: first..<end,
-          openingOffset: opening)
+          level: heading.level, text: heading.plainText, line: first,
+          openingOffset: Self.atxOpening(in: lines[first].text, inContainer: !topLevel))
         headings.append(item)
         if topLevel { topLevelHeadings.append(item) }
       } else if let html = node as? HTMLBlock, topLevel, let range = html.range {
@@ -123,7 +93,6 @@ struct MarkdownDocument: Sendable, Equatable {
         pending.append((child, node is Document))
       }
     }
-    indexSections()
     inspectEnd(of: parsed, text: normalized)
   }
 
@@ -147,12 +116,6 @@ struct MarkdownDocument: Sendable, Equatable {
 
   func normalized(_ range: Range<Int>) -> String {
     lines[range].map { $0.text + ($0.ending.isEmpty ? "" : "\n") }.joined()
-  }
-
-  static func content(_ lines: ArraySlice<MarkdownLine>) -> String {
-    var trimmed = lines
-    while trimmed.last?.isBlank == true { trimmed = trimmed.dropLast() }
-    return trimmed.map(\.text).joined(separator: "\n")
   }
 
   /// Physical prefix verification is used only for blocks already identified by CommonMark.
@@ -193,59 +156,6 @@ struct MarkdownDocument: Sendable, Equatable {
       end == bytes.count || bytes[end] == 32 || bytes[end] == 9
     else { return nil }
     return start
-  }
-
-  private static func isSetextUnderline(_ line: String, level: Int) -> Bool {
-    let bytes = Array(line.utf8)
-    let indentation = bytes.prefix(while: { $0 == 32 }).count
-    guard indentation <= 3 else { return false }
-    let marker: UInt8 = level == 1 ? 61 : 45
-    let run = bytes.dropFirst(indentation).prefix(while: { $0 == marker }).count
-    return run > 0 && bytes.dropFirst(indentation + run).allSatisfy { $0 == 32 || $0 == 9 }
-  }
-
-  private func firstContentLine(afterDefinitionsAt first: Int, before end: Int) -> Int {
-    guard lines[first].text.trimmingCharacters(in: .whitespaces).hasPrefix("[") else {
-      return first
-    }
-    // Complete definition-only prefixes produce no AST blocks. Testing physical prefixes also
-    // handles destinations and titles on later lines, without relying on logical inline ranges.
-    var prefix = ""
-    var contentStart = first
-    for line in first..<end {
-      prefix += lines[line].raw
-      if Document(parsing: prefix, options: [.disableSmartOpts]).childCount == 0 {
-        contentStart = line + 1
-      }
-    }
-    return contentStart
-  }
-
-  private mutating func indexSections() {
-    var nextAtLevel = Array(repeating: lines.count, count: 7)
-    var markerIndex = markers.count
-    var nextMarker = lines.count
-    var ranges: [Range<Int>] = []
-    for heading in topLevelHeadings.reversed() {
-      while markerIndex > 0, markers[markerIndex - 1] > heading.lines.lowerBound {
-        markerIndex -= 1
-        nextMarker = markers[markerIndex]
-      }
-      let end = min(nextAtLevel[1...heading.level].min()!, nextMarker)
-      ranges.append(heading.lines.lowerBound..<end)
-      nextAtLevel[heading.level] = heading.lines.lowerBound
-    }
-    for (heading, range) in zip(topLevelHeadings, ranges.reversed()) {
-      var contentRanges: [Range<Int>] = []
-      var start = range.lowerBound
-      for line in range where referenceDefinitionLines.contains(line) {
-        if start < line { contentRanges.append(start..<line) }
-        start = line + 1
-      }
-      if start < range.upperBound { contentRanges.append(start..<range.upperBound) }
-      sections[HeadingIdentity(level: heading.level, text: heading.key), default: []].append(
-        MarkdownSection(headingLine: heading.lines.lowerBound, contentRanges: contentRanges))
-    }
   }
 
   private static func terminalBlock(_ document: Markup) -> Markup {

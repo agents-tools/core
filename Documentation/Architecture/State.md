@@ -8,7 +8,8 @@
 | User | `~/.agents/agents.json` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | `~/.agents/cache/` |
 
 User paths are relative to `RuntimeEnvironment.homeDirectory`. State files belong
-to their scope and are local state. `agents.watch` stores subscription baselines
+to their scope. A project may commit its declaration and lock; the cache, the
+writer lock and the journal stay local. `agents.watch` stores subscription baselines
 independently of installed pins; [Watch](Watch.md) describes the operations.
 
 ## Declaration
@@ -18,7 +19,19 @@ independently of installed pins; [Watch](Watch.md) describes the operations.
 location, an optional requirement, and an optional search `path`. A source added
 by location keeps the alias already declaring it, or receives its location's last
 path component; while another source holds that name, preceding components are
-prefixed (`anthropics-skills`), then a number is appended.
+prefixed (`anthropics-skills`), then a number is appended. `sources` may be
+omitted.
+
+`agents.json` and `agents.resolved` are written with sorted keys in Prettier's
+default JSON layout: two-space indentation, `"key": value`, every non-empty
+object expanded, empty containers as `{}` and `[]`, and an array without objects
+on one line when it fits in 80 columns. A repository whose Prettier
+configuration uses another print width may lay out an array between the two
+widths differently. An operation that writes state rewrites either file when
+its bytes differ from that layout, even when its content is unchanged. Empty
+lock sections such as `"skills": {}` remain, because earlier readers require
+them. Journals, `agents.watch` and content hashes keep the encoder's fixed
+layout.
 
 ```json
 {
@@ -54,7 +67,8 @@ Source IDs are Git `host[:port]/path` with a lowercase host and without user,
 scheme or `.git`; `local:` plus an absolute path; or a well-known URL retaining
 its scheme. Declaring two aliases for one normalized ID is an error.
 
-`instructions` holds recipients, ordered `source:name` section references, and
+`instructions` holds recipients, ordered section references (`alias:name`, or a
+bare name for the project's own instructions), and
 named `chatgpt` prompts with ordered sections and optional relative `append`
 paths. `watch` is a unique alias array. Skill operations preserve both fields
 and existing watch-state bytes.
@@ -77,9 +91,11 @@ Restoration reads these recorded URLs or verified digest cache entries and
 never reads an index. Missing pins or mismatched content stop restoration.
 
 Instruction section records carry name, source, revision or artifact, path and
-hash. Prompts hold ordered locked sections and optional append paths. Physical
-targets record agents, heading offset or import, block hash, and whether the
-file was created by the tool. Skill writes retain these records unchanged.
+hash; a project's own files use source `.`, their project-relative path and hash,
+and no revision. Prompts hold ordered locked sections and optional append paths.
+Physical targets record agents, heading offset 0 or import, the hash of the
+generated file or import block, and `created`, which unit targets always record
+as false. Skill writes retain these records unchanged.
 Instruction lifecycle writes preserve skill records. Target keys are project
 relative or user-home relative; configured user files outside home use absolute
 keys checked against the runtime's registered instruction locations.
@@ -108,7 +124,8 @@ A durable `transaction.json` in the scope state directory records target, state
 file and pruning replacements before mutation. Paths are relative to named
 roots in that scope: `state`, registered agent installation directories, and
 registered instruction destinations. Instruction roots permit fixed project
-files, configured user files and named Markdown authoring files. The
+files, configured user files and named Markdown files in the project's own
+instructions container. The
 journal binds the state directory and each used root to its physical location
 and filesystem identity. Configured agent containers are resolved at the
 registry boundary; recovery opens journal descendants without following links.

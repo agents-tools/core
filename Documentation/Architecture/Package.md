@@ -189,75 +189,45 @@ workflows. It composes the text APIs below with scope state and journaled writes
 See [Instruction lifecycle](Instructions.md) for consumer APIs, target mapping,
 lost-lock recovery and diagnostics.
 
-`Instructions` validates source bytes into immutable `InstructionSection`
-values, assembles or removes managed blocks, detects drift, renders ChatGPT
-prompts, and compares source-qualified identities across scopes. The `Markdown`
-product from [swift-markdown](https://github.com/swiftlang/swift-markdown)
-provides CommonMark structure, semantic inline text, and block line ranges through cmark-gfm.
-Only `AgentsInstructions` depends on that product. The adapter retains original
-line bytes for splicing; it does not format the parsed tree.
+`Instructions` validates instructions files into immutable `InstructionSection`
+values, renders generated targets and ChatGPT prompts, recognizes generated
+files by their notice, finds local links, detects drift of Claude import blocks,
+and compares source-qualified identities across scopes. The `Markdown` product
+from [swift-markdown](https://github.com/swiftlang/swift-markdown) provides
+CommonMark structure, semantic inline text, and block line ranges through
+cmark-gfm. Only `AgentsInstructions` depends on that product. The adapter
+retains original line bytes; it does not format the parsed tree.
 
-Only top-level headings are target titles or section boundaries. Headings
-inside lists and block quotes belong to their containing section. Every source
-heading, including container headings, shifts by the target offset and is
-checked for level-6 overflow. A source starts with a top-level ATX H1, has no
-other H1 anywhere, uses no Setext headings, and cannot end inside a code or HTML
-block. Heading identity is the AST heading's `plainText`, trimmed with whitespace
-collapsed. Emphasis delimiters and link destinations are absent, entities are
-decoded, and code spans retain the backticks supplied by `plainText`. This same
-identity controls matching, title detection, and duplicate selection checks;
-rendering retains the original source syntax.
-Markers count only as top-level, single-line HTML blocks whose complete source
-line equals the fixed marker text; indented, quoted, or padded examples are not
-markers.
-
-The parser supplies heading levels, start lines, and container ownership.
-Splicing uses physical line boundaries. The adapter verifies ATX syntax on the
-start line: one through six hashes followed by a space, tab, or end of line,
-with at most three leading spaces at the top level. Within AST-confirmed
-containers, a small prefix scan locates the opening run after list and quote
-prefixes. A top-level Setext span starts after any leading link reference
-definitions consumed from its paragraph block. Because those definitions have
-no AST nodes, the adapter reparses original physical prefixes and identifies
-complete definition-only prefixes by their empty document trees. This also
-handles multiline labels, destinations, and titles. Definition lines remain
-custom bytes and are excluded from section comparisons and replacement ranges,
-including when a selected parent section contains the Setext heading.
-A top-level Setext span ends at a physically verified underline:
-up to three leading spaces, a nonempty run of the appropriate `=` or `-`, and
-optional trailing spaces or tabs. Inline source coordinates are not physical
-positions and are never used to slice target bytes. Setext end coordinates are
-also unsuitable because they can extend into the next block. Prefix verification
-is limited to Setext paragraph blocks that could begin with a reference
-definition; CommonMark remains responsible for recognizing the definitions.
+`InstructionFrontMatter` reads the fixed front matter, a strict YAML subset with
+a required `description` and optional `paths`. The body keeps its source syntax:
+it starts with a top-level ATX heading of any level, every other heading,
+including container headings, is a deeper ATX heading, and it cannot end inside
+a code or HTML block. Heading identity is the AST heading's `plainText`, trimmed
+with whitespace collapsed, plus its level; it controls duplicate checks within a
+target. Rendering inserts the `paths` line after the first heading and never
+changes heading levels. A rendered target is reparsed, and every section's first
+heading must remain a document heading.
 
 Because the AST does not expose fence or HTML closure state, source validation
 reparses a continuation token in the terminal block's container and checks
 whether it becomes code or HTML. Physical list prefixes become continuation
 indentation and quote prefixes remain intact. The token is never emitted.
-Final assembly is reparsed and must contain exactly the expected managed block.
 
-A leading UTF-8 BOM is kept separately as file metadata before parsing. Target
-assembly and removal restore those bytes at the start, including when the block
-is prepended or no custom content remains. The BOM does not count as custom
-content or enter the managed block hash. Source hashes include it, while source
+Link inspection walks the AST for links, images and raw HTML outside code, and
+reads reference definitions, which have no AST nodes, from lines outside code
+blocks. It reports destinations that are relative, absolute or `file:` URLs,
+decoded and without query or fragment; lifecycle callers resolve them against
+the checkout being written.
+
+A leading UTF-8 BOM in a source is metadata: source hashes include it, while
 rendering omits it. ChatGPT custom content is UTF-8 validated and appended as
-original bytes, including any BOM and line endings.
+original bytes, including any BOM and line endings. Source hashes cover
+original bytes; a target's hash covers its rendered bytes.
 
-Selected headings are grouped once. Target headings and section boundaries
-are indexed in one traversal, with a reverse pass across the six heading
-levels. Removal ranges are sorted and applied in a single pass over target
-lines; assembly does not scan all headings for each selected section.
-
-Assembly returns bytes, heading offset, the rendered block and its hash,
-adoptions, conflicts, a block difference, and whether custom content remains.
-The caller chooses whether to replace conflicting custom sections and supplies
-the locked heading offset for installation. Existing managed content is
-rendered anew; lifecycle callers check drift before deciding to persist it.
-Source hashes cover original bytes. Block hashes cover LF-normalized marker
-and content lines, including the final LF. Drift detection accepts an optional
-reconstructed locked block for a textual difference; a hash alone establishes
-drift but cannot recover the old text.
+Markers count only as top-level, single-line HTML blocks whose complete source
+line equals the fixed marker text; indented, quoted, or padded examples are not
+markers. They delimit only the managed import block in a project Claude file,
+whose hash covers LF-normalized marker and content lines.
 
 `ClaudeForwarding` renders import blocks and classifies existing project Claude
 files from caller-supplied bytes and symbolic-link metadata. Forwarding requires
@@ -305,11 +275,11 @@ state, transactions, concurrency, requirements, mirrors, snapshots, hashes and
 agent paths. Skill tests cover discovery, artifact formats and the full declared
 lifecycle, including public consumer calls and failed-operation preservation.
 Fixtures create isolated homes and explicit Git initial branches and remove
-their temporary roots. Instruction tests cover source validation, managed-block
-assembly and removal, byte preservation, drift, Claude forwarding, and ChatGPT
-rendering through public APIs with in-memory fixtures. Lifecycle tests cover
-pinned sources, physical targets, transactional writes, conflict stops, lost
-locks, prompts, deletion ownership and read-only multi-root audits.
+their temporary roots. Instruction tests cover the instructions file format,
+generation, link checks, Claude forwarding and ChatGPT rendering through public
+APIs with in-memory fixtures. Lifecycle tests cover pinned sources, own
+instructions, nested and physical targets, transactional writes, ownership
+stops, lost locks, prompts, deletion, export and read-only multi-root audits.
 
 [State and cache](State.md) describes persisted data and lifecycle invariants.
 `../Proposals/` holds design work; `../Decisions/`, `../Migrations/` and

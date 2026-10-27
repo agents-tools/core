@@ -231,11 +231,22 @@ public struct ResolvedState: Codable, Equatable, Sendable {
       }
     }
     for section in instructions.sections + instructions.chatgpt.values.flatMap(\.sections) {
-      guard let source = sources[section.source], !section.name.isEmpty else {
-        throw CoreError.invalidState("invalid section source or name")
+      guard Declaration.isInstructionName(section.name) else {
+        throw CoreError.invalidState("invalid section name: \(section.name)")
       }
-      try validatePin(
-        source: source, revision: section.revision, artifact: section.artifact, path: section.path)
+      if section.source == "." {
+        // A project's own instructions are read live from `.agent/instructions/`; only the hash pins them.
+        guard section.revision == nil, section.version == nil, section.artifact == nil,
+          section.path.hasPrefix(".agent/instructions/")
+        else { throw CoreError.invalidState("own instructions take only a path and a hash") }
+      } else {
+        guard let source = sources[section.source] else {
+          throw CoreError.invalidState("invalid section source: \(section.source)")
+        }
+        try validatePin(
+          source: source, revision: section.revision, artifact: section.artifact,
+          path: section.path)
+      }
       _ = try PathSafety.sanitizeSubpath(section.path)
       try StateValidation.digest(section.hash)
     }

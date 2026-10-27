@@ -198,6 +198,19 @@ public struct Declaration: Codable, Equatable, Sendable {
     self.watch = watch
   }
 
+  /// A missing `sources` key means no declared sources, as in a project that selects only its
+  /// own instructions.
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    agents = try container.decodeIfPresent([AgentID].self, forKey: .agents)
+    sources =
+      try container.decodeIfPresent([String: SourceDeclaration].self, forKey: .sources) ?? [:]
+    skills = try container.decodeIfPresent([String: SkillDeclaration].self, forKey: .skills)
+    instructions = try container.decodeIfPresent(
+      InstructionsDeclaration.self, forKey: .instructions)
+    watch = try container.decodeIfPresent([String].self, forKey: .watch)
+  }
+
   public var defaultAgents: [AgentID] { agents ?? [.codex, .claudeCode] }
 
   public func validate(environment: RuntimeEnvironment) throws {
@@ -238,13 +251,26 @@ public struct Declaration: Codable, Equatable, Sendable {
       + (instructions?.chatgpt ?? [:]).values.flatMap(\.sections)
     {
       let parts = reference.split(separator: ":", omittingEmptySubsequences: false)
-      guard parts.count == 2, sources[String(parts[0])] != nil, !parts[1].isEmpty else {
-        throw CoreError.invalidState("invalid section reference: \(reference)")
-      }
+      let valid =
+        parts.count == 1
+        ? Self.isInstructionName(reference)
+        : parts.count == 2 && sources[String(parts[0])] != nil
+          && Self.isInstructionName(String(parts[1]))
+      guard valid else { throw CoreError.invalidState("invalid section reference: \(reference)") }
     }
     for prompt in (instructions?.chatgpt ?? [:]).values {
       if let append = prompt.append { _ = try PathSafety.sanitizeSubpath(append) }
     }
+  }
+
+  /// Whether every `/`-separated segment of an instructions name uses lowercase letters, digits
+  /// and hyphens. A reference without an alias names the project's own instructions.
+  package static func isInstructionName(_ name: String) -> Bool {
+    let segments = name.split(separator: "/", omittingEmptySubsequences: false)
+    return !segments.isEmpty
+      && segments.allSatisfy {
+        $0.range(of: #"^[a-z0-9][a-z0-9-]*$"#, options: .regularExpression) != nil
+      }
   }
 
   package static func validateNames(_ names: [String]) throws {

@@ -335,18 +335,17 @@ package final class FileTransaction {
     return source.path
   }
 
+  /// A copied subtree keeps relative links that stay inside it, dangling ones included.
   private static func validateCopy(_ source: URL) throws {
-    let root = source.resolvingSymlinksInPath()
-    guard
+    guard let root = PathSafety.realPath(source.path),
       let entries = FileManager.default.enumerator(
-        at: root, includingPropertiesForKeys: [.isSymbolicLinkKey])
+        at: URL(fileURLWithPath: root), includingPropertiesForKeys: [.isSymbolicLinkKey])
     else { return }
     for case let entry as URL in entries {
       if try entry.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
         entries.skipDescendants()
         let destination = try FileManager.default.destinationOfSymbolicLink(atPath: entry.path)
-        guard !destination.hasPrefix("/"),
-          PathSafety.isContained(entry.resolvingSymlinksInPath(), in: root)
+        guard !destination.hasPrefix("/"), try PathSafety.linkStaysInside(entry, root: root)
         else {
           throw CoreError.unsafePath("copy symlink escapes installed subtree: \(entry.path)")
         }

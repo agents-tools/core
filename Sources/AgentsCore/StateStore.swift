@@ -61,14 +61,23 @@ public struct StateStore: Sendable {
       _ = try readDeclaration()
       _ = try readResolved()
       let transaction = FileTransaction(store: self)
+      try stageDeclaration(declaration, in: transaction)
       try transaction.replace(
-        declarationURL, content: nil, data: Self.encode(declaration.normalized))
-      try transaction.replace(resolvedURL, content: nil, data: Self.encode(resolved.normalized))
+        resolvedURL, content: nil, data: Self.encodeState(resolved.normalized))
       if let watch {
         try transaction.replace(watchURL, content: nil, data: Self.encode(watch))
       }
       try transaction.commit()
     }
+  }
+
+  /// Stages the declaration when the file's bytes differ from its standard layout, so a file
+  /// written by hand or by an earlier version is rewritten even when its content is unchanged.
+  package func stageDeclaration(_ declaration: Declaration, in transaction: FileTransaction) throws
+  {
+    let data = try Self.encodeState(declaration.normalized)
+    guard try existingData(declarationURL) != data else { return }
+    try transaction.replace(declarationURL, content: nil, data: data)
   }
 
   package func withLock<T>(
@@ -128,6 +137,15 @@ public struct StateStore: Sendable {
     return try parent.child(name)
   }
 
+  /// Encodes `agents.json` or `agents.resolved` in the layout `StateJSON` describes.
+  package static func encodeState<T: Encodable>(_ value: T) throws -> Data {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    return try StateJSON.format(encoder.encode(value))
+  }
+
+  /// Encodes journals, watch state and content hashes. Its bytes feed recorded hashes, so its
+  /// layout stays fixed.
   package static func encode<T: Encodable>(_ value: T) throws -> Data {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

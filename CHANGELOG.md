@@ -6,6 +6,77 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-27
+
+### Added
+
+- Instructions files may sit in subdirectories of `instructions/` and
+  `.agents/instructions/`; a file's name is its container-relative path, such
+  as `epd/review`.
+- A project's own instructions in `.agent/instructions/` are selected by bare
+  name and read from the working tree. `InstructionAddOptions(source: ".")`
+  adds them; `listOwn(environment:)` lists them. Restoring a lock fails with
+  `InstructionError.ownChanged` when an own file changed since the lock.
+- Front matter `paths` scopes a section: its patterns are named after its first
+  heading, and in project scope the section is written to the `AGENTS.md` of
+  the directory the patterns share.
+- `InstructionOperations.export(projectRoots:environment:)` maps the locked
+  targets of the user scope and given projects to their sections.
+- Doctor reports own files changed since the lock and links in generated
+  targets that no longer resolve.
+
+### Changed
+
+- **Breaking:** an instructions file needs front matter with a `description`,
+  and its body may start at any heading level. Add front matter to existing
+  files; headings are written as authored.
+- **Breaking:** targets are generated in full: a notice line followed by the
+  sections. Custom content in targets, managed blocks, title detection, heading
+  offsets and adoption of matching custom sections are gone. Move hand-written
+  content into instructions files. A file is owned when it is blank or starts
+  with the notice; writing over any other file needs `replace`, and
+  `InstructionError.unownedTargets` names it. Upgrading from 0.1.2 therefore
+  takes over targets that kept custom content only with `replace`.
+- **Breaking:** `InstructionTargetChange.assembly` is replaced by `foreign`,
+  and `InstructionDrift` is `clean`, `drifted` or `missing`. Diagnostic kinds
+  `missingBlock`, `adoption` and `conflict` are removed; `missingTarget`,
+  `foreignTarget`, `ownChanged` and `invalidLink` are added.
+- **Breaking:** `initializeInstructions(named:environment:)` replaces
+  `initializeInstructions(named:directory:)` and creates
+  `.agent/instructions/<name>.md` in the project, using the project's state
+  lock.
+- A declaration may omit `sources`.
+- `agents.json` and `agents.resolved` are written in Prettier's default JSON
+  layout: two-space indentation, `"key": value`, expanded objects, empty
+  containers as `{}` and `[]`, and an array on one line when it fits in 80
+  columns. Any operation that writes state rewrites a file in another layout,
+  such as the one earlier versions wrote, even when its content is unchanged.
+  Empty lock sections remain so earlier readers decode the lock.
+- A local link in a section must resolve, from the target, to a file in the
+  checkout being written; user targets accept no local links.
+- Removing a name that equals a declared reference removes that reference, so
+  an own file's bare name no longer collides with a source's same-named file.
+- Install restores the locked Claude import files instead of recomputing them.
+- A nested target's directory cannot be a symbolic link, `.git`, or inside
+  another repository. Discovery skips `AGENTS.md` and `GEMINI.md` in
+  containers, and a symbolic link at or below a source's search path is an
+  error.
+- Doctor reports a Claude file that keeps Claude Code from reading a generated
+  nested `AGENTS.md`, and checks root forwarding only when the root
+  `AGENTS.md` is a Claude target.
+- A target that no longer receives sections is deleted only while it equals its
+  locked rendering.
+
+### Fixed
+
+- Materializing a source and copying a subtree keep a dangling symbolic link
+  that stays inside, such as one to an uncommitted file, instead of rejecting
+  the whole source; a link that leaves the tree is still rejected.
+- Doctor's Codex size check counts only the project chain, as Codex does: the
+  user file is loaded separately without a limit, separators are not counted,
+  whitespace-only files add nothing, fallback names apply in every directory,
+  and an existing `AGENTS.override.md`, even an empty one, hides `AGENTS.md`.
+
 ## 0.1.2 - 2026-10-25
 
 ### Added

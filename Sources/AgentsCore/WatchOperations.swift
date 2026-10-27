@@ -170,8 +170,7 @@ public struct WatchOperations: Sendable {
     try watch.validate()
     let transaction = FileTransaction(store: store, checkpoint: checkpoint)
     if let declaration {
-      try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(declaration.normalized))
+      try store.stageDeclaration(declaration, in: transaction)
     }
     try transaction.replace(store.watchURL, content: nil, data: StateStore.encode(watch))
     try SourceCache(store: store).prune(referencedBy: lock, watch: watch, transaction: transaction)
@@ -342,17 +341,28 @@ public struct WatchOperations: Sendable {
       for path in ["instructions", ".agents/instructions"] {
         let directory = try PathSafety.resolvedChild(base: root, subpath: path)
         guard FileManager.default.fileExists(atPath: directory.path) else { continue }
-        let handle = try DirectoryHandle(at: directory)
-        for file in try handle.names() where file.hasSuffix(".md") {
-          guard try (handle.info(file)?.st_mode ?? 0) & 0o170000 != 0o040000 else { continue }
-          let key = WatchItemKey(kind: .instructions, name: String(file.dropLast(3)))
-          guard result[key] == nil else {
-            throw CoreError.invalidSource("duplicate instructions name: \(key.name)")
+        // Instructions files are named by their path inside the container, subdirectories included.
+        func collect(_ handle: DirectoryHandle, prefix: String) throws {
+          for file in try handle.names() {
+            let mode = try (handle.info(file)?.st_mode ?? 0) & 0o170000
+            if mode == 0o040000 {
+              try collect(handle.child(file), prefix: prefix + file + "/")
+              continue
+            }
+            // Target names are never instructions files, as in discovery.
+            guard file.hasSuffix(".md"), !["AGENTS.md", "GEMINI.md"].contains(file) else {
+              continue
+            }
+            let key = WatchItemKey(kind: .instructions, name: prefix + String(file.dropLast(3)))
+            guard result[key] == nil else {
+              throw CoreError.invalidSource("duplicate instructions name: \(key.name)")
+            }
+            result[key] = WatchUnit(
+              path: path + "/" + prefix + file, digest: nil,
+              files: [file: try WatchUnit.entry(file, in: handle)])
           }
-          result[key] = WatchUnit(
-            path: path + "/" + file, digest: nil,
-            files: [file: try WatchUnit.entry(file, in: handle)])
         }
+        try collect(DirectoryHandle(at: directory), prefix: "")
       }
       return result
     }

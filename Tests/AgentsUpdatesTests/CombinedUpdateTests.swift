@@ -49,6 +49,21 @@ struct CombinedUpdateTests {
     #expect(try !fixture.preview().hasChanges)
   }
 
+  @Test func combinedApplyStopsBeforeWritingOverAHandWrittenTarget() throws {
+    let fixture = try UpdateFixture()
+    try fixture.install(agents: [.codex])
+    try fixture.write("Hand written.\n", to: fixture.instruction(.geminiCLI))
+    var declaration = try fixture.store.loadDeclaration()
+    declaration.instructions?.agents = [.codex, .geminiCLI]
+    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    let preview = try fixture.preview()
+    #expect(preview.instructions.targets.contains { $0.target == "GEMINI.md" && $0.foreign })
+    let before = try fixture.snapshot()
+    #expect(throws: InstructionError.unownedTargets(["GEMINI.md"])) { try fixture.apply() }
+    #expect(try fixture.snapshot() == before)
+    #expect(try fixture.bytes(fixture.instruction(.geminiCLI)) == Data("Hand written.\n".utf8))
+  }
+
   @Test(arguments: [false, true])
   func standaloneInstructionsValidateRetainedSkills(_ apply: Bool) throws {
     let fixture = try UpdateFixture()
@@ -392,7 +407,7 @@ struct CombinedUpdateTests {
     #expect(try fixture.preview().hasChanges)
   }
 
-  @Test(arguments: ["skills", "instructions", "assembly"])
+  @Test(arguments: ["skills", "instructions", "target"])
   func preparationFailureNeverExposesAPartialReport(_ kind: String) throws {
     let fixture = try UpdateFixture()
     try fixture.install()
@@ -407,9 +422,9 @@ struct CombinedUpdateTests {
       try fixture.write("invalid", to: fixture.repo.appendingPathComponent("instructions/rules.md"))
       try fixture.commit()
     } else {
-      try fixture.write(
-        "<!-- BEGIN managed by agents: do not edit this block. Edit its sources and run `agents update`. -->\nbroken",
-        to: fixture.instruction())
+      try FileManager.default.removeItem(at: fixture.instruction())
+      try FileManager.default.createDirectory(
+        at: fixture.instruction(), withIntermediateDirectories: false)
     }
     let before = try fixture.snapshot()
     var called = false
@@ -548,7 +563,8 @@ struct CombinedUpdateTests {
     #expect(prompt.instructions.changedPrompts.isEmpty)
     _ = try fixture.apply()
     try fixture.write(
-      "# Second\n\nSecond body\n", to: fixture.repo.appendingPathComponent("instructions/second.md")
+      "---\ndescription: Fixture instructions.\n---\n# Second\n\nSecond body\n",
+      to: fixture.repo.appendingPathComponent("instructions/second.md")
     )
     try fixture.commit()
     declaration.instructions?.chatgpt?["weekly"]?.sections = ["fixture:rules", "fixture:second"]

@@ -29,7 +29,7 @@ struct InstructionDoctorTests {
     let healthy = try InstructionOperations.doctor(
       scope: healthyScope, environment: fixture.environment)
     #expect(healthy.diagnostics.filter { $0.kind == .pendingRecovery }.count == 1)
-    #expect(healthy.diagnostics.contains { $0.kind == .missingBlock && $0.path == healthyFile })
+    #expect(healthy.diagnostics.contains { $0.kind == .missingTarget && $0.path == healthyFile })
     #expect(!healthy.diagnostics.contains { $0.kind == .duplicateScope })
     #expect(try fixture.snapshot() == before)
   }
@@ -93,7 +93,7 @@ struct InstructionDoctorTests {
         }
       })
     let size = try #require(reports[0].diagnostics.first { $0.kind == .codexSize })
-    #expect(size.message.contains("2050 bytes"))
+    #expect(size.message.contains("2048 bytes"))
     #expect(size.message.contains("(1536)"))
     #expect(!reports[1].diagnostics.contains { $0.kind == .codexSize })
     #expect(try fixture.snapshot() == before)
@@ -114,11 +114,11 @@ struct InstructionDoctorTests {
     runtime.projectDirectory = nested
     let report = try InstructionOperations.doctor(environment: runtime)
     #expect(
-      report.diagnostics.contains { $0.kind == .codexSize && $0.message.contains("1802 bytes") })
+      report.diagnostics.contains { $0.kind == .codexSize && $0.message.contains("1800 bytes") })
     #expect(!report.diagnostics.contains { $0.kind == .invalidConfiguration })
   }
 
-  @Test func doctorReportsAdoptionsAndConflictsWithoutChangingCustomSections() throws {
+  @Test func doctorReportsForeignAndDriftedTargetsWithoutWriting() throws {
     let fixture = try InstructionFixture()
     try fixture.section("rules")
     try fixture.commit()
@@ -127,12 +127,12 @@ struct InstructionDoctorTests {
     try fixture.write("# rules\n\nOriginal\n", to: file)
     #expect(
       try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
-        $0.kind == .adoption
+        $0.kind == .foreignTarget && $0.path == file
       })
-    try fixture.write("# rules\n\nCustom\n", to: file)
+    try fixture.write(generated(["# rules\n\nCustom"]), to: file)
     let report = try InstructionOperations.doctor(environment: fixture.environment)
-    #expect(report.diagnostics.contains { $0.kind == .conflict && $0.message.contains("-Custom") })
-    #expect(try fixture.text() == "# rules\n\nCustom\n")
+    #expect(report.diagnostics.contains { $0.kind == .drift && $0.path == file })
+    #expect(try fixture.text() == generated(["# rules\n\nCustom"]))
   }
 
   @Test func diagnosesBothScopesOverridesAncestorsAndConfiguredByteLimit() throws {
@@ -179,7 +179,7 @@ struct InstructionDoctorTests {
     let reports = InstructionOperations.doctor(
       projectRoots: [fixture.project, empty, pending], environment: fixture.environment)
     #expect(reports.count == 3)
-    #expect(reports[0].diagnostics.contains { $0.kind == .missingBlock })
+    #expect(reports[0].diagnostics.contains { $0.kind == .missingTarget })
     #expect(reports[2].diagnostics.map(\.kind) == [.pendingRecovery])
     #expect(try fixture.snapshot() == before)
     #expect(!FileManager.default.fileExists(atPath: empty.appendingPathComponent(".agent").path))
@@ -188,7 +188,7 @@ struct InstructionDoctorTests {
         atPath: pending.appendingPathComponent(".agent/.agents.lock").path))
   }
 
-  @Test func codexCountsOnlyLoadedChainAndSkipsEmptyOverrides() throws {
+  @Test func codexBudgetCountsOnlyTheProjectChainAndEmptyOverridesWin() throws {
     let fixture = try InstructionFixture()
     try fixture.section("rules")
     try fixture.commit()
@@ -202,24 +202,50 @@ struct InstructionDoctorTests {
       String(repeating: "y", count: 20_000), to: nested.appendingPathComponent("AGENTS.md"))
     try fixture.write("", to: nested.appendingPathComponent("AGENTS.override.md"))
     try fixture.write(
+      String(repeating: "z", count: 30_000),
+      to: fixture.home.appendingPathComponent(".codex/AGENTS.md"))
+    try fixture.write(
       String(repeating: "ignored", count: 20_000),
       to: fixture.root.appendingPathComponent("AGENTS.md"))
     var runtime = fixture.environment
     runtime.projectDirectory = nested
-    let report = try InstructionOperations.doctor(environment: runtime)
-    let size = try #require(report.diagnostics.first { $0.kind == .codexSize })
-    #expect(size.message.contains("40002 bytes"))
-    #expect(!size.message.contains(fixture.root.appendingPathComponent("AGENTS.md").path))
-    try fixture.write(
-      "project_doc_max_bytes = 65536\n",
-      to: fixture.home.appendingPathComponent(".codex/config.toml"))
     #expect(
       try !InstructionOperations.doctor(environment: runtime).diagnostics.contains {
         $0.kind == .codexSize
       })
+    try fixture.write(
+      "project_doc_max_bytes = 16384\n",
+      to: fixture.home.appendingPathComponent(".codex/config.toml"))
+    let report = try InstructionOperations.doctor(environment: runtime)
+    let size = try #require(report.diagnostics.first { $0.kind == .codexSize })
+    #expect(size.message.contains("20000 bytes"))
+    #expect(!size.message.contains(fixture.home.appendingPathComponent(".codex").path))
+    #expect(!size.message.contains(fixture.root.appendingPathComponent("AGENTS.md").path))
   }
 
-  @Test func malformedMarkersAndLostLockProduceDiagnostics() throws {
+  @Test func codexOverrideHidesManagedFilesEvenWhenEmptyInProjects() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("rules")
+    try fixture.commit()
+    try fixture.add(agents: [.codex])
+    try fixture.add(scope: .user, agents: [.codex])
+    try fixture.write("", to: fixture.project.appendingPathComponent("AGENTS.override.md"))
+    try fixture.write(" \n", to: fixture.home.appendingPathComponent(".codex/AGENTS.override.md"))
+    #expect(
+      try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
+        $0.kind == .codexOverride
+      })
+    #expect(
+      try !InstructionOperations.doctor(scope: .user, environment: fixture.environment)
+        .diagnostics.contains { $0.kind == .codexOverride })
+    try fixture.write(
+      "Override\n", to: fixture.home.appendingPathComponent(".codex/AGENTS.override.md"))
+    #expect(
+      try InstructionOperations.doctor(scope: .user, environment: fixture.environment)
+        .diagnostics.contains { $0.kind == .codexOverride })
+  }
+
+  @Test func editedTargetAndLostLockProduceDiagnostics() throws {
     let fixture = try InstructionFixture()
     try fixture.section("rules")
     try fixture.commit()
@@ -229,7 +255,7 @@ struct InstructionDoctorTests {
       to: fixture.project.appendingPathComponent("AGENTS.md"))
     #expect(
       try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
-        $0.kind == .invalidTarget
+        $0.kind == .drift
       })
     try FileManager.default.removeItem(at: fixture.store().resolvedURL)
     #expect(

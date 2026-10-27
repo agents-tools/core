@@ -46,21 +46,21 @@ struct InstructionLifecycleSafetyTests {
     #expect(try Data(contentsOf: fixture.store().resolvedURL) == lock)
   }
 
-  @Test func installUsesLockedOffsetAndRejectsCustomConflicts() throws {
+  @Test func installRestoresTheLockedRenderingOverEdits() throws {
     let fixture = try InstructionFixture()
     try fixture.section("rules")
     try fixture.commit()
-    try fixture.write("# Project\n", to: fixture.project.appendingPathComponent("AGENTS.md"))
     try fixture.add()
+    let locked = try fixture.bytes()
     try fixture.write("", to: fixture.project.appendingPathComponent("AGENTS.md"))
     _ = try InstructionOperations.installResolvedReport(environment: fixture.environment)
-    #expect(try fixture.text().contains("## rules"))
+    #expect(try fixture.bytes() == locked)
     try fixture.write(
-      "## rules\n\nConflicting.\n", to: fixture.project.appendingPathComponent("AGENTS.md"))
-    #expect(throws: (any Error).self) {
-      try InstructionOperations.installResolvedReport(environment: fixture.environment)
-    }
-    #expect(try fixture.text() == "## rules\n\nConflicting.\n")
+      Instructions.notice + "\n\n## rules\n\nEdited.\n",
+      to: fixture.project.appendingPathComponent("AGENTS.md"))
+    let report = try InstructionOperations.installResolvedReport(environment: fixture.environment)
+    #expect(report.targets.first?.drift == .drifted)
+    #expect(try fixture.bytes() == locked)
   }
 
   @Test func addPreservesOtherPinsAndSharedSkillState() throws {
@@ -133,17 +133,16 @@ struct InstructionLifecycleSafetyTests {
     #expect(!FileManager.default.fileExists(atPath: fixture.store().resolvedURL.path))
   }
 
-  @Test func removalPreservesCustomContentAndCleansForwarder() throws {
+  @Test func removalKeepsAnEditedTargetAndCleansForwarder() throws {
     let fixture = try InstructionFixture()
     try fixture.section("rules")
     try fixture.commit()
     try fixture.write("Claude custom.\n", to: fixture.project.appendingPathComponent("CLAUDE.md"))
     try fixture.add()
-    try fixture.write(
-      try fixture.text() + "\n# Custom\n\nKeep.\n",
-      to: fixture.project.appendingPathComponent("AGENTS.md"))
+    let edited = try fixture.text() + "\n# Custom\n\nKeep.\n"
+    try fixture.write(edited, to: fixture.project.appendingPathComponent("AGENTS.md"))
     try InstructionOperations.remove(names: ["rules"], environment: fixture.environment)
-    #expect(try fixture.text() == "# Custom\n\nKeep.\n")
+    #expect(try fixture.text() == edited)
     #expect(try fixture.text("CLAUDE.md") == "Claude custom.\n")
   }
 

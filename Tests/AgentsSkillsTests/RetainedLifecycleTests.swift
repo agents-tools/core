@@ -33,6 +33,24 @@ struct RetainedLifecycleTests {
     #expect(try fixture.store().loadDeclaration().sources.values.first?.path == "skills/demo")
   }
 
+  @Test func copyInstallRejectsADanglingLinkThatResolvesAboveTheSkill() throws {
+    let fixture = try SkillFixture()
+    try fixture.skill("demo", body: "demo")
+    let skill = fixture.repo.appendingPathComponent("skills/demo")
+    try FileManager.default.createSymbolicLink(
+      atPath: skill.appendingPathComponent("here").path, withDestinationPath: ".")
+    try FileManager.default.createSymbolicLink(
+      atPath: skill.appendingPathComponent("leak").path,
+      withDestinationPath: "here/here/../../settings.json")
+    try fixture.commit()
+    #expect(throws: CoreError.self) {
+      try SkillOperations.add(
+        AddOptions(
+          source: fixture.repo.path, agents: [.codex], mode: .copy,
+          environment: fixture.environment))
+    }
+  }
+
   @Test func publicDiscoveryForwardsDepthAndInternalEnvironmentValues() throws {
     let fixture = try SkillFixture()
     try fixture.skill("public", body: "public")
