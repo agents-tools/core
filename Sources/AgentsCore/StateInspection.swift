@@ -1,10 +1,5 @@
+import CPlatform
 import Foundation
-
-#if canImport(Darwin)
-  import Darwin
-#else
-  import Glibc
-#endif
 
 extension StateStore {
   /// Takes an existing scope lock without creating files or replaying recovery.
@@ -23,15 +18,17 @@ extension StateStore {
           openat($0.descriptor, ".agents.lock", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         } ?? -1
       if directory != nil, descriptor < 0, errno != ENOENT {
-        throw CoreError.invalidState("cannot open scope lock for inspection")
+        throw FileSystem.posixError(
+          errno, at: self.directory.appendingPathComponent(".agents.lock"),
+          otherwise: .invalidState("cannot open scope lock for inspection"))
       }
       defer { if descriptor >= 0 { close(descriptor) } }
       if descriptor >= 0 {
-        while flock(descriptor, LOCK_SH) != 0 {
+        while platform_flock(descriptor, LOCK_SH) != 0 {
           if errno != EINTR { throw CoreError.invalidState("cannot acquire scope inspection lock") }
         }
       }
-      defer { if descriptor >= 0 { flock(descriptor, LOCK_UN) } }
+      defer { if descriptor >= 0 { platform_flock(descriptor, LOCK_UN) } }
       let pending = try hasPendingRecovery(in: directory)
       let result = Result { try pending ? onPendingRecovery() : body() }
       // Writers create the lock before mutation and never remove it. A failed

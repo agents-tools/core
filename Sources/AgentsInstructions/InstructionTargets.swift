@@ -288,7 +288,7 @@ struct InstructionTargets {
     guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
       throw CoreError.unsafePath("instruction target is not a regular file: \(file.path)")
     }
-    return try Data(contentsOf: file)
+    return try FileSystem.read(at: file)
   }
 
   private static func importBlock(in bytes: Data, at path: ClaudeInstructionPath) throws

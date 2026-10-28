@@ -534,14 +534,18 @@ public enum SkillOperations {
       let name = name.map(PathSafety.sanitizeName)
       let root = name.map { directory.appendingPathComponent($0) } ?? directory
       let file = root.appendingPathComponent("SKILL.md")
-      guard !FileManager.default.fileExists(atPath: file.path) else {
+      if FileManager.default.fileExists(atPath: file.path) {
+        try FileSystem.requireWritableFile(at: file)
         throw CoreError.invalidSkill("SKILL.md already exists at \(file.path)")
       }
-      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      try FileSystem.createDirectory(at: root)
       let title = name ?? PathSafety.sanitizeName(root.lastPathComponent)
-      try
-        "---\nname: \(title)\ndescription: Describe when to use this skill\n---\n\n# \(title)\n\nWrite the skill instructions here.\n"
-        .write(to: file, atomically: true, encoding: .utf8)
+      try FileSystem.withAccessErrors(at: file) {
+        try
+          "---\nname: \(title)\ndescription: Describe when to use this skill\n---\n\n# \(title)\n\nWrite the skill instructions here.\n"
+          .write(to: file, atomically: true, encoding: .utf8)
+      }
+      try FileSystem.requireWritableFile(at: file)
       return root
     }
   }

@@ -1,6 +1,6 @@
 import AgentsCore
 import AgentsSkills
-import Darwin
+import CPlatform
 import Foundation
 import Testing
 
@@ -193,7 +193,7 @@ private func lastSkillIndex(_ store: StateStore) throws -> Int {
 private final class UpdateTestBundle: NSObject {}
 
 private func launch(_ fixture: UpdateFixture, command: String, argument: String) throws -> Process {
-  var directory = Bundle(for: UpdateTestBundle.self).bundleURL.deletingLastPathComponent()
+  var directory = Bundle(for: UpdateTestBundle.self).bundleURL
   while !FileManager.default.isExecutableFile(
     atPath: directory.appendingPathComponent("StateTestProcess").path),
     directory.path != "/"

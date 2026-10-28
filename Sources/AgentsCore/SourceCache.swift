@@ -325,7 +325,7 @@ package struct SourceCache {
     if !cacheSource {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(
         "agents-discovery-" + UUID().uuidString)
-      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      try FileSystem.createDirectory(at: root)
       defer { try? FileManager.default.removeItem(at: root) }
       if case .revision(let object) = source.requirement, Self.isObjectID(object),
         let cached = try withExistingMirror(
@@ -373,7 +373,7 @@ package struct SourceCache {
     let mirror = try pinnedMirror(sourceID: sourceID, source: source, revision: revision)
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "agents-snapshot-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: root)
     defer { try? FileManager.default.removeItem(at: root) }
     return try body(
       extract(
@@ -411,7 +411,7 @@ package struct SourceCache {
   ) throws -> URL {
     let archive = root.appendingPathComponent("tree.tar")
     let tree = root.appendingPathComponent("tree")
-    try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: tree)
     let arguments = [
       "--no-optional-locks", "archive", "--format=tar", "--output=" + archive.path, revision,
     ]
@@ -435,7 +435,7 @@ package struct SourceCache {
     }
     let url = try artifactURL(digest: digest)
     if FileManager.default.fileExists(atPath: url.path) {
-      guard try Data(contentsOf: url) == data else {
+      guard try FileSystem.read(at: url) == data else {
         throw CoreError.invalidState("cached artifact digest mismatch")
       }
     } else {
@@ -587,8 +587,7 @@ package struct SourceCache {
     let url =
       source.kind == .local ? source.localURL(environment: store.environment).path : source.gitURL
     let mirror = mirrorURL(sourceID: id)
-    try FileManager.default.createDirectory(
-      at: mirror.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: mirror.deletingLastPathComponent())
     if FileManager.default.fileExists(atPath: mirror.path) {
       _ = try git(
         mirror,
@@ -601,7 +600,9 @@ package struct SourceCache {
         Self.gitOptions + ["clone", "--mirror", "--no-local", "--", url, staging.path],
         operation: .clone, source: source.location,
         replacingPaths: [staging, store.cacheDirectory], inheritingLock: lock)
-      try FileManager.default.moveItem(at: staging, to: mirror)
+      try FileSystem.withAccessErrors(at: mirror) {
+        try FileManager.default.moveItem(at: staging, to: mirror)
+      }
     }
     // A remote can change its default branch after the initial clone.
     let head = try ProcessRunner.git(

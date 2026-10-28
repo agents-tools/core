@@ -6,12 +6,15 @@
 transformations. Both `agents` in `agents-tools/cli` and `skill` in
 `skill-cli/cli` consume this package. Consumers own command trees, argument
 parsing, terminal presentation, and executable distribution. The package uses
-Swift 6.3, Swift 6 language mode, and a macOS 15 minimum deployment platform.
+Swift 6.3 and Swift 6 language mode. It supports macOS 15 or newer and Linux
+with glibc 2.34 or newer.
 
 ## Products and Dependencies
 
 ```text
-AgentsUpdates ──> AgentsCore, AgentsSkills, AgentsInstructions
+AgentsUpdates ──> AgentsCore, AgentsSkills, AgentsInstructions, CPlatform
+
+AgentsCore ──> Crypto (swift-crypto), CPlatform
 
 AgentsSkills ──> AgentsCore
       │
@@ -21,11 +24,11 @@ AgentsInstructions ──> AgentsCore
          │
          └───────> Markdown (swift-markdown) ──> cmark-gfm
 
-StateTestProcess ──> AgentsCore, AgentsSkills, AgentsInstructions, AgentsUpdates
-AgentsCoreTests ──> AgentsCore, StateTestProcess
-AgentsSkillsTests ──> AgentsSkills, AgentsCore, Yams, StateTestProcess
+StateTestProcess ──> AgentsCore, AgentsSkills, AgentsInstructions, AgentsUpdates, CPlatform
+AgentsCoreTests ──> AgentsCore, StateTestProcess, CPlatform
+AgentsSkillsTests ──> AgentsSkills, AgentsCore, AgentsInstructions, Yams, StateTestProcess, CPlatform
 AgentsInstructionsTests ──> AgentsInstructions
-AgentsUpdatesTests ──> AgentsUpdates, StateTestProcess
+AgentsUpdatesTests ──> AgentsUpdates, StateTestProcess, CPlatform
 ```
 
 `AgentsCore`, `AgentsSkills`, `AgentsInstructions` and `AgentsUpdates` are library products with
@@ -33,6 +36,21 @@ matching targets under `Sources/` and test targets under `Tests/`. Shared
 implementation uses `package` access; consumers receive the
 workflow APIs and the state and result models they need. `Package.swift` owns
 this dependency graph.
+
+`CPlatform` is an internal C target for filesystem and process differences. It
+wraps file locks, access checks, atomic directory exchange, directory entry names, durable
+synchronization, metadata copying and spawn actions. Linux uses
+`renameat2(RENAME_EXCHANGE)`, `fsync`, descriptor-based mode/xattr copying
+(including POSIX ACLs) and glibc's
+`posix_spawn_file_actions_addclosefrom_np`. Symlink metadata uses no-follow calls
+through pinned parent paths in `/proc/self/fd`; Linux symlink modes remain 0777.
+Darwin keeps `renameatx_np`, `F_FULLFSYNC`, `fcopyfile` and its spawn inheritance
+policy. Business workflows share the same Swift implementation.
+Foundation re-exports the platform libc used by the Swift code; `CPlatform`
+bridges APIs missing from those overlays.
+
+`AgentsCore` hashes through swift-crypto's `Crypto` product, which delegates to
+CryptoKit on Apple platforms and supplies its own implementation on Linux.
 
 ## AgentsCore
 

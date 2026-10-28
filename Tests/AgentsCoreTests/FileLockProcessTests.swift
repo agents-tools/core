@@ -1,17 +1,48 @@
 import AgentsCore
-import Darwin
+import CPlatform
 import Foundation
 import Testing
 
 @Suite("Inherited file locks")
 struct FileLockProcessTests {
+  @Test func lockedChildClosesUnrelatedDescriptors() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let file = open(root.appendingPathComponent("private").path, O_CREAT | O_RDWR, 0o600)
+    try #require(file >= 0)
+    defer { close(file) }
+    let unrelated = fcntl(file, F_DUPFD, 64)
+    try #require(unrelated >= 64)
+    defer { close(unrelated) }
+    try FileLock.withDescriptor(at: root.appendingPathComponent("writer.lock")) { descriptor in
+      let output = try ProcessRunner.run(
+        "/bin/sh", arguments: ["-c", "test ! -e /dev/fd/$1", "sh", String(unrelated)],
+        inheritingLock: descriptor)
+      #expect(output.exitCode == 0)
+    }
+  }
+
+  @Test func lockedChildPropagatesLaunchErrors() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    try FileLock.withDescriptor(at: root.appendingPathComponent("writer.lock")) { descriptor in
+      let error =
+        try #require(throws: (any Error).self) {
+          try ProcessRunner.run(
+            root.appendingPathComponent("missing").path, arguments: [], inheritingLock: descriptor)
+        } as NSError
+      #expect(error.domain == NSPOSIXErrorDomain)
+      #expect(error.code == Int(ENOENT))
+    }
+  }
+
   @Test func childKeepsLockAfterParentClosesItsDescriptor() throws {
     let root = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
     let lock = root.appendingPathComponent("writer.lock")
     let ready = root.appendingPathComponent("child-ready")
     var child: Int32?
-    defer { if let child { Darwin.kill(child, SIGKILL) } }
+    defer { if let child { CPlatform.kill(child, SIGKILL) } }
     try FileLock.withDescriptor(at: lock) { descriptor in
       let script = """
         defined(my $child = fork) or die $!;
@@ -40,14 +71,14 @@ struct FileLockProcessTests {
     let contender = open(lock.path, O_RDWR | O_CLOEXEC)
     try #require(contender >= 0)
     defer { close(contender) }
-    #expect(flock(contender, LOCK_EX | LOCK_NB) == -1)
+    #expect(platform_flock(contender, LOCK_EX | LOCK_NB) == -1)
     #expect(errno == EWOULDBLOCK)
-    Darwin.kill(try #require(child), SIGCONT)
+    CPlatform.kill(try #require(child), SIGCONT)
     let deadline = Date().addingTimeInterval(10)
     var acquired = false
     repeat {
-      if let child { Darwin.kill(child, SIGCONT) }
-      acquired = flock(contender, LOCK_EX | LOCK_NB) == 0
+      if let child { CPlatform.kill(child, SIGCONT) }
+      acquired = platform_flock(contender, LOCK_EX | LOCK_NB) == 0
       if !acquired { Thread.sleep(forTimeInterval: 0.01) }
     } while !acquired && Date() < deadline
     #expect(acquired)

@@ -1,10 +1,5 @@
+import CPlatform
 import Foundation
-
-#if canImport(Darwin)
-  import Darwin
-#else
-  import Glibc
-#endif
 
 /// Captures existing ancestry and the final entry without following that entry's link.
 /// Missing ancestors may be created, but existing ancestors cannot be exchanged.

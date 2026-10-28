@@ -1,5 +1,5 @@
 import AgentsCore
-import Darwin
+import CPlatform
 import Foundation
 import Testing
 
@@ -39,10 +39,10 @@ struct WatchGitLockTests {
     defer {
       // Freeze the scope owner before killing its Git children, so error handling
       // cannot race the assertions about abandoned locks.
-      if writer.isRunning { Darwin.kill(writer.processIdentifier, SIGSTOP) }
+      if writer.isRunning { CPlatform.kill(writer.processIdentifier, SIGSTOP) }
       if let text = try? String(contentsOf: ready, encoding: .utf8) {
         for pid in text.split(whereSeparator: \.isWhitespace).compactMap({ Int32($0) }) {
-          Darwin.kill(pid, SIGKILL)
+          CPlatform.kill(pid, SIGKILL)
         }
       }
       terminate(writer)
@@ -63,11 +63,11 @@ struct WatchGitLockTests {
         atPath: fixture.root.appendingPathComponent("reader-finished").path))
     for lock in locks { #expect(FileManager.default.fileExists(atPath: lock.path)) }
     terminate(reader)
-    Darwin.kill(writer.processIdentifier, SIGSTOP)
+    CPlatform.kill(writer.processIdentifier, SIGSTOP)
     let pids = try String(contentsOf: ready, encoding: .utf8)
       .split(whereSeparator: \.isWhitespace).compactMap { Int32($0) }
     try #require(pids.count == 2)
-    for pid in pids { Darwin.kill(pid, SIGKILL) }
+    for pid in pids { CPlatform.kill(pid, SIGKILL) }
     terminate(writer)
     try FileManager.default.removeItem(at: ready)
     try FileManager.default.removeItem(at: hook)
@@ -161,7 +161,7 @@ struct WatchGitLockTests {
 
   private func terminate(_ process: Process) {
     if process.isRunning {
-      Darwin.kill(process.processIdentifier, SIGKILL)
+      CPlatform.kill(process.processIdentifier, SIGKILL)
       process.waitUntilExit()
     }
   }

@@ -194,16 +194,15 @@ public struct WatchOperations: Sendable {
     let artifacts = try artifacts(source)
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "agents-watch-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: root)
     defer { try? FileManager.default.removeItem(at: root) }
     for artifact in artifacts {
       let directory = root.appendingPathComponent(artifact.name)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      try FileSystem.createDirectory(at: directory)
       for (path, data) in artifact.files {
         let destination = try PathSafety.resolvedChild(base: directory, subpath: path)
-        try FileManager.default.createDirectory(
-          at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: destination)
+        try FileSystem.createDirectory(at: destination.deletingLastPathComponent())
+        try FileSystem.write(data, to: destination)
       }
       for (digest, data) in artifact.payloads { _ = try cache.storeArtifact(data, digest: digest) }
       _ = try cache.materializeArtifact(

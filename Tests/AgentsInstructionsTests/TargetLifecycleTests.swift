@@ -5,6 +5,19 @@ import Testing
 
 @Suite("Own instructions and generated targets")
 struct TargetLifecycleTests {
+  @Test func doctorReportsAnOwnFileReplacedByADirectory() throws {
+    let fixture = try InstructionFixture()
+    try fixture.own("guide", heading: "# Project Guide")
+    try fixture.addOwn(names: ["guide"])
+    let file = fixture.project.appendingPathComponent(".agent/instructions/guide.md")
+    try FileManager.default.removeItem(at: file)
+    try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+    #expect(
+      try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
+        $0.kind == .ownChanged
+      })
+  }
+
   @Test func ownInstructionsAreReadLiveAndRecordedByHash() throws {
     let fixture = try InstructionFixture()
     try fixture.section("shared")

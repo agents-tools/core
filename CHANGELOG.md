@@ -6,6 +6,10 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ## Unreleased
 
+### Added
+
+- Linux support.
+
 ## 0.2.0 - 2026-10-27
 
 ### Added

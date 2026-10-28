@@ -120,6 +120,14 @@ is fsynced before target mutation, including when an interrupted creator left a
 visible directory entry. Empty managed containers can remain after a failed
 operation.
 
+Managed directories are created with mode 0700 and files/locks with mode 0600.
+Directory permissions, inherited/default ACLs and other filesystem policy must
+allow the owner to use newly created entries. Core checks access without changing
+that policy. Permission denial stops the operation with the affected path and a
+message to check directory permissions and default ACLs; retries remain denied
+until the environment is corrected. This is a filesystem requirement, not a
+transaction recovery case. Existing user content and metadata are preserved.
+
 A durable `transaction.json` in the scope state directory records target, state
 file and pruning replacements before mutation. Paths are relative to named
 roots in that scope: `state`, registered agent installation directories, and
