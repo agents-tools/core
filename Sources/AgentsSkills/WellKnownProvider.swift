@@ -2,6 +2,10 @@ import AgentsCore
 import Foundation
 import Yams
 
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
+
 struct WellKnownRemoteSkill: Equatable, Sendable {
   var installName: String
   var description: String
@@ -194,7 +198,7 @@ struct WellKnownProvider: Sendable {
       let cached = try cache.artifactURL(digest: digest)
       let data =
         FileManager.default.fileExists(atPath: cached.path)
-        ? try Data(contentsOf: cached) : try fetch(URL(string: url)!)
+        ? try FileSystem.read(at: cached) : try fetch(URL(string: url)!)
       try verifyDigest(data: data, expected: digest)
       payloads[digest] = data
       return data
@@ -259,8 +263,8 @@ struct WellKnownProvider: Sendable {
       .appendingPathComponent("agents-artifact-" + UUID().uuidString)
     let archive = tempRoot.appendingPathComponent("artifact.tar.gz")
     let extract = tempRoot.appendingPathComponent("extract")
-    try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)
-    try data.write(to: archive)
+    try FileSystem.createDirectory(at: extract)
+    try FileSystem.write(data, to: archive)
     defer {
       try? FileManager.default.removeItem(at: tempRoot)
     }
@@ -299,8 +303,8 @@ struct WellKnownProvider: Sendable {
       .appendingPathComponent("agents-artifact-" + UUID().uuidString)
     let archive = tempRoot.appendingPathComponent("artifact.zip")
     let extract = tempRoot.appendingPathComponent("extract")
-    try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)
-    try data.write(to: archive)
+    try FileSystem.createDirectory(at: extract)
+    try FileSystem.write(data, to: archive)
     defer {
       try? FileManager.default.removeItem(at: tempRoot)
     }

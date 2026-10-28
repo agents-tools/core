@@ -1,5 +1,5 @@
 import AgentsCore
-import Darwin
+import CPlatform
 import Foundation
 import Testing
 
@@ -231,7 +231,7 @@ final class WatchGitFixture {
   func kill(_ child: Process, at step: String) throws {
     defer {
       if child.isRunning {
-        Darwin.kill(child.processIdentifier, SIGKILL)
+        CPlatform.kill(child.processIdentifier, SIGKILL)
         child.waitUntilExit()
       }
     }
@@ -242,7 +242,7 @@ final class WatchGitFixture {
     }
     try #require(FileManager.default.fileExists(atPath: marker.path), "did not reach \(step)")
     #expect(try String(contentsOf: marker, encoding: .utf8) == step)
-    Darwin.kill(child.processIdentifier, SIGKILL)
+    CPlatform.kill(child.processIdentifier, SIGKILL)
     child.waitUntilExit()
     try FileManager.default.removeItem(at: marker)
   }

@@ -1,4 +1,4 @@
-import Darwin
+import CPlatform
 import Foundation
 import Testing
 
@@ -18,7 +18,7 @@ func finishProcesses(_ processes: [Process], resuming pause: GitTransactionPause
 
 func terminateProcess(_ process: Process) {
   if process.isRunning {
-    Darwin.kill(process.processIdentifier, SIGKILL)
+    CPlatform.kill(process.processIdentifier, SIGKILL)
     process.waitUntilExit()
   }
 }
@@ -39,7 +39,7 @@ final class ProcessSignal {
 
   func send(_ message: String) throws {
     let data = Data((message + "\n").utf8)
-    let count = data.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) }
+    let count = data.withUnsafeBytes { CPlatform.write(descriptor, $0.baseAddress, $0.count) }
     try #require(count == data.count)
   }
 
@@ -53,7 +53,7 @@ final class ProcessSignal {
       if result < 0 && errno == EINTR { continue }
       try #require(result > 0, "Timed out waiting for \(url.lastPathComponent)")
       var byte: UInt8 = 0
-      try #require(Darwin.read(descriptor, &byte, 1) == 1)
+      try #require(CPlatform.read(descriptor, &byte, 1) == 1)
       if byte == 10 { return String(decoding: bytes, as: UTF8.self) }
       bytes.append(byte)
     }
@@ -113,6 +113,6 @@ final class GitTransactionPause {
     let pids =
       (try? String(contentsOf: marker, encoding: .utf8))?
       .split(whereSeparator: \.isWhitespace).compactMap { Int32($0) } ?? []
-    for pid in pids { Darwin.kill(pid, SIGKILL) }
+    for pid in pids { CPlatform.kill(pid, SIGKILL) }
   }
 }

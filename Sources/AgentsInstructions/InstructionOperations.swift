@@ -285,7 +285,7 @@ public enum InstructionOperations {
         let root = scope == .project ? environment.projectDirectory : environment.homeDirectory
         let file = try PathSafety.resolvedChild(base: root, subpath: append)
         try InstructionSources.contained(file, in: root)
-        custom = try Data(contentsOf: file)
+        custom = try FileSystem.read(at: file)
       }
       return try Instructions.renderChatGPT(
         sections: sections.map(\.section), customContent: custom)

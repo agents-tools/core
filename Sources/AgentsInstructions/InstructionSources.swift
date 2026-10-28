@@ -49,7 +49,8 @@ final class InstructionSources {
       for container in Self.containers {
         let directory = root.appendingPathComponent(container)
         for (name, file) in try Self.files(in: directory, tree: tree) {
-          let section = try Instructions.validateSource(Data(contentsOf: file), id: id + ":" + name)
+          let section = try Instructions.validateSource(
+            FileSystem.read(at: file), id: id + ":" + name)
           units.append(
             InstructionUnit(
               record: LockedSection(
@@ -77,7 +78,7 @@ final class InstructionSources {
     let directory = project.appendingPathComponent(Self.ownContainer)
     let units = try Self.unique(
       Self.files(in: directory, tree: project).map { name, file in
-        let section = try Instructions.validateSource(Data(contentsOf: file), id: name)
+        let section = try Instructions.validateSource(FileSystem.read(at: file), id: name)
         return InstructionUnit(
           record: LockedSection(
             name: name, source: Self.own,
@@ -100,7 +101,7 @@ final class InstructionSources {
     guard Declaration.isInstructionName(name), FileManager.default.fileExists(atPath: file.path)
     else { throw CoreError.notFound("own instructions file: \(name)") }
     try Self.requireNoLinks(file, below: project)
-    let section = try Instructions.validateSource(Data(contentsOf: file), id: name)
+    let section = try Instructions.validateSource(FileSystem.read(at: file), id: name)
     return InstructionUnit(
       record: LockedSection(name: name, source: Self.own, path: path, hash: section.hash),
       section: section)
@@ -149,7 +150,8 @@ final class InstructionSources {
         func read(_ root: URL) throws -> InstructionSection {
           let file = try PathSafety.resolvedChild(base: root, subpath: record.path)
           try Self.contained(file, in: root)
-          return try Instructions.validateSource(Data(contentsOf: file), id: Self.identity(record))
+          return try Instructions.validateSource(
+            FileSystem.read(at: file), id: Self.identity(record))
         }
         if FileManager.default.fileExists(atPath: materialized.path) {
           section = try read(materialized)
@@ -178,7 +180,7 @@ final class InstructionSources {
       let root = try cache.materialize(sourceID: record.source, source: source, revision: revision)
       let file = try PathSafety.resolvedChild(base: root, subpath: record.path)
       try Self.contained(file, in: root)
-      guard Instructions.hash(try Data(contentsOf: file)) == record.hash else {
+      guard Instructions.hash(try FileSystem.read(at: file)) == record.hash else {
         throw CoreError.invalidState("cached instruction digest mismatch: \(record.name)")
       }
     }

@@ -1,5 +1,5 @@
 import AgentsCore
-import Darwin
+import CPlatform
 import Foundation
 import Testing
 
@@ -212,7 +212,7 @@ extension LockedArtifactLifecycleTests {
   }
 
   private func artifactTestProcess(root: URL) throws -> Process {
-    var directory = Bundle(for: ArtifactTestBundle.self).bundleURL.deletingLastPathComponent()
+    var directory = Bundle(for: ArtifactTestBundle.self).bundleURL
     while !FileManager.default.isExecutableFile(
       atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
     {

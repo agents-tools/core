@@ -45,7 +45,7 @@ func gitHead(_ repo: URL) throws -> String {
 func stateTestProcess(
   root: URL, arguments: [String], environment: [String: String] = [:]
 ) throws -> Process {
-  var directory = Bundle(for: TransactionTestBundle.self).bundleURL.deletingLastPathComponent()
+  var directory = Bundle(for: TransactionTestBundle.self).bundleURL
   while !FileManager.default.isExecutableFile(
     atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
   {

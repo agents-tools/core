@@ -1,7 +1,7 @@
 import AgentsCore
 import AgentsInstructions
 import AgentsSkills
-import Darwin
+import CPlatform
 import Foundation
 import Testing
 
@@ -32,7 +32,7 @@ struct ReadOnlyInspectionTests {
         let descriptor = open(lock.path, O_RDONLY | O_CLOEXEC)
         try #require(descriptor >= 0)
         defer { close(descriptor) }
-        let acquired = flock(descriptor, LOCK_EX | LOCK_NB)
+        let acquired = platform_flock(descriptor, LOCK_EX | LOCK_NB)
         let lockError = errno
         #expect(acquired == -1)
         #expect(lockError == EWOULDBLOCK)
@@ -416,7 +416,7 @@ struct ReadOnlyInspectionTests {
   }
 
   private func interruptedTransaction(root: URL, scope: InstallScope) throws -> Process {
-    var directory = Bundle(for: InspectionTestBundle.self).bundleURL.deletingLastPathComponent()
+    var directory = Bundle(for: InspectionTestBundle.self).bundleURL
     while !FileManager.default.isExecutableFile(
       atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
     {

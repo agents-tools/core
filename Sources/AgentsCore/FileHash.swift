@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 
 package enum FileHash {
@@ -7,7 +7,7 @@ package enum FileHash {
   }
 
   package static func sha256Hex(file: URL) throws -> String {
-    try sha256Hex(data: Data(contentsOf: file))
+    try sha256Hex(data: FileSystem.read(at: file))
   }
 
   /// Hashes every tree entry in path order, including hidden files and symlink destinations.

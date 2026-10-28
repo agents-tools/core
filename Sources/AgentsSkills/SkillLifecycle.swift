@@ -44,7 +44,7 @@ final class SkillLifecycle {
     self.provider = provider
     workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
       "agents-operation-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: workspace)
   }
 
   deinit { try? FileManager.default.removeItem(at: workspace) }
@@ -84,7 +84,9 @@ final class SkillLifecycle {
       root = workspace.appendingPathComponent(UUID().uuidString)
       func copy(_ resolved: SourceRevision, _ snapshot: URL) throws {
         pin = resolved
-        try FileManager.default.copyItem(at: snapshot, to: root)
+        try FileSystem.withAccessErrors(at: root) {
+          try FileManager.default.copyItem(at: snapshot, to: root)
+        }
       }
       if let resolutions {
         try resolutions.withSnapshot(source, copy)
@@ -195,7 +197,9 @@ final class SkillLifecycle {
         root = workspace.appendingPathComponent(UUID().uuidString)
         try cache.withSnapshot(sourceID: skill.source, source: source, revision: revision) {
           snapshot in
-          try FileManager.default.copyItem(at: snapshot, to: root)
+          try FileSystem.withAccessErrors(at: root) {
+            try FileManager.default.copyItem(at: snapshot, to: root)
+          }
         }
       }
       directory = try PathSafety.resolvedChild(base: root, subpath: path)
@@ -414,12 +418,11 @@ final class SkillLifecycle {
   }
 
   private func write(_ files: [String: Data], to directory: URL) throws {
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: directory)
     for (path, data) in files {
       let url = try PathSafety.resolvedChild(base: directory, subpath: path)
-      try FileManager.default.createDirectory(
-        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-      try data.write(to: url)
+      try FileSystem.createDirectory(at: url.deletingLastPathComponent())
+      try FileSystem.write(data, to: url)
     }
   }
 
@@ -434,7 +437,7 @@ final class SkillLifecycle {
       case .typeDirectory: return .directory
       case .typeRegular:
         let mode = (attributes[.posixPermissions] as? NSNumber)?.uint16Value ?? 0
-        return .file(try Data(contentsOf: url), executable: mode & 0o111 != 0)
+        return .file(try FileSystem.read(at: url), executable: mode & 0o111 != 0)
       default: throw CoreError.unsafePath("unsupported installed entry: \(url.path)")
       }
     }

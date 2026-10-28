@@ -22,8 +22,8 @@
       alt="Swift 6.3+">
   </a>
   <a href="Package.swift">
-    <img src="https://img.shields.io/static/v1?label=platforms&amp;message=macOS%2015%2B&amp;color=16143D&amp;labelColor=4F4C7A"
-      alt="Platforms: macOS 15+">
+    <img src="https://img.shields.io/static/v1?label=platforms&amp;message=macOS%2015%2B%20%7C%20Linux&amp;color=16143D&amp;labelColor=4F4C7A"
+      alt="Platforms: macOS 15+ and Linux">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/static/v1?label=license&amp;message=MIT&amp;color=16143D&amp;labelColor=4F4C7A" alt="License: MIT">
@@ -245,7 +245,15 @@ contracts, target paths, read-only inspection and deletion rules.
 ## Requirements
 
 - Swift 6.3 or newer, using Swift 6 language mode.
-- macOS 15 or newer, as declared in [Package.swift](Package.swift).
+- macOS 15 or newer, as declared in [Package.swift](Package.swift), or Linux
+  with glibc 2.34 or newer, `/proc` mounted and a filesystem supporting file
+  `flock`, atomic directory exchange, POSIX ACLs and extended attributes.
+- Git and `tar`; ZIP artifacts also require `unzip` (including `zipinfo`).
+- Directory permissions, inherited/default ACLs and other filesystem policy must
+  allow the owner to read/write created files and read/write/search created
+  directories. Core does not repair access policy; denied operations stop with
+  the affected path and a permission diagnostic. Correct the environment before
+  retrying.
 
 ## Documentation
 
@@ -287,10 +295,12 @@ swift format lint --strict --configuration .swift-format \
 The required checks are `policy / policy` and `validate / result`, provided by
 full-SHA-pinned reusable workflows from `agents-tools/github-workflows`.
 Source policy validates PR titles, new commit messages and added lines.
-[Package validation configuration](.github/swift-package.json) selects one
-compiler: the latest stable Xcode, 26.6, on `macos-26`. Validation runs tests
-and a release build, plus strict formatting with `.swift-format` over
-`Package.swift`, `Sources` and `Tests`.
+[Package validation configuration](.github/swift-package.json) selects Xcode 26.6 on `macos-26` and a digest-pinned official Swift Linux
+container. macOS validation runs tests and a release build, plus strict
+formatting with `.swift-format` over `Package.swift`, `Sources` and `Tests`.
+Linux runs the full test suite, including the subprocess recovery tests. The
+configuration owns the Linux compiler version and image digest. Tests also
+require Perl, which is included by the Linux image's Git dependencies.
 
 Render and check the committed
 [social preview](.github/assets/social-preview/social-preview.png) locally with

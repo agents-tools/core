@@ -1,11 +1,6 @@
 import AgentsCore
+import CPlatform
 import Foundation
-
-#if canImport(Darwin)
-  import Darwin
-#else
-  import Glibc
-#endif
 
 /// Valid only on the preparing thread, inside `withPreparedUpdate`. Any apply attempt consumes it.
 /// Render `report` directly; re-entering scope operations while this handle is active can deadlock.

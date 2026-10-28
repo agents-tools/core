@@ -15,29 +15,39 @@ let package = Package(
     .library(name: "AgentsUpdates", targets: ["AgentsUpdates"]),
   ],
   dependencies: [
+    .package(url: "https://github.com/apple/swift-crypto.git", from: "5.0.0"),
     .package(url: "https://github.com/jpsim/Yams", from: "6.0.0"),
     .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.9.0"),
   ],
   targets: [
-    .target(name: "AgentsCore"),
+    .target(name: "CPlatform"),
+    .target(
+      name: "AgentsCore",
+      dependencies: ["CPlatform", .product(name: "Crypto", package: "swift-crypto")]
+    ),
     .target(
       name: "AgentsInstructions",
       dependencies: ["AgentsCore", .product(name: "Markdown", package: "swift-markdown")]
     ),
     .target(name: "AgentsSkills", dependencies: ["AgentsCore", "Yams"]),
     .target(
-      name: "AgentsUpdates", dependencies: ["AgentsCore", "AgentsSkills", "AgentsInstructions"]),
+      name: "AgentsUpdates",
+      dependencies: ["AgentsCore", "AgentsSkills", "AgentsInstructions", "CPlatform"]),
     .executableTarget(
       name: "StateTestProcess",
-      dependencies: ["AgentsCore", "AgentsInstructions", "AgentsSkills", "AgentsUpdates"],
+      dependencies: [
+        "AgentsCore", "AgentsInstructions", "AgentsSkills", "AgentsUpdates", "CPlatform",
+      ],
       path: "Tests/StateTestProcess"),
-    .testTarget(name: "AgentsCoreTests", dependencies: ["AgentsCore", "StateTestProcess"]),
+    .testTarget(
+      name: "AgentsCoreTests", dependencies: ["AgentsCore", "StateTestProcess", "CPlatform"]),
     .testTarget(name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions"]),
-    .testTarget(name: "AgentsUpdatesTests", dependencies: ["AgentsUpdates", "StateTestProcess"]),
+    .testTarget(
+      name: "AgentsUpdatesTests", dependencies: ["AgentsUpdates", "StateTestProcess", "CPlatform"]),
     .testTarget(
       name: "AgentsSkillsTests",
       dependencies: [
-        "AgentsSkills", "AgentsCore", "AgentsInstructions", "Yams", "StateTestProcess",
+        "AgentsSkills", "AgentsCore", "AgentsInstructions", "Yams", "StateTestProcess", "CPlatform",
       ]),
   ],
   swiftLanguageModes: [.v6]

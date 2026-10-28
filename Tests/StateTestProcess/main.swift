@@ -2,7 +2,7 @@ import AgentsCore
 import AgentsInstructions
 import AgentsSkills
 import AgentsUpdates
-import Darwin
+import CPlatform
 import Foundation
 
 let arguments = CommandLine.arguments

@@ -1,10 +1,5 @@
+import CPlatform
 import Foundation
-
-#if canImport(Darwin)
-  import Darwin
-#else
-  import Glibc
-#endif
 
 /// Pins directory ancestry. Child operations never traverse symbolic links.
 final class DirectoryHandle {
@@ -21,13 +16,16 @@ final class DirectoryHandle {
     for (index, component) in self.url.pathComponents.dropFirst().enumerated() {
       // macOS exposes these root-owned system directories through immutable aliases.
       // All task-controlled components, including every cache ancestor, use O_NOFOLLOW.
-      let systemAlias = index == 0 && ["var", "tmp", "etc"].contains(component)
+      let systemAlias = index == 0 && platform_system_alias(component)
       if create {
         var info = stat()
         if fstatat(current, component, &info, AT_SYMLINK_NOFOLLOW) != 0 {
           guard errno == ENOENT, mkdirat(current, component, 0o700) == 0 else {
-            throw CoreError.unsafePath("cannot create directory: \(url.path)")
+            throw FileSystem.posixError(
+              errno, at: self.url, otherwise: .unsafePath("cannot create directory: \(url.path)"))
           }
+          try FileSystem.requireAccess(
+            R_OK | W_OK | X_OK, at: self.url, parent: current, name: component)
           try checkpoint("directory.created.\(component)")
         }
         // An existing entry may have been published by an interrupted creator.
@@ -36,9 +34,15 @@ final class DirectoryHandle {
       }
       let next = openat(
         current, component, O_RDONLY | O_DIRECTORY | (systemAlias ? 0 : O_NOFOLLOW) | O_CLOEXEC)
-      guard next >= 0 else { throw CoreError.unsafePath("unsafe directory: \(url.path)") }
+      guard next >= 0 else {
+        throw FileSystem.posixError(
+          errno, at: self.url, otherwise: .unsafePath("unsafe directory: \(url.path)"))
+      }
       close(current)
       current = next
+    }
+    if create {
+      try FileSystem.requireAccess(R_OK | W_OK | X_OK, at: self.url, parent: current, name: ".")
     }
     descriptor = current
     current = -1
@@ -47,7 +51,10 @@ final class DirectoryHandle {
   private init(parent: DirectoryHandle, name: String) throws {
     url = parent.url.appendingPathComponent(name)
     descriptor = openat(parent.descriptor, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-    guard descriptor >= 0 else { throw CoreError.unsafePath("unsafe directory: \(url.path)") }
+    guard descriptor >= 0 else {
+      throw FileSystem.posixError(
+        errno, at: url, otherwise: .unsafePath("unsafe directory: \(url.path)"))
+    }
   }
 
   deinit { close(descriptor) }
@@ -60,7 +67,9 @@ final class DirectoryHandle {
     var value = stat()
     if fstatat(descriptor, name, &value, AT_SYMLINK_NOFOLLOW) == 0 { return value }
     if errno == ENOENT { return nil }
-    throw CoreError.unsafePath("cannot inspect \(url.appendingPathComponent(name).path)")
+    throw FileSystem.posixError(
+      errno, at: url.appendingPathComponent(name),
+      otherwise: .unsafePath("cannot inspect \(url.appendingPathComponent(name).path)"))
   }
 
   func names() throws -> [String] {
@@ -72,11 +81,7 @@ final class DirectoryHandle {
     var names: [String] = []
     errno = 0
     while let entry = readdir(stream) {
-      let name = withUnsafePointer(to: &entry.pointee.d_name) {
-        $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.d_namlen) + 1) {
-          String(cString: $0)
-        }
-      }
+      let name = String(cString: platform_entry_name(entry))
       if name != "." && name != ".." { names.append(name) }
     }
     guard errno == 0 else { throw CoreError.unsafePath("cannot enumerate \(url.path)") }
@@ -111,16 +116,10 @@ final class DirectoryHandle {
     _ name: String, to destination: String, swap: Bool = false,
     afterRename: () throws -> Void = {}
   ) throws {
-    let result: Int32
-    if swap {
-      #if canImport(Darwin)
-        result = renameatx_np(descriptor, name, descriptor, destination, UInt32(RENAME_SWAP))
-      #else
-        throw CoreError.unsupported("atomic directory exchange requires renameatx_np")
-      #endif
-    } else {
-      result = renameat(descriptor, name, descriptor, destination)
-    }
+    let result =
+      swap
+      ? platform_exchange(descriptor, name, destination)
+      : renameat(descriptor, name, descriptor, destination)
     guard result == 0 else {
       throw CoreError.invalidState("cannot replace \(destination): \(errno)")
     }
@@ -129,9 +128,17 @@ final class DirectoryHandle {
   }
 
   func makeDirectory(_ name: String) throws {
-    guard mkdirat(descriptor, name, 0o700) == 0 else {
-      throw CoreError.invalidState("cannot create directory: \(name)")
+    if try info(name) != nil {
+      try FileSystem.requireAccess(
+        R_OK | W_OK | X_OK, at: url.appendingPathComponent(name), parent: descriptor)
     }
+    guard mkdirat(descriptor, name, 0o700) == 0 else {
+      throw FileSystem.posixError(
+        errno, at: url.appendingPathComponent(name),
+        otherwise: .invalidState("cannot create directory: \(name)"))
+    }
+    try FileSystem.requireAccess(
+      R_OK | W_OK | X_OK, at: url.appendingPathComponent(name), parent: descriptor)
     try sync()
   }
 
@@ -141,7 +148,9 @@ final class DirectoryHandle {
 
   func link(_ name: String, destination: String) throws {
     guard symlinkat(destination, descriptor, name) == 0 else {
-      throw CoreError.invalidState("cannot create link: \(name)")
+      throw FileSystem.posixError(
+        errno, at: url.appendingPathComponent(name),
+        otherwise: .invalidState("cannot create link: \(name)"))
     }
     try sync()
   }
@@ -149,14 +158,25 @@ final class DirectoryHandle {
   func write(
     _ name: String, data: Data, mode: mode_t = 0o600, preservingMetadataOf original: String? = nil
   ) throws {
+    if try info(name) != nil {
+      try FileSystem.requireAccess(
+        R_OK | W_OK, at: url.appendingPathComponent(name), parent: descriptor)
+    }
     let file = openat(descriptor, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)
-    guard file >= 0 else { throw CoreError.invalidState("cannot stage \(name)") }
+    guard file >= 0 else {
+      throw FileSystem.posixError(
+        errno, at: url.appendingPathComponent(name),
+        otherwise: .invalidState("cannot stage \(name)"))
+    }
     defer { close(file) }
+    try FileSystem.requireAccess(
+      R_OK | W_OK, at: url.appendingPathComponent(name), parent: descriptor)
     try data.withUnsafeBytes { bytes in
       var offset = 0
       while offset < bytes.count {
-        let count = Foundation.write(
+        let count = CPlatform.write(
           file, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+        if count < 0 && errno == EINTR { continue }
         guard count > 0 else { throw CoreError.invalidState("cannot write \(name)") }
         offset += count
       }
@@ -182,8 +202,13 @@ final class DirectoryHandle {
     var data = Data()
     var buffer = [UInt8](repeating: 0, count: 65536)
     while true {
-      let count = Darwin.read(file, &buffer, buffer.count)
-      guard count >= 0 else { throw CoreError.invalidState("cannot read \(name)") }
+      let count = CPlatform.read(file, &buffer, buffer.count)
+      if count < 0 && errno == EINTR { continue }
+      guard count >= 0 else {
+        throw FileSystem.posixError(
+          errno, at: url.appendingPathComponent(name),
+          otherwise: .invalidState("cannot read \(name)"))
+      }
       if count == 0 { return data }
       data.append(contentsOf: buffer.prefix(count))
     }
@@ -193,7 +218,9 @@ final class DirectoryHandle {
     var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
     let count = readlinkat(descriptor, name, &buffer, buffer.count - 1)
     guard count >= 0, count < buffer.count - 1 else {
-      throw CoreError.unsafePath("invalid symbolic link")
+      throw FileSystem.posixError(
+        count < 0 ? errno : 0, at: url.appendingPathComponent(name),
+        otherwise: .unsafePath("invalid symbolic link"))
     }
     return String(decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) }, as: UTF8.self)
   }
@@ -218,7 +245,11 @@ final class DirectoryHandle {
   private func regularFile(_ name: String) throws -> Int32 {
     let file = openat(descriptor, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
     var info = stat()
-    guard file >= 0 else { throw CoreError.unsafePath("cannot open file: \(name)") }
+    guard file >= 0 else {
+      throw FileSystem.posixError(
+        errno, at: url.appendingPathComponent(name),
+        otherwise: .unsafePath("cannot open file: \(name)"))
+    }
     guard fstat(file, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
       close(file)
       throw CoreError.unsafePath("expected regular file: \(name)")
@@ -227,12 +258,9 @@ final class DirectoryHandle {
   }
 
   private static func synchronize(_ file: Int32) throws {
-    guard fsync(file) == 0 else { throw CoreError.invalidState("cannot sync filesystem entry") }
-    #if canImport(Darwin)
-      guard fcntl(file, F_FULLFSYNC) == 0 else {
-        throw CoreError.invalidState("cannot flush filesystem entry to storage")
-      }
-    #endif
+    guard platform_sync(file) == 0 else {
+      throw CoreError.invalidState("cannot sync filesystem entry: \(errno)")
+    }
   }
 
   /// Copies through pinned descriptors, including modes, ACLs and extended attributes.
@@ -243,9 +271,17 @@ final class DirectoryHandle {
     guard let info = try source.info(original) else { throw CoreError.notFound(original) }
     switch info.st_mode & S_IFMT {
     case S_IFDIR:
-      guard mkdirat(descriptor, name, 0o700) == 0 else {
-        throw CoreError.invalidState("cannot stage directory")
+      if try self.info(name) != nil {
+        try FileSystem.requireAccess(
+          R_OK | W_OK | X_OK, at: url.appendingPathComponent(name), parent: descriptor)
       }
+      guard mkdirat(descriptor, name, 0o700) == 0 else {
+        throw FileSystem.posixError(
+          errno, at: url.appendingPathComponent(name),
+          otherwise: .invalidState("cannot stage directory"))
+      }
+      try FileSystem.requireAccess(
+        R_OK | W_OK | X_OK, at: url.appendingPathComponent(name), parent: descriptor)
       try checkpoint("directory")
       let destination = try child(name)
       let origin = try source.child(original)
@@ -255,24 +291,26 @@ final class DirectoryHandle {
       try Self.copyMetadata(from: origin.descriptor, to: destination.descriptor, mode: info.st_mode)
     case S_IFLNK:
       try link(name, destination: source.readLink(original))
-      let origin = openat(source.descriptor, original, O_RDONLY | O_SYMLINK | O_CLOEXEC)
-      let destination = openat(descriptor, name, O_RDONLY | O_SYMLINK | O_CLOEXEC)
-      defer {
-        close(origin)
-        close(destination)
+      guard platform_copy_link_metadata(source.descriptor, original, descriptor, name) == 0 else {
+        throw CoreError.invalidState("cannot preserve link metadata: \(errno)")
       }
-      guard origin >= 0, destination >= 0 else {
-        throw CoreError.unsafePath("cannot copy link metadata")
-      }
-      try Self.copyMetadata(from: origin, to: destination, mode: info.st_mode)
     case S_IFREG:
+      if try self.info(name) != nil {
+        try FileSystem.requireAccess(
+          R_OK | W_OK, at: url.appendingPathComponent(name), parent: descriptor)
+      }
       let origin = try source.regularFile(original)
       defer { close(origin) }
       let destination = openat(
         descriptor, name, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-      guard destination >= 0 else { throw CoreError.unsafePath("cannot copy file") }
+      guard destination >= 0 else {
+        throw FileSystem.posixError(
+          errno, at: url.appendingPathComponent(name), otherwise: .unsafePath("cannot copy file"))
+      }
       defer { close(destination) }
-      guard fcopyfile(origin, destination, nil, copyfile_flags_t(COPYFILE_DATA)) == 0 else {
+      try FileSystem.requireAccess(
+        R_OK | W_OK, at: url.appendingPathComponent(name), parent: descriptor)
+      guard platform_copy_data(origin, destination) == 0 else {
         throw CoreError.invalidState("cannot copy file content")
       }
       try Self.copyMetadata(from: origin, to: destination, mode: info.st_mode)
@@ -283,9 +321,8 @@ final class DirectoryHandle {
   }
 
   private static func copyMetadata(from origin: Int32, to destination: Int32, mode: mode_t) throws {
-    guard fcopyfile(origin, destination, nil, copyfile_flags_t(COPYFILE_METADATA)) == 0,
-      fchmod(destination, mode & 0o7777) == 0
-    else { throw CoreError.invalidState("cannot preserve filesystem metadata") }
-    try synchronize(destination)
+    guard platform_copy_metadata(origin, destination, mode) == 0 else {
+      throw CoreError.invalidState("cannot preserve filesystem metadata: \(errno)")
+    }
   }
 }

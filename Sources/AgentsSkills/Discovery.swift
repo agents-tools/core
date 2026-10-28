@@ -36,7 +36,9 @@ enum Discovery {
   ])
 
   static func parseSkill(at skillFile: URL, includeInternal: Bool = false) throws -> Skill? {
-    let content = try String(contentsOf: skillFile, encoding: .utf8)
+    let content = try FileSystem.withAccessErrors(at: skillFile) {
+      try String(contentsOf: skillFile, encoding: .utf8)
+    }
     let data: [String: Any]
     do {
       data = try parseFrontmatter(content)
@@ -72,7 +74,7 @@ enum Discovery {
   ) throws -> [Skill] {
     let searchRoot =
       try subpath.map { try PathSafety.resolvedChild(base: base, subpath: $0) } ?? base
-    let pluginGroups = pluginGroupings(base: searchRoot)
+    let pluginGroups = try pluginGroupings(base: searchRoot)
     let projectInstalledSkillNames = projectInstalledAgentSkillNames(base: searchRoot)
     var skills: [Skill] = []
     var seen = Set<String>()
@@ -112,7 +114,7 @@ enum Discovery {
       searchRoot.appendingPathComponent(".codex/skills"),
       searchRoot.appendingPathComponent(".opencode/skills"),
     ]
-    priorityDirectories.append(contentsOf: pluginSkillSearchDirectories(base: searchRoot))
+    priorityDirectories.append(contentsOf: try pluginSkillSearchDirectories(base: searchRoot))
 
     for directory in priorityDirectories {
       let candidates =
@@ -239,12 +241,12 @@ enum Discovery {
     (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
   }
 
-  private static func pluginSkillSearchDirectories(base: URL) -> [URL] {
+  private static func pluginSkillSearchDirectories(base: URL) throws -> [URL] {
     var directories: [URL] = []
     let decoder = JSONDecoder()
 
     let marketplaceURL = base.appendingPathComponent(".claude-plugin/marketplace.json")
-    if let data = try? Data(contentsOf: marketplaceURL),
+    if let data = try FileSystem.readUnlessDenied(at: marketplaceURL),
       let manifest = try? decoder.decode(MarketplaceManifest.self, from: data)
     {
       let root = manifest.metadata?.pluginRoot
@@ -269,7 +271,7 @@ enum Discovery {
     }
 
     let pluginURL = base.appendingPathComponent(".claude-plugin/plugin.json")
-    if let data = try? Data(contentsOf: pluginURL),
+    if let data = try FileSystem.readUnlessDenied(at: pluginURL),
       let manifest = try? decoder.decode(PluginManifest.self, from: data)
     {
       for skill in manifest.skills ?? [] where skill.hasPrefix("./") {
@@ -285,12 +287,12 @@ enum Discovery {
     return directories
   }
 
-  private static func pluginGroupings(base: URL) -> [String: String] {
+  private static func pluginGroupings(base: URL) throws -> [String: String] {
     var groups: [String: String] = [:]
     let decoder = JSONDecoder()
 
     let marketplaceURL = base.appendingPathComponent(".claude-plugin/marketplace.json")
-    if let data = try? Data(contentsOf: marketplaceURL),
+    if let data = try FileSystem.readUnlessDenied(at: marketplaceURL),
       let manifest = try? decoder.decode(MarketplaceManifest.self, from: data)
     {
       let root = manifest.metadata?.pluginRoot
@@ -314,7 +316,7 @@ enum Discovery {
     }
 
     let pluginURL = base.appendingPathComponent(".claude-plugin/plugin.json")
-    if let data = try? Data(contentsOf: pluginURL),
+    if let data = try FileSystem.readUnlessDenied(at: pluginURL),
       let manifest = try? decoder.decode(PluginManifest.self, from: data),
       let name = manifest.name
     {

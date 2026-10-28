@@ -1,5 +1,5 @@
 import AgentsCore
-import Darwin
+import CPlatform
 import Foundation
 import Testing
 
@@ -130,7 +130,6 @@ struct AutomaticSelectionTests {
     ).write(to: git)
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: git.path)
     var directory = Bundle(for: AutomaticSelectionTestBundle.self).bundleURL
-      .deletingLastPathComponent()
     while !FileManager.default.isExecutableFile(
       atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
     {

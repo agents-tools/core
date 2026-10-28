@@ -1,10 +1,5 @@
+import CPlatform
 import Foundation
-
-#if canImport(Darwin)
-  import Darwin
-#else
-  import Glibc
-#endif
 
 package struct ProcessOutput: Equatable, Sendable {
   package var stdout: String
@@ -106,21 +101,6 @@ package enum ProcessRunner {
     // Capture stdin before pipes can reuse a closed standard descriptor. A lock
     // occupying stdin is internal state, not input for the child.
     let inputIsOpen = lock != STDIN_FILENO && fcntl(STDIN_FILENO, F_GETFD) >= 0
-    var actions: posix_spawn_file_actions_t?
-    try check(posix_spawn_file_actions_init(&actions))
-    defer { posix_spawn_file_actions_destroy(&actions) }
-    var attributes: posix_spawnattr_t?
-    try check(posix_spawnattr_init(&attributes))
-    defer { posix_spawnattr_destroy(&attributes) }
-    try check(posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)))
-    if inputIsOpen {
-      try check(posix_spawn_file_actions_addinherit_np(&actions, STDIN_FILENO))
-    } else {
-      try check(posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0))
-    }
-    if let workingDirectory {
-      try check(posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path))
-    }
     let stdout = Pipe()
     let stderr = Pipe()
     defer {
@@ -143,10 +123,17 @@ package enum ProcessRunner {
       defer { close(output) }
       let error = try duplicate(stderr.fileHandleForWriting.fileDescriptor)
       defer { close(error) }
-      try check(posix_spawn_file_actions_addinherit_np(&actions, inheritedLock))
-      try check(posix_spawn_file_actions_adddup2(&actions, output, STDOUT_FILENO))
-      try check(posix_spawn_file_actions_adddup2(&actions, error, STDERR_FILENO))
-      try check(posix_spawn(&pid, executable, &actions, &attributes, argv, environment))
+      func launch(_ directory: UnsafePointer<CChar>?) throws {
+        try check(
+          platform_spawn(
+            &pid, executable, argv, environment, directory, inheritedLock, inputIsOpen, output,
+            error))
+      }
+      if let workingDirectory {
+        try workingDirectory.path.withCString { try launch($0) }
+      } else {
+        try launch(nil)
+      }
     }()
     stdout.fileHandleForWriting.closeFile()
     stderr.fileHandleForWriting.closeFile()
