@@ -1,0 +1,31 @@
+{
+  "agents": [],
+  "sources": {
+    "é/别名~\"\\\n\r\t\u0001": {
+      "git": "https://example.org/escape.git"
+    }
+  },
+  "skills": {
+    "é/别名~\"\\\n\r\t\u0001": {
+      "select": [
+        "selected"
+      ],
+      "overrides": {
+        "unused": {
+          "agents": []
+        }
+      }
+    }
+  },
+  "instructions": {
+    "chatgpt": {
+      "\"\\\n\r\t\u0001 é 😀": {
+        "sections": [
+          "own"
+        ],
+        "append": "notes/内容.md"
+      }
+    },
+    "sections": []
+  }
+}

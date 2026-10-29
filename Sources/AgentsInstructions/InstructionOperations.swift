@@ -168,8 +168,11 @@ public enum InstructionOperations {
         let transaction = FileTransaction(store: store)
         try plan.stage(transaction: transaction)
         try store.stageDeclaration(declaration, in: transaction)
-        try transaction.replace(
-          store.resolvedURL, content: nil, data: StateStore.encodeState(plan.next.normalized))
+        if let data = try plan.next.replacementData(
+          comparedTo: store.existingData(store.resolvedURL))
+        {
+          try transaction.replace(store.resolvedURL, content: nil, data: data)
+        }
         try SourceCache(store: store).prune(referencedBy: plan.next, transaction: transaction)
         try transaction.commit()
       }
@@ -432,8 +435,11 @@ public enum InstructionOperations {
       }
       if writeState {
         try store.stageDeclaration(declaration, in: transaction)
-        try transaction.replace(
-          store.resolvedURL, content: nil, data: StateStore.encodeState(next.normalized))
+        if let data = try next.replacementData(
+          comparedTo: store.existingData(store.resolvedURL))
+        {
+          try transaction.replace(store.resolvedURL, content: nil, data: data)
+        }
       }
       try sources.cache.prune(referencedBy: next, transaction: transaction)
       try transaction.commit()

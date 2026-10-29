@@ -1,0 +1,17 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  sources: [
+    .source(name: "source", path: "live"),
+    .source(name: "source-2", path: "other"),
+  ],
+  components: [
+    .skills(
+      source: "source",
+      overrides: [
+        .skill(name: "future"),
+      ]
+    ),
+  ]
+)

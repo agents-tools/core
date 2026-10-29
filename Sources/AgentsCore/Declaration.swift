@@ -108,7 +108,11 @@ public struct SourceDeclaration: Codable, Equatable, Sendable {
   }
 
   package var gitURL: String {
-    location.contains("://") || location.contains("@") ? location : "https://" + location
+    if location.contains("://") { return location }
+    if let colon = location.firstIndex(of: ":"), location[..<colon].contains("@") {
+      return location
+    }
+    return "https://" + location
   }
 }
 

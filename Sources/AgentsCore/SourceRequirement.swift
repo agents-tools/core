@@ -227,6 +227,28 @@ struct SemanticVersion: Comparable, Equatable, Sendable, CustomStringConvertible
 }
 
 extension SourceRequirement {
+  /// Canonical spelling for new declaration and ledger fields. Decoding keeps stored spelling.
+  public func canonicalized() throws -> SourceRequirement {
+    try validate()
+    switch self {
+    case .branch, .revision: return self
+    case .exact(let version): return .exact(SemanticVersion(version)!.description)
+    default:
+      let (lower, upper) = declarationBounds!
+      let (major, majorOverflow) = lower.major.addingReportingOverflow(1)
+      if !majorOverflow, upper == SemanticVersion(major: major, minor: 0, patch: 0) {
+        return .upToNextMajor(from: lower.description)
+      }
+      let (minor, minorOverflow) = lower.minor.addingReportingOverflow(1)
+      if !minorOverflow, upper == SemanticVersion(major: lower.major, minor: minor, patch: 0) {
+        return .upToNextMinor(from: lower.description)
+      }
+      return .range(from: lower.description, to: upper.description)
+    }
+  }
+
+  package var canonical: SourceRequirement { (try? canonicalized()) ?? self }
+
   /// Declaration comparison expands range spellings; exact requirements retain metadata.
   package func declarationEquivalent(to other: SourceRequirement) -> Bool {
     switch (self, other) {

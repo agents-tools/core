@@ -1,0 +1,26 @@
+{
+  "sources": {
+    "s": {
+      "local": "./s"
+    },
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": {
+      "local": "p"
+    },
+    "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy": {
+      "local": "p2"
+    }
+  },
+  "skills": {
+    "s": {
+      "select": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "exclude": [
+        "ccccccccccccccccccccccccccccccccc",
+        "dddddddddddddddddddddddd"
+      ],
+      "mode": "link"
+    }
+  }
+}

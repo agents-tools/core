@@ -1,0 +1,100 @@
+{
+  "agents": [
+    "opencode",
+    "claude-code",
+    "codex"
+  ],
+  "sources": {
+    "git": {
+      "git": "intranet/team.git",
+      "branch": "main",
+      "path": "skills"
+    },
+    "local": {
+      "local": "./drafts",
+      "revision": "abc123"
+    },
+    "index": {
+      "well-known": "https://example.org/.well-known/skills/index.json",
+      "path": "bundle"
+    },
+    "empty": {
+      "local": "./live"
+    }
+  },
+  "skills": {
+    "git": {
+      "select": [
+        "b",
+        "a"
+      ],
+      "exclude": [
+        "b"
+      ],
+      "agents": [],
+      "mode": "copy",
+      "overrides": {
+        "a": {
+          "mode": "link",
+          "agents": [
+            "codex"
+          ]
+        },
+        "b": {
+          "agents": []
+        },
+        "unused": {
+          "mode": "copy",
+          "agents": [
+            "opencode",
+            "codex"
+          ]
+        }
+      }
+    },
+    "local": {
+      "select": "all",
+      "overrides": {
+        "future": {
+          "mode": "copy"
+        }
+      }
+    },
+    "index": {
+      "select": []
+    },
+    "empty": {
+      "select": "all",
+      "mode": "edit"
+    }
+  },
+  "instructions": {
+    "agents": [
+      "gemini-cli",
+      "codex"
+    ],
+    "sections": [
+      "own",
+      "git:rule",
+      "own",
+      "local:nested/rule"
+    ],
+    "chatgpt": {
+      "周报": {
+        "sections": [
+          "git:rule",
+          "own"
+        ],
+        "append": "notes/周报.md"
+      },
+      "": {
+        "sections": []
+      }
+    }
+  },
+  "watch": [
+    "local",
+    "git",
+    "index"
+  ]
+}

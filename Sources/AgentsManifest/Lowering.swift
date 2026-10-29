@@ -15,13 +15,19 @@ enum Lowering {
   }
 
   static func requirement(_ range: Range<Version>) -> SourceRequirement {
-    let lower = range.lowerBound
-    let upper = range.upperBound
-    let major = lower.successor(major: true)
-    let minor = lower.successor(major: false)
-    if major.valid && upper == major { return .upToNextMajor(from: lower.normalized) }
-    if minor.valid && upper == minor { return .upToNextMinor(from: lower.normalized) }
-    return .range(from: lower.normalized, to: upper.normalized)
+    SourceRequirement.range(
+      from: range.lowerBound.normalized, to: range.upperBound.normalized
+    ).canonical
+  }
+
+  static func recordKind(
+    type: String, member: String, fields: [String: ConstructionValue]
+  ) -> String {
+    if type == "Source" {
+      return fields["url"] != nil ? "git" : fields["path"] != nil ? "local" : "index"
+    }
+    if type == "GroupReference" { return fields["source"]?.text == nil ? "local" : "exported" }
+    return member
   }
 
   static func lower(_ value: ConstructionValue) -> DeclarationValue {
@@ -46,14 +52,12 @@ enum Lowering {
           member == "exact" ? .exact(text) : member == "branch" ? .branch(text) : .revision(text))
       }
       var lowered = fields.mapValues(lower)
-      var kind = member
+      let kind = recordKind(type: type, member: member, fields: fields)
       if type == "Source" {
-        kind = fields["url"] != nil ? "git" : fields["path"] != nil ? "local" : "index"
         if let url = fields["url"]?.text {
           lowered["url"] = .string(SourceDeclaration(kind: .git, location: url).gitURL)
         }
       }
-      if type == "GroupReference" { kind = fields["source"]?.text == nil ? "local" : "exported" }
       return .record(DeclarationRecord(kind: kind, fields: lowered))
     }
   }

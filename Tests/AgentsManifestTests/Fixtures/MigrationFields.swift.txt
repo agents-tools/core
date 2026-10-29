@@ -1,0 +1,76 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  defaultAgents: [.claudeCode, .codex, .openCode],
+  sources: [
+    .source(name: "empty", path: "./live"),
+    .source(
+      name: "git",
+      url: "https://intranet/team.git",
+      branch: "main",
+      subpath: "skills"
+    ),
+    .source(
+      name: "index",
+      index: "https://example.org/.well-known/skills/index.json",
+      subpath: "bundle"
+    ),
+    .source(name: "local", path: "./drafts", revision: "abc123"),
+  ],
+  components: [
+    .skills(source: "empty", mode: .edit),
+    .skills(
+      source: "git",
+      select: ["a", "b"],
+      exclude: ["b"],
+      mode: .copy,
+      overrides: [
+        .skill(
+          name: "a",
+          mode: .link,
+          agents: [.codex]
+        ),
+        .skill(
+          name: "b",
+          agents: []
+        ),
+      ],
+      agents: []
+    ),
+    .skills(
+      source: "index",
+      select: []
+    ),
+    .skills(
+      source: "local",
+      overrides: [
+        .skill(name: "future", mode: .copy),
+      ]
+    ),
+    .instructions(
+      sections: [
+        "own",
+        .section(name: "rule", source: "git"),
+        "own",
+        .section(name: "nested/rule", source: "local"),
+      ],
+      chatGPT: [
+        .prompt(
+          name: "",
+          sections: []
+        ),
+        .prompt(
+          name: "周报",
+          sections: [
+            .section(name: "rule", source: "git"),
+            "own",
+          ],
+          append: "notes/周报.md"
+        ),
+      ],
+      agents: [.codex, .geminiCLI]
+    ),
+  ],
+  watch: ["git", "index", "local"]
+)
