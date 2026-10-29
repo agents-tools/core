@@ -276,7 +276,7 @@ package struct SourceCache {
     if !locks.isEmpty { try beginWatchReferenceUpdate() }
     guard try directory.info("watch-refs.pending") != nil else { return }
     for (parent, name) in locks {
-      try parent.remove(name) { try checkpoint("watch.git-lock.\($0)") }
+      try parent.remove(name) { try checkpoint("watch.git-lock.\($0.step.rawValue)") }
     }
     // A killed cleanup may have unlinked the last lock before syncing its parent.
     // The pending marker requires these barriers even if no lock remains visible.

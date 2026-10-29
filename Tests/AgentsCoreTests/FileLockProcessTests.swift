@@ -1,6 +1,7 @@
 import AgentsCore
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Inherited file locks")
@@ -61,9 +62,11 @@ struct FileLockProcessTests {
       let identifier = Int32(output.stdout)
       let pid: Int32 = try #require(identifier)
       child = pid
-      let deadline = Date().addingTimeInterval(10)
-      while !FileManager.default.fileExists(atPath: ready.path), Date() < deadline {
-        Thread.sleep(forTimeInterval: 0.01)
+      try ProcessWait.condition(
+        processIdentifier: pid, root: root, description: "grandchild readiness",
+        isRunning: { CPlatform.kill(pid, 0) == 0 }
+      ) {
+        FileManager.default.fileExists(atPath: ready.path)
       }
       #expect(try String(contentsOf: ready, encoding: .utf8) == String(pid))
       #expect(fcntl(descriptor, F_GETFD) & FD_CLOEXEC != 0)
@@ -73,16 +76,15 @@ struct FileLockProcessTests {
     defer { close(contender) }
     #expect(platform_flock(contender, LOCK_EX | LOCK_NB) == -1)
     #expect(errno == EWOULDBLOCK)
-    CPlatform.kill(try #require(child), SIGCONT)
-    let deadline = Date().addingTimeInterval(10)
-    var acquired = false
-    repeat {
-      if let child { CPlatform.kill(child, SIGCONT) }
-      acquired = platform_flock(contender, LOCK_EX | LOCK_NB) == 0
-      if !acquired { Thread.sleep(forTimeInterval: 0.01) }
-    } while !acquired && Date() < deadline
-    #expect(acquired)
-    if acquired { child = nil }
+    let pid = try #require(child)
+    try ProcessWait.condition(
+      processIdentifier: pid, root: root, description: "grandchild lock release",
+      isRunning: { CPlatform.kill(pid, 0) == 0 },
+      ready: {
+        CPlatform.kill(pid, SIGCONT)
+        return platform_flock(contender, LOCK_EX | LOCK_NB) == 0
+      })
+    child = nil
   }
 
   @Test func lockedChildPreservesStreamsDirectoryAndEnvironment() throws {
@@ -155,7 +157,7 @@ struct FileLockProcessTests {
       !FileManager.default.fileExists(atPath: root.appendingPathComponent("lock-acquired").path))
     #expect(FileManager.default.fileExists(atPath: gitLock.path))
 
-    try finishProcesses([contender], resuming: pause)
+    try finishProcesses([contender], root: root, resuming: pause)
     #expect(
       FileManager.default.fileExists(atPath: root.appendingPathComponent("lock-acquired").path))
     #expect(!FileManager.default.fileExists(atPath: gitLock.path))
@@ -170,7 +172,7 @@ struct FileLockProcessTests {
     defer { removeTemporaryDirectory(root) }
     let parent = try stateTestProcess(root: root, arguments: ["closed-streams", String(mask)])
     defer { terminateProcess(parent) }
-    try finishProcesses([parent])
+    try finishProcesses([parent], root: root)
     #expect(try String(contentsOf: root.appendingPathComponent("stdout"), encoding: .utf8) == "out")
     #expect(try String(contentsOf: root.appendingPathComponent("stderr"), encoding: .utf8) == "err")
   }

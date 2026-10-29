@@ -1410,6 +1410,18 @@ syntax; editability remains a document-layer capability.
 [State Transaction and Recovery](../Architecture/State.md#state-transaction-and-recovery)
 owns the current publication, precondition and recovery guarantees.
 
+### Manifest integration
+
+Manifest orchestration must publish validated source bytes in place of declaration
+re-encoding. The deployment ledger and watch state retain their own encoders.
+One transaction includes the source, ledger, affected watch state, native outputs,
+cache retention and cleanup. Source-only changes use the same protocol.
+
+Preparation records presence, physical identity and byte digest for the manifest,
+ledger, watch state and related targets. A changed comment also invalidates the
+prepared preview. These obligations belong to the integration that connects
+`Agents.swift` to the state engine.
+
 ### Approvals
 
 Approval identity covers declarations, commands and shipped content, excluding
@@ -1522,8 +1534,9 @@ last argument. Empty collections are `[]` or `[:]`. No formatting pass touches
 an already migrated manifest.
 
 One transaction creates `Agents.swift`, upgrades an existing ledger as needed and
-removes `agents.json`. Creation uses the no-replace protocol above. Existing native
-files, cache content and watch-state bytes do not change. A missing ledger stays
+removes `agents.json`. Creation uses the
+[no-replace protocol](../Architecture/State.md#publication-and-concurrent-writers).
+Existing native files, cache content and watch-state bytes do not change. A missing ledger stays
 missing. Repeating migration after success is unchanged. Both declaration files
 present is a conflict; Swift source with a version-1 lock permits a lock-only
 migration. Normal commands report required migration rather than converting

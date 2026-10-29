@@ -126,13 +126,15 @@ struct UpdateReportingTests {
       } else {
         let retained = try plan.retain()
         let transaction = FileTransaction(store: store) { step in
-          if step == "stage.0.ready" {
+          if step == "stage.0.constructed" {
             let parent = fixture.target("demo").deletingLastPathComponent()
             let staged = try #require(
               FileManager.default.contentsOfDirectory(
                 at: parent,
                 includingPropertiesForKeys: nil
-              ).first { $0.lastPathComponent.hasSuffix(".new") })
+              ).first { $0.lastPathComponent.hasPrefix(".agents-") }
+            )
+            .appendingPathComponent("entry.0.staged")
             try FileManager.default.setAttributes(
               [.posixPermissions: 0o755],
               ofItemAtPath: staged.appendingPathComponent("SKILL.md").path)

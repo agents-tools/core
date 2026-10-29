@@ -180,8 +180,8 @@ struct CombinedUpdateTests {
         environment: fixture.environment,
         checkpoint: { step in
           // Pruning is queued after both kinds and the merged state; rollback restores it too.
-          if step == "journal.committed.renamed" { return }
-          if step.hasPrefix("replace."), !step.hasSuffix(".renamed"),
+          if step == "journal.committed.terminal.renamed" { return }
+          if step.hasPrefix("entry."), step.hasSuffix(".applied"),
             !FileManager.default.fileExists(atPath: unused.path)
           {
             throw CoreError.invalidState("pruning interrupted")
@@ -335,7 +335,7 @@ struct CombinedUpdateTests {
       try UpdateOperations.withPreparedUpdate(
         environment: fixture.environment,
         checkpoint: { step in
-          if step == "stage.0.ready" {
+          if step == "stage.0.constructed" {
             let file = cache.appendingPathComponent("skills/demo/run.sh")
             if dimension == "bytes" {
               try fixture.write("corrupt", to: file)

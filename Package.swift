@@ -44,6 +44,7 @@ let package = Package(
     .target(
       name: "AgentsUpdates",
       dependencies: ["AgentsCore", "AgentsSkills", "AgentsInstructions", "CPlatform"]),
+    .target(name: "StateTestSupport", path: "Tests/StateTestSupport"),
     .executableTarget(
       name: "StateTestProcess",
       dependencies: [
@@ -51,7 +52,8 @@ let package = Package(
       ],
       path: "Tests/StateTestProcess"),
     .testTarget(
-      name: "AgentsCoreTests", dependencies: ["AgentsCore", "StateTestProcess", "CPlatform"]),
+      name: "AgentsCoreTests",
+      dependencies: ["AgentsCore", "StateTestProcess", "StateTestSupport", "CPlatform"]),
     .testTarget(name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions"]),
     .target(
       name: "ManifestTestSupport", dependencies: ["AgentsManifest"],
@@ -70,11 +72,13 @@ let package = Package(
       ],
       resources: [.copy("Fixtures")]),
     .testTarget(
-      name: "AgentsUpdatesTests", dependencies: ["AgentsUpdates", "StateTestProcess", "CPlatform"]),
+      name: "AgentsUpdatesTests",
+      dependencies: ["AgentsUpdates", "StateTestProcess", "StateTestSupport", "CPlatform"]),
     .testTarget(
       name: "AgentsSkillsTests",
       dependencies: [
-        "AgentsSkills", "AgentsCore", "AgentsInstructions", "Yams", "StateTestProcess", "CPlatform",
+        "AgentsSkills", "AgentsCore", "AgentsInstructions", "Yams", "StateTestProcess",
+        "StateTestSupport", "CPlatform",
       ]),
   ],
   swiftLanguageModes: [.v6]

@@ -1,6 +1,7 @@
 import AgentsCore
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Watch Git durability")
@@ -10,8 +11,8 @@ struct WatchDurabilityTests {
     [
       "watch.mirror.fetched", "watch.references.pending", "watch.objects.synced",
       "watch.ref.updated", "watch.ref.synced",
-      "watch.mirror.synced", "journal.applying", "replace.0.renamed",
-      "journal.committed.renamed", "journal.committed", "journal.removed",
+      "watch.mirror.synced", "entry.0.publishing", "publish.0.exchanged",
+      "journal.committed.terminal.renamed", "journal.committed", "journal.removed",
     ])
   func interruptedAcknowledgmentRetainsTheRecoveredBaseline(_ advancing: Bool, _ step: String)
     throws
@@ -236,11 +237,7 @@ final class WatchGitFixture {
       }
     }
     let marker = root.appendingPathComponent("ready")
-    let deadline = Date().addingTimeInterval(30)
-    while !FileManager.default.fileExists(atPath: marker.path), child.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path), "did not reach \(step)")
+    try ProcessWait.marker(marker, child: child, root: root)
     #expect(try String(contentsOf: marker, encoding: .utf8) == step)
     CPlatform.kill(child.processIdentifier, SIGKILL)
     child.waitUntilExit()

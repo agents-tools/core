@@ -1,6 +1,7 @@
 import AgentsCore
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Automatic add selection")
@@ -147,9 +148,9 @@ struct AutomaticSelectionTests {
   }
 
   private func wait(for process: Process, until ready: () -> Bool) throws {
-    let deadline = Date().addingTimeInterval(20)
-    while !ready(), process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
-    try #require(ready())
+    try ProcessWait.condition(
+      process, root: URL(fileURLWithPath: process.arguments![0]),
+      description: "automatic selection handshake", ready: ready)
   }
 }
 

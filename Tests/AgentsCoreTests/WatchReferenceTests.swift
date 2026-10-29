@@ -48,8 +48,8 @@ struct WatchReferenceTests {
     try fixture.rewrite("replacement")
     let replacement = try fixture.head()
     let writer = try stateTestProcess(
-      root: fixture.root, arguments: ["watch-seen", "replace.0.renamed"])
-    try fixture.kill(writer, at: "replace.0.renamed")
+      root: fixture.root, arguments: ["watch-seen", "publish.0.exchanged"])
+    try fixture.kill(writer, at: "publish.0.exchanged")
     #expect(try fixture.watchRefs() == [first, replacement])
     let recovery = try stateTestProcess(
       root: fixture.root, arguments: ["watch-recover", "watch.references.deleted"])

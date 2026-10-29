@@ -56,6 +56,10 @@ package enum FileHash {
       }
     }
     try collect(directory, prefix: "")
+    return hashRecords(entries)
+  }
+
+  static func hashRecords(_ entries: [(String, Data)]) -> String {
     var hasher = SHA256()
     // Each field has a fixed-width byte length, so arbitrary payload bytes cannot
     // impersonate paths, entry types or record boundaries.

@@ -1,16 +1,14 @@
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
-func finishProcesses(_ processes: [Process], resuming pause: GitTransactionPause? = nil) throws {
+func finishProcesses(
+  _ processes: [Process], root: URL, resuming pause: GitTransactionPause? = nil
+) throws {
   try pause?.resume()
   for process in processes {
-    let exited = DispatchSemaphore(value: 0)
-    process.terminationHandler = { _ in exited.signal() }
-    if process.isRunning {
-      try #require(exited.wait(timeout: .now() + 60) == .success)
-    }
-    process.waitUntilExit()
+    try ProcessWait.exit(process, root: root)
     #expect(process.terminationStatus == 0)
   }
   pause?.completed()

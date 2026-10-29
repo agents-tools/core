@@ -24,7 +24,7 @@ public enum InstructionOperations {
     beforeApply: ((InstructionUpdateReport) throws -> Void)?
   ) throws -> InstructionAddOutcome {
     let store = StateStore(scope: options.scope, environment: options.environment)
-    return try operate(store, apply: apply) { previousDeclaration, previous in
+    return try operate(store, apply: apply) { previousDeclaration, previous, baseline in
       var declaration = previousDeclaration
       let selectionChanged = CoreError.invalidState(
         "automatic instruction selection changed during discovery; retry the command")
@@ -101,7 +101,8 @@ public enum InstructionOperations {
       if !options.replace { try requireOwnership(plan.report) }
       try beforeApply?(plan.report)
       try Self.apply(
-        declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
+        declaration: declaration, next: plan.lock, report: plan.report, sources: sources,
+        baseline: baseline, expectations: plan.expectations)
       return InstructionAddOutcome(sourceID: id, available: available, result: plan.report)
     }
   }
@@ -144,10 +145,7 @@ public enum InstructionOperations {
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: apply) { _, _ in
-      let baseline = try StatePrecondition(store: store)
-      let previousDeclaration = try store.readDeclaration()
-      let previous = try store.readResolved()
+    return try operate(store, apply: apply) { previousDeclaration, previous, baseline in
       var declaration = previousDeclaration
       if let agents {
         var instructions = declaration.instructions ?? InstructionsDeclaration()
@@ -166,21 +164,24 @@ public enum InstructionOperations {
         try baseline.validate()
         try plan.validate()
         try plan.retain()
-        try baseline.validate()
-        try plan.validate()
         let transaction = FileTransaction(store: store)
-        transaction.validateBeforePublication = {
-          try baseline.validate()
-          try plan.validate()
+        transaction.validateBeforePublication = { [unowned transaction] in
+          try baseline.validate(excludingTargets: transaction.targetPaths)
+          try plan.validate(excludingTargets: transaction.targetPaths)
         }
         try plan.stage(transaction: transaction)
-        try store.stageDeclaration(declaration, in: transaction)
+        try store.stageDeclaration(
+          declaration, in: transaction, prepared: baseline)
         if let data = try plan.next.replacementData(
-          comparedTo: store.existingData(store.resolvedURL))
+          comparedTo: baseline.bytes(for: store.resolvedURL))
         {
-          try transaction.replace(store.resolvedURL, content: nil, data: data)
+          try transaction.replace(
+            store.resolvedURL, content: nil, data: data,
+            expecting: baseline.evidence(for: store.resolvedURL))
         }
-        try SourceCache(store: store).prune(referencedBy: plan.next, transaction: transaction)
+        try SourceCache(store: store).prune(
+          referencedBy: plan.next, watch: store.readWatch(prepared: baseline),
+          transaction: transaction)
         try transaction.commit()
       }
       return plan.report
@@ -199,7 +200,8 @@ public enum InstructionOperations {
       declaration: declaration, previousDeclaration: previousDeclaration,
       previous: previous, prepared: prepared, store: store)
     return try InstructionUpdatePlan(
-      next: plan.lock, report: plan.report, sources: sources, replace: replace)
+      next: plan.lock, report: plan.report, sources: sources, replace: replace,
+      expectedTargets: plan.expectations)
   }
 
   /// Restores only recorded pins and targets, without changing either state file.
@@ -207,7 +209,7 @@ public enum InstructionOperations {
     scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> InstructionUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: true) { declaration, lock in
+    return try operate(store, apply: true) { declaration, lock, baseline in
       let sources = InstructionSources(store: store)
       let sections = try sources.restore(lock.instructions.sections, sources: lock.sources)
       for prompt in lock.instructions.chatgpt.values {
@@ -223,7 +225,8 @@ public enum InstructionOperations {
         hasChanges: targets.changes.contains(where: \.changed))
       try requireOwnership(report)
       try apply(
-        declaration: declaration, next: lock, report: report, sources: sources, writeState: false)
+        declaration: declaration, next: lock, report: report, sources: sources,
+        baseline: baseline, expectations: targets.expectations, writeState: false)
       return report
     }
   }
@@ -237,7 +240,7 @@ public enum InstructionOperations {
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: true) { previousDeclaration, previous in
+    return try operate(store, apply: true) { previousDeclaration, previous, baseline in
       var declaration = previousDeclaration
       var instructions = declaration.instructions ?? InstructionsDeclaration()
       let references = Set(
@@ -273,7 +276,9 @@ public enum InstructionOperations {
       try plan.lock.validate()
       try requireOwnership(plan.report)
       try beforeApply?(plan.report)
-      try apply(declaration: declaration, next: plan.lock, report: plan.report, sources: sources)
+      try apply(
+        declaration: declaration, next: plan.lock, report: plan.report, sources: sources,
+        baseline: baseline, expectations: plan.expectations)
       return plan.report
     }
   }
@@ -372,7 +377,9 @@ public enum InstructionOperations {
   private static func plan(
     declaration: Declaration, previousDeclaration: Declaration, previous: ResolvedState,
     prepared: (lock: ResolvedState, sections: [InstructionSection]), store: StateStore
-  ) throws -> (lock: ResolvedState, report: InstructionUpdateReport) {
+  ) throws -> (
+    lock: ResolvedState, report: InstructionUpdateReport, expectations: [String: TargetPrecondition]
+  ) {
     var next = prepared.lock
     let targets = try InstructionTargets(store: store).plan(
       sections: prepared.sections,
@@ -405,7 +412,8 @@ public enum InstructionOperations {
       next,
       InstructionUpdateReport(
         sections: changes, targets: targets.changes, changedPrompts: prompts,
-        lockMissing: lockMissing, hasChanges: hasChanges)
+        lockMissing: lockMissing, hasChanges: hasChanges),
+      targets.expectations
     )
   }
 
@@ -417,38 +425,34 @@ public enum InstructionOperations {
 
   private static func apply(
     declaration: Declaration, next: ResolvedState, report: InstructionUpdateReport,
-    sources: InstructionSources, writeState: Bool = true
+    sources: InstructionSources, baseline: StatePrecondition,
+    expectations: [String: TargetPrecondition], writeState: Bool = true
   ) throws {
     let store = sources.store
     try declaration.validate(environment: store.environment)
     try next.validate()
-    // User callbacks can inspect or cancel, but cannot silently invalidate the prepared differences.
-    for change in report.targets {
-      guard try InstructionTargets.read(change.url) == change.before else {
-        throw CoreError.invalidState(
-          "instruction target changed during preparation: \(change.target)")
-      }
-    }
-    try InstructionTargets.validateSourceDirectories(report.targets, sources: next.sources)
+    let plan = try InstructionUpdatePlan(
+      next: next, report: report, sources: sources, replace: true, expectedTargets: expectations)
+    try baseline.validate()
+    try plan.validate()
     do {
-      try sources.retain(next)
+      try plan.retain()
       let transaction = FileTransaction(store: store)
-      for change in report.targets {
-        guard try InstructionTargets.read(change.url) == change.before else {
-          throw CoreError.invalidState(
-            "instruction target changed during preparation: \(change.target)")
-        }
-        if change.changed { try transaction.replace(change.url, content: nil, data: change.after) }
+      transaction.validateBeforePublication = { [unowned transaction] in
+        try baseline.validate(excludingTargets: transaction.targetPaths)
+        try plan.validate(excludingTargets: transaction.targetPaths)
       }
+      try plan.stage(transaction: transaction)
       if writeState {
-        try store.stageDeclaration(declaration, in: transaction)
-        if let data = try next.replacementData(
-          comparedTo: store.existingData(store.resolvedURL))
-        {
-          try transaction.replace(store.resolvedURL, content: nil, data: data)
+        try store.stageDeclaration(declaration, in: transaction, prepared: baseline)
+        if let data = try next.replacementData(comparedTo: baseline.bytes(for: store.resolvedURL)) {
+          try transaction.replace(
+            store.resolvedURL, content: nil, data: data,
+            expecting: baseline.evidence(for: store.resolvedURL))
         }
       }
-      try sources.cache.prune(referencedBy: next, transaction: transaction)
+      try sources.cache.prune(
+        referencedBy: next, watch: store.readWatch(prepared: baseline), transaction: transaction)
       try transaction.commit()
     } catch {
       if let recovered = try? store.readResolved() {
@@ -458,6 +462,13 @@ public enum InstructionOperations {
     }
   }
 
+  private static func operate<T>(_ store: StateStore, apply: Bool, _ body: () throws -> T) throws
+    -> T
+  {
+    if apply { return try store.withLock(body) }
+    return try store.withReadLock(body)
+  }
+
   static func operate<T>(
     _ store: StateStore, apply: Bool, _ body: (Declaration, ResolvedState) throws -> T
   ) throws -> T {
@@ -465,6 +476,17 @@ public enum InstructionOperations {
       return try store.withLock { try body(store.readDeclaration(), store.readResolved()) }
     }
     return try store.withReadLock { try body(store.readDeclaration(), store.readResolved()) }
+  }
+
+  private static func operate<T>(
+    _ store: StateStore, apply: Bool,
+    _ body: (Declaration, ResolvedState, StatePrecondition) throws -> T
+  ) throws -> T {
+    try operate(store, apply: apply) {
+      let baseline = try StatePrecondition(store: store)
+      return try body(
+        store.readDeclaration(prepared: baseline), store.readResolved(prepared: baseline), baseline)
+    }
   }
 
   private static func sourceDeclaration(_ options: InstructionAddOptions, declaration: Declaration)

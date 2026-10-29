@@ -31,11 +31,12 @@ ManifestTestSupport ──> AgentsManifest
 ManifestTestProcess ──> AgentsManifest, AgentsCore, AgentsDescription, ManifestTestSupport
 AgentsManifestTests ──> AgentsManifest, AgentsDescription, AgentsCore, ManifestTestProcess, ManifestTestSupport, SwiftParser, SwiftSyntax
 
+StateTestSupport (Foundation only)
 StateTestProcess ──> AgentsCore, AgentsSkills, AgentsInstructions, AgentsUpdates, CPlatform
-AgentsCoreTests ──> AgentsCore, StateTestProcess, CPlatform
-AgentsSkillsTests ──> AgentsSkills, AgentsCore, AgentsInstructions, Yams, StateTestProcess, CPlatform
+AgentsCoreTests ──> AgentsCore, StateTestProcess, StateTestSupport, CPlatform
+AgentsSkillsTests ──> AgentsSkills, AgentsCore, AgentsInstructions, Yams, StateTestProcess, StateTestSupport, CPlatform
 AgentsInstructionsTests ──> AgentsInstructions
-AgentsUpdatesTests ──> AgentsUpdates, StateTestProcess, CPlatform
+AgentsUpdatesTests ──> AgentsUpdates, StateTestProcess, StateTestSupport, CPlatform
 ```
 
 `AgentsDescription`, `AgentsManifest`, `AgentsCore`, `AgentsSkills`,
@@ -47,10 +48,11 @@ workflow APIs and the state and result models they need. `Package.swift` owns
 this dependency graph.
 
 `CPlatform` is an internal C target for filesystem and process differences. It
-wraps file locks, access checks, atomic directory exchange, directory entry names, durable
-synchronization, metadata copying and spawn actions. Linux uses
-`renameat2(RENAME_EXCHANGE)`, `fsync`, descriptor-based mode/xattr copying
-(including POSIX ACLs) and glibc's
+wraps file locks, access checks, atomic exchange and no-replace rename,
+filesystem-generation comparison, directory entry names, durable synchronization,
+metadata copying and spawn actions. Linux uses
+`renameat2(RENAME_EXCHANGE)` and `renameat2(RENAME_NOREPLACE)`, `fsync`,
+descriptor-based mode/xattr copying (including POSIX ACLs) and glibc's
 `posix_spawn_file_actions_addclosefrom_np`. Symlink metadata uses no-follow calls
 through pinned parent paths in `/proc/self/fd`; Linux symlink modes remain 0777.
 Darwin keeps `renameatx_np`, `F_FULLFSYNC`, `fcopyfile` and its spawn inheritance
@@ -60,6 +62,11 @@ bridges APIs missing from those overlays.
 
 `AgentsCore` hashes through swift-crypto's `Crypto` product, which delegates to
 CryptoKit on Apple platforms and supplies its own implementation on Linux.
+
+`StateTestSupport` supplies the shared process-handshake deadline and diagnostics
+for transaction, watch and update tests. `StateTestProcess` records actual
+checkpoints and supports interruption and resumed recovery through the production
+journal protocol.
 
 ## AgentsDescription and AgentsManifest
 
@@ -141,13 +148,18 @@ baselines and seeds belong to the test corpus, not the runtime language.
   including the complete instruction section, prompt and physical-target models.
 - `StateStore` owns scope paths, validation, deterministic encoding and state
   persistence. `FileLock` serializes state access; `FileTransaction` durably
-  journals replacements across installations, state and cache. Mutating state
-  access recovers interrupted transactions before proceeding, as described in
+  journals replacements across installations, state and cache. `FileSnapshot` and
+  `FileObjectIdentity` own content and physical-object evidence, including directory
+  descendants and permission bits. `DirectoryHandle` owns verified deletion,
+  inode-checked directory permission updates and typed cross-directory rename
+  results. Mutating state access recovers interrupted transactions before
+  proceeding, as described in
   [State and cache](State.md).
 - `SourceCache` owns bare Git mirrors, requirement resolution, exact snapshots,
   digest-addressed downloads and pruning across skill, instruction and watch pins.
   `SourceResolutionSession` shares disposable exact snapshots between domain
-  planners during one update. `StatePrecondition` and `PathIdentity` validate
+  planners during one update. `StatePrecondition`, `TargetPrecondition` and
+  `PathIdentity` validate
   the rendered generation before application. `TransactionOutcome` follows
   its owning journal through commit and recovery.
   `ProcessRunner` executes subprocesses.

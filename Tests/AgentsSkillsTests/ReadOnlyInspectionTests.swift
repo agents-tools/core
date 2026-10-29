@@ -3,6 +3,7 @@ import AgentsInstructions
 import AgentsSkills
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Read-only skill inspection")
@@ -103,11 +104,7 @@ struct ReadOnlyInspectionTests {
       }
     }
     let marker = root.appendingPathComponent("ready")
-    let deadline = Date().addingTimeInterval(10)
-    while !FileManager.default.fileExists(atPath: marker.path), child.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
+    try ProcessWait.marker(marker, child: child, root: root)
     kill(child.processIdentifier, SIGKILL)
     child.waitUntilExit()
     #expect(!FileManager.default.fileExists(atPath: instructions.path))
@@ -424,7 +421,9 @@ struct ReadOnlyInspectionTests {
     }
     let process = Process()
     process.executableURL = directory.appendingPathComponent("StateTestProcess")
-    process.arguments = [root.path, "inspection-transaction", "replace.4", scope.rawValue]
+    process.arguments = [
+      root.path, "inspection-transaction", "entry.4.applied", "--scope", scope.rawValue,
+    ]
     try process.run()
     return process
   }

@@ -1,6 +1,7 @@
 import AgentsCore
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Watch state")
@@ -109,7 +110,9 @@ struct WatchStateTests {
     #expect(throws: CoreError.self) { try declaration.validate(environment: environment) }
   }
 
-  @Test(arguments: ["replace.0.renamed", "replace.1.renamed", "journal.committed", "cleanup.0"])
+  @Test(arguments: [
+    "publish.0.exchanged", "publish.1.exchanged", "journal.committed", "cleanup.0.removed",
+  ])
   func interruptedWatchAndDeclarationRecoverTogether(_ checkpoint: String) throws {
     let root = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -131,15 +134,11 @@ struct WatchStateTests {
       }
     }
     let marker = root.appendingPathComponent("ready")
-    let deadline = Date().addingTimeInterval(10)
-    while !FileManager.default.fileExists(atPath: marker.path), child.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
+    try ProcessWait.marker(marker, child: child, root: root)
     kill(child.processIdentifier, SIGKILL)
     child.waitUntilExit()
     #expect(throws: CoreError.transactionRecovered(store.directory.path)) { try store.loadWatch() }
-    let committed = checkpoint == "journal.committed" || checkpoint == "cleanup.0"
+    let committed = checkpoint == "journal.committed" || checkpoint == "cleanup.0.removed"
     #expect(try store.loadDeclaration().watch == (committed ? ["source"] : nil))
     #expect(try store.loadWatch().sources.isEmpty == !committed)
     #expect(try Data(contentsOf: store.resolvedURL) == lockBytes)

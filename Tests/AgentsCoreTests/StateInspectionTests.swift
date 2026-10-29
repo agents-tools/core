@@ -87,8 +87,8 @@ struct StateInspectionTests {
       try fixture.store.withReadLock {
         reads += 1
         let child = try stateTestProcess(
-          root: fixture.root, arguments: ["watch-add", "replace.1.renamed"])
-        try fixture.kill(child, at: "replace.1.renamed")
+          root: fixture.root, arguments: ["watch-add", "publish.1.created"])
+        try fixture.kill(child, at: "publish.1.created")
         let declaration = try fixture.store.readDeclaration()
         let watch = try fixture.store.readWatch()
         try #require(declaration.watch == ["source"])

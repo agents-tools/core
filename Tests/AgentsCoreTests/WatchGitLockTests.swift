@@ -1,6 +1,7 @@
 import AgentsCore
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Watch Git lock recovery")
@@ -151,12 +152,7 @@ struct WatchGitLockTests {
   }
 
   private func waitFor(_ marker: URL, process: Process) throws {
-    let deadline = Date().addingTimeInterval(30)
-    while !FileManager.default.fileExists(atPath: marker.path), process.isRunning, Date() < deadline
-    {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
+    try ProcessWait.marker(marker, child: process, root: marker.deletingLastPathComponent())
   }
 
   private func terminate(_ process: Process) {

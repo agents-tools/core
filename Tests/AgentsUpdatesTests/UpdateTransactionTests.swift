@@ -2,6 +2,7 @@ import AgentsCore
 import AgentsSkills
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsUpdates
@@ -19,7 +20,7 @@ struct UpdateTransactionTests {
       _ = try UpdateOperations.withPreparedUpdate(
         environment: fixture.environment,
         checkpoint: { step in
-          if step == "replace.0" {
+          if step == "entry.0.applied" {
             // Exchange a journal-bound root so every automatic recovery attempt must stop.
             try FileManager.default.moveItem(at: root, to: moved)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -34,8 +35,10 @@ struct UpdateTransactionTests {
     let journal = fixture.store.directory.appendingPathComponent("transaction.json")
     #expect(FileManager.default.fileExists(atPath: journal.path))
     let retained = try FileManager.default.contentsOfDirectory(atPath: moved.path)
-    #expect(retained.contains { $0.hasSuffix(".old") })
-    #expect(throws: CoreError.self) { try fixture.store.loadResolved() }
+    #expect(retained.contains { $0.hasPrefix(".agents-") })
+    #expect(throws: CoreError.invalidState("transaction root identity changed")) {
+      try fixture.store.loadResolved()
+    }
     #expect(try FileManager.default.contentsOfDirectory(atPath: moved.path) == retained)
     try FileManager.default.removeItem(at: root)
     try FileManager.default.moveItem(at: moved, to: root)
@@ -48,8 +51,9 @@ struct UpdateTransactionTests {
   }
 
   @Test(arguments: [
-    "between-kinds", "journal.preparing", "journal.applying.renamed",
-    "journal.committed.renamed", "journal.committed", "cleanup.0", "journal.removed",
+    "between-kinds", "journal.preparing", "journal.applying.entry.0.publishing.renamed",
+    "journal.committed.terminal.renamed", "journal.committed", "cleanup.0.removed",
+    "journal.removed",
   ])
   func failuresReportTheRecoveredGeneration(_ failure: String) throws {
     let fixture = try UpdateFixture()
@@ -70,7 +74,7 @@ struct UpdateTransactionTests {
             lastSkill = try lastSkillIndex(fixture.store)
           }
           if step == failure
-            || (failure == "between-kinds" && step == lastSkill.map { "replace.\($0)" })
+            || (failure == "between-kinds" && step == lastSkill.map { "entry.\($0).applied" })
           {
             failed = true
             throw CoreError.invalidState("injected update failure")
@@ -80,7 +84,7 @@ struct UpdateTransactionTests {
       Issue.record("failure checkpoint was not reached")
     } catch let error as UpdateApplyError {
       let committed =
-        failure.hasPrefix("journal.committed") || failure == "cleanup.0"
+        failure.hasPrefix("journal.committed") || failure == "cleanup.0.removed"
         || failure == "journal.removed"
       #expect(error.disposition == (committed ? .committed : .unchanged))
       #expect(error.underlyingError as? CoreError == .invalidState("injected update failure"))
@@ -98,8 +102,8 @@ struct UpdateTransactionTests {
   }
 
   @Test(arguments: [
-    "between-kinds", "journal.preparing", "journal.applying.renamed",
-    "journal.committed.renamed", "cleanup.0",
+    "between-kinds", "journal.preparing", "journal.applying.entry.0.publishing.renamed",
+    "journal.committed.terminal.renamed", "cleanup.0.removed",
   ])
   func killedCombinedWriterRecoversThenPreparesTheWholeUpdate(_ checkpoint: String) throws {
     let fixture = try UpdateFixture()
@@ -110,11 +114,13 @@ struct UpdateTransactionTests {
     defer { terminate(child) }
     try waitFor("ready", fixture: fixture, child: child)
     terminate(child)
-    #expect(throws: CoreError.self) { try fixture.preview() }
+    #expect(throws: CoreError.invalidState("transaction recovery is required before inspection")) {
+      try fixture.preview()
+    }
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
       try fixture.apply()
     }
-    let committed = checkpoint.hasPrefix("journal.committed") || checkpoint == "cleanup.0"
+    let committed = checkpoint.hasPrefix("journal.committed") || checkpoint == "cleanup.0.removed"
     if !committed { #expect(try fixture.snapshot() == before) }
     var displayed = 0
     _ = try UpdateOperations.withPreparedUpdate(environment: fixture.environment) { update in
@@ -200,18 +206,16 @@ private func launch(_ fixture: UpdateFixture, command: String, argument: String)
   { directory.deleteLastPathComponent() }
   let process = Process()
   process.executableURL = directory.appendingPathComponent("StateTestProcess")
-  process.arguments = [fixture.root.path, command, argument, fixture.store.scope.rawValue]
+  process.arguments = [
+    fixture.root.path, command, argument, "--scope", fixture.store.scope.rawValue,
+  ]
   try process.run()
   return process
 }
 
 private func waitFor(_ name: String, fixture: UpdateFixture, child: Process) throws {
   let file = fixture.root.appendingPathComponent(name)
-  let deadline = Date().addingTimeInterval(20)
-  while !FileManager.default.fileExists(atPath: file.path), Date() < deadline, child.isRunning {
-    Thread.sleep(forTimeInterval: 0.01)
-  }
-  try #require(FileManager.default.fileExists(atPath: file.path))
+  try ProcessWait.marker(file, child: child, root: fixture.root)
 }
 
 private func terminate(_ process: Process) {

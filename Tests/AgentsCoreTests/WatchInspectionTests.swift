@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Read-only watch inspection")
 struct WatchInspectionTests {
-  @Test(arguments: ["replace.0.renamed", "journal.committed"])
+  @Test(arguments: ["publish.0.exchanged", "journal.committed"])
   func pendingTransactionLeavesStateUnchanged(_ step: String) throws {
     let fixture = try WatchGitFixture()
     try fixture.watch.add("source", environment: fixture.environment)

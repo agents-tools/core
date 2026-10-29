@@ -1,6 +1,7 @@
 import AgentsCore
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsSkills
@@ -182,11 +183,7 @@ extension LockedArtifactLifecycleTests {
       }
     }
     let marker = project.appendingPathComponent("ready")
-    let deadline = Date().addingTimeInterval(10)
-    while !FileManager.default.fileExists(atPath: marker.path), child.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
+    try ProcessWait.marker(marker, child: child, root: fixture.root)
     let final = store.cacheDirectory.appendingPathComponent(
       "artifact-content/" + digest.dropFirst(7))
     #expect(!FileManager.default.fileExists(atPath: final.path))
@@ -220,7 +217,9 @@ extension LockedArtifactLifecycleTests {
     }
     let process = Process()
     process.executableURL = directory.appendingPathComponent("StateTestProcess")
-    process.arguments = [root.path, "cache-content", "stage.0.copy.entry"]
+    process.arguments = [
+      root.path, "cache-content", "stage.0.copy.entry.0.staged/SKILL.md.entryCopied",
+    ]
     try process.run()
     return process
   }

@@ -6,6 +6,19 @@ import Testing
 
 @Suite("Portable filesystem contracts")
 struct DirectoryHandleTests {
+  @Test func linkEvidenceHashesRawDestinationBytes() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let link = root.appendingPathComponent("link")
+    let bytes = [CChar(bitPattern: 0xff), 0]
+    try #require(bytes.withUnsafeBufferPointer { symlink($0.baseAddress!, link.path) } == 0)
+    let directory = try DirectoryHandle(at: root)
+    #expect(try directory.readLinkData("link") == Data([0xff]))
+    let snapshot = try #require(try FileSnapshot.read(at: link))
+    #expect(snapshot.digest == FileHash.sha256Hex(data: Data([0xff])))
+    #expect(snapshot.digest != FileHash.sha256Hex(data: Data("\u{fffd}".utf8)))
+  }
+
   @Test func enumeratesHiddenUnicodeAndLongNamesAcrossRepeatedReads() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }

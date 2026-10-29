@@ -1,5 +1,6 @@
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -9,14 +10,15 @@ struct CachePublicationTests {
   @Test(
     arguments: ["cache-content", "cache-git"],
     [
-      "stage.0.copy.directory", "stage.0.copy.entry", "stage.0.verified", "replace.0.renamed",
-      "journal.committed.renamed",
+      "stage.0.copy.entry.0.staged.directoryCreated",
+      "stage.0.copy.entry.0.staged/SKILL.md.entryCopied", "entry.0.ready", "publish.0.created",
+      "journal.committed.terminal.renamed",
     ])
   func interruptedTreePublicationRecoversAndRetries(_ kind: String, _ point: String) throws {
     let fixture = try CacheFixture(git: kind == "cache-git")
     try interrupt(fixture, kind: kind, point: point)
-    if point.hasPrefix("stage.") {
-      #expect(!FileManager.default.fileExists(atPath: fixture.destination.path))
+    if point.hasPrefix("stage.") || point.hasPrefix("entry.") {
+      #expect(try FileSnapshot.read(at: fixture.destination) == nil)
     } else {
       #expect(try FileHash.folderHash(fixture.destination) == fixture.hash)
     }
@@ -37,7 +39,8 @@ struct CachePublicationTests {
   }
 
   @Test(arguments: [
-    "stage.0.written", "stage.0.verified", "replace.0.renamed", "journal.committed.renamed",
+    "stage.0.constructed", "entry.0.ready", "publish.0.created",
+    "journal.committed.terminal.renamed",
   ])
   func interruptedArtifactBytesAreNeverPublishedPartially(_ point: String) throws {
     let fixture = try CacheFixture()
@@ -54,11 +57,11 @@ struct CachePublicationTests {
     #expect(try Data(contentsOf: fixture.store.resolvedURL) == fixture.lockBytes)
   }
 
-  @Test(arguments: ["prepare.0.directory", "prepare.0.ready"])
+  @Test(arguments: ["stage.0.workCreated", "stage.0.workPrepared"])
   func interruptedExtractionCleansJournalOwnedScratch(_ point: String) throws {
     let fixture = try CacheFixture(git: true)
     try interrupt(fixture, kind: "cache-git", point: point)
-    #expect(!FileManager.default.fileExists(atPath: fixture.destination.path))
+    #expect(try FileSnapshot.read(at: fixture.destination) == nil)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
       try fixture.store.loadResolved()
     }
@@ -73,23 +76,27 @@ struct CachePublicationTests {
 
   @Test func verifiesPrivateCopyBeforePublication() throws {
     let fixture = try CacheFixture()
+    let beforeState = try FileSnapshot.read(at: fixture.store.resolvedURL)
     let cache = SourceCache(store: fixture.store) { step in
-      if step == "stage.0.copy.entry" {
+      if step == "stage.0.constructed" {
         let parent = fixture.destination.deletingLastPathComponent()
         for name in try FileManager.default.contentsOfDirectory(atPath: parent.path)
-        where name.hasSuffix(".new") {
-          try Data("tampered".utf8).write(to: parent.appendingPathComponent(name + "/injected"))
+        where name.hasPrefix(".agents-") {
+          try Data("tampered".utf8).write(
+            to: parent.appendingPathComponent(name).appendingPathComponent(
+              "entry.0.staged/injected"))
         }
       }
     }
-    #expect(throws: CoreError.self) {
+    #expect(throws: CoreError.invalidState("staged content digest mismatch")) {
       try fixture.store.withLock {
         try cache.materializeArtifact(
           fixture.root.appendingPathComponent("new"), digest: fixture.digest,
           hash: "sha256:" + fixture.hash)
       }
     }
-    #expect(!FileManager.default.fileExists(atPath: fixture.destination.path))
+    #expect(try FileSnapshot.read(at: fixture.destination) == nil)
+    #expect(try FileSnapshot.read(at: fixture.store.resolvedURL) == beforeState)
     #expect(
       try FileManager.default.contentsOfDirectory(
         atPath: fixture.destination.deletingLastPathComponent().path
@@ -99,26 +106,56 @@ struct CachePublicationTests {
 
   @Test func verifiesPrivateBytesBeforePublication() throws {
     let fixture = try CacheFixture()
+    let beforeState = try FileSnapshot.read(at: fixture.store.resolvedURL)
     let cache = SourceCache(store: fixture.store) { step in
-      if step == "stage.0.written" {
+      if step == "stage.0.constructed" {
         let parent = fixture.store.cacheDirectory.appendingPathComponent("artifacts")
         for name in try FileManager.default.contentsOfDirectory(atPath: parent.path)
-        where name.hasSuffix(".new") {
-          try Data("tampered".utf8).write(to: parent.appendingPathComponent(name))
+        where name.hasPrefix(".agents-") {
+          try Data("tampered".utf8).write(
+            to: parent.appendingPathComponent(name).appendingPathComponent("entry.0.staged"))
         }
       }
     }
-    #expect(throws: CoreError.self) {
+    #expect(throws: CoreError.invalidState("staged content bytes mismatch")) {
       try fixture.store.withLock {
         try cache.storeArtifact(
           Data(contentsOf: fixture.root.appendingPathComponent("payload")), digest: fixture.digest)
       }
     }
     let final = try cache.artifactURL(digest: fixture.digest)
-    #expect(!FileManager.default.fileExists(atPath: final.path))
+    #expect(try FileSnapshot.read(at: final) == nil)
+    #expect(try FileSnapshot.read(at: fixture.store.resolvedURL) == beforeState)
     #expect(
       try FileManager.default.contentsOfDirectory(atPath: final.deletingLastPathComponent().path)
         .isEmpty)
+  }
+
+  @Test(arguments: [false, true])
+  func concurrentCacheCreatorKeepsItsBytesAndInode(_ equalBytes: Bool) throws {
+    let fixture = try CacheFixture()
+    let beforeState = try FileSnapshot.read(at: fixture.store.resolvedURL)
+    let payload = try Data(contentsOf: fixture.root.appendingPathComponent("payload"))
+    let final = try SourceCache(store: fixture.store).artifactURL(digest: fixture.digest)
+    var external: FileSnapshot?
+    let cache = SourceCache(store: fixture.store) { step in
+      if step == "publish.0.validated" {
+        try (equalBytes ? payload : Data("external cache bytes".utf8)).write(to: final)
+        external = try FileSnapshot.read(at: final)
+      }
+    }
+    #expect {
+      try fixture.store.withLock { try cache.storeArtifact(payload, digest: fixture.digest) }
+    } throws: { error in
+      guard case CoreError.invalidState(let reason) = error else { return false }
+      return reason.contains("transaction destination already exists")
+    }
+    #expect(external != nil)
+    #expect(try FileSnapshot.read(at: final) == external)
+    #expect(try FileSnapshot.read(at: fixture.store.resolvedURL) == beforeState)
+    #expect(
+      try FileManager.default.contentsOfDirectory(atPath: final.deletingLastPathComponent().path)
+        == [final.lastPathComponent])
   }
 
   private func interrupt(_ fixture: CacheFixture, kind: String, point: String) throws {
@@ -130,11 +167,7 @@ struct CachePublicationTests {
       }
     }
     let marker = fixture.root.appendingPathComponent("ready")
-    let deadline = Date().addingTimeInterval(10)
-    while !FileManager.default.fileExists(atPath: marker.path), child.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
+    try ProcessWait.marker(marker, child: child, root: fixture.root)
     kill(child.processIdentifier, SIGKILL)
     child.waitUntilExit()
   }

@@ -1,8 +1,10 @@
 import CPlatform
 import Foundation
+import Synchronization
 
 /// Pins directory ancestry. Child operations never traverse symbolic links.
 final class DirectoryHandle {
+  @TaskLocal static var synchronizationObserver: (@Sendable () -> Void)?
   let descriptor: Int32
   let url: URL
 
@@ -88,87 +90,276 @@ final class DirectoryHandle {
     return names.sorted()
   }
 
-  /// Deletes an owned subtree, granting owner access only to directories being discarded.
-  func remove(_ name: String, checkpoint: (String) throws -> Void = { _ in }) throws {
-    if let info = try info(name) {
-      if info.st_mode & S_IFMT == S_IFDIR {
-        let directory = try child(name)
-        if info.st_mode & S_IRWXU != S_IRWXU {
-          guard fchmod(directory.descriptor, (info.st_mode & 0o7777) | S_IRWXU) == 0 else {
-            throw CoreError.unsafePath("cannot make discarded directory writable: \(name)")
-          }
-        }
-        for entry in try directory.names() { try directory.remove(entry) }
-        guard unlinkat(descriptor, name, AT_REMOVEDIR) == 0 else {
-          throw CoreError.unsafePath("cannot remove directory: \(name)")
-        }
-      } else if unlinkat(descriptor, name, 0) != 0 {
-        throw CoreError.unsafePath("cannot remove entry: \(name)")
-      }
-      try checkpoint("unlinked")
-    }
-    // An absent entry may reflect an interrupted unlink whose parent was never synced.
+  enum RemovalStep: String { case unlinked, synced }
+  struct RemovalPoint {
+    let path: String
+    let step: RemovalStep
+  }
+
+  /// Missing descendants are accepted only by callers with a durable discard intent.
+  /// Private trees and verified user objects share the same descriptor-relative deleter.
+  func remove(
+    _ name: String, expecting expected: FileSnapshot? = nil,
+    identity expectedIdentity: FileObjectIdentity? = nil,
+    checkpoint: (RemovalPoint) throws -> Void = { _ in }
+  ) throws {
+    try removeContents(
+      name, expected: expected, identity: expectedIdentity, prefix: name,
+      checkpoint: checkpoint)
+    // An absent entry may be an interrupted unlink whose parent was not synced.
     try sync()
-    try checkpoint("synced")
+    try checkpoint(RemovalPoint(path: name, step: .synced))
+  }
+
+  private func removeContents(
+    _ name: String, expected: FileSnapshot?, identity: FileObjectIdentity?, prefix: String,
+    checkpoint: (RemovalPoint) throws -> Void
+  ) throws {
+    guard let info = try info(name) else { return }
+    let observed = FileObjectIdentity(info)
+    if let identity, observed != identity {
+      throw CoreError.invalidState("transaction cleanup identity changed: \(name)")
+    }
+    if let expected, observed != expected.identity {
+      throw CoreError.invalidState("transaction cleanup ownership changed: \(name)")
+    }
+    if info.st_mode & S_IFMT == S_IFDIR {
+      let directory = try child(name)
+      if info.st_mode & S_IRWXU != S_IRWXU {
+        guard fchmod(directory.descriptor, (info.st_mode & 0o7777) | S_IRWXU) == 0 else {
+          throw CoreError.unsafePath("cannot make discarded directory writable: \(name)")
+        }
+      }
+      for child in try directory.names() {
+        if let expected, expected.children?[child] == nil {
+          throw CoreError.invalidState("unexpected transaction descendant: \(child)")
+        }
+        try directory.removeContents(
+          child, expected: expected?.children?[child], identity: nil,
+          prefix: prefix + "/" + child, checkpoint: checkpoint)
+      }
+      try directory.sync()
+    } else if let expected, try FileSnapshot.read(name, from: self) != expected {
+      throw CoreError.invalidState("transaction cleanup content changed: \(name)")
+    }
+    guard try self.info(name).map(FileObjectIdentity.init) == observed else {
+      throw CoreError.invalidState("transaction cleanup identity changed: \(name)")
+    }
+    guard unlinkat(descriptor, name, info.st_mode & S_IFMT == S_IFDIR ? AT_REMOVEDIR : 0) == 0
+    else {
+      throw CoreError.invalidState("cannot discard filesystem entry: \(name): \(errno)")
+    }
+    try checkpoint(RemovalPoint(path: prefix, step: .unlinked))
+  }
+
+  /// Only an empty unidentified container may be removed; rmdir never erases contents.
+  func removeEmptyDirectory(_ name: String) throws {
+    guard unlinkat(descriptor, name, AT_REMOVEDIR) == 0 || errno == ENOENT else {
+      throw CoreError.invalidState("unidentified transaction container is not empty: \(name)")
+    }
+    try sync()
+  }
+
+  enum RenameMode: Sendable { case exchange, exclusive }
+  enum RenameResult: Equatable {
+    case success
+    case exists(Int32)
+    case unsupported(Int32)
+    case failure(Int32)
+
+    init(code: Int32) {
+      if code == 0 {
+        self = .success
+      } else if code == EEXIST || code == ENOTEMPTY {
+        self = .exists(code)
+      } else if [EINVAL, ENOSYS, ENOTSUP, EOPNOTSUPP].contains(code) {
+        self = .unsupported(code)
+      } else {
+        self = .failure(code)
+      }
+    }
+
+    func requireSuccess(_ operation: String) throws {
+      switch self {
+      case .success: return
+      case .exists(let code):
+        throw CoreError.invalidState(
+          "transaction destination already exists: \(operation): \(code) (\(String(cString: strerror(code))))"
+        )
+      case .unsupported(let code):
+        throw CoreError.unsupported(
+          "atomic rename is required: \(operation): \(code) (\(String(cString: strerror(code))))")
+      case .failure(let code):
+        throw CoreError.invalidState(
+          "cannot \(operation): \(code) (\(String(cString: strerror(code))))")
+      }
+    }
+  }
+
+  // A nil override delegates to the platform primitive; injected errno takes the same classifier.
+  @TaskLocal static var atomicRenameFailure: (@Sendable (RenameMode) -> Int32?)?
+  private static let capableDevices = Mutex<Set<UInt64>>([])
+
+  var device: UInt64 { get throws { try objectIdentity.device } }
+  var objectIdentity: FileObjectIdentity {
+    get throws {
+      var info = stat()
+      guard fstat(descriptor, &info) == 0 else {
+        throw CoreError.invalidState("cannot identify directory")
+      }
+      return FileObjectIdentity(info)
+    }
+  }
+
+  enum PermissionStep: String { case changed, synced }
+
+  /// Only a recorded directory inode may receive the journal's temporary owner-write bit.
+  func setPermissions(
+    _ mode: mode_t, expecting identity: FileObjectIdentity,
+    from original: mode_t, checkpoint: (PermissionStep) throws -> Void
+  ) throws {
+    let current = try checkedPermissions(expecting: identity, from: original)
+    if current != mode {
+      guard fchmod(descriptor, mode) == 0 else {
+        let code = errno
+        throw CoreError.invalidState(
+          "cannot set directory permissions: \(code) (\(String(cString: strerror(code))))")
+      }
+      try checkpoint(.changed)
+    }
+    // A visible mode may be an interrupted chmod whose metadata barrier did not complete.
+    try sync()
+    var value = stat()
+    guard fstat(descriptor, &value) == 0, value.st_mode & 0o7777 == mode else {
+      throw CoreError.invalidState("directory permissions changed before synchronization")
+    }
+    try checkpoint(.synced)
+  }
+
+  func checkedPermissions(expecting identity: FileObjectIdentity, from original: mode_t) throws
+    -> mode_t
+  {
+    var value = stat()
+    guard fstat(descriptor, &value) == 0, FileObjectIdentity(value) == identity else {
+      throw CoreError.invalidState("recorded directory identity changed")
+    }
+    let current = value.st_mode & 0o7777
+    guard current == original || current == original | 0o200 else {
+      throw CoreError.invalidState(
+        "directory permissions changed beyond transaction intent: \(url.path)")
+    }
+    return current
+  }
+
+  func atomicRename(
+    _ name: String, to parent: DirectoryHandle, named destination: String,
+    mode: RenameMode
+  ) -> RenameResult {
+    if let code = Self.atomicRenameFailure?(mode) { return RenameResult(code: code) }
+    let result =
+      mode == .exchange
+      ? platform_exchange(descriptor, name, parent.descriptor, destination)
+      : platform_rename_exclusive(descriptor, name, parent.descriptor, destination)
+    return RenameResult(code: result == 0 ? 0 : errno)
+  }
+
+  func move(
+    _ name: String, to parent: DirectoryHandle, named destination: String,
+    mode: RenameMode, afterRename: () throws -> Void = {}
+  ) throws {
+    try atomicRename(name, to: parent, named: destination, mode: mode).requireSuccess(
+      "rename \(destination)")
+    try afterRename()
+    try parent.sync()
+    if self !== parent { try sync() }
   }
 
   func rename(
     _ name: String, to destination: String, swap: Bool = false,
     afterRename: () throws -> Void = {}
   ) throws {
-    let result =
-      swap
-      ? platform_exchange(descriptor, name, destination)
-      : renameat(descriptor, name, descriptor, destination)
-    guard result == 0 else {
-      if swap, errno == ENOSYS || errno == ENOTSUP || errno == EINVAL {
-        throw CoreError.unsupported("atomic exchange is required: \(errno)")
+    if swap {
+      try move(name, to: self, named: destination, mode: .exchange, afterRename: afterRename)
+    } else {
+      guard renameat(descriptor, name, descriptor, destination) == 0 else {
+        throw CoreError.invalidState("cannot replace \(destination): \(errno)")
       }
-      throw CoreError.invalidState("cannot replace \(destination): \(errno)")
+      try afterRename()
+      try sync()
     }
-    try afterRename()
-    try sync()
   }
 
   func renameExclusive(
-    _ name: String, to destination: String, afterRename: () throws -> Void = {}
+    _ name: String, to destination: String,
+    afterRename: () throws -> Void = {}
   ) throws {
-    guard platform_rename_exclusive(descriptor, name, destination) == 0 else {
-      let code = errno
-      if code == EEXIST || code == ENOTEMPTY {
-        throw CoreError.invalidState("transaction destination already exists: \(destination)")
-      }
-      if code == ENOSYS || code == ENOTSUP || code == EINVAL {
-        throw CoreError.unsupported("atomic no-replace publication is required: \(code)")
-      }
-      throw CoreError.invalidState("cannot publish exclusively \(destination): \(code)")
-    }
-    try afterRename()
-    try sync()
+    try move(name, to: self, named: destination, mode: .exclusive, afterRename: afterRename)
   }
 
-  /// Checks flag admission without creating any object. FileTransaction also probes
-  /// the actual filesystem with journal-owned objects before publishing targets.
-  static func requireAtomicRenames(at destination: URL) throws {
-    var ancestor = destination.deletingLastPathComponent()
-    while !FileManager.default.fileExists(atPath: ancestor.path), ancestor.path != "/" {
-      ancestor.deleteLastPathComponent()
+  enum ProbeStep: String {
+    case firstCreated, secondCreated, exchanged, collisionChecked, moved, verified
+  }
+
+  /// The descriptor is a journal-owned private container on the publication device.
+  func requireAtomicRenames(checkpoint: (ProbeStep) throws -> Void) throws {
+    if Self.atomicRenameFailure != nil {
+      try probeAtomicRenames(checkpoint: checkpoint)
+      return
     }
-    let directory = try DirectoryHandle(at: ancestor.resolvingSymlinksInPath())
-    let prefix = ".agents-probe-" + UUID().uuidString
-    for exclusive in [false, true] {
-      let result =
-        exclusive
-        ? platform_rename_exclusive(directory.descriptor, prefix + ".a", prefix + ".b")
-        : platform_exchange(directory.descriptor, prefix + ".a", prefix + ".b")
-      guard result < 0, errno == ENOENT else {
-        throw CoreError.unsupported(
-          "atomic exchange and no-replace publication are required: \(errno)")
-      }
+    let device = try device
+    // The lock spans probing so concurrent scopes check a device only once.
+    try Self.capableDevices.withLock { devices in
+      if devices.contains(device) { return }
+      try probeAtomicRenames(checkpoint: checkpoint)
+      devices.insert(device)
     }
   }
 
-  func makeDirectory(_ name: String) throws {
+  private func probeAtomicRenames(checkpoint: (ProbeStep) throws -> Void) throws {
+    let a = TransactionScratch.probeA.name
+    let b = TransactionScratch.probeB.name
+    let c = TransactionScratch.probeC.name
+    try write(
+      a, data: Data("a".utf8), syncParent: false, afterCreate: { try checkpoint(.firstCreated) })
+    try write(
+      b, data: Data("b".utf8), syncParent: false, afterCreate: { try checkpoint(.secondCreated) })
+    let first = try info(a).map(FileObjectIdentity.init)
+    let second = try info(b).map(FileObjectIdentity.init)
+    // Exchange must preserve both entries and exchange their physical identities.
+    try atomicRename(a, to: self, named: b, mode: .exchange).requireSuccess("exchange atomic probe")
+    try checkpoint(.exchanged)
+    guard try info(a).map(FileObjectIdentity.init) == second,
+      try info(b).map(FileObjectIdentity.init) == first
+    else {
+      throw CoreError.unsupported("atomic exchange did not preserve probe objects")
+    }
+    // An occupied destination must refuse publication and preserve both inodes.
+    let collision = atomicRename(a, to: self, named: b, mode: .exclusive)
+    switch collision {
+    case .exists: break
+    case .success:
+      throw CoreError.unsupported("exclusive rename replaced an occupied probe")
+    case .unsupported, .failure:
+      try collision.requireSuccess("check exclusive atomic probe collision")
+    }
+    try checkpoint(.collisionChecked)
+    guard try info(a).map(FileObjectIdentity.init) == second,
+      try info(b).map(FileObjectIdentity.init) == first
+    else {
+      throw CoreError.unsupported("exclusive rename changed occupied probe objects")
+    }
+    // The same primitive must admit an absent destination, not merely reject all calls.
+    try atomicRename(a, to: self, named: c, mode: .exclusive).requireSuccess(
+      "move exclusive atomic probe")
+    try checkpoint(.moved)
+    guard try info(a) == nil, try info(c).map(FileObjectIdentity.init) == second else {
+      throw CoreError.unsupported("exclusive rename did not move the probe object")
+    }
+    try checkpoint(.verified)
+  }
+
+  @discardableResult
+  func makeDirectory(_ name: String, syncParent: Bool = true) throws -> DirectoryHandle {
     if try info(name) != nil {
       try FileSystem.requireAccess(
         R_OK | W_OK | X_OK, at: url.appendingPathComponent(name), parent: descriptor)
@@ -180,24 +371,31 @@ final class DirectoryHandle {
     }
     try FileSystem.requireAccess(
       R_OK | W_OK | X_OK, at: url.appendingPathComponent(name), parent: descriptor)
-    try sync()
+    let directory = try child(name)
+    guard fchmod(directory.descriptor, 0o700) == 0 else {
+      throw CoreError.invalidState("cannot set directory permissions")
+    }
+    if syncParent { try sync() }
+    return directory
   }
 
   func sync() throws {
     try Self.synchronize(descriptor)
   }
 
-  func link(_ name: String, destination: String) throws {
+  func link(_ name: String, destination: String, syncParent: Bool = true) throws {
     guard symlinkat(destination, descriptor, name) == 0 else {
       throw FileSystem.posixError(
         errno, at: url.appendingPathComponent(name),
         otherwise: .invalidState("cannot create link: \(name)"))
     }
-    try sync()
+    if syncParent { try sync() }
   }
 
   func write(
-    _ name: String, data: Data, mode: mode_t = 0o600, preservingMetadataOf original: String? = nil
+    _ name: String, data: Data, mode: mode_t = 0o600, preservingMetadataOf original: String? = nil,
+    originalParent: DirectoryHandle? = nil, syncParent: Bool = true,
+    afterCreate: () throws -> Void = {}
   ) throws {
     if try info(name) != nil {
       try FileSystem.requireAccess(
@@ -210,6 +408,7 @@ final class DirectoryHandle {
         otherwise: .invalidState("cannot stage \(name)"))
     }
     defer { close(file) }
+    try afterCreate()
     try FileSystem.requireAccess(
       R_OK | W_OK, at: url.appendingPathComponent(name), parent: descriptor)
     try data.withUnsafeBytes { bytes in
@@ -223,7 +422,7 @@ final class DirectoryHandle {
       }
     }
     if let original {
-      let source = try regularFile(original)
+      let source = try (originalParent ?? self).regularFile(original)
       defer { close(source) }
       var attributes = stat()
       guard fstat(source, &attributes) == 0 else {
@@ -233,6 +432,33 @@ final class DirectoryHandle {
     } else {
       guard fchmod(file, mode) == 0 else { throw CoreError.invalidState("cannot set permissions") }
       try Self.synchronize(file)
+    }
+    if syncParent { try sync() }
+  }
+
+  func writeJournal(_ data: Data, afterWrite: () throws -> Void, afterRename: () throws -> Void)
+    throws
+  {
+    if try info("transaction.new") != nil {
+      _ = try read("transaction.new")
+      guard unlinkat(descriptor, "transaction.new", 0) == 0 else {
+        throw CoreError.invalidState("cannot remove incomplete journal: \(errno)")
+      }
+    }
+    try write("transaction.new", data: data, syncParent: false)
+    try afterWrite()
+    try rename("transaction.new", to: "transaction.json", afterRename: afterRename)
+  }
+
+  func removeJournal(afterUnlink: () throws -> Void = {}) throws {
+    for name in ["transaction.new", "transaction.json"] {
+      if try info(name) != nil {
+        _ = try read(name)
+        guard unlinkat(descriptor, name, 0) == 0 else {
+          throw CoreError.invalidState("cannot remove journal: \(errno)")
+        }
+        if name == "transaction.json" { try afterUnlink() }
+      }
     }
     try sync()
   }
@@ -269,6 +495,10 @@ final class DirectoryHandle {
   }
 
   func readLink(_ name: String) throws -> String {
+    String(decoding: try readLinkData(name), as: UTF8.self)
+  }
+
+  func readLinkData(_ name: String) throws -> Data {
     var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
     let count = readlinkat(descriptor, name, &buffer, buffer.count - 1)
     guard count >= 0, count < buffer.count - 1 else {
@@ -276,14 +506,14 @@ final class DirectoryHandle {
         count < 0 ? errno : 0, at: url.appendingPathComponent(name),
         otherwise: .unsafePath("invalid symbolic link"))
     }
-    return String(decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    return Data(buffer.prefix(count).map { UInt8(bitPattern: $0) })
   }
 
-  func syncFile(_ name: String) throws {
+  func syncFile(_ name: String, includingParent: Bool = true) throws {
     let file = try regularFile(name)
     defer { close(file) }
     try Self.synchronize(file)
-    try sync()
+    if includingParent { try sync() }
   }
 
   var identity: String {
@@ -315,13 +545,22 @@ final class DirectoryHandle {
     guard platform_sync(file) == 0 else {
       throw CoreError.invalidState("cannot sync filesystem entry: \(errno)")
     }
+    synchronizationObserver?()
+  }
+
+  enum CopyStep: String { case directoryCreated, fileCreated, linkCreated, entryCopied }
+  struct CopyPoint {
+    let path: String
+    let step: CopyStep
   }
 
   /// Copies through pinned descriptors, including modes, ACLs and extended attributes.
   func copy(
     _ name: String, from source: DirectoryHandle, named original: String,
-    checkpoint: (String) throws -> Void = { _ in }
+    prefix: String = "", syncParent: Bool = true,
+    checkpoint: (CopyPoint) throws -> Void = { _ in }
   ) throws {
+    let path = prefix.isEmpty ? name : prefix + "/" + name
     guard let info = try source.info(original) else { throw CoreError.notFound(original) }
     switch info.st_mode & S_IFMT {
     case S_IFDIR:
@@ -336,15 +575,18 @@ final class DirectoryHandle {
       }
       try FileSystem.requireAccess(
         R_OK | W_OK | X_OK, at: url.appendingPathComponent(name), parent: descriptor)
-      try checkpoint("directory")
+      try checkpoint(CopyPoint(path: path, step: .directoryCreated))
       let destination = try child(name)
       let origin = try source.child(original)
       for entry in try origin.names() {
-        try destination.copy(entry, from: origin, named: entry, checkpoint: checkpoint)
+        try destination.copy(
+          entry, from: origin, named: entry, prefix: path, syncParent: false, checkpoint: checkpoint
+        )
       }
       try Self.copyMetadata(from: origin.descriptor, to: destination.descriptor, mode: info.st_mode)
     case S_IFLNK:
-      try link(name, destination: source.readLink(original))
+      try link(name, destination: source.readLink(original), syncParent: false)
+      try checkpoint(CopyPoint(path: path, step: .linkCreated))
       guard platform_copy_link_metadata(source.descriptor, original, descriptor, name) == 0 else {
         throw CoreError.invalidState("cannot preserve link metadata: \(errno)")
       }
@@ -362,6 +604,7 @@ final class DirectoryHandle {
           errno, at: url.appendingPathComponent(name), otherwise: .unsafePath("cannot copy file"))
       }
       defer { close(destination) }
+      try checkpoint(CopyPoint(path: path, step: .fileCreated))
       try FileSystem.requireAccess(
         R_OK | W_OK, at: url.appendingPathComponent(name), parent: descriptor)
       guard platform_copy_data(origin, destination) == 0 else {
@@ -370,13 +613,14 @@ final class DirectoryHandle {
       try Self.copyMetadata(from: origin, to: destination, mode: info.st_mode)
     default: throw CoreError.unsafePath("unsupported filesystem entry: \(original)")
     }
-    try sync()
-    try checkpoint("entry")
+    if syncParent { try sync() }
+    if !prefix.isEmpty { try checkpoint(CopyPoint(path: path, step: .entryCopied)) }
   }
 
   private static func copyMetadata(from origin: Int32, to destination: Int32, mode: mode_t) throws {
     guard platform_copy_metadata(origin, destination, mode) == 0 else {
       throw CoreError.invalidState("cannot preserve filesystem metadata: \(errno)")
     }
+    synchronizationObserver?()
   }
 }

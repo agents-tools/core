@@ -32,20 +32,20 @@ bool platform_system_alias(const char *name) {
 #endif
 }
 
-int platform_exchange(int directory, const char *name, const char *destination) {
+int platform_exchange(int sourceDirectory, const char *name, int destinationDirectory, const char *destination) {
 #if defined(__APPLE__)
-  return renameatx_np(directory, name, directory, destination, RENAME_SWAP);
+  return renameatx_np(sourceDirectory, name, destinationDirectory, destination, RENAME_SWAP);
 #else
   // Call the kernel primitive without relying on the libc Swift overlay.
-  return (int)syscall(SYS_renameat2, directory, name, directory, destination, 2 /* RENAME_EXCHANGE */);
+  return (int)syscall(SYS_renameat2, sourceDirectory, name, destinationDirectory, destination, 2 /* RENAME_EXCHANGE */);
 #endif
 }
 
-int platform_rename_exclusive(int directory, const char *name, const char *destination) {
+int platform_rename_exclusive(int sourceDirectory, const char *name, int destinationDirectory, const char *destination) {
 #if defined(__APPLE__)
-  return renameatx_np(directory, name, directory, destination, RENAME_EXCL);
+  return renameatx_np(sourceDirectory, name, destinationDirectory, destination, RENAME_EXCL);
 #else
-  return (int)syscall(SYS_renameat2, directory, name, directory, destination, 1 /* RENAME_NOREPLACE */);
+  return (int)syscall(SYS_renameat2, sourceDirectory, name, destinationDirectory, destination, 1 /* RENAME_NOREPLACE */);
 #endif
 }
 

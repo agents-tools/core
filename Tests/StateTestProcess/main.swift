@@ -4,23 +4,46 @@ import AgentsSkills
 import AgentsUpdates
 import CPlatform
 import Foundation
+import Synchronization
 
 let arguments = CommandLine.arguments
 let root = URL(fileURLWithPath: arguments[1])
-let scope: InstallScope = arguments.count > 4 && arguments[4] == "user" ? .user : .project
+let scopeIndex = arguments.firstIndex(of: "--scope")
+let scope: InstallScope =
+  scopeIndex.flatMap { InstallScope(rawValue: arguments[$0 + 1]) } ?? .project
 let store = StateStore(
   scope: scope,
   environment: RuntimeEnvironment(
     projectDirectory: root,
     homeDirectory: root.appendingPathComponent("home"),
     environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path]))
+let checkpointState = Mutex(
+  (requested: arguments.count > 3 ? arguments[3] : "", counts: [String: Int]()))
+let traceURL = root.appendingPathComponent(
+  "checkpoint-\(ProcessInfo.processInfo.processIdentifier).log")
+FileManager.default.createFile(atPath: traceURL.path, contents: nil)
+let trace = try FileHandle(forWritingTo: traceURL)
 func stop(_ step: String, marker: String = "ready") throws {
-  let requested =
-    (try? String(contentsOf: root.appendingPathComponent("stop-at"), encoding: .utf8))
-    ?? arguments[3]
-  if step == requested {
-    try Data(step.utf8).write(to: root.appendingPathComponent(marker), options: .atomic)
+  let normalized = step.replacingOccurrences(of: root.lastPathComponent, with: "$ROOT")
+  let (point, shouldStop) = checkpointState.withLock { state in
+    state.counts[normalized, default: 0] += 1
+    let count = state.counts[normalized]!
+    let point = count == 1 ? normalized : normalized + "#\(count)"
+    return (point, point == state.requested)
+  }
+  try trace.write(contentsOf: Data((point + "\n").utf8))
+  if step.hasPrefix("journal."), step.hasSuffix(".renamed"),
+    let bytes = try? Data(contentsOf: store.directory.appendingPathComponent("transaction.json"))
+  {
+    try bytes.write(to: root.appendingPathComponent("last-journal"))
+  }
+  if shouldStop {
+    try Data(point.utf8).write(to: root.appendingPathComponent(marker), options: .atomic)
     raise(SIGSTOP)
+    // A resumed handshake may select the next stop once, rather than reading on every checkpoint.
+    let next =
+      (try? String(contentsOf: root.appendingPathComponent("stop-at"), encoding: .utf8)) ?? ""
+    checkpointState.withLock { $0.requested = next }
   }
 }
 func signalContention() throws {
@@ -150,13 +173,12 @@ if arguments[2] == "git-environment" {
 } else if arguments[2] == "watch-recover" {
   try store.withLock(checkpoint: { try stop($0) }, {})
 } else if arguments[2] == "publication-recover" {
+  let outcome = TransactionOutcome()
   let result: String
   do {
-    try store.withLock(checkpoint: { try stop($0, marker: "recovery-ready") }, {})
+    try store.withLock(checkpoint: { try stop($0, marker: "recovery-ready") }, outcome: outcome, {})
     result = "clean"
-  } catch CoreError.transactionRecovered {
-    result = "recovered"
-  } catch {
+  } catch CoreError.transactionRecovered { result = "recovered" } catch {
     result = "unresolved: \(error)"
   }
   try Data(result.utf8).write(to: root.appendingPathComponent("recovery-result"))
@@ -165,25 +187,29 @@ if arguments[2] == "git-environment" {
   var failure = ""
   do {
     try store.withLock(outcome: outcome) {
-      let transaction = FileTransaction(store: store, outcome: outcome) { try stop($0) }
+      let transaction = FileTransaction(store: store, outcome: outcome) {
+        try Data(String(describing: outcome.disposition).utf8).write(
+          to: root.appendingPathComponent("stopped-outcome"))
+        try stop($0)
+      }
       try transaction.replace(
         root.appendingPathComponent("GEMINI.md"), content: nil,
         data: Data("auxiliary postimage".utf8))
-      try transaction.replace(
-        root.appendingPathComponent("AGENTS.md"), content: nil,
-        data: arguments[4] == "delete" ? nil : Data("postimage".utf8))
+      let target = root.appendingPathComponent("AGENTS.md")
+      switch arguments[4] {
+      case "directoryReplace":
+        let source = root.appendingPathComponent("new")
+        try transaction.replace(
+          target, content: source, expectedHash: "sha256:" + FileHash.folderHash(source))
+      case "directoryDelete": try transaction.replace(target, content: nil)
+      case "symlinkCreate":
+        try transaction.replace(target, content: root.appendingPathComponent("new"), link: true)
+      default: try transaction.replace(target, content: nil, data: Data("postimage".utf8))
+      }
       try transaction.commit()
     }
-  } catch {
-    failure = String(describing: error)
-  }
-  let disposition: String
-  switch outcome.disposition {
-  case .unchanged: disposition = "unchanged"
-  case .committed: disposition = "committed"
-  case .recoveryRequired: disposition = "unresolved"
-  }
-  try Data((disposition + "\n" + failure).utf8).write(
+  } catch { failure = String(describing: error) }
+  try Data((String(describing: outcome.disposition) + "\n" + failure).utf8).write(
     to: root.appendingPathComponent("publication-result"))
 } else if arguments[2] == "recover" {
   try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
@@ -199,7 +225,7 @@ if arguments[2] == "git-environment" {
   _ = try UpdateOperations.withPreparedUpdate(
     scope: scope, environment: store.environment,
     checkpoint: { step in
-      if arguments[3] == "between-kinds", step.hasPrefix("replace.") {
+      if arguments[3] == "between-kinds", step.hasPrefix("entry.") && step.hasSuffix(".applied") {
         let journal =
           try JSONSerialization.jsonObject(
             with: Data(contentsOf: store.directory.appendingPathComponent("transaction.json")))
@@ -208,7 +234,7 @@ if arguments[2] == "git-environment" {
         let firstInstruction = entries.firstIndex {
           ($0["path"] as! String).hasPrefix("instructions-")
         }!
-        if step == "replace.\(firstInstruction - 1)" { try stop("between-kinds") }
+        if step == "entry.\(firstInstruction - 1).applied" { try stop("between-kinds") }
       } else {
         try stop(step)
       }
