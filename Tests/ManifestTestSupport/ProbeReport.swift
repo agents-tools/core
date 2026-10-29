@@ -24,14 +24,20 @@ package struct ProbeReport: Codable {
   package let message: String
   package let metrics: FrontEndMetrics
   package let peakMemoryBytes: UInt64
-  package let preparationBaselineBytes: UInt64?
-  package let preparationPeakGrowthBytes: UInt64?
+  /// Process RSS high-water mark before preparation, including earlier allocations.
+  package let preparationBaselinePeakBytes: UInt64?
+
+  package var preparationPeakGrowthBytes: UInt64? {
+    preparationBaselinePeakBytes.map { baseline in
+      peakMemoryBytes > baseline ? peakMemoryBytes - baseline : 0
+    }
+  }
 
   package init(
     status: String, operation: ProbeOperation = .frontEnd, stage: FrontEndStage? = nil,
     offset: Int = 0, line: Int = 1, column: Int = 1,
     message: String = "", metrics: FrontEndMetrics, peakMemoryBytes: UInt64,
-    preparationBaselineBytes: UInt64? = nil
+    preparationBaselinePeakBytes: UInt64? = nil
   ) {
     configuration = probeConfiguration
     self.status = status
@@ -43,9 +49,6 @@ package struct ProbeReport: Codable {
     self.message = message
     self.metrics = metrics
     self.peakMemoryBytes = peakMemoryBytes
-    self.preparationBaselineBytes = preparationBaselineBytes
-    preparationPeakGrowthBytes = preparationBaselineBytes.map {
-      peakMemoryBytes > $0 ? peakMemoryBytes - $0 : 0
-    }
+    self.preparationBaselinePeakBytes = preparationBaselinePeakBytes
   }
 }

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Generate authoring types, evaluation metadata and editor factories from one inventory."""
-import argparse
+import sys
+
+# Imports must not leave bytecode caches in the source tree.
+sys.dont_write_bytecode = True
+
 import json
 from pathlib import Path
 
-from manifest_generation import write_generated
+from manifest_generation import run_generator
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = json.loads((ROOT / "Scripts/ManifestVocabulary.json").read_text())
@@ -165,17 +169,12 @@ def editor_factories_source():
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--output-root", type=Path, default=ROOT)
-    mode.add_argument("--check", action="store_true", help="fail on committed source drift")
-    arguments = parser.parse_args()
     outputs = {
-        "Sources/AgentsDescription/Vocabulary.swift": authoring_source(),
-        "Sources/AgentsDescription/VocabularyInventory.swift": registration_source(),
-        "Sources/AgentsManifest/StaticValueVocabulary.swift": editor_factories_source(),
+        Path("Sources/AgentsDescription/Vocabulary.swift"): authoring_source(),
+        Path("Sources/AgentsDescription/VocabularyInventory.swift"): registration_source(),
+        Path("Sources/AgentsManifest/StaticValueVocabulary.swift"): editor_factories_source(),
     }
-    write_generated(outputs, arguments.output_root, check=arguments.check)
+    run_generator(outputs, repository=ROOT, generator=Path(__file__).resolve())
 
 
 if __name__ == "__main__":

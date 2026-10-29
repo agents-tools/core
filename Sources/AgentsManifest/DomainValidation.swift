@@ -309,11 +309,12 @@ final class DomainValidator {
       if f["prompt"]?.member == "literal", let prompt = f["prompt"]?.fields["value"]?.text {
         let bytes = Array(prompt.utf8)
         var i = 0
-        let escapedInput = Array("$${input:".utf8)
+        let escapedDollars = Array("$$".utf8)
         let input = Array("${input:".utf8)
+        let escapedInput = escapedDollars + input.dropFirst()
         while i < bytes.count {
           if bytes[i...].starts(with: escapedInput) {
-            i += 2
+            i += escapedDollars.count
             while i < bytes.count && bytes[i] != UInt8(ascii: "}") { i += 1 }
           } else if bytes[i...].starts(with: input) {
             let first = i + input.count

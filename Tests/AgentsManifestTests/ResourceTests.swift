@@ -1,6 +1,7 @@
 import AgentsCore
 import AgentsDescription
 import Foundation
+import ManifestTestSupport
 import Testing
 
 @testable import AgentsManifest
@@ -118,6 +119,18 @@ struct ResourceTests {
     }
   }
 
+  @Test func memoryReportsDeriveGrowthFromStoredHighWaterMarks() throws {
+    let report = ProbeReport(
+      status: "manifest.limit", operation: .editing, metrics: FrontEndMetrics(),
+      peakMemoryBytes: 2_048, preparationBaselinePeakBytes: 1_024)
+    let data = try JSONEncoder().encode(report)
+    let fields = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect(fields["preparationPeakGrowthBytes"] == nil)
+    let decoded = try JSONDecoder().decode(ProbeReport.self, from: data)
+    #expect(decoded.preparationBaselinePeakBytes == 1_024)
+    #expect(decoded.preparationPeakGrowthBytes == 1_024)
+  }
+
   @Test func oversizedExplicitInsertionIsRejectedBeforeRendering() throws {
     let directory = try temporaryManifestDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -127,9 +140,9 @@ struct ResourceTests {
       extraArguments: ["--edit-oversized"], in: directory)
     #expect(result.report.status == "manifest.limit")
     #expect(result.report.operation == .editing)
-    #expect(result.report.preparationBaselineBytes != nil)
-    // Rendering the 20 MB pattern needs at least one 20 MB output buffer. Allow
-    // 8 MiB for allocator/runtime variation after the component is already in memory.
+    #expect(result.report.preparationBaselinePeakBytes != nil)
+    // Compare RSS high-water marks after constructing the component, including earlier peaks.
+    // Allow 8 MiB of growth for allocator/runtime variation, below one 20 MB render buffer.
     #expect(try #require(result.report.preparationPeakGrowthBytes) < 8 * 1_024 * 1_024)
     try recordProbeResults([result], name: "oversized-insert-run")
   }

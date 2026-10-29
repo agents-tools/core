@@ -83,7 +83,8 @@ func probe(
   // A loose runaway-process guard, not a platform-specific memory promise. 512 MiB
   // leaves room for the Swift runtime, Debug SwiftSyntax and bounded source/IR copies;
   // it is well above the contract's 2 MiB input, 16 MiB values and 32 MiB encoding caps.
-  #expect(report.peakMemoryBytes < 536_870_912, "\(name): peak memory \(report.peakMemoryBytes)")
+  #expect(
+    report.peakMemoryBytes < 512 * 1_024 * 1_024, "\(name): peak memory \(report.peakMemoryBytes)")
   #expect(report.status != "unexpected", "\(report.message)")
   if report.stage == .admission { #expect(report.metrics.parserCalls == 0) }
   if report.status == "accepted" {

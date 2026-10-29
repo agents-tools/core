@@ -258,7 +258,7 @@ final class Evaluator {
     do {
       value = try LiteralConversion.collection(
         dictionary ? .object(fields.mapValues(\.value)) : .array(values.map(\.value)),
-        kind: dictionary ? .dictionary : .array, to: type
+        to: type
       ) { try charge(at: id) }
     } catch let error as LiteralConversionError {
       throw fail(error.code, error.message, id)

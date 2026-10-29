@@ -3,7 +3,7 @@ import Foundation
 
 private let utf8ByteOrderMark: [UInt8] = [0xEF, 0xBB, 0xBF]
 
-enum ProjectionKind: String, Sendable, Codable {
+enum ProjectionKind: String, Sendable {
   case string, integer, negative, boolean, array, dictionary, sequence, call, group
   case member, reference, label, type, arrayType, dictionaryType
   case importDeclaration = "import"
@@ -11,7 +11,7 @@ enum ProjectionKind: String, Sendable, Codable {
   case nilLiteral = "nil"
 }
 
-struct ProjectionEvent: Sendable, Equatable, Comparable, Codable {
+struct ProjectionEvent: Sendable, Equatable, Comparable {
   let start: Int
   let end: Int
   let kind: ProjectionKind
@@ -40,13 +40,13 @@ enum LexemeKind: String, Sendable {
   case endOfFile = "eof"
 }
 
-enum GrammarNodeKind: String, Sendable {
+enum GrammarNodeKind: Sendable {
   case string, integer, negative, boolean, array, dictionary, sequence, range, name, call, group
-  case nilLiteral = "nil"
+  case nilLiteral
 }
 
 extension GrammarNodeKind {
-  var projection: ProjectionKind {
+  var projection: ProjectionKind? {
     switch self {
     case .string: .string
     case .integer: .integer
@@ -54,8 +54,8 @@ extension GrammarNodeKind {
     case .boolean: .boolean
     case .array: .array
     case .dictionary: .dictionary
-    case .sequence, .range: .sequence
-    case .name: .reference
+    case .sequence: .sequence
+    case .name, .range: nil
     case .call: .call
     case .group: .group
     case .nilLiteral: .nilLiteral
@@ -603,10 +603,17 @@ final class Recognizer {
     events.append(
       ProjectionEvent(start: range.lowerBound, end: range.upperBound, kind: kind, detail: detail))
   }
-  private func node(_ value: GrammarNode, projection: Bool = true) -> Int {
+  private func node(_ value: GrammarNode) -> Int {
     let id = nodes.count
     nodes.append(value)
-    if projection { emit(value.kind.projection, value.range, value.text) }
+    if let kind = value.kind.projection {
+      let detail: String
+      switch kind {
+      case .string, .integer, .boolean, .nilLiteral: detail = source.spelling(value.range)
+      default: detail = ""
+      }
+      emit(kind, value.range, detail)
+    }
     return id
   }
 
@@ -668,10 +675,8 @@ final class Recognizer {
         token.kind == .identifier
         ? (token.text == "nil" ? .nilLiteral : .boolean)
         : (token.kind == .string ? .string : .integer)
-      emit(kind.projection, token.range, token.text)
       return node(
-        GrammarNode(kind: kind, range: token.range, text: token.decoded ?? token.text),
-        projection: false)
+        GrammarNode(kind: kind, range: token.range, text: token.decoded ?? token.text))
     }
     if peek("-") {
       _ = try take("-")
@@ -680,10 +685,8 @@ final class Recognizer {
         throw fail("minus requires adjacent decimal digits", at: integer.range.lowerBound)
       }
       emit(.integer, integer.range, integer.text)
-      emit(.negative, start..<integer.range.upperBound)
       return node(
-        GrammarNode(kind: .negative, range: start..<integer.range.upperBound, text: integer.text),
-        projection: false)
+        GrammarNode(kind: .negative, range: start..<integer.range.upperBound, text: integer.text))
     }
     if peek("(") {
       _ = try open("(")
@@ -755,7 +758,7 @@ final class Recognizer {
       throw fail("factory requires an argument list", at: last)
     }
     if !peek("(") {
-      return node(GrammarNode(kind: .name, range: start..<last, text: callee), projection: false)
+      return node(GrammarNode(kind: .name, range: start..<last, text: callee))
     }
     guard peek().range.lowerBound == last else {
       throw fail("call opener must immediately follow callee", at: peek().range.lowerBound)
@@ -785,10 +788,8 @@ final class Recognizer {
       }
     }
     let end = try close(")")
-    emit(.call, start..<end)
     return node(
-      GrammarNode(kind: .call, range: start..<end, text: callee, arguments: arguments),
-      projection: false)
+      GrammarNode(kind: .call, range: start..<end, text: callee, arguments: arguments))
   }
 
   private func argument(label: String) throws -> GrammarArgument {
@@ -802,8 +803,11 @@ final class Recognizer {
     var args = [try argument(label: "name")]
     _ = try take(",")
     let location = peek().text
-    guard ["url", "path", "index"].contains(location) else {
-      throw fail("source requires url:, path: or index:", at: peek().range.lowerBound)
+    guard SourceRequirements.locations.contains(location) else {
+      throw fail(
+        "source requires a location label: "
+          + SourceRequirements.locations.sorted().joined(separator: ", "),
+        at: peek().range.lowerBound)
     }
     args.append(try argument(label: location))
     if !peek(",") { return args }
@@ -812,8 +816,8 @@ final class Recognizer {
       args.append(try argument(label: "subpath"))
       return args
     }
-    if location == "index" {
-      throw fail("index source has no requirement", at: peek().range.lowerBound)
+    if !SourceRequirements.locationsWithRequirements.contains(location) {
+      throw fail("source location has no registered requirement", at: peek().range.lowerBound)
     }
     if SourceRequirements.labels.contains(peek().text) {
       args.append(try argument(label: peek().text))
@@ -828,8 +832,7 @@ final class Recognizer {
       let range = nodes[first].range.lowerBound..<nodes[second].range.upperBound
       emit(.sequence, range)
       let id = node(
-        GrammarNode(kind: .range, range: range, children: [first, second]),
-        projection: false)
+        GrammarNode(kind: .range, range: range, children: [first, second]))
       args.append(GrammarArgument(label: "_", labelRange: nil, value: id))
     } else if peek(".") && ["upToNextMajor", "upToNextMinor"].contains(tokens[index + 1].text) {
       args.append(

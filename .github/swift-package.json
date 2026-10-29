@@ -1,8 +1,12 @@
 {
   "commands": [
     {
-      "name": "manifest-generation",
-      "run": "python3 Scripts/generate-manifest-vocabulary.py --check\npython3 Scripts/generate-manifest-fixtures.py --check"
+      "name": "manifest-vocabulary-generation",
+      "run": "python3 Scripts/generate-manifest-vocabulary.py --check"
+    },
+    {
+      "name": "manifest-fixture-generation",
+      "run": "python3 Scripts/generate-manifest-fixtures.py --check"
     }
   ],
   "test_configurations": ["debug", "release"],

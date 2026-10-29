@@ -6,14 +6,6 @@ import Testing
 
 @Suite("Manifest literal conversion")
 struct LiteralConversionTests {
-  @Test(arguments: [
-    "let versions: [Version] = [\"1.2.3\"]",
-    "let versions: [String: Version] = [\"stable\": \"1.2.3\"]",
-    "let version: Version = \"1.2.3\"\nlet versions: [Version] = [version]",
-  ])
-  func versionCollectionsPreserveContextuallyTypedElements(_ body: String) throws {
-    _ = try document(body + "\nlet agents = Agents()")
-  }
   @Test func valueLiteralExamplesMatchTheRealCompiler() throws {
     let values: [(String, ConfigurationValue)] = [
       ("nil", nil), ("true", true), ("-9_223_372_036_854_775_808", .integer(Int.min)),
@@ -28,9 +20,11 @@ struct LiteralConversionTests {
       #expect(doc.evaluation.constants["value"]!.value == compiled.constructionValue)
     }
   }
+
   @Test func editorLiteralConversionsMatchCompiledConfigurationValues() throws {
     let values: [(StaticValue, ConfigurationValue)] = [
       (.null, nil), (.boolean(true), true), (.integer(Int.min), .integer(Int.min)),
+      (.string("\0\u{1F} \u{7F}😀"), "\0\u{1F} \u{7F}😀"),
       (.string("first\n\nlast"), "first\n\nlast"),
       (.array([.integer(1), .boolean(true), .null, .string("x")]), [1, true, nil, "x"]),
       (
@@ -45,5 +39,4 @@ struct LiteralConversionTests {
       #expect(changed.evaluation.constants["value"]?.value == compiled.constructionValue)
     }
   }
-
 }

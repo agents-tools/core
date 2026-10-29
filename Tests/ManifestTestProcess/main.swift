@@ -70,24 +70,24 @@ while bytes.count < (ManifestLimits.Input.bytes + 1) {
 try handle.close()
 let report: ProbeReport
 if CommandLine.arguments.contains("--edit-oversized") {
-  var preparationBaselineBytes: UInt64?
+  var preparationBaselinePeakBytes: UInt64?
   do {
     let document = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
     let component = Component.ignore(
       name: "large", patterns: [String(repeating: "x", count: 20_000_000)])
-    preparationBaselineBytes = peakMemory()
+    preparationBaselinePeakBytes = peakMemory()
     _ = try document.preparing([.insertComponent(component, into: .root, at: .first)])
     report = ProbeReport(
       status: "accepted", operation: .editing, offset: 0, line: 1, column: 1, message: "",
       metrics: document.metrics, peakMemoryBytes: peakMemory(),
-      preparationBaselineBytes: preparationBaselineBytes)
+      preparationBaselinePeakBytes: preparationBaselinePeakBytes)
   } catch let error as ManifestFailure {
     let diagnostic = error.diagnostics[0]
     report = ProbeReport(
       status: diagnostic.code, operation: .editing, offset: diagnostic.span.start,
       line: diagnostic.span.line, column: diagnostic.span.column, message: diagnostic.message,
       metrics: error.metrics, peakMemoryBytes: peakMemory(),
-      preparationBaselineBytes: preparationBaselineBytes)
+      preparationBaselinePeakBytes: preparationBaselinePeakBytes)
   }
 } else {
   report = run(bytes, semantics: CommandLine.arguments.contains("--semantics"))

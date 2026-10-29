@@ -5,13 +5,13 @@ import Foundation
 func quoted(_ string: String) -> String {
   var result = "\""
   for scalar in string.unicodeScalars {
-    switch scalar.value {
-    case UInt32(UInt8(ascii: "\"")): result += "\\\""
-    case UInt32(UInt8(ascii: "\\")): result += "\\\\"
-    case UInt32(UInt8(ascii: "\n")): result += "\\n"
-    case UInt32(UInt8(ascii: "\r")): result += "\\r"
-    case UInt32(UInt8(ascii: "\t")): result += "\\t"
-    case 0..<32, 127: result += "\\u{" + String(scalar.value, radix: 16) + "}"
+    switch scalar {
+    case "\"": result += "\\\""
+    case "\\": result += "\\\\"
+    case "\n": result += "\\n"
+    case "\r": result += "\\r"
+    case "\t": result += "\\t"
+    case "\0"..<" ", "\u{7F}": result += "\\u{" + String(scalar.value, radix: 16) + "}"
     default: result.unicodeScalars.append(scalar)
     }
   }

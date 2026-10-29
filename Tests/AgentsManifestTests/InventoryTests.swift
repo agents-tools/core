@@ -142,6 +142,41 @@ struct InventoryTests {
     #expect(Set(Vocabulary.scalarValues["Agent"]!.values) == Set(AgentID.allCases.map(\.rawValue)))
   }
 
+  @Test func sourceSignaturesDefineLocationAndRequirementSlots() throws {
+    let locations: Set<String> = ["url", "path", "index"]
+    #expect(SourceRequirements.locations == locations)
+    #expect(SourceRequirements.locationsWithRequirements == ["url", "path"])
+    #expect(SourceRequirements.labels == ["from", "exact", "branch", "revision"])
+    for signature in Vocabulary.signatures where signature.type == "Source" {
+      try #require(signature.parameters.count >= 2)
+      #expect(signature.parameters[0].label == "name")
+      #expect(signature.parameters[0].name == "name")
+      #expect(signature.parameters[0].defaultValue == nil)
+      #expect(locations.contains(signature.parameters[1].label))
+      #expect(signature.parameters[1].defaultValue == nil)
+    }
+    for location in locations {
+      let text =
+        manifestHeader + "let agents = Agents(sources: [.source(name: \"r\", "
+        + location + ": \"example.org/r\", from: \"1.2.3\")])"
+      if SourceRequirements.locationsWithRequirements.contains(location) {
+        _ = try Recognizer(
+          source: SourceText(Array(text.utf8), identity: DocumentIdentity("manifest"))
+        )
+        .recognize()
+      } else {
+        do {
+          _ = try DeclarationDocument(
+            bytes: Array(text.utf8), identity: DocumentIdentity("manifest"))
+          Issue.record("unsupported source requirement was accepted")
+        } catch let failure as ManifestFailure {
+          #expect(failure.diagnostics[0].code == "manifest.syntax")
+          #expect(failure.metrics.parserCalls == 0)
+        }
+      }
+    }
+  }
+
   @Test func allContractSwiftBlocksPassTheRealParser() throws {
     let contract = try String(
       contentsOf: root.appendingPathComponent("Documentation/Proposals/AgentsManifest.md"),

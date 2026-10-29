@@ -82,20 +82,27 @@ enum LiteralConversion {
   /// Elements have already been checked in their payload context. Only the new
   /// container and its optional vocabulary wrapper need work; descendants stay shared.
   static func collection(
-    _ payload: @autoclosure () -> ConstructionValue, kind: LiteralKind,
+    _ payload: @autoclosure () -> ConstructionValue,
     to context: ConstructionType,
     charge: () throws -> Void
   ) throws -> ConstructionValue {
     try charge()
+    let value = payload()
+    let kind: LiteralKind
+    switch value {
+    case .array: kind = .array
+    case .object: kind = .dictionary
+    default: throw LiteralConversionError.incompatible
+    }
     let context = context.unwrapped
     switch (kind, context) {
-    case (.array, .array), (.dictionary, .dictionary): return payload()
+    case (.array, .array), (.dictionary, .dictionary): return value
     default: break
     }
     guard case .named(let name) = context,
       let construction = Vocabulary.literalConstructions[name]?[kind]
     else { throw LiteralConversionError.incompatible }
-    return try construct(payload(), name: name, using: construction, charge: charge)
+    return try construct(value, name: name, using: construction, charge: charge)
   }
 
   private static func construct(

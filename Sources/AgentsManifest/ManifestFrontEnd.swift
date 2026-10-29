@@ -30,8 +30,9 @@ struct FrontEndResult {
 /// Owns phase ordering for document construction and bounded syntax inspection.
 /// Observers receive phase-entry metrics; failures retain the phase and work already done.
 package enum ManifestFrontEnd {
-  /// Exercises the production pipeline through the selected phase and releases its tree.
-  /// The syntax projection corpus intentionally stops before contextual type checking.
+  /// `.syntax` runs admission, parsing, tree guards and projection comparison.
+  /// `.declaration` also evaluates and validates values, lowers IR and builds source maps.
+  /// Both release the retained syntax tree before returning.
   package static func inspect(
     bytes: [UInt8], identity: DocumentIdentity, checking: FrontEndCheck,
     observe: ((FrontEndStage, FrontEndMetrics) -> Void)? = nil
