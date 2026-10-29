@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed — language version 1.0.
+Accepted — language version 1.0.
 
 ## Authors / Owners
 
@@ -28,9 +28,9 @@ import AgentsDescription
 
 let agents = Agents(
   sources: [
-    .git(
+    .source(
       name: "agents-tools",
-      url: "github.com/agents-tools/.github",
+      url: "https://github.com/agents-tools/.github",
       branch: "master",
       subpath: ".agent"
     ),
@@ -39,8 +39,8 @@ let agents = Agents(
     .instructions(
       sections: [
         "guide",
-        .section("shared/swift-package-route", from: "agents-tools"),
-        .section("shared/swift-package-tests", from: "agents-tools"),
+        .section(name: "shared/swift-package-route", source: "agents-tools"),
+        .section(name: "shared/swift-package-tests", source: "agents-tools"),
       ],
       agents: [.claudeCode, .codex]
     ),
@@ -59,7 +59,7 @@ import AgentsDescription
 
 let agents = Agents(
   defaultAgents: [.cursor],
-  sources: [.local(name: "team", directory: "./team")],
+  sources: [.source(name: "team", path: "./team")],
   components: [
     .ignore(
       name: "build-products", patterns: [".build/"], purpose: .indexing,
@@ -67,7 +67,7 @@ let agents = Agents(
     ),
   ],
   uses: [
-    .exported(name: "review", from: "team", condition: .when(agents: [.codex])),
+    .group(name: "review", source: "team", condition: .when(agents: [.codex])),
   ]
 )
 ```
@@ -145,56 +145,74 @@ public struct Condition: Sendable, Equatable {
 
 public struct Agents: Sendable, Equatable {
   public init(
-    defaultAgents: [Agent]? = nil, sources: [Source] = [],
+    defaultAgents: [Agent]? = nil, exports: [String] = [], sources: [Source] = [],
     components: [Component] = [], groups: [ComponentGroup] = [],
-    uses: [GroupReference] = [], exports: [String] = [], watch: [String] = []
+    uses: [GroupReference] = [], watch: [String] = []
   )
+}
+
+public struct Version: Sendable, Comparable, ExpressibleByStringLiteral {
+  public init(stringLiteral value: String)
+  public static func == (lhs: Version, rhs: Version) -> Bool
+  public static func < (lhs: Version, rhs: Version) -> Bool
+}
+
+extension Range where Bound == Version {
+  public static func upToNextMajor(from version: Version) -> Range<Version>
+  public static func upToNextMinor(from version: Version) -> Range<Version>
 }
 
 public struct Source: Sendable, Equatable {
-  public static func git(name: String, url: String, subpath: String? = nil) -> Source
-  public static func git(name: String, url: String, from: String, subpath: String? = nil) -> Source
-  public static func git(name: String, url: String, exact: String, subpath: String? = nil) -> Source
-  public static func git(name: String, url: String, branch: String, subpath: String? = nil) -> Source
-  public static func git(name: String, url: String, revision: String, subpath: String? = nil) -> Source
-  public static func git(
-    name: String, url: String, upToNextMinorFrom: String, subpath: String? = nil
+  public static func source(
+    name: String, url: String, subpath: String? = nil
   ) -> Source
-  public static func git(
-    name: String, url: String, from: String, to: String, subpath: String? = nil
+  public static func source(
+    name: String, url: String, from: Version, subpath: String? = nil
   ) -> Source
-  public static func local(name: String, directory: String, subpath: String? = nil) -> Source
-  public static func local(
-    name: String, directory: String, from: String, subpath: String? = nil
+  public static func source(
+    name: String, url: String, exact: Version, subpath: String? = nil
   ) -> Source
-  public static func local(
-    name: String, directory: String, exact: String, subpath: String? = nil
+  public static func source(
+    name: String, url: String, branch: String, subpath: String? = nil
   ) -> Source
-  public static func local(
-    name: String, directory: String, branch: String, subpath: String? = nil
+  public static func source(
+    name: String, url: String, revision: String, subpath: String? = nil
   ) -> Source
-  public static func local(
-    name: String, directory: String, revision: String, subpath: String? = nil
+  public static func source(
+    name: String, url: String, _ range: Range<Version>, subpath: String? = nil
   ) -> Source
-  public static func local(
-    name: String, directory: String, upToNextMinorFrom: String, subpath: String? = nil
+  public static func source(
+    name: String, path: String, subpath: String? = nil
   ) -> Source
-  public static func local(
-    name: String, directory: String, from: String, to: String, subpath: String? = nil
+  public static func source(
+    name: String, path: String, from: Version, subpath: String? = nil
   ) -> Source
-  public static func index(name: String, url: String, subpath: String? = nil) -> Source
+  public static func source(
+    name: String, path: String, exact: Version, subpath: String? = nil
+  ) -> Source
+  public static func source(
+    name: String, path: String, branch: String, subpath: String? = nil
+  ) -> Source
+  public static func source(
+    name: String, path: String, revision: String, subpath: String? = nil
+  ) -> Source
+  public static func source(
+    name: String, path: String, _ range: Range<Version>, subpath: String? = nil
+  ) -> Source
+  public static func source(name: String, index: String, subpath: String? = nil) -> Source
 }
 
 public struct ComponentGroup: Sendable, Equatable {
-  public init(
+  public static func group(
     name: String, components: [Component] = [], uses: [GroupReference] = [],
     condition: Condition? = nil
-  )
+  ) -> ComponentGroup
 }
-public struct GroupReference: Sendable, Equatable {
-  public static func local(name: String, condition: Condition? = nil) -> GroupReference
-  public static func exported(
-    name: String, from source: String, condition: Condition? = nil
+public struct GroupReference: Sendable, Equatable, ExpressibleByStringLiteral {
+  public init(stringLiteral value: String)
+  public static func group(name: String, condition: Condition? = nil) -> GroupReference
+  public static func group(
+    name: String, source: String, condition: Condition? = nil
   ) -> GroupReference
 }
 ```
@@ -203,12 +221,37 @@ There is one `let agents = Agents(...)`, optionally annotated `: Agents`.
 Other constants contain reusable values. Source names are lexical aliases, not
 output paths. A **discovery root** is the source root with its optional safe
 `subpath` applied; component and export discovery start there. Core owns source
-identity normalization and requirement resolution. `from:` means up to the next
-major version, `upToNextMinorFrom:` up to the next minor, and `from:to:` a
-half-open range. `exact:`, `branch:` and `revision:` retain their existing meanings.
-Prerelease matching and default latest-tag/default-branch selection remain core's
-rules. Only a Git-backed local source accepts a requirement. `.index` represents
-the existing well-known index kind and has no Git requirement.
+identity normalization and requirement resolution.
+
+`Version` uses core's semantic-version validation and precedence. A requirement
+is a value: `from: x` and `.upToNextMajor(from: x)` denote
+`x ..< (major + 1).0.0`; `.upToNextMinor(from: x)` denotes
+`x ..< major.(minor + 1).0`. The upper bounds have no prerelease or build metadata,
+even when the lower bound has either. The lower bound retains its prerelease and
+metadata. All range forms use the resolver's `isInRange(from:to:)`: build metadata
+does not affect precedence, and a prerelease tag additionally needs a bound with
+a prerelease and the same major/minor/patch triple. Exact requirements retain
+core's full normalized-version matching, including build metadata.
+
+Lowering canonicalizes the `Range<Version>` value. An upper bound equal by SemVer
+precedence to `(major + 1).0.0` becomes `SourceRequirement.upToNextMajor`; one
+equal to `major.(minor + 1).0` becomes `upToNextMinor`; any other upper bound
+becomes `SourceRequirement.range(from:to:)`. The two canonical upper bounds
+never coincide. Version strings use core's
+normalized description; range equality compares bounds by SemVer precedence,
+while exact-version equality includes metadata. Invalid versions, non-increasing
+ranges and successor overflow are located `manifest.domain` errors. Candidate
+successor bounds are computed with checked arithmetic; a literal range does not
+fail merely because a nonmatching candidate successor would overflow.
+
+The canonical printer uses `from:` for a major range,
+`.upToNextMinor(from:)` for a minor range and adjacent `"lower"..<"upper"` for
+other half-open ranges. `exact:`, `branch:` and `revision:` retain their meanings.
+Default latest-tag/default-branch selection remains core's rule. Requirements
+apply to Git URL sources and Git-backed local paths only. `.source(name:index:)`
+represents the existing well-known index kind and has no Git requirement.
+`path:` locates a resource inside a named source or supplies a local source
+location; `subpath:` narrows the source's own discovery root.
 
 Source aliases follow the existing nonempty, colon-free string rule, with `.`
 reserved for the declaring package. Escapes preserve otherwise valid string
@@ -218,6 +261,17 @@ names with no empty, `.` or `..` segment, colon, backslash or control character.
 Skill and instruction names retain their domain validators. ChatGPT prompt names
 retain the existing arbitrary string-key namespace; they are not filesystem paths.
 Names must be unique in their respective namespace.
+
+Git URLs are complete transport URLs, as in SwiftPM. A hand-written shorthand is
+admitted with `SourceDeclaration` normalization and a `manifest.domain` warning
+whose fix-it is the complete URL: `intranet/team` means `https://intranet/team`,
+preserving the host; it is not the CLI's owner/repository shorthand. The editor
+and migration emit complete URLs using `SourceDeclaration.gitURL`: add `https://`
+to host/repository shorthand, preserve existing schemes and preserve complete
+SCP-style URLs such as `user@host:path`. Preserving SCP transport syntax also
+preserves its remote path interpretation. Identity normalization lowercases the
+host, retains an explicit port, trims path slashes and removes a terminal `.git`;
+printing preserves the repository suffix.
 
 `exports: ["review"]` exports the group named `review`; export name and group name
 are identical. A differently named wrapper group provides a renamed export.
@@ -233,26 +287,26 @@ public struct SkillSelection: Sendable, Equatable, ExpressibleByArrayLiteral {
   public init(arrayLiteral elements: String...)
 }
 public struct SkillOverride: Sendable, Equatable {
-  public init(name: String, mode: InstallMode? = nil, agents: [Agent]? = nil)
+  public static func skill(name: String, mode: InstallMode? = nil, agents: [Agent]? = nil) -> SkillOverride
 }
 public struct SectionReference: Sendable, Equatable, ExpressibleByStringLiteral {
   public init(stringLiteral value: String)
   public static func section(
-    _ name: String, from source: String? = nil, condition: Condition? = nil
+    name: String, source: String? = nil, condition: Condition? = nil
   ) -> SectionReference
 }
 public struct ChatGPTPrompt: Sendable, Equatable {
-  public init(
+  public static func prompt(
     name: String, sections: [SectionReference], append: String? = nil,
     condition: Condition? = nil
-  )
+  ) -> ChatGPTPrompt
 }
 public struct Resource: Sendable, Equatable {
-  public init(path: String, from source: String? = nil)
+  public static func path(_ path: String, source: String? = nil) -> Resource
 }
 public struct PromptContent: Sendable, Equatable, ExpressibleByStringLiteral {
   public init(stringLiteral value: String)
-  public static func file(path: String, from source: String? = nil) -> PromptContent
+  public static func file(_ path: String, source: String? = nil) -> PromptContent
 }
 public enum RuntimeValue: Sendable, Equatable, ExpressibleByStringLiteral {
   case literal(String)
@@ -302,7 +356,7 @@ public enum HookEvent: Sendable, Equatable {
   case native(String)
 }
 public struct PromptParameter: Sendable, Equatable {
-  public init(name: String, description: String, defaultValue: String? = nil)
+  public static func parameter(name: String, description: String, defaultValue: String? = nil) -> PromptParameter
 }
 public enum PermissionOperation: Sendable, Equatable {
   case read, write, execute
@@ -320,21 +374,21 @@ public enum ComponentKind: Sendable, Equatable {
   case lspServer, permissions, ignore, plugin
 }
 public enum ComponentReference: Sendable, Equatable {
-  case skill(String)
-  case instruction(String)
-  case mcpServer(String)
-  case hook(String)
-  case subagent(String)
-  case command(String)
-  case lspServer(String)
-  case permissions(String)
-  case ignore(String)
-  case plugin(String)
+  case skill(name: String)
+  case instruction(name: String)
+  case mcpServer(name: String)
+  case hook(name: String)
+  case subagent(name: String)
+  case command(name: String)
+  case lspServer(name: String)
+  case permissions(name: String)
+  case ignore(name: String)
+  case plugin(name: String)
 }
 ```
 
 Literal conversions are closed and contextual. `PromptContent`,
-`SectionReference` and `RuntimeValue` accept string literals; `SkillSelection`
+`SectionReference`, `GroupReference`, `Version` and `RuntimeValue` accept string literals; `SkillSelection`
 accepts string array literals. `ConfigurationValue` accepts strings, signed
 64-bit integer literals, booleans, `nil`, arrays and string-keyed dictionaries.
 Decimals use `.decimal("1.25")`, with finite JSON-number text; floating-point
@@ -346,7 +400,7 @@ values are equal. There is no user-defined literal conformance or conversion
 from an already-typed `String`, `[String]` or dictionary to a wrapper type.
 
 A bare section string names the declaring project's own instruction section;
-`.section("engineering", from: "rules")` names a source section. A root user-scope
+`.section(name: "engineering", source: "rules")` names a source section. A root user-scope
 declaration uses named instruction sources. Exported own sections belong to the
 producer package and may be consumed in either supported scope. Ordered sections,
 Markdown rendering and **front matter** (the structured metadata preceding a
@@ -390,7 +444,7 @@ subject to ordinary preview, ownership and approval checks.
 ```swift
 public struct Component: Sendable, Equatable {
   public static func skills(
-    from source: String, select: SkillSelection = .all, exclude: [String] = [],
+    source: String, select: SkillSelection = .all, exclude: [String] = [],
     mode: InstallMode? = nil, overrides: [SkillOverride] = [],
     agents: [Agent]? = nil, condition: Condition? = nil,
     native: NativeConfiguration = [:]
@@ -440,7 +494,7 @@ public struct Component: Sendable, Equatable {
     native: NativeConfiguration = [:]
   ) -> Component
   public static func plugin(
-    name: String, path: String, from source: String,
+    name: String, path: String, source: String,
     mode: PluginMode = .components, select: [ComponentKind]? = nil,
     exclude: [ComponentReference] = [],
     agents: [Agent]? = nil, condition: Condition? = nil,
@@ -530,16 +584,18 @@ conflict. Targeting is deployment intent, not filesystem isolation.
 ### Groups and source linking
 
 A `ComponentGroup` is an inert ordered fragment until selected by a
-`GroupReference`. The root emits its components, then `uses` in order. Each group
+`GroupReference`; a string literal denotes an unconditional local reference,
+equivalent to `.group(name: "review")` for `"review"`. A conditional local
+reference uses `.group(name:condition:)`. The root emits its components, then `uses` in order. Each group
 emits its components, then recursively its `uses`, depth first. This defines
 section, hook and policy contribution order. A source's root components, root
 subscriptions and unrelated exports are not imported through a group reference.
 The producer's defaults are captured as described under targeting.
 
 `exports: ["review"]` publishes that local group. A consumer writes
-`.exported(name: "review", from: "team")`. To publish an existing group under a
-new name, declare a wrapper `ComponentGroup(name: "quality", uses:
-[.local(name: "review")])` and export `"quality"`. References do not import Swift
+`.group(name: "review", source: "team")`. To publish an existing group under a
+new name, declare a wrapper `.group(name: "quality", uses:
+["review"])` and export `"quality"`. References do not import Swift
 symbols. There are no wildcard exports, implicit exports or executable package
 initializers. Duplicate group/export names and unknown local group names are
 errors, including in unused declarations.
@@ -552,7 +608,7 @@ An index export must identify an immutable package artifact containing a manifes
 An index publishing only individual skills cannot satisfy a group reference.
 
 Aliases bind in the document that declares them. Within an exported component,
-`from: "rules"` refers to the producer's alias; `.` refers to its package.
+`source: "rules"` refers to the producer's alias; `.` refers to its package.
 Relative local sources in a downloaded package must remain within that snapshot;
 absolute, home-relative and escaping producer-local sources are invalid for
 remote consumption. Root local sources retain core's existing path rules.
@@ -625,17 +681,17 @@ conventions. The project condition prevents deployment of this group in user sco
 import AgentsDescription
 
 let agents = Agents(
+  exports: ["review"],
   groups: [
-    ComponentGroup(
+    .group(
       name: "review",
       components: [
         .instructions(sections: ["review-principles"], agents: [.claudeCode, .codex]),
-        .skills(from: ".", select: ["review"], mode: .copy, agents: [.claudeCode, .codex]),
+        .skills(source: ".", select: ["review"], mode: .copy, agents: [.claudeCode, .codex]),
       ],
       condition: .when(scopes: [.project])
     ),
-  ],
-  exports: ["review"]
+  ]
 )
 ```
 
@@ -651,7 +707,7 @@ IDs and source exports are validated during resolution, not accessed by parsing.
 import AgentsDescription
 
 let base: [SectionReference] = ["guide"]
-let sections = base + [.section("engineering", from: "rules")]
+let sections = base + [.section(name: "engineering", source: "rules")]
 let reviewer: Component = .subagent(
   name: "reviewer",
   description: "Review correctness and tests.",
@@ -663,24 +719,24 @@ let reviewer: Component = .subagent(
 
 let agents = Agents(
   sources: [
-    .local(name: "team", directory: "./team"),
-    .local(name: "drafts", directory: "./draft-skills"),
-    .git(name: "rules", url: "https://example.org/team/rules.git", from: "1.2.0"),
-    .index(name: "catalog", url: "https://example.org/skills/index.json"),
-    .git(name: "vendor", url: "https://example.org/vendor/tools.git", exact: "2.1.0"),
+    .source(name: "team", path: "./team"),
+    .source(name: "drafts", path: "./draft-skills"),
+    .source(name: "rules", url: "https://example.org/team/rules.git", from: "1.2.0"),
+    .source(name: "catalog", index: "https://example.org/skills/index.json"),
+    .source(name: "vendor", url: "https://example.org/vendor/tools.git", exact: "2.1.0"),
   ],
   components: [
     .skills(
-      from: "rules", exclude: ["experimental"], mode: .copy,
-      overrides: [SkillOverride(name: "testing", mode: .link, agents: [.codex])]
+      source: "rules", exclude: ["experimental"], mode: .copy,
+      overrides: [.skill(name: "testing", mode: .link, agents: [.codex])]
     ),
     .skills(
-      from: "drafts", select: ["draft"], mode: .edit,
+      source: "drafts", select: ["draft"], mode: .edit,
       condition: .when(agents: [.claudeCode], scopes: [.project])
     ),
     .instructions(
       sections: sections,
-      chatGPT: [ChatGPTPrompt(name: "weekly", sections: base, append: "notes/weekly.md")]
+      chatGPT: [.prompt(name: "weekly", sections: base, append: "notes/weekly.md")]
     ),
     .mcpServer(
       name: "workspace",
@@ -699,13 +755,16 @@ let agents = Agents(
     ),
     .hook(
       name: "format", event: .afterTool,
-      run: .executable("swift", arguments: ["format", "--in-place", "Sources"]),
+      run: .executable(
+        "swift", arguments: ["format", "--in-place", "Sources"],
+        workingDirectory: .path("tools", source: "rules")
+      ),
       timeoutSeconds: 30, agents: [.claudeCode], condition: .when(scopes: [.project])
     ),
     .command(
       name: "review/change", description: "Review a selected change.",
       prompt: "Review ${input:change} and cite evidence.",
-      parameters: [PromptParameter(name: "change", description: "The change to review.")],
+      parameters: [.parameter(name: "change", description: "The change to review.")],
       agents: [.claudeCode]
     ),
     .lspServer(
@@ -724,21 +783,21 @@ let agents = Agents(
       agents: [.cursor], condition: .when(scopes: [.project])
     ),
     .plugin(
-      name: "vendor-tools", path: "plugins/tools", from: "vendor", mode: .native,
+      name: "vendor-tools", path: "plugins/tools", source: "vendor", mode: .native,
       agents: [.claudeCode], condition: .when(scopes: [.user])
     ),
     .plugin(
-      name: "shared-tools", path: "plugins/shared", from: "vendor",
-      exclude: [.hook("format")], condition: .when(scopes: [.project])
+      name: "shared-tools", path: "plugins/shared", source: "vendor",
+      exclude: [.hook(name: "format")], condition: .when(scopes: [.project])
     ),
   ],
   groups: [
-    ComponentGroup(
+    .group(
       name: "review-tools", components: [reviewer],
-      uses: [.exported(name: "review", from: "team", condition: .when(agents: [.codex]))]
+      uses: [.group(name: "review", source: "team", condition: .when(agents: [.codex]))]
     ),
   ],
-  uses: [.local(name: "review-tools")],
+  uses: ["review-tools"],
   watch: ["rules", "catalog"]
 )
 ```
@@ -773,15 +832,15 @@ Group-name references are resolved separately and may refer forward.
 | Accepted syntax | Rule |
 | --- | --- |
 | `SourceFileSyntax`, `ImportDeclSyntax`, `VariableDeclSyntax` | The file structure above, with one identifier-pattern binding and initializer per declaration. |
-| `StringLiteralExprSyntax` | Single-line and multiline literals from the closed lexical grammar below, with Swift decoding and no interpolation. |
+| `StringLiteralExprSyntax` | Single-line and multiline literals from the closed lexical grammar below, with Swift decoding and no interpolation. Contextual `GroupReference` literals denote local groups; this is a type conversion, not an extra grammar production. |
 | Integer, Boolean and nil literals | Decimal signed-64 integers with underscore separators, Bool and contextual nil. One unary minus is accepted only immediately adjacent to a decimal integer literal, with no intervening trivia. Other bases, floating literals and other numeric operators fail admission. |
 | `ArrayExprSyntax` | Homogeneous arrays or a contextual, whitelisted array-literal conversion. Trailing commas are allowed. Empty literals require contextual type. |
 | `DictionaryExprSyntax` | String-literal keys, homogeneous contextual values, or a contextual configuration object. `[:]` is an empty dictionary. Keys are decoded before duplicate detection; key references/interpolation are rejected. |
 | `DeclReferenceExprSyntax` | A preceding constant, a vocabulary type as a member/call base, or the permitted operator. |
-| Sequence/folded infix expressions | Only left-associative array `+` with exact `[T]` operands, at most 32 terms per additive chain. No concatenation of selections or configuration values, dictionary merging, string concatenation, range expressions or other operators. |
+| Sequence/folded infix expressions | Only left-associative array `+` with exact `[T]` operands, at most 32 terms per additive chain. No concatenation of selections or configuration values, dictionary merging or string concatenation. A single half-open version range is admitted only in the source requirement position defined below; other operators are rejected. |
 | `TupleExprSyntax` | One unlabeled expression in parentheses, not tuple values. |
 | `MemberAccessExprSyntax` | Listed static factories, static `.all`, and enum cases, qualified or contextual. No instance-property access, subscripts or optional chaining. |
-| `FunctionCallExprSyntax` | Listed ordinary initializers spelled with the bare type name, factories and associated cases, with exact labels and order. Literal-protocol entry points are reached only through literals. No arbitrary functions or trailing closures. |
+| `FunctionCallExprSyntax` | `Agents(...)`, listed static factories and associated cases, with exact labels and order. Literal-protocol entry points are reached only through literals. No arbitrary functions or trailing closures. |
 | Type annotations | `String`, `Int`, `Bool`, named vocabulary types/aliases, `[T]` and `[String: T]`. No explicit Optional annotations, user aliases, qualified/generic/existential/function/metatype syntax. |
 
 Grammar admission precedes SwiftParser and the iterative tree check precedes all
@@ -814,7 +873,7 @@ configuration null. Signed integer literal conversion follows Swift's literal
 semantics and must fit the declared literal type. `.decimal(...)` remains explicit.
 No arbitrary user protocol dispatch or conversion of pre-existing typed values
 is allowed. In particular, a `String` constant is not implicitly a `PromptContent`
-or a `SectionReference`, and a `[String]` constant is not a `SkillSelection`.
+or a `SectionReference`, `GroupReference` or `Version`, and a `[String]` constant is not a `SkillSelection`.
 
 For array `+`, context propagates to both operands when present; otherwise infer
 the left array and use its element type for the right array. An expression of
@@ -828,7 +887,7 @@ not an alternative type system.
 | --- | --- |
 | `manifest.version.missing`, `.invalid`, `.duplicate`, `.unsupported` | Version selection failed. |
 | `manifest.syntax` | Recognizer: a lexical or production violation, including missing/extra imports, juxtaposed identifiers, unsupported prefixes, raw strings, interpolation and malformed literals. SwiftParser syntax/recovery diagnostics can occur only after recognizer acceptance and the tree guard; such a disagreement is also an implementation regression. |
-| `manifest.call`, `manifest.type`, `manifest.operator` | After the tree guard: unlisted call/member, incorrect labels/order/type, missing context, integer overflow or non-array use of the admitted `+` operator. Other operators fail admission. |
+| `manifest.call`, `manifest.type`, `manifest.operator` | After the tree guard: unlisted call/member, incorrect labels/order/type, missing context, integer overflow or non-array use of the admitted `+` operator. The `..<` operator is typed as `Range<Version>` only in its admitted requirement position. Other operators, including closed ranges (`...`), fail admission with a located `manifest.syntax` diagnostic; `ClosedRange<Version>` also has no matching compiler overload. |
 | `manifest.reference` | Unknown, forward, self, duplicate or shadowing constant name. |
 | `manifest.domain`, `manifest.dictionary.duplicateKey` | Invalid domain value or duplicate decoded dictionary key. |
 | `manifest.group.cycle`, `.missing`, `.conflict` | Invalid group/source graph, with the relevant reference chain. |
@@ -863,10 +922,19 @@ type           = typeName | "[" type "]" | "[" "String" ":" type "]" ;
 expression     = primary ("+" primary)* ;
 primary        = string | integer | "-" integer | "true" | "false" | "nil"
                | namedValue | array | dictionary | "(" expression ")" ;
-namedValue     = callee ("(" arguments? ")")? ;
+namedValue     = sourceCall | callee ("(" arguments? ")")? ;
 callee         = bareName | bareName "." name | "." name ;
 arguments      = argument ("," argument)* ;
 argument       = (name ":")? expression ;
+sourceCall     = (".source" | "Source.source") "(" "name" ":" expression ","
+                 (("url" | "path") ":" expression
+                    ("," requirement)? | "index" ":" expression)
+                 ("," "subpath" ":" expression)? ")" ;
+requirement    = ("from" | "exact" | "branch" | "revision") ":" expression
+               | versionRange | rangeFactory ;
+versionRange   = string "..<" string ;
+rangeFactory   = (".upToNextMajor" | ".upToNextMinor")
+                 "(" "from" ":" expression ")" ;
 array          = "[" (expression ("," expression)* ","?)? "]" ;
 dictionary     = "[" ":" "]"
                | "[" string ":" expression
@@ -874,7 +942,15 @@ dictionary     = "[" ":" "]"
 ```
 
 `typeName` is exactly `String`, `Int`, `Bool`, or a public vocabulary type/alias
-listed in §2. Type existence is checked during recognition. `callee` is a
+listed under Construction vocabulary. Type existence is checked during recognition. `sourceCall` takes
+precedence over the general call production for `.source` and `Source.source`; those spellings cannot bypass it through `callee`. The
+`.upToNextMajor` and `.upToNextMinor` callees are reserved to `rangeFactory`,
+including its required argument list; other positions fail recognition.
+`versionRange` is not a general expression: no grouping, constants, chaining or
+other operands are admitted at its position. A range factory is contextual to
+this same unlabeled requirement slot. Its argument receives `Version` context;
+`from:` and `exact:` on the source also receive `Version` context. The subsequent
+checker enforces version typing and domain validation. `callee` is a
 syntactic spelling; subsequent vocabulary checking rejects unlisted functions,
 instance members, literal-protocol entry points and invalid factory labels.
 There is no postfix loop: a callee has at most one member operation and one call,
@@ -884,9 +960,9 @@ production. No operation attaches to a call result, grouped
 expression or subscript. The leading shorthand dot counts as one operation.
 These are exactly the construction forms needed by the vocabulary. Parentheses
 contain one expression; calls have no trailing comma; collections may have one.
-The sole infix production has at most **32 terms**, with later type checking
-requiring array operands. No assignment expression or prefix-keyword production
-exists. An identifier after a completed expression is a syntax error, not an
+The additive production has at most **32 terms**, with later type checking
+requiring array operands. A version range has exactly two literal operands.
+No assignment expression or prefix-keyword production exists. An identifier after a completed expression is a syntax error, not an
 implicit prefix, argument or declaration.
 
 The lexical grammar is closed:
@@ -928,7 +1004,7 @@ The lexical grammar is closed:
   **20** nested levels. The lexer validates UTF-8 throughout the snapshot. Strings
   and comments are opaque to expression counters. No other whitespace or comment
   form is admitted.
-- Source punctuation is `( ) [ ] , : . = +` and the adjacent numeric sign `-`,
+- Source punctuation is `( ) [ ] , : . = + ..<` and the adjacent numeric sign `-`,
   only in the roles in the productions. Callee member spellings contain no trivia
   around their dot; the call opener immediately follows its callee. Both `=` and
   binary `+` require at least one ASCII whitespace character (space, tab, CR or LF)
@@ -938,7 +1014,13 @@ The lexical grammar is closed:
   `value= 0`, `value=-1`, `a+b` and `a/* note */ + b` fail recognition. A located
   `manifest.syntax` diagnostic names the canonical spelling, such as
   `let value = -1` or `left + right`. These adjacency rules make
-  Swift operator/member tokenization unambiguous. Other operators, generic angle
+  Swift operator/member tokenization unambiguous. The single `..<` token is
+  admitted only by `versionRange`, with either no whitespace on both sides or
+  at least one ASCII whitespace character immediately on both sides. Comments
+  in either operand gap must themselves be surrounded by whitespace, as for `+`.
+  The canonical operator spelling is `"1.2.0"..<"1.8.0"`; an asymmetric boundary
+  reports that spelling in a located `manifest.syntax` diagnostic. A lone `<`
+  or `>` is never admitted. Other operators, generic angle
   brackets, braces, attributes, directives, macros and regex literals fail at
   recognition. There is no fallback to SwiftParser recovery.
 
@@ -967,7 +1049,10 @@ validation, independently of the later semantic IR.
 Admission reads at most 2,097,153 bytes, rejecting the extra byte before decoding,
 lexing or parsing; it never allocates an unbounded file buffer. The exact admitted
 snapshot is subsequently parsed. The recognizer permits at most 100,000 non-trivia
-tokens; the minus and integer count separately. It additionally reserves syntax
+tokens; the minus and integer count separately, and `..<` counts as one token
+plus its two string-literal operands. Range factories count as ordinary calls.
+Version values charge their decoded bytes and nodes; range costs include both
+endpoints before canonical lowering or serialization. It additionally reserves syntax
 storage conservatively as **16 + 4 × (tokens + literal breaks + literal escapes)**,
 capped at 100,000 nodes before SwiftParser is invoked. A literal break is each
 CR or LF byte inside a string (CRLF counts twice); a literal escape is each
@@ -1153,13 +1238,19 @@ Comments follow SwiftSyntax trivia ownership:
    Container comments survive; ambiguous mixed layouts or comment-only insertion
    sites are read-only.
 
-New nodes use the shortest canonical type-correct spelling: strings for prompts
-and own sections, array literals for explicit skill selections, dictionaries and
-JSON-style configuration literals, direct component factories and labeled source
-requirements. Existing unmodified expressions keep their spelling. New text uses
+New nodes use the shortest canonical type-correct spelling. `Agents(...)` is the
+only ordinary initializer in manifest expressions; nested values use leading-dot
+factories. Sources use `.source(name:url:)`, `.source(name:path:)` or
+`.source(name:index:)`, and references use `source:`.
+Requirement values use the canonical printer defined under Construction vocabulary. Literal conformances provide strings
+for prompts, own sections, local group references and versions, array literals for explicit skill
+selections, and JSON-style configuration literals. Dictionary literals and
+direct factories construct the remaining values. Existing unmodified expressions keep their spelling. New text uses
 the container's consistent indentation, newline and comma style; absent evidence,
 use two spaces, LF and trailing commas in multiline collections. Argument order
-follows signatures. Fresh node layout follows the deterministic migration printer;
+follows signatures; root insertion order is `defaultAgents`, `exports`, `sources`,
+`components`, `groups`, `uses`, `watch`. `upsertSource(Source)` preserves the
+complete requirement value. Fresh node layout follows the deterministic migration printer;
 existing surrounding style takes precedence. Conflicting local style is an
 editability diagnostic, not permission to reformat the file.
 
@@ -1182,6 +1273,14 @@ groups and exports; only source positions and trivia are excluded. Prepare then
 re-links affected sources and revalidates capabilities/targets. All stages use the
 expanded-size budgets. BOM, final-newline presence and unrelated bytes survive.
 
+Range replacement re-checks both operator/operand boundaries and the containing
+source requirement slot. A complete replacement uses the canonical requirement
+printer, including changing the argument label when its range category changes. A leaf endpoint edit preserves surrounding trivia only if the
+result still meets balanced spacing and comment rules; otherwise include the
+necessary whitespace in the explicit patch or report `manifest.edit.readOnly`
+when comment ownership is ambiguous. Re-run admission, typing and expected-IR
+comparison before publishing any edit.
+
 ### Evaluated JSON dump
 
 `agents manifest dump --json` reads and evaluates only the local declaration.
@@ -1194,8 +1293,8 @@ no partial success object.
 The root has `schemaVersion: 1`, `kind: "manifest"`, `languageVersion: "1.0"`,
 `sourceDigest`, `declaration`, `locations` and `diagnostics`. The digest is
 `sha256:` plus 64 lowercase hexadecimal digits over the original bytes.
-`declaration` has `defaultAgents`, `sources`, `components`, `groups`, `uses`,
-`exports` and `watch`. Default arrays are empty, Optional absence is null, and
+`declaration` has `defaultAgents`, `exports`, `sources`, `components`, `groups`,
+`uses` and `watch`. Default arrays are empty, Optional absence is null, and
 explicit empty recipients remain distinct from inheritance.
 
 A component encodes directly as `{ "kind": "mcpServer", "name": "workspace",
@@ -1203,20 +1302,28 @@ A component encodes directly as `{ "kind": "mcpServer", "name": "workspace",
 "native": {} }`. There is no payload wrapper. The remaining schema is determined
 by the vocabulary as follows:
 
-- Opaque factory values encode `{kind, ...fields}`. Component/transport kinds are
+- Tagged families encode `{kind, ...fields}`. Component/transport kinds are
   their factory names. `ExecutableInvocation` is `kind: "executable"` with executable,
-  arguments, environment and workingDirectory. Group references are `local` or
-  `exported`, with name, optional source and condition. Conditions encode their
+  arguments, environment and workingDirectory. `.group(name:)` references encode
+  kind `local`; `.group(name:source:)` references encode kind `exported`, with
+  name and condition. An exported reference always has a non-null source; a local
+  reference has none (encoded as null). Conditions encode their
   three dimensions without a kind. Permission rules encode
   `{kind: "allow" | "ask" | "deny", operation, pattern}`; their two unlabeled
   factory arguments use the keys `operation` and `pattern`. LSP `languages`
   encodes an object mapping extension keys to language-ID strings.
-- A source has `kind: "git" | "local" | "index"`, name, location (`url` or
-  `directory`), subpath and requirement. Requirement is null or an object with
-  exactly one of branch/revision/exact/from/upToNextMinorFrom, or from plus to.
-  Overload spelling does not change the source kind.
-- Named structs encode their initializer fields. `from source:` uses JSON key
-  `source`. Arrays/dictionaries encode as JSON collections, with defaults supplied.
+- A source has `kind: "git" | "local" | "index"`, name, location (`url`, `path` or
+  `index`, matching its factory field), subpath and requirement. A `path:` source
+  with a requirement remains kind `local`. Requirement is null or an
+  object with exactly one of `branch`, `revision`, `exact`, `from`, `upToNextMinor`,
+  or `from` plus `to`, matching core's `SourceRequirement` encoding. Version values encode
+  as normalized version strings. Every range value encodes its canonical
+  requirement kind: `from`,
+  `upToNextMinor`, or `from`/`to`, regardless of its construction spelling.
+- Groups, skill overrides, ChatGPT prompts, prompt parameters and resources encode
+  their factory fields without a factory-name tag; the resource's unlabeled
+  subject uses key `path`. Arrays/dictionaries encode as JSON collections,
+  with defaults supplied.
   Exports and watch are string arrays. An instruction section is always an object
   with name, source and condition, even when authored as a string.
 - Skill selection encodes `"all"` or an array of names. Prompt content is
@@ -1225,7 +1332,7 @@ by the vocabulary as follows:
   spelling and explicit equivalent cases have identical evaluated output.
 - Payload-free enum cases are strings, except mixed enums always use tagged
   objects. Associated values retain labels; a single unlabeled payload uses
-  `value`. Typed component references use kind and value. Configuration values
+  `value`. Typed component references use kind and name. Configuration values
   retain kind and value tags, including nested arrays/objects; null has only kind,
   and decimal values remain strings to prevent numeric rounding.
 - Agent IDs are `claude-code`, `codex`, `cursor`, `gemini-cli`, `opencode`;
@@ -1235,7 +1342,7 @@ Components, group references, sections, hooks, permission rules, ignore patterns
 arguments and prompt parameters preserve order. Definitions of sources/groups,
 exports, watch, named prompts and overrides sort by name; recipients, exclusions
 and explicit skill selections sort by canonical identity. Dictionary keys sort
-by decoded UTF-8 bytes. Typed plugin exclusions sort by kind then value.
+by decoded UTF-8 bytes. Typed plugin exclusions sort by kind then name.
 Constants are substituted by value within the checked expansion budget.
 
 A location has `pointer` (JSON Pointer into the normalized declaration), `span`,
@@ -1381,22 +1488,22 @@ intent without fetching, re-resolving pins or inferring installed recipients.
 | JSON | Swift construction |
 | --- | --- |
 | `agents` | `Agents(defaultAgents: [...])`; omitted remains inheritance, explicit empty remains empty. |
-| `sources.<alias>.git` | `.git(name: <alias>, url: <value>, ...)`. |
-| `sources.<alias>.local` | `.local(name: <alias>, directory: <value>, ...)`. |
-| `sources.<alias>.well-known` | `.index(name: <alias>, url: <value>, ...)`. |
+| `sources.<alias>.git` | `.source(name: <alias>, url: <value>, ...)`. |
+| `sources.<alias>.local` | `.source(name: <alias>, path: <value>, ...)`. |
+| `sources.<alias>.well-known` | `.source(name: <alias>, index: <value>, ...)`. |
 | `sources.<alias>.path` | `subpath:` unchanged. |
 | `branch`, `revision`, `exact` | Corresponding source factory label. |
-| `from` | `from:`; with `to`, the `from:to:` overload. |
-| `upToNextMinor` | `upToNextMinorFrom:`. |
-| `skills.<alias>` | `.skills(from: <alias>, ...)` in components. |
+| `from`, `to` | Decode the lower bound and optional upper bound, canonicalize the range value, then print `from:`, the minor-range factory or the unlabeled literal range as appropriate. |
+| `upToNextMinor` | The unlabeled `.upToNextMinor(from: "version")` requirement. |
+| `skills.<alias>` | `.skills(source: <alias>, ...)` in components. |
 | `select: "all"` | Omit `select`; explicit names become a string array literal, including `[]`. |
 | `exclude` | String array, omitted when empty. |
 | Skill `agents`, `mode` | Corresponding fields; omission preserves inheritance. |
-| `overrides.<name>` | `SkillOverride(name: ..., mode: ..., agents: ...)`, subject to the explicit inert-override rule below. |
+| `overrides.<name>` | `.skill(name: ..., mode: ..., agents: ...)`, subject to the explicit inert-override rule below. |
 | `instructions` | One `.instructions(...)` after skill selections; missing object means no contribution. |
 | `instructions.agents` | `agents:` on that component, preserving explicit recipient intent. |
-| `instructions.sections[]` | Bare name becomes a string literal; `alias:name` becomes `.section("name", from: "alias")`. Preserve order and repetitions. |
-| `instructions.chatgpt.<name>` | `ChatGPTPrompt(name: ..., sections: ..., append: ...)` in `chatGPT`. Names and per-prompt section order remain exact. |
+| `instructions.sections[]` | Bare name becomes a string literal; `alias:name` becomes `.section(name: "name", source: "alias")`. Preserve order and repetitions. |
+| `instructions.chatgpt.<name>` | `.prompt(name: ..., sections: ..., append: ...)` in `chatGPT`. Names and per-prompt section order remain exact. |
 | Prompt `append` | Unchanged string, with existing project-root/user-home interpretation. |
 | `watch[]` | Source alias strings in `watch`, with no condition. |
 | Missing sources/skills/prompts/watch | Empty collections, with default-valued arguments omitted. |
@@ -1440,6 +1547,13 @@ settings or additional approvals are synthesized.
 
 ### Deterministic source and migration transaction
 
+Git locations use the legacy `SourceDeclaration` identity normalization described
+under Construction vocabulary, including single-label hosts and SCP-style SSH
+locations. Local paths remain paths. Migration and the JSON-to-IR compatibility
+path canonicalize requirement values identically to Swift lowering. A legacy
+`from`/`to` pair may therefore print as `from:` or a minor-range factory. This
+preserves the selected tag set and every exact ledger pin.
+
 The same validated JSON, language version and compatibility transformations
 produce identical source bytes and diagnostic records. Emit the version line,
 import, one blank line, then `let agents = Agents(...)`; two-space indentation,
@@ -1470,6 +1584,29 @@ present is a conflict; Swift source with a version-1 lock permits a lock-only
 migration. Normal commands report required migration rather than converting
 implicitly. A failed migration retains a recoverable original declaration and
 never treats a concurrent file as generated output.
+
+### Requirement persistence and comparison
+
+Canonicalization applies to new IR and new serialized requirement fields.
+Semantic comparison of existing range requirements expands them to bounds;
+raw enum-case equality or raw requirement JSON equality is insufficient. Branch
+and revision compare their strings; exact versions compare normalized full
+versions; absence retains its distinct latest-tag/default-branch policy.
+
+| Site | Contract |
+| --- | --- |
+| Declaration IR, JSON compatibility projection and dump | Canonical requirement kinds and normalized version strings; comparisons use range-value equality. A factory, literal range and legacy JSON denoting equal bounds compare equal. |
+| Document edits and `upsertSource` | Compare semantic values; an equal edit returns original source bytes. New or changed nodes print canonically; untouched spelling is retained. |
+| `LockedSource.requirement` in the deployment ledger and requirements in `groupResolutions` | Newly written records use canonical requirements. Reading existing records preserves their bytes and builds a semantic comparison view. A requirement-spelling difference alone never changes pins, reports an update or stages a write. |
+| Lock version 1 to version 2 conversion | Canonicalize requirements while preserving exact source/item pins and ownership. An existing version-2 ledger is not upgraded merely to canonicalize requirements. |
+| Skill/instruction lock producers, combined update-plan conflict and change detection | Compare source identity, discovery root and semantic requirement values; merge equal ranges without a conflict. If the complete resulting ledger is semantically unchanged, keep its original bytes even when another state file changes. A necessary ledger rewrite emits canonical requirements. |
+| Resolution-session reuse and cache descriptors | Key requirement comparisons by semantic value, not case spelling. Cache identity/materialization keys continue to use source identity and exact revision/artifact digest; restore uses the stored pins without requirement re-resolution. |
+| `agents.watch` | Stores source identities and `seen` revision/artifact digests, no requirement kind. Migration retains its bytes. Re-evaluating an equivalent declaration preserves the subscription and baseline; watch-created lock descriptors follow the ledger rule. |
+
+These rules extend the existing requirement comparisons in source argument
+selection, source resolution sessions and combined update planning. They do not
+rewrite historical records on read. State transactions compare semantic state
+before choosing any serialization and retain the original ledger bytes on a no-op.
 
 ### Lock version 2 and ownership conversion
 
@@ -1511,8 +1648,12 @@ preservation result as before conversion.
 
 ## Validation Contract
 
-Positive fixtures compile against `AgentsDescription` and their compiled values
-match static evaluation. Compiler-required literal conformances and evaluator
+Every Swift code block, including interface and editor-API blocks, must pass
+`swiftc -parse`; signature-only interface blocks use `swiftc -frontend -parse`
+with `.swiftinterface` inputs so getter declarations are parsed in interface mode.
+Positive fixtures compile against `AgentsDescription` and their
+compiled values match static evaluation under plain value equality, including
+equal range forms and string-literal group references. Compiler-required literal conformances and evaluator
 registrations are checked against the same signature inventory. Negative fixtures
 cover unsupported syntax, contextual typing, duplicate dictionary keys, budgets
 and spans. No accepted static value may fail real Swift type checking.
@@ -1579,7 +1720,11 @@ Tests also cover condition narrowing, default capture on export, namespaces,
 cycles/diamonds, conflicting requirements, shared-target exposure, byte-preserving
 edits, comment ownership, deterministic dumps, compatibility transformations and
 lock restoration/removal equivalence. Resource tests include exponential constant
-reuse in unused declarations, dumping, source maps and comparison. Fuzzing runs
+reuse in unused declarations, dumping, source maps and comparison.
+Range differential cases cover balanced/unbalanced spacing, comment adjacency,
+misplacement, chained and closed ranges, nonliteral endpoints and replacement
+boundaries; admitted cases must match SwiftParser's structure, and semantically
+accepted cases must type-check against the types module. Fuzzing runs
 with fixed budgets on macOS and Linux. Native capability claims require current
 client probes. Fault tests interrupt every publication/recovery stage, including
 concurrent creation of an absent destination and external replacement of both
