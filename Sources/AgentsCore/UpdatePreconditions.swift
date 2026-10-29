@@ -4,12 +4,12 @@ import Foundation
 struct FileObjectIdentity: Codable, Equatable {
   let device: UInt64
   let inode: UInt64
-  let kind: UInt32
+  let kind: mode_t
 
   init(_ info: stat) {
     device = UInt64(info.st_dev)
     inode = UInt64(info.st_ino)
-    kind = UInt32(info.st_mode & S_IFMT)
+    kind = info.st_mode & S_IFMT
   }
 }
 
@@ -73,7 +73,8 @@ struct FileSnapshot: Codable, Equatable {
 
   func validate() throws {
     try StateValidation.digest("sha256:" + digest)
-    guard [UInt32(S_IFDIR), UInt32(S_IFREG), UInt32(S_IFLNK)].contains(identity.kind),
+    let kinds: [mode_t] = [S_IFDIR, S_IFREG, S_IFLNK]
+    guard kinds.contains(identity.kind),
       (identity.kind == S_IFDIR) == (children != nil)
     else { throw CoreError.invalidState("invalid transaction object evidence") }
     for (name, child) in children ?? [:] {

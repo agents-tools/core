@@ -276,7 +276,7 @@ package final class FileTransaction {
     if let data = content.data {
       try parent.write(
         staged, data: data,
-        preservingMetadataOf: entry.preimage?.identity.kind == UInt32(S_IFREG) ? entry.name : nil)
+        preservingMetadataOf: entry.preimage?.identity.kind == S_IFREG ? entry.name : nil)
       journal.entries[index].staging = try FileSnapshot.read(staged, from: parent)
       try Self.persist(journal, directory: directory, checkpoint: checkpoint)
       try checkpoint("stage.\(index).written")
