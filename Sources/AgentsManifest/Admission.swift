@@ -1,15 +1,25 @@
 import AgentsDescription
 import Foundation
 
+private let utf8ByteOrderMark: [UInt8] = [0xEF, 0xBB, 0xBF]
+
+enum ProjectionKind: String, Sendable, Codable {
+  case string, integer, negative, boolean, array, dictionary, sequence, call, group
+  case member, reference, label, type, arrayType, dictionaryType
+  case importDeclaration = "import"
+  case letDeclaration = "let"
+  case nilLiteral = "nil"
+}
+
 struct ProjectionEvent: Sendable, Equatable, Comparable, Codable {
   let start: Int
   let end: Int
-  let kind: String
+  let kind: ProjectionKind
   let detail: String
   static func < (lhs: Self, rhs: Self) -> Bool {
     if lhs.start != rhs.start { return lhs.start < rhs.start }
     if lhs.end != rhs.end { return lhs.end < rhs.end }
-    if lhs.kind != rhs.kind { return lhs.kind < rhs.kind }
+    if lhs.kind != rhs.kind { return lhs.kind.rawValue < rhs.kind.rawValue }
     return lhs.detail < rhs.detail
   }
 }
@@ -33,6 +43,24 @@ enum LexemeKind: String, Sendable {
 enum GrammarNodeKind: String, Sendable {
   case string, integer, negative, boolean, array, dictionary, sequence, range, name, call, group
   case nilLiteral = "nil"
+}
+
+extension GrammarNodeKind {
+  var projection: ProjectionKind {
+    switch self {
+    case .string: .string
+    case .integer: .integer
+    case .negative: .negative
+    case .boolean: .boolean
+    case .array: .array
+    case .dictionary: .dictionary
+    case .sequence, .range: .sequence
+    case .name: .reference
+    case .call: .call
+    case .group: .group
+    case .nilLiteral: .nilLiteral
+    }
+  }
 }
 
 struct Lexeme: Sendable {
@@ -113,12 +141,12 @@ final class Recognizer {
       throw fail("input byte limit", at: ManifestLimits.Input.bytes, code: "manifest.limit")
     }
     try validateUTF8()
-    let header = bytes.starts(with: [239, 187, 191]) ? 3 : 0
+    let header = bytes.starts(with: utf8ByteOrderMark) ? utf8ByteOrderMark.count : 0
     try version(at: header)
     try lex(from: header)
     let start = try take("import").range.lowerBound
     let module = try take("AgentsDescription")
-    emit("import", start..<module.range.upperBound, "AgentsDescription")
+    emit(.importDeclaration, start..<module.range.upperBound, "AgentsDescription")
     var previous = module.range.upperBound
     var declarations: [GrammarDeclaration] = []
     while peek().kind != .endOfFile {
@@ -137,7 +165,7 @@ final class Recognizer {
       let expression = try expression()
       previous = nodes[expression].range.upperBound
       let range = first.range.lowerBound..<previous
-      emit("let", range, name.text)
+      emit(.letDeclaration, range, name.text)
       declarations.append(
         GrammarDeclaration(
           name: name.text, nameRange: name.range, type: annotation, expression: expression,
@@ -571,14 +599,14 @@ final class Recognizer {
     if text == "]" { square -= 1 }
     return token.range.upperBound
   }
-  private func emit(_ kind: String, _ range: Range<Int>, _ detail: String = "") {
+  private func emit(_ kind: ProjectionKind, _ range: Range<Int>, _ detail: String = "") {
     events.append(
       ProjectionEvent(start: range.lowerBound, end: range.upperBound, kind: kind, detail: detail))
   }
   private func node(_ value: GrammarNode, projection: Bool = true) -> Int {
     let id = nodes.count
     nodes.append(value)
-    if projection { emit(value.kind.rawValue, value.range, value.text) }
+    if projection { emit(value.kind.projection, value.range, value.text) }
     return id
   }
 
@@ -587,17 +615,17 @@ final class Recognizer {
       let start = try open("[")
       let first = try type()
       let result: ConstructionType
-      let kind: String
+      let kind: ProjectionKind
       if peek(":") {
         guard first == .named("String") else {
           throw fail("dictionary key type must be String", at: start)
         }
         _ = try take(":")
         result = .dictionary(try type())
-        kind = "dictionaryType"
+        kind = .dictionaryType
       } else {
         result = .array(first)
-        kind = "arrayType"
+        kind = .arrayType
       }
       emit(kind, start..<(try close("]")))
       return result
@@ -606,7 +634,7 @@ final class Recognizer {
     guard Vocabulary.typeNames.contains(token.text) else {
       throw fail("type outside construction vocabulary", at: token.range.lowerBound)
     }
-    emit("type", token.range, token.text)
+    emit(.type, token.range, token.text)
     return Vocabulary.aliasTypes[token.text] ?? .named(token.text)
   }
 
@@ -640,7 +668,7 @@ final class Recognizer {
         token.kind == .identifier
         ? (token.text == "nil" ? .nilLiteral : .boolean)
         : (token.kind == .string ? .string : .integer)
-      emit(kind.rawValue, token.range, token.text)
+      emit(kind.projection, token.range, token.text)
       return node(
         GrammarNode(kind: kind, range: token.range, text: token.decoded ?? token.text),
         projection: false)
@@ -651,8 +679,8 @@ final class Recognizer {
       guard integer.kind == .integer, integer.range.lowerBound == token.range.upperBound else {
         throw fail("minus requires adjacent decimal digits", at: integer.range.lowerBound)
       }
-      emit("integer", integer.range, integer.text)
-      emit("negative", start..<integer.range.upperBound)
+      emit(.integer, integer.range, integer.text)
+      emit(.negative, start..<integer.range.upperBound)
       return node(
         GrammarNode(kind: .negative, range: start..<integer.range.upperBound, text: integer.text),
         projection: false)
@@ -680,7 +708,7 @@ final class Recognizer {
             }
             let key = try take()
             keys.append(key)
-            emit("string", key.range, key.text)
+            emit(.string, key.range, key.text)
             _ = try take(":")
           }
           children.append(try expression())
@@ -702,12 +730,12 @@ final class Recognizer {
       }
       callee = "." + member.text
       last = member.range.upperBound
-      emit("member", start..<last, member.text)
+      emit(.member, start..<last, member.text)
     } else {
       let base = try identifier(bare: true)
       callee = base.text
       last = base.range.upperBound
-      emit("reference", base.range, base.text)
+      emit(.reference, base.range, base.text)
       if peek(".") {
         let dot = try take(".")
         let member = try identifier()
@@ -716,7 +744,7 @@ final class Recognizer {
         }
         callee += "." + member.text
         last = member.range.upperBound
-        emit("member", start..<last, member.text)
+        emit(.member, start..<last, member.text)
       }
     }
     let sourceCall = callee == ".source" || callee == "Source.source"
@@ -746,7 +774,7 @@ final class Recognizer {
           let name = try identifier()
           label = name.text
           labelRange = name.range
-          emit("label", name.range, name.text)
+          emit(.label, name.range, name.text)
           _ = try take(":")
         }
         arguments.append(
@@ -757,7 +785,7 @@ final class Recognizer {
       }
     }
     let end = try close(")")
-    emit("call", start..<end)
+    emit(.call, start..<end)
     return node(
       GrammarNode(kind: .call, range: start..<end, text: callee, arguments: arguments),
       projection: false)
@@ -765,7 +793,7 @@ final class Recognizer {
 
   private func argument(label: String) throws -> GrammarArgument {
     let token = try take(label)
-    emit("label", token.range, token.text)
+    emit(.label, token.range, token.text)
     _ = try take(":")
     return GrammarArgument(label: label, labelRange: token.range, value: try expression())
   }
@@ -787,18 +815,18 @@ final class Recognizer {
     if location == "index" {
       throw fail("index source has no requirement", at: peek().range.lowerBound)
     }
-    if ["from", "exact", "branch", "revision"].contains(peek().text) {
+    if SourceRequirements.labels.contains(peek().text) {
       args.append(try argument(label: peek().text))
     } else if peek().kind == .string {
       let first = try primary()
       let op = try take("..<")
-      emit("reference", op.range, "..<")
+      emit(.reference, op.range, "..<")
       guard peek().kind == .string else {
         throw fail("range endpoint must be a string literal", at: peek().range.lowerBound)
       }
       let second = try primary()
       let range = nodes[first].range.lowerBound..<nodes[second].range.upperBound
-      emit("sequence", range)
+      emit(.sequence, range)
       let id = node(
         GrammarNode(kind: .range, range: range, children: [first, second]),
         projection: false)

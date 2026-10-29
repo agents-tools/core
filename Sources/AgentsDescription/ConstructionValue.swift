@@ -17,7 +17,6 @@ package struct ConstructionParameter: Sendable {
   package let name: String
   package let type: ConstructionType
   package let defaultValue: ConstructionValue?
-  package let defaultExpression: String?
 }
 
 package struct ConstructionSignature: Sendable {

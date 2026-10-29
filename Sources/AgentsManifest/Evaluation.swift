@@ -199,7 +199,7 @@ final class Evaluator {
     let type = context ?? inferred
     let converted: ConstructionValue
     do {
-      converted = try LiteralConversion.convert(value, to: type)
+      converted = try LiteralConversion.convert(value, to: type) { try charge(at: id) }
     } catch let error as LiteralConversionError {
       throw fail(error.code, error.message, id)
     }
@@ -252,13 +252,14 @@ final class Evaluator {
       cost.encoded += 32
     }
     try check(cost, at: id)
-    let payload: ConstructionValue =
-      dictionary ? .object(fields.mapValues(\.value)) : .array(values.map(\.value))
     let inferred: ConstructionType = dictionary ? .dictionary(elementType) : .array(elementType)
     let type = context ?? inferred
     let value: ConstructionValue
     do {
-      value = try LiteralConversion.convert(payload, to: type)
+      value = try LiteralConversion.collection(
+        dictionary ? .object(fields.mapValues(\.value)) : .array(values.map(\.value)),
+        kind: dictionary ? .dictionary : .array, to: type
+      ) { try charge(at: id) }
     } catch let error as LiteralConversionError {
       throw fail(error.code, error.message, id)
     }

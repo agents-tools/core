@@ -296,7 +296,7 @@ struct AdversarialTests {
         #expect(try SyntaxValidation.guardTree(Syntax(deep), source: source).depth == 128)
       }
     }
-    #expect(throws: ManifestFailure.self) {
+    expectManifestFailure("manifest.limit") {
       try SyntaxValidation.guardTree(Syntax(deep), source: source)
     }
     let atLimit = ArrayExprSyntax(
@@ -314,7 +314,7 @@ struct AdversarialTests {
             expression: IntegerLiteralExprSyntax(literal: .integerLiteral("0")),
             trailingComma: .commaToken())
         }))
-    #expect(throws: ManifestFailure.self) {
+    expectManifestFailure("manifest.limit") {
       try SyntaxValidation.guardTree(Syntax(wide), source: source)
     }
   }

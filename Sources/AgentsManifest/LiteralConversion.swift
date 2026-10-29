@@ -10,7 +10,8 @@ enum LiteralConversionError: Error {
 }
 
 /// Closed literal conversions shared by static evaluation and domain edits.
-/// Already constructed children keep their type; referenced expressions never enter this algebra.
+/// Contextually evaluated collections retain their typed descendants; untyped edit
+/// payloads use recursive conversion with an explicit work budget.
 enum LiteralConversion {
   static func kind(of value: ConstructionValue) -> LiteralKind? {
     switch value {
@@ -45,7 +46,7 @@ enum LiteralConversion {
 
   static func convert(
     _ value: ConstructionValue, to context: ConstructionType,
-    charge: () throws -> Void = {}
+    charge: () throws -> Void
   ) throws -> ConstructionValue {
     try charge()
     if case .optional(let wrapped) = context {
@@ -54,6 +55,7 @@ enum LiteralConversion {
     switch (value, context) {
     case (.text, .named("String")), (.integer, .named("Int")), (.boolean, .named("Bool")):
       return value
+    case (.version, .named("Version")), (.range, .named("VersionRange")): return value
     case (.node(let type, _, _), .named(let expected)) where type == expected: return value
     case (.array(let values), .array(let element)):
       return .array(try values.map { try convert($0, to: element, charge: charge) })
@@ -68,10 +70,42 @@ enum LiteralConversion {
     guard case .named(let name) = context, let kind = kind(of: value),
       let construction = Vocabulary.literalConstructions[name]?[kind]
     else { throw LiteralConversionError.incompatible }
-    var fields = construction.defaults
-    if let key = construction.payload, let type = construction.payloadType {
-      fields[key] = try convert(value, to: type, charge: charge)
+    let payload: ConstructionValue
+    if let type = construction.payloadType {
+      payload = try convert(value, to: type, charge: charge)
+    } else {
+      payload = value
     }
+    return try construct(payload, name: name, using: construction, charge: charge)
+  }
+
+  /// Elements have already been checked in their payload context. Only the new
+  /// container and its optional vocabulary wrapper need work; descendants stay shared.
+  static func collection(
+    _ payload: @autoclosure () -> ConstructionValue, kind: LiteralKind,
+    to context: ConstructionType,
+    charge: () throws -> Void
+  ) throws -> ConstructionValue {
+    try charge()
+    let context = context.unwrapped
+    switch (kind, context) {
+    case (.array, .array), (.dictionary, .dictionary): return payload()
+    default: break
+    }
+    guard case .named(let name) = context,
+      let construction = Vocabulary.literalConstructions[name]?[kind]
+    else { throw LiteralConversionError.incompatible }
+    return try construct(payload(), name: name, using: construction, charge: charge)
+  }
+
+  private static func construct(
+    _ payload: ConstructionValue, name: String, using construction: LiteralConstruction,
+    charge: () throws -> Void
+  ) throws -> ConstructionValue {
+    try charge()
+    var fields = construction.defaults
+    for _ in fields { try charge() }
+    if let key = construction.payload { fields[key] = payload }
     return .node(type: name, member: construction.member, fields: fields)
   }
 }

@@ -28,15 +28,15 @@ public enum Editability: Sendable, Equatable {
 
 /// Checked values are constructed from the vocabulary or literal algebra, never source text.
 public struct StaticValue: Sendable {
-  package let value: ConstructionValue
-  package let type: ConstructionType
-  package let literal: Bool
+  let value: ConstructionValue
+  let type: ConstructionType
+  let literal: Bool
   private init(_ value: ConstructionValue, _ type: ConstructionType, literal: Bool = false) {
     self.value = value
     self.type = type
     self.literal = literal
   }
-  package static func checked(_ value: ConstructionValue, type: ConstructionType) -> Self {
+  static func checked(_ value: ConstructionValue, type: ConstructionType) -> Self {
     Self(value, type)
   }
 

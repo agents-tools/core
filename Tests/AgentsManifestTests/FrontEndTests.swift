@@ -61,41 +61,85 @@ struct FrontEndTests {
 
   @Test func closedLiteralTyping() throws {
     let bodies = [
-      "let text = \"x\"\nlet value: SectionReference = text",
-      "let text = \"x\"\nlet value: PromptContent = text",
-      "let text = \"x\"\nlet value: RuntimeValue = text",
-      "let text = \"1.2.0\"\nlet value: Version = text",
-      "let text = \"review\"\nlet value: GroupReference = text",
-      "let names = [\"x\"]\nlet value: SkillSelection = names",
-      "let text = \"x\"\nlet value: ConfigurationValue = text",
-      "let value = .copy", "let value = []", "let value = [:]", "let value = nil",
-      "let value = \"a\" + \"b\"", "let value: SkillSelection = [\"a\"] + [\"b\"]",
-      "let value: ConfigurationValue = [1] + [2]", "let value = Version(\"1.2.0\")",
-      "let value = String(stringLiteral: \"x\")", "let value = future\nlet future = 1",
+      ("let text = \"x\"\nlet value: SectionReference = text", "manifest.type"),
+      ("let text = \"x\"\nlet value: PromptContent = text", "manifest.type"),
+      ("let text = \"x\"\nlet value: RuntimeValue = text", "manifest.type"),
+      ("let text = \"1.2.0\"\nlet value: Version = text", "manifest.type"),
+      ("let text = \"review\"\nlet value: GroupReference = text", "manifest.type"),
+      ("let names = [\"x\"]\nlet value: SkillSelection = names", "manifest.type"),
+      ("let text = \"x\"\nlet value: ConfigurationValue = text", "manifest.type"),
+      ("let value = .copy", "manifest.type"),
+      ("let value = []", "manifest.type"),
+      ("let value = [:]", "manifest.type"),
+      ("let value = nil", "manifest.type"),
+      ("let value = \"a\" + \"b\"", "manifest.operator"),
+      ("let value: SkillSelection = [\"a\"] + [\"b\"]", "manifest.operator"),
+      ("let value: ConfigurationValue = [1] + [2]", "manifest.operator"),
+      ("let value = Version(\"1.2.0\")", "manifest.call"),
+      ("let value = String(stringLiteral: \"x\")", "manifest.call"),
+      ("let value = future\nlet future = 1", "manifest.reference"),
     ]
-    for body in bodies {
-      #expect(throws: ManifestFailure.self) { try document(body + "\nlet agents = Agents()") }
+    for (body, code) in bodies {
+      expectManifestFailure(code) { try document(body + "\nlet agents = Agents()") }
     }
   }
 
   @Test func domainValidationIsOfflineAndIncludesUnusedValues() throws {
     let bad = [
-      "let bad: Condition = .when(agents: [.codex, .codex])\nlet agents = Agents()",
-      "let agents = Agents(sources: [.source(name: \".\", path: \"a\")])",
-      "let agents = Agents(sources: [.source(name: \"a\", url: \"https://EXAMPLE.org/r.git\"), .source(name: \"b\", url: \"https://example.org/r/\")])",
-      "let agents = Agents(components: [.hook(name: \"h\", event: .native(\"x\"), run: .executable(\"tool\"))])",
-      "let agents = Agents(components: [.hook(name: \"h\", event: .beforeTool, run: .executable(\"tool\"), timeoutSeconds: 0)])",
-      "let agents = Agents(components: [.subagent(name: \"../bad\", description: \"x\", prompt: \"x\")])",
-      "let agents = Agents(components: [.mcpServer(name: \"x\", transport: .sse(url: \"https://user:pw@example.org/mcp\"))])",
-      "let agents = Agents(components: [.command(name: \"x\", description: \"x\", prompt: \"${input:missing}\")])",
-      "let value: ConfigurationValue = .decimal(\"1e99999\")\nlet agents = Agents()",
-      "let value: Resource = .path(\"../escape\")\nlet agents = Agents()",
-      "let value: PermissionRule = .allow(.read, \"/private/**\")\nlet agents = Agents()",
-      "let value: PermissionRule = .deny(.write, \"../**\")\nlet agents = Agents()",
-      "let agents = Agents(groups: [.group(name: \"a\", uses: [\"b\"]), .group(name: \"b\", uses: [\"a\"])])",
-      "let agents = Agents(groups: [.group(name: \"unused\", uses: [\"missing\"])])",
+      (
+        "let bad: Condition = .when(agents: [.codex, .codex])\nlet agents = Agents()",
+        "manifest.domain"
+      ),
+      ("let agents = Agents(sources: [.source(name: \".\", path: \"a\")])", "manifest.domain"),
+      (
+        "let agents = Agents(sources: [.source(name: \"a\", url: \"https://EXAMPLE.org/r.git\"), .source(name: \"b\", url: \"https://example.org/r/\")])",
+        "manifest.domain"
+      ),
+      (
+        "let agents = Agents(components: [.hook(name: \"h\", event: .native(\"x\"), run: .executable(\"tool\"))])",
+        "manifest.domain"
+      ),
+      (
+        "let agents = Agents(components: [.hook(name: \"h\", event: .beforeTool, run: .executable(\"tool\"), timeoutSeconds: 0)])",
+        "manifest.domain"
+      ),
+      (
+        "let agents = Agents(components: [.subagent(name: \"../bad\", description: \"x\", prompt: \"x\")])",
+        "manifest.domain"
+      ),
+      (
+        "let agents = Agents(components: [.mcpServer(name: \"x\", transport: .sse(url: \"https://user:pw@example.org/mcp\"))])",
+        "manifest.domain"
+      ),
+      (
+        "let agents = Agents(components: [.command(name: \"x\", description: \"x\", prompt: \"${input:missing}\")])",
+        "manifest.domain"
+      ),
+      (
+        "let value: ConfigurationValue = .decimal(\"1e99999\")\nlet agents = Agents()",
+        "manifest.domain"
+      ),
+      ("let value: Resource = .path(\"../escape\")\nlet agents = Agents()", "manifest.domain"),
+      (
+        "let value: PermissionRule = .allow(.read, \"/private/**\")\nlet agents = Agents()",
+        "manifest.domain"
+      ),
+      (
+        "let value: PermissionRule = .deny(.write, \"../**\")\nlet agents = Agents()",
+        "manifest.domain"
+      ),
+      (
+        "let agents = Agents(groups: [.group(name: \"a\", uses: [\"b\"]), .group(name: \"b\", uses: [\"a\"])])",
+        "manifest.group.cycle"
+      ),
+      (
+        "let agents = Agents(groups: [.group(name: \"unused\", uses: [\"missing\"])])",
+        "manifest.group.missing"
+      ),
     ]
-    for input in bad { #expect(throws: ManifestFailure.self) { try document(input) } }
+    for (input, code) in bad {
+      expectManifestFailure(code) { try document(input) }
+    }
     let doc = try document(
       "let agents = Agents(sources: [.source(name: \"r\", url: \"intranet/team\")])")
     #expect(doc.diagnostics.first?.code == "manifest.domain")
@@ -120,7 +164,7 @@ struct FrontEndTests {
         #expect(error.diagnostics[0].span.start > error.diagnostics[0].related[0].start)
       }
     }
-    #expect(throws: ManifestFailure.self) {
+    expectManifestFailure("manifest.dictionary.duplicateKey") {
       try document(
         "let value: ConfigurationValue = [\"é\": 1, \"e\\u{301}\": 2]\nlet agents = Agents()")
     }
@@ -157,11 +201,11 @@ struct FrontEndTests {
       bytes: bytes, identity: DocumentIdentity("manifest"), validateDomain: true
     ) { stage, _ in documentStages.append(stage) }
     var inspectionStages: [FrontEndStage] = []
-    let metrics = try DeclarationDocument.inspect(
+    let metrics = try ManifestFrontEnd.inspect(
       bytes: bytes, identity: DocumentIdentity("manifest"), checking: .declaration
     ) { stage, _ in inspectionStages.append(stage) }
     #expect(documentStages == [.admission, .parser, .evaluation, .domain, .lowering, .sourceMap])
-    #expect(inspectionStages == documentStages + [.teardown, .complete])
+    #expect(inspectionStages == documentStages + [.teardown])
     #expect(metrics.parserCalls == doc.metrics.parserCalls)
     #expect(metrics.syntaxNodes == doc.metrics.syntaxNodes)
     #expect(metrics.evaluationSteps == doc.metrics.evaluationSteps)

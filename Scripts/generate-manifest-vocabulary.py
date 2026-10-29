@@ -2,8 +2,9 @@
 """Generate authoring types, evaluation metadata and editor factories from one inventory."""
 import argparse
 import json
-import subprocess
 from pathlib import Path
+
+from manifest_generation import write_generated
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = json.loads((ROOT / "Scripts/ManifestVocabulary.json").read_text())
@@ -130,7 +131,7 @@ def registration_source():
         for parameter in factory.get("parameters", []):
             default = parameter.get("default")
             value = "nil" if default is None else "(" + default + " as " + parameter["type"] + ").constructionValue"
-            parameters.append("ConstructionParameter(label: " + quoted(parameter["label"]) + ", name: " + quoted(parameter["name"]) + ", type: " + type_expression(parameter["type"]) + ", defaultValue: " + value + ", defaultExpression: " + (quoted(default) if default is not None else "nil") + ")")
+            parameters.append("ConstructionParameter(label: " + quoted(parameter["label"]) + ", name: " + quoted(parameter["name"]) + ", type: " + type_expression(parameter["type"]) + ", defaultValue: " + value + ")")
         callable_member = not factory.get("property") and (not factory.get("enumCase") or bool(factory.get("parameters")))
         lines.append("    ConstructionSignature(type: " + quoted(factory["type"]) + ", member: " + quoted(factory["name"]) + ", parameters: [" + ", ".join(parameters) + "], callable: " + str(callable_member).lower() + "),")
     lines += ["  ]", "  package static let literalTypes: [String: Set<LiteralKind>] = ["]
@@ -151,7 +152,7 @@ def registration_source():
         if all(not case.get("parameters") for case in cases):
             fields = {case["name"]: quoted(case.get("loweredValue", case["name"])) for case in cases}
             lines.append("    " + quoted(name) + ": " + dictionary_expression(fields) + ",")
-    lines += ["  ]", "  package static let taggedRecordTypes: Set<String> = [" + ", ".join(map(quoted, SPEC["taggedRecordTypes"])) + "]", "  package static let aliasTypes: [String: ConstructionType] = " + dictionary_expression({k: type_expression(v) for k, v in SPEC["aliases"].items()}), "  package static let typeAliases: [String: String] = " + dictionary_expression({k: quoted(v) for k, v in SPEC["aliases"].items()}), "}", ""]
+    lines += ["  ]", "  package static let taggedRecordTypes: Set<String> = [" + ", ".join(map(quoted, SPEC["taggedRecordTypes"])) + "]", "  package static let aliasTypes: [String: ConstructionType] = " + dictionary_expression({k: type_expression(v) for k, v in SPEC["aliases"].items()}), "}", ""]
     return "\n".join(lines)
 
 
@@ -165,20 +166,16 @@ def editor_factories_source():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", type=Path, default=ROOT)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--output-root", type=Path, default=ROOT)
+    mode.add_argument("--check", action="store_true", help="fail on committed source drift")
     arguments = parser.parse_args()
     outputs = {
         "Sources/AgentsDescription/Vocabulary.swift": authoring_source(),
         "Sources/AgentsDescription/VocabularyInventory.swift": registration_source(),
         "Sources/AgentsManifest/StaticValueVocabulary.swift": editor_factories_source(),
     }
-    paths = []
-    for relative, source in outputs.items():
-        path = arguments.output_root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source)
-        paths.append(str(path))
-    subprocess.run(["swift", "format", "format", "--in-place", "--configuration", str(ROOT / ".swift-format"), *paths], check=True)
+    write_generated(outputs, arguments.output_root, check=arguments.check)
 
 
 if __name__ == "__main__":

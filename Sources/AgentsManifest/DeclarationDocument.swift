@@ -42,26 +42,6 @@ public struct DeclarationDocument: Sendable {
     metrics = result.metrics
   }
 
-  /// Exercises the production pipeline through the selected phase and releases its tree.
-  /// The syntax projection corpus intentionally stops before contextual type checking.
-  package static func inspect(
-    bytes: [UInt8], identity: DocumentIdentity, checking: FrontEndCheck,
-    observe: ((FrontEndStage, FrontEndMetrics) -> Void)? = nil
-  ) throws -> FrontEndMetrics {
-    var result: FrontEndResult? = try ManifestFrontEnd.run(
-      bytes: bytes, identity: identity, checking: checking, observe: observe)
-    var metrics = result!.metrics
-    observe?(.teardown, metrics)
-    let clock = ContinuousClock()
-    let start = clock.now
-    // Keep ARC from releasing the tree before teardown timing starts.
-    withExtendedLifetime(result) {}
-    result = nil
-    metrics.teardownSeconds = seconds(start.duration(to: clock.now))
-    observe?(.complete, metrics)
-    return metrics
-  }
-
   /// A JSON Pointer into the lowered declaration: empty string denotes the root,
   /// arrays use decimal indexes, and object keys escape `~` as `~0` and `/` as `~1`.
   /// Source requirements and literal wrappers use their lowered fields (for example `/value`).

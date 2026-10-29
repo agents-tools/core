@@ -316,7 +316,7 @@ final class DomainValidator {
             i += 2
             while i < bytes.count && bytes[i] != UInt8(ascii: "}") { i += 1 }
           } else if bytes[i...].starts(with: input) {
-            let first = i + 8
+            let first = i + input.count
             i = first
             while i < bytes.count && bytes[i] != UInt8(ascii: "}") { i += 1 }
             if i == bytes.count

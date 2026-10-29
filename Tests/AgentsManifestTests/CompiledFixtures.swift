@@ -30,6 +30,7 @@ func compiledFixtures() -> [CompiledManifestFixture] {
     compiledSketchExample(),
     compiledSkillsExample(),
     compiledTeamConfiguration(),
+    compiledVersionCollections(),
     compiledVocabularyDepthExample(),
   ]
 }
@@ -785,6 +786,25 @@ private func compiledTeamConfiguration() -> CompiledManifestFixture {
     name: "TeamConfiguration.swift.txt", agents: agents,
     constants: [
       "reviewer": reviewer.constructionValue,
+      "agents": agents.constructionValue,
+    ])
+}
+
+private func compiledVersionCollections() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let versions: [Version] = ["1.2.3"]
+  let namedVersions: [String: Version] = ["stable": "1.2.3"]
+  let version: Version = "1.2.3"
+  let referencedVersions: [Version] = [version]
+  let agents = Agents()
+  return CompiledManifestFixture(
+    name: "VersionCollections.swift.txt", agents: agents,
+    constants: [
+      "versions": versions.constructionValue,
+      "namedVersions": namedVersions.constructionValue,
+      "version": version.constructionValue,
+      "referencedVersions": referencedVersions.constructionValue,
       "agents": agents.constructionValue,
     ])
 }

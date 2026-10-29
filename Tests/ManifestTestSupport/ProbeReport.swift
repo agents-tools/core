@@ -8,24 +8,34 @@ import AgentsManifest
   package let probeWatchdogSeconds = 2.0
 #endif
 
+package enum ProbeOperation: String, Codable {
+  case frontEnd, editing
+}
+
 /// Wire format shared by the watchdog parent and its isolated child.
 package struct ProbeReport: Codable {
   package let configuration: String
   package let status: String
-  package let stage: FrontEndStage
+  package let operation: ProbeOperation
+  package let stage: FrontEndStage?
   package let offset: Int
   package let line: Int
   package let column: Int
   package let message: String
   package let metrics: FrontEndMetrics
   package let peakMemoryBytes: UInt64
+  package let preparationBaselineBytes: UInt64?
+  package let preparationPeakGrowthBytes: UInt64?
 
   package init(
-    status: String, stage: FrontEndStage, offset: Int = 0, line: Int = 1, column: Int = 1,
-    message: String = "", metrics: FrontEndMetrics, peakMemoryBytes: UInt64
+    status: String, operation: ProbeOperation = .frontEnd, stage: FrontEndStage? = nil,
+    offset: Int = 0, line: Int = 1, column: Int = 1,
+    message: String = "", metrics: FrontEndMetrics, peakMemoryBytes: UInt64,
+    preparationBaselineBytes: UInt64? = nil
   ) {
     configuration = probeConfiguration
     self.status = status
+    self.operation = operation
     self.stage = stage
     self.offset = offset
     self.line = line
@@ -33,5 +43,9 @@ package struct ProbeReport: Codable {
     self.message = message
     self.metrics = metrics
     self.peakMemoryBytes = peakMemoryBytes
+    self.preparationBaselineBytes = preparationBaselineBytes
+    preparationPeakGrowthBytes = preparationBaselineBytes.map {
+      peakMemoryBytes > $0 ? peakMemoryBytes - $0 : 0
+    }
   }
 }

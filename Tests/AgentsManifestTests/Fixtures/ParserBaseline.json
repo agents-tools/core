@@ -90,6 +90,12 @@
       "syntaxReservation": 1672,
       "tokens": 414
     },
+    "VersionCollections.swift.txt": {
+      "syntaxDepth": 14,
+      "syntaxNodes": 143,
+      "syntaxReservation": 208,
+      "tokens": 48
+    },
     "VocabularyDepthExample.swift.txt": {
       "syntaxDepth": 43,
       "syntaxNodes": 155,

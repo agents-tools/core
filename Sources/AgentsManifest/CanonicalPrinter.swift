@@ -2,15 +2,15 @@ import AgentsCore
 import AgentsDescription
 import Foundation
 
-package func quoted(_ string: String) -> String {
+func quoted(_ string: String) -> String {
   var result = "\""
   for scalar in string.unicodeScalars {
     switch scalar.value {
-    case 34: result += "\\\""
-    case 92: result += "\\\\"
-    case 10: result += "\\n"
-    case 13: result += "\\r"
-    case 9: result += "\\t"
+    case UInt32(UInt8(ascii: "\"")): result += "\\\""
+    case UInt32(UInt8(ascii: "\\")): result += "\\\\"
+    case UInt32(UInt8(ascii: "\n")): result += "\\n"
+    case UInt32(UInt8(ascii: "\r")): result += "\\r"
+    case UInt32(UInt8(ascii: "\t")): result += "\\t"
     case 0..<32, 127: result += "\\u{" + String(scalar.value, radix: 16) + "}"
     default: result.unicodeScalars.append(scalar)
     }
@@ -18,16 +18,16 @@ package func quoted(_ string: String) -> String {
   return result + "\""
 }
 
-package struct PrintStyle {
-  package var indent = "  "
-  package var newline = "\n"
-  package var trailingComma = true
+struct PrintStyle {
+  var indent = "  "
+  var newline = "\n"
+  var trailingComma = true
 }
 
-package struct CanonicalPrinter {
-  package var style = PrintStyle()
+struct CanonicalPrinter {
+  var style = PrintStyle()
 
-  package func render(_ value: ConstructionValue, indentation: String = "") -> String {
+  func render(_ value: ConstructionValue, indentation: String = "") -> String {
     switch value {
     case .text(let text): return quoted(text)
     case .integer(let value): return String(value)
@@ -174,6 +174,6 @@ package struct CanonicalPrinter {
   }
 }
 
-package func utf8Less(_ lhs: String, _ rhs: String) -> Bool {
+func utf8Less(_ lhs: String, _ rhs: String) -> Bool {
   lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
 }

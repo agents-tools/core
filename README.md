@@ -287,8 +287,17 @@ Read the [organization contributing guide][contributing] and the
 
 ### Development
 
-Manifest generation checks require `python3` and `swift format` from the toolchain.
-They regenerate into a temporary directory and leave checked-in sources unchanged.
+The `manifest-generation` CI command runs on the macOS compiler runner with
+`python3` and the toolchain's `swift format`. It regenerates into a temporary
+directory and checks committed bytes. Run the same check locally with:
+
+```bash
+python3 Scripts/generate-manifest-vocabulary.py --check
+python3 Scripts/generate-manifest-fixtures.py --check
+```
+
+`swift test` checks contract signatures and the complete compiler-backed fixture
+inventory without invoking these generators.
 
 Run the package's build, test, release and formatting checks:
 
@@ -305,10 +314,10 @@ The required checks are `policy / policy` and `validate / result`, provided by
 full-SHA-pinned reusable workflows from `agents-tools/github-workflows`.
 Source policy validates PR titles, new commit messages and added lines.
 [Package validation configuration](.github/swift-package.json) selects Xcode 26.6 on `macos-26` and a digest-pinned official Swift Linux
-container. macOS validation runs tests and a release build, plus strict
+container. macOS and Linux validation run the full Debug and Release test suites. macOS also
+runs a release build and generation checks, plus strict
 formatting with `.swift-format` over `Package.swift`, `Sources` and `Tests`.
-Linux runs the full test suite, including the subprocess recovery tests. The
-configuration owns the Linux compiler version and image digest. Tests also
+The test suites include subprocess recovery tests. The configuration owns the Linux compiler version and image digest. Tests also
 require Perl, which is included by the Linux image's Git dependencies.
 
 Render and check the committed

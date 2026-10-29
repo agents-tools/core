@@ -108,8 +108,8 @@ final class MapBuilder {
       }
       for (key, childValue) in fields {
         if type == "Source", key == "requirement" {
-          let trace = ["from", "exact", "branch", "revision", "range"].compactMap {
-            resolved.fields[$0]
+          let trace = SourceRequirements.parameters.compactMap {
+            resolved.fields[$0.name]
           }.first
           if let trace, childValue != .none {
             let shape = requirementShape(childValue, trace: trace)

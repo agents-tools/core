@@ -37,7 +37,7 @@ func peakMemory() -> UInt64 {
 func run(_ bytes: [UInt8], semantics: Bool) -> ProbeReport {
   var stage = FrontEndStage.admission
   do {
-    let metrics = try DeclarationDocument.inspect(
+    let metrics = try ManifestFrontEnd.inspect(
       bytes: bytes, identity: DocumentIdentity("manifest"),
       checking: semantics ? .declaration : .syntax
     ) { next, metrics in
@@ -45,7 +45,7 @@ func run(_ bytes: [UInt8], semantics: Bool) -> ProbeReport {
       progress(next, metrics)
     }
     return ProbeReport(
-      status: "accepted", stage: .complete, metrics: metrics, peakMemoryBytes: peakMemory())
+      status: "accepted", stage: .teardown, metrics: metrics, peakMemoryBytes: peakMemory())
   } catch let failure as ManifestFailure {
     let diagnostic = failure.diagnostics[0]
     return ProbeReport(
@@ -70,20 +70,24 @@ while bytes.count < (ManifestLimits.Input.bytes + 1) {
 try handle.close()
 let report: ProbeReport
 if CommandLine.arguments.contains("--edit-oversized") {
+  var preparationBaselineBytes: UInt64?
   do {
     let document = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
     let component = Component.ignore(
       name: "large", patterns: [String(repeating: "x", count: 20_000_000)])
+    preparationBaselineBytes = peakMemory()
     _ = try document.preparing([.insertComponent(component, into: .root, at: .first)])
     report = ProbeReport(
-      status: "accepted", stage: .editing, offset: 0, line: 1, column: 1, message: "",
-      metrics: document.metrics, peakMemoryBytes: peakMemory())
+      status: "accepted", operation: .editing, offset: 0, line: 1, column: 1, message: "",
+      metrics: document.metrics, peakMemoryBytes: peakMemory(),
+      preparationBaselineBytes: preparationBaselineBytes)
   } catch let error as ManifestFailure {
     let diagnostic = error.diagnostics[0]
     report = ProbeReport(
-      status: diagnostic.code, stage: .editing, offset: diagnostic.span.start,
+      status: diagnostic.code, operation: .editing, offset: diagnostic.span.start,
       line: diagnostic.span.line, column: diagnostic.span.column, message: diagnostic.message,
-      metrics: error.metrics, peakMemoryBytes: peakMemory())
+      metrics: error.metrics, peakMemoryBytes: peakMemory(),
+      preparationBaselineBytes: preparationBaselineBytes)
   }
 } else {
   report = run(bytes, semantics: CommandLine.arguments.contains("--semantics"))

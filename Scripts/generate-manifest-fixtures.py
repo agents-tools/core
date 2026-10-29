@@ -3,8 +3,9 @@
 import argparse
 import json
 import re
-import subprocess
 from pathlib import Path
+
+from manifest_generation import write_generated
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "Tests/AgentsManifestTests/Fixtures"
@@ -43,14 +44,14 @@ def generated_source(paths):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", type=Path, default=ROOT)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--output-root", type=Path, default=ROOT)
+    mode.add_argument("--check", action="store_true", help="fail on committed source drift")
     arguments = parser.parse_args()
     paths = sorted(FIXTURES.glob("*.swift.txt"))
-    destination = arguments.output_root / DESTINATION
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(generated_source(paths))
-    subprocess.run(["swift", "format", "format", "--in-place", "--configuration",
-                    str(ROOT / ".swift-format"), str(destination)], check=True)
+    write_generated(
+        {DESTINATION: generated_source(paths)}, arguments.output_root, check=arguments.check
+    )
 
 
 if __name__ == "__main__":

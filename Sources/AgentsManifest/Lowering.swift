@@ -1,8 +1,8 @@
 import AgentsCore
 import AgentsDescription
 
-package enum Lowering {
-  package static func declaration(_ value: ConstructionValue) -> DeclarationIR {
+enum Lowering {
+  static func declaration(_ value: ConstructionValue) -> DeclarationIR {
     let fields = value.fields
     return DeclarationIR(
       defaultAgents: fields["defaultAgents"]?.array?.compactMap { lower($0).string },
@@ -14,7 +14,7 @@ package enum Lowering {
       watch: fields["watch"]?.strings ?? [])
   }
 
-  package static func requirement(_ range: Range<Version>) -> SourceRequirement {
+  static func requirement(_ range: Range<Version>) -> SourceRequirement {
     let lower = range.lowerBound
     let upper = range.upperBound
     let major = lower.successor(major: true)
@@ -24,7 +24,7 @@ package enum Lowering {
     return .range(from: lower.normalized, to: upper.normalized)
   }
 
-  package static func lower(_ value: ConstructionValue) -> DeclarationValue {
+  static func lower(_ value: ConstructionValue) -> DeclarationValue {
     switch value {
     case .text(let text): return .string(text)
     case .integer(let integer): return .integer(integer)

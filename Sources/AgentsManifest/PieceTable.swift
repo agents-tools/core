@@ -1,4 +1,4 @@
-package struct PieceTable {
+struct PieceTable {
   private enum Piece {
     case original(Range<Int>)
     case inserted([UInt8])
@@ -19,12 +19,12 @@ package struct PieceTable {
   }
   private let original: [UInt8]
   private var pieces: [Piece]
-  package init(_ bytes: [UInt8]) {
+  init(_ bytes: [UInt8]) {
     original = bytes
     pieces = [.original(0..<bytes.count)]
   }
-  package var count: Int { pieces.reduce(0) { $0 + $1.count } }
-  package var bytes: [UInt8] {
+  var count: Int { pieces.reduce(0) { $0 + $1.count } }
+  var bytes: [UInt8] {
     pieces.flatMap { piece in
       switch piece {
       case .original(let range): return Array(original[range])
@@ -32,7 +32,7 @@ package struct PieceTable {
       }
     }
   }
-  package mutating func replace(_ range: Range<Int>, with replacement: [UInt8]) {
+  mutating func replace(_ range: Range<Int>, with replacement: [UInt8]) {
     var result: [Piece] = []
     var offset = 0
     var inserted = false
@@ -55,7 +55,7 @@ package struct PieceTable {
     if !inserted && !replacement.isEmpty { result.append(.inserted(replacement)) }
     pieces = result
   }
-  package func patches() -> [SourcePatch] {
+  func patches() -> [SourcePatch] {
     var result: [SourcePatch] = []
     var consumed = 0
     var replacement: [UInt8] = []

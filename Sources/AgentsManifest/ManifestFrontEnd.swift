@@ -4,7 +4,7 @@ import Foundation
 import SwiftSyntax
 
 package enum FrontEndStage: String, Sendable, Codable {
-  case admission, parser, evaluation, domain, lowering, sourceMap, teardown, complete, editing
+  case admission, parser, evaluation, domain, lowering, sourceMap, teardown
 }
 
 package enum FrontEndCheck: Sendable, Equatable {
@@ -29,7 +29,26 @@ struct FrontEndResult {
 
 /// Owns phase ordering for document construction and bounded syntax inspection.
 /// Observers receive phase-entry metrics; failures retain the phase and work already done.
-enum ManifestFrontEnd {
+package enum ManifestFrontEnd {
+  /// Exercises the production pipeline through the selected phase and releases its tree.
+  /// The syntax projection corpus intentionally stops before contextual type checking.
+  package static func inspect(
+    bytes: [UInt8], identity: DocumentIdentity, checking: FrontEndCheck,
+    observe: ((FrontEndStage, FrontEndMetrics) -> Void)? = nil
+  ) throws -> FrontEndMetrics {
+    var result: FrontEndResult? = try run(
+      bytes: bytes, identity: identity, checking: checking, observe: observe)
+    var metrics = result!.metrics
+    observe?(.teardown, metrics)
+    let clock = ContinuousClock()
+    let start = clock.now
+    // Keep ARC from releasing the tree before teardown timing starts.
+    withExtendedLifetime(result) {}
+    result = nil
+    metrics.teardownSeconds = seconds(start.duration(to: clock.now))
+    return metrics
+  }
+
   static func run(
     bytes: [UInt8], identity: DocumentIdentity, checking: FrontEndCheck,
     validateDomain: Bool = true, observe: ((FrontEndStage, FrontEndMetrics) -> Void)? = nil

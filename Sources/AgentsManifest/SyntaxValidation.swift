@@ -86,13 +86,13 @@ enum SyntaxValidation {
   static func projection(_ root: Syntax, source: SourceText) -> [ProjectionEvent] {
     var pending = [root]
     var events: [ProjectionEvent] = []
-    func emit(_ node: Syntax, _ kind: String, _ detail: String = "") {
+    func emit(_ node: Syntax, _ kind: ProjectionKind, _ detail: String = "") {
       events.append(
         ProjectionEvent(
           start: node.positionAfterSkippingLeadingTrivia.utf8Offset,
           end: node.endPositionBeforeTrailingTrivia.utf8Offset, kind: kind, detail: detail))
     }
-    func literal(_ node: Syntax, _ kind: String) {
+    func literal(_ node: Syntax, _ kind: ProjectionKind) {
       emit(
         node, kind,
         source.spelling(
@@ -101,47 +101,47 @@ enum SyntaxValidation {
     }
     while let node = pending.popLast() {
       if let value = node.as(ImportDeclSyntax.self) {
-        emit(node, "import", value.path.first?.name.text ?? "")
+        emit(node, .importDeclaration, value.path.first?.name.text ?? "")
       } else if let value = node.as(VariableDeclSyntax.self) {
         emit(
-          node, "let",
+          node, .letDeclaration,
           value.bindings.first?.pattern.as(IdentifierPatternSyntax.self)?.identifier.text ?? "")
       } else if let value = node.as(MemberAccessExprSyntax.self) {
-        emit(node, "member", value.declName.baseName.text)
+        emit(node, .member, value.declName.baseName.text)
         if let base = value.base { pending.append(Syntax(base)) }
         continue
       } else if let value = node.as(DeclReferenceExprSyntax.self) {
-        emit(node, "reference", value.baseName.text)
+        emit(node, .reference, value.baseName.text)
       } else if let value = node.as(BinaryOperatorExprSyntax.self), value.operator.text == "..<" {
-        emit(node, "reference", "..<")
+        emit(node, .reference, "..<")
       } else if let value = node.as(LabeledExprSyntax.self), let label = value.label {
-        emit(Syntax(label), "label", label.text)
+        emit(Syntax(label), .label, label.text)
       } else if let value = node.as(IdentifierTypeSyntax.self) {
-        emit(node, "type", value.name.text)
+        emit(node, .type, value.name.text)
       } else if node.is(ArrayTypeSyntax.self) {
-        emit(node, "arrayType")
+        emit(node, .arrayType)
       } else if node.is(DictionaryTypeSyntax.self) {
-        emit(node, "dictionaryType")
+        emit(node, .dictionaryType)
       } else if node.is(FunctionCallExprSyntax.self) {
-        emit(node, "call")
+        emit(node, .call)
       } else if node.is(ArrayExprSyntax.self) {
-        emit(node, "array")
+        emit(node, .array)
       } else if node.is(DictionaryExprSyntax.self) {
-        emit(node, "dictionary")
+        emit(node, .dictionary)
       } else if node.is(TupleExprSyntax.self) {
-        emit(node, "group")
+        emit(node, .group)
       } else if node.is(SequenceExprSyntax.self) {
-        emit(node, "sequence")
+        emit(node, .sequence)
       } else if node.is(PrefixOperatorExprSyntax.self) {
-        emit(node, "negative")
+        emit(node, .negative)
       } else if node.is(IntegerLiteralExprSyntax.self) {
-        literal(node, "integer")
+        literal(node, .integer)
       } else if node.is(StringLiteralExprSyntax.self) {
-        literal(node, "string")
+        literal(node, .string)
       } else if node.is(BooleanLiteralExprSyntax.self) {
-        literal(node, "boolean")
+        literal(node, .boolean)
       } else if node.is(NilLiteralExprSyntax.self) {
-        literal(node, "nil")
+        literal(node, .nilLiteral)
       }
       pending.append(contentsOf: node.children(viewMode: .all))
     }

@@ -15,6 +15,11 @@ struct InventoryTests {
   }
 
   @Test func contractSignaturesDefaultsAndLiteralProtocolsMatchRegistration() throws {
+    let inventory = try #require(
+      JSONSerialization.jsonObject(
+        with: Data(contentsOf: root.appendingPathComponent("Scripts/ManifestVocabulary.json")))
+        as? [String: Any])
+    let aliases = try #require(inventory["aliases"] as? [String: String])
     let contract = try String(
       contentsOf: root.appendingPathComponent("Documentation/Proposals/AgentsManifest.md"),
       encoding: .utf8)
@@ -32,7 +37,7 @@ struct InventoryTests {
     ]
     func typeSpelling(_ raw: String) -> String {
       var value = raw
-      for (alias, type) in Vocabulary.typeAliases {
+      for (alias, type) in aliases {
         value = value.replacingOccurrences(of: alias, with: type)
       }
       return value.replacingOccurrences(of: "Range<Version>", with: "VersionRange")
@@ -128,36 +133,13 @@ struct InventoryTests {
       signature(
         value.type, value.member,
         value.parameters.map {
-          ($0.label, registeredType($0.type), $0.defaultExpression)
+          ($0.label, registeredType($0.type), $0.defaultValue.map { CanonicalPrinter().render($0) })
         }, callable: value.callable)
     }
     #expect(namedTypes == Vocabulary.typeNames)
     #expect(literalTypes == Vocabulary.literalTypes)
     #expect(signatures.sorted() == registered.sorted())
     #expect(Set(Vocabulary.scalarValues["Agent"]!.values) == Set(AgentID.allCases.map(\.rawValue)))
-  }
-
-  @Test func generatedVocabularyAndCompilerFixturesMatchTheirSourcesByteForByte() throws {
-    let directory = try temporaryManifestDirectory()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    for script in ["generate-manifest-vocabulary.py", "generate-manifest-fixtures.py"] {
-      _ = try ProcessRunner.run(
-        "/usr/bin/env",
-        arguments: [
-          "python3", root.appendingPathComponent("Scripts/" + script).path,
-          "--output-root", directory.path,
-        ])
-    }
-    for path in [
-      "Sources/AgentsDescription/Vocabulary.swift",
-      "Sources/AgentsDescription/VocabularyInventory.swift",
-      "Sources/AgentsManifest/StaticValueVocabulary.swift",
-      "Tests/AgentsManifestTests/CompiledFixtures.swift",
-    ] {
-      #expect(
-        try Data(contentsOf: root.appendingPathComponent(path))
-          == Data(contentsOf: directory.appendingPathComponent(path)), "generated drift: \(path)")
-    }
   }
 
   @Test func allContractSwiftBlocksPassTheRealParser() throws {

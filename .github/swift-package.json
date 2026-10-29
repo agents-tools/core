@@ -1,4 +1,10 @@
 {
+  "commands": [
+    {
+      "name": "manifest-generation",
+      "run": "python3 Scripts/generate-manifest-vocabulary.py --check\npython3 Scripts/generate-manifest-fixtures.py --check"
+    }
+  ],
   "test_configurations": ["debug", "release"],
   "compilers": [
     {"name": "macos-26-xcode-26.6", "runner": "macos-26", "xcode": "26.6"}
