@@ -26,6 +26,8 @@ int platform_access(int directory, const char *name, int mode);
 const char *platform_entry_name(const struct dirent *entry);
 bool platform_system_alias(const char *name);
 int platform_exchange(int directory, const char *name, const char *destination);
+int platform_rename_exclusive(int directory, const char *name, const char *destination);
+bool platform_same_generation(const struct stat *first, const struct stat *second);
 int platform_sync(int descriptor);
 int platform_copy_data(int source, int destination);
 int platform_copy_metadata(int source, int destination, mode_t mode);

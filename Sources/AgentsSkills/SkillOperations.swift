@@ -141,13 +141,16 @@ public enum SkillOperations {
     beforeApply: (([UpdateResult]) throws -> Void)? = nil, provider: WellKnownProvider
   ) throws -> [UpdateResult] {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: apply) { declaration, previous in
+    return try operate(store, apply: apply) { _, _ in
       let baseline = try StatePrecondition(store: store)
+      let declaration = try store.readDeclaration()
+      let previous = try store.readResolved()
       let resolutions = try SourceResolutionSession(store: store)
       let plan = try prepareUpdate(
         store: store, declaration: declaration, previous: previous, resolutions: resolutions,
         skillNames: skillNames, provider: provider)
       try plan.next.validate()
+      try baseline.validate()
       var results = plan.results
       if apply {
         try plan.validateOwnership()
@@ -158,6 +161,10 @@ public enum SkillOperations {
         try baseline.validate()
         try plan.validate()
         let transaction = FileTransaction(store: store)
+        transaction.validateBeforePublication = {
+          try baseline.validate()
+          try plan.validate()
+        }
         try plan.stage(retained: retained, transaction: transaction)
         try store.stageDeclaration(declaration, in: transaction)
         if let data = try plan.next.replacementData(

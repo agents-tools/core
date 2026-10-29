@@ -89,6 +89,7 @@ final class UpdatePlan {
       try checkpoint("apply.retained")
       try validate()
       let transaction = FileTransaction(store: store, outcome: outcome, checkpoint: checkpoint)
+      transaction.validateBeforePublication = { try self.validate() }
       try skills.stage(retained: retained, transaction: transaction)
       try instructions.stage(transaction: transaction)
       try store.stageDeclaration(declaration, in: transaction)

@@ -41,6 +41,30 @@ int platform_exchange(int directory, const char *name, const char *destination) 
 #endif
 }
 
+int platform_rename_exclusive(int directory, const char *name, const char *destination) {
+#if defined(__APPLE__)
+  return renameatx_np(directory, name, directory, destination, RENAME_EXCL);
+#else
+  return (int)syscall(SYS_renameat2, directory, name, directory, destination, 1 /* RENAME_NOREPLACE */);
+#endif
+}
+
+bool platform_same_generation(const struct stat *first, const struct stat *second) {
+#if defined(__APPLE__)
+#define MTIME st_mtimespec
+#define CTIME st_ctimespec
+#else
+#define MTIME st_mtim
+#define CTIME st_ctim
+#endif
+  return first->st_dev == second->st_dev && first->st_ino == second->st_ino &&
+    first->st_mode == second->st_mode && first->st_size == second->st_size &&
+    first->MTIME.tv_sec == second->MTIME.tv_sec && first->MTIME.tv_nsec == second->MTIME.tv_nsec &&
+    first->CTIME.tv_sec == second->CTIME.tv_sec && first->CTIME.tv_nsec == second->CTIME.tv_nsec;
+#undef MTIME
+#undef CTIME
+}
+
 int platform_sync(int descriptor) {
   int result;
   do { result = fsync(descriptor); } while (result < 0 && errno == EINTR);

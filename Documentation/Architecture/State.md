@@ -114,6 +114,27 @@ the any-execute-bit Boolean separately for regular files. Preparation,
 retention and transaction staging verify that dimension without changing
 stored hashes, pins or the version 1 declaration, lock and watch schemas.
 
+## State Transaction and Recovery
+
+The scope's existing `transaction.json` is the sole persistent transaction owner
+for target changes, declaration, lock, watch state, cache publication and pruning.
+The protocol accepts regular files, directories and symbolic links independently
+of the declaration format. Declaration and lock retain their state encoders;
+watch state retains its fixed encoder.
+
+### Preparation and preconditions
+
+Prepare records presence, physical identity and content digest for declaration,
+lock, watch state and affected targets. `UpdatePreconditions` binds final entries
+and existing ancestry; state snapshots also record bytes through their digest.
+Skill and instruction plans validate source snapshots, target content and
+executable flags. The scope writer lock covers recovery, preparation, retention
+and publication. Recovery runs first. Apply re-reads preparation conditions before
+retention and again immediately before publication, including after transaction
+staging. Any changed bytes, including declaration whitespace or comments in a
+rendered target, or another inode with equal bytes invalidates that preparation.
+Apply requires a newly prepared plan rather than rebasing an old edit.
+
 Readers and writers serialize through `.agents.lock`. Missing scope and target
 ancestry is created with descriptor-relative operations; each parent directory
 is fsynced before target mutation, including when an interrupted creator left a
@@ -128,36 +149,108 @@ message to check directory permissions and default ACLs; retries remain denied
 until the environment is corrected. This is a filesystem requirement, not a
 transaction recovery case. Existing user content and metadata are preserved.
 
-A durable `transaction.json` in the scope state directory records target, state
-file and pruning replacements before mutation. Paths are relative to named
-roots in that scope: `state`, registered agent installation directories, and
-registered instruction destinations. Instruction roots permit fixed project
-files, configured user files and named Markdown files in the project's own
-instructions container. The
-journal binds the state directory and each used root to its physical location
-and filesystem identity. Configured agent containers are resolved at the
-registry boundary; recovery opens journal descendants without following links.
-Symlinked journals, symlinked descendants, unregistered destinations and journals
-copied or moved from another scope location are rejected before replay. All
-parents are validated and their directory descriptors retained throughout
-recovery. Backup and staging basenames are derived from the transaction ID,
-never accepted as arbitrary journal paths.
+Journal paths are relative to named roots in that scope: `state`, registered
+agent installation directories and registered instruction destinations.
+Instruction roots permit fixed project files, configured user files and named
+Markdown files in the project's own instructions container. The journal binds the
+state directory, each used root and every destination parent to its physical
+location and filesystem identity. Configured agent containers resolve at the
+registry boundary; descendants open without following links. Symlinked journals,
+symlinked descendants, unregistered destinations, overlapping targets and journals
+copied or moved from another location are rejected before replay. Directory
+descriptors remain pinned. Recovery names derive from the transaction UUID and
+entry index, never from arbitrary paths in journal input.
 
-Backups and staged data are fsynced before applying changes. macOS `fcopyfile`
-preserves original bytes, permissions, ACLs and extended attributes in backups
-and restores. Data replacements inherit the existing regular file's metadata
-from its backup before publication; new files default to `0600`. Final modes
-are applied explicitly rather than through the umask.
-`renameatx_np(RENAME_SWAP)` atomically exchanges existing directories, files and
-links with their replacements; installations always retain a directory entry.
-Discarding transaction-owned trees grants owner access through pinned directory
-descriptors so read-only backups and staging can be removed. This never changes
-the metadata of the installed or restored tree, nor of a backup still needed
-for rollback; symbolic links are unlinked without following their destinations.
+Each operation records its expected presence and preimage, staged object and
+intended postimage before publication. Object evidence includes device, inode,
+entry type, SHA-256 digest and executable status; directory snapshots include
+child identities and digests. Staging and extraction scratch have recorded
+ownership and are sealed before publication. The journal records per-operation
+`queued`, `verifying`, `ready`, `publishing`, `applied`, `restoring`, `restored` or `cancelled`
+progress, plus cleanup evidence and unresolved conflicts. File contents,
+metadata, read preimages, journal records and parent directories are synchronized
+in dependency order. Data replacements inherit the existing regular file's metadata. Copies
+preserve modes, ACLs and extended attributes on macOS and Linux; rollback restores
+the retained original object and its metadata.
 
-After a process kill or power loss at any point, the next mutating state access
-recovers one consistent generation of targets, declaration, lock, watch state and
-cache references.
+### Publication and concurrent writers
+
+Before changing any destination, capability checks require atomic exchange and
+atomic no-replace rename. Filesystem probes use recorded private objects within
+the same journal; unsupported primitives fail before any destination publication.
+There is no replacing-rename fallback for managed destinations, including newly
+created declaration, lock and watch files.
+
+| Expected destination | Publication |
+| --- | --- |
+| Absent | Persist staging identity and digest, then publish with `renameat2(RENAME_NOREPLACE)` on Linux or `renameatx_np(RENAME_EXCL)` on macOS. An existence conflict preserves the concurrent creator's bytes and inode. |
+| Existing | Revalidate the exact read preimage and atomically exchange it with staging. Retain the displaced object, read and compare its identity and digest, and retain it as the rollback preimage. Unexpected content is a conflict preimage and cannot count as a successful replacement. |
+| Deletion | Revalidate the preimage and move it without replacement into the journal's unique quarantine. Verify the quarantined object's identity and digest before confirming the operation or disposing of it. |
+
+Publication intent is durable before the atomic operation. The destination parent
+is synchronized before `applied` is persisted. The retained preimage and the
+published object must both match before a replacement is confirmed. Every
+postimage is checked again before the commit marker. The scope lock excludes
+cooperating writers; these publication checks also preserve objects changed by
+editors that ignore the lock.
+
+### Recovery outcomes
+
+An applying journal reverses verified publications in reverse order. A committed
+journal completes terminal cleanup. Recovery uses recorded physical identity and
+digest, including when a process died between rename and recording `applied`.
+Another inode with identical bytes remains external. Missing or changed evidence
+leaves an unresolved conflict rather than establishing ownership by name or
+content equality. Other verified operations can roll back while conflicted
+objects and their journal remain available for owner resolution.
+
+Replacement rollback exchanges the retained preimage only with the verified
+transaction-owned postimage and verifies the displaced object again. If an
+external writer changes the destination before or during restoration, both
+available versions remain and recovery stops. Deletion restoration uses atomic
+no-replace rename; an occupied original name remains untouched. Creation rollback
+moves only the verified published object into quarantine and verifies it there;
+it never unlinks an external creator's object. A reverse rename is synchronized
+even when a retry recognizes that it already happened.
+
+Before deleting staging, probes, scratch or preimages, the journal persists a
+terminal `committed` or `rolledBack` phase with each disposal object's identity
+and digest. The observed terminal journal and its parent are synchronized even
+when the phase was already visible on entry. Per-entry discard intent is durable
+before deletion. Cleanup verifies ownership, records descendant evidence and
+accepts only already removed descendants on retry; changed or newly introduced
+objects remain conflicts. Discarded directories may receive owner access through
+pinned descriptors without changing the installed or restored tree's metadata.
+Symbolic links are removed without following their destinations. Parent deletion
+barriers also run for already absent entries. On macOS synchronization also uses
+`F_FULLFSYNC` to request a storage flush.
+
+Recovery is repeatable across interruption. The next recovering state access
+reports `CoreError.transactionRecovered` after it establishes a consistent
+generation; callers retry the whole preparation. Outcome tracking belongs to the
+transaction UUID: recovering a cache publication cannot mark a later combined
+update committed. Failures distinguish confirmed unchanged, confirmed committed
+and unresolved recovery. A commit marker alone does not establish successful
+cleanup: changed recovery evidence after that marker reports unresolved recovery
+and retains the journal and remaining recovery material. A committed failure
+must not be described as rollback.
+
+### Read-only access
+
+Non-applying skill and instruction operations, listings, previews, watch status
+and watch diff take an existing shared lock, report pending recovery and never
+replay it or create state files. When the lock is absent, inspection reads and
+then checks for a newly created lock or recovery marker before returning either
+its result or its error. If a writer appeared, inspection discards that attempt
+and retries under the shared lock. Writers create the scope lock before mutation
+and never remove it. Pending journals and watch-reference cleanup markers cause
+`CoreError.invalidState`; doctor reports one pending-recovery diagnostic per
+affected scope and skips checks requiring a consistent generation. Explicit
+multi-root instruction audits never write. Corrupt journals stop recovery without
+guessing a plan.
+
+### Watch references and mirror locks
+
 Mirror Git invocations pass `-c core.fsync=objects,reference,pack-metadata` and
 `-c core.fsyncMethod=fsync`; durability settings never rewrite configuration.
 Mirror configuration must be a regular file, checked before invoking Git.
@@ -211,39 +304,11 @@ and source location rather than its mirror, staging or extraction paths; see
 [process execution and errors](Package.md#process-execution-and-errors) for the
 consumer error contract.
 
-Each mutating state operation first checks for an abandoned journal under the
-scope lock, then validates watch state and finishes pending ref cleanup before
-proceeding. An applying journal rolls back every replacement, including watch
-baselines; a committed journal
-finishes cleanup. Recovery is repeatable if interrupted. Before deleting any
-recovery material, both the terminal journal file and its parent directory are
-fsynced, even when that phase was already visible on entry. State and backup
-files and their parent directories are synced before publishing the terminal
-phase. Replayed deletions sync their own parent directories even when the entry
-is already absent; a visible unlink alone does not establish durability on that
-target's volume. On macOS these barriers also use `F_FULLFSYNC` to request a
-storage flush.
-
-Recovery throws `CoreError.transactionRecovered` after completing, reporting
-the scope and asking the caller to retry against the recovered generation.
-This includes recovery of pending watch refs even when no journal remains.
-Non-applying skill and instruction operations and watch status and diff take an
-existing shared lock without creating scope state files or replaying recovery.
-When the scope lock is absent, inspection reads without a lock, then checks again
-for a lock or pending recovery before returning either a result or an error.
-If a writer appeared, inspection discards that attempt and retries under the
-shared lock. Writers create the scope lock before mutation and never remove it.
-Listings, previews, watch status and watch diff fail with `CoreError.invalidState`
-when a transaction journal or watch-ref cleanup marker is pending. Inspection
-leaves recovery material, state and retained refs untouched; pending Git ref
-cleanup can also leave mirror locks that prevent fetching safely.
-Each doctor instead reports one pending-recovery diagnostic per affected scope
-and skips checks that require that scope's consistent state. The diagnostic
-explains that the next command changing the scope will recover it. Explicit
-multi-root instruction audits never write. Corrupt journals stop mutations
-without guessing a recovery plan.
-Tests interrupt writers between rename and parent fsync, interrupt rollback and terminal cleanup, and verify
-that a competing reader waits for the recovering process's lock.
+Each mutating state operation checks for an abandoned journal under the scope
+lock, validates watch state and finishes pending reference cleanup before
+proceeding. Recovery of pending watch references also reports
+`CoreError.transactionRecovered` when no journal remains. Retained refs remain
+available while any journal conflict is unresolved.
 
 ## Materialization and Installation
 

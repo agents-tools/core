@@ -101,7 +101,8 @@ public struct StateStore: Sendable {
     let physicalDirectory = base.resolvingSymlinksInPath().appendingPathComponent(
       directory.lastPathComponent)
     return try FileLock.withLock(at: physicalDirectory.appendingPathComponent(".agents.lock")) {
-      let recovered = try FileTransaction.recover(store: self, checkpoint: checkpoint)
+      let recovered = try FileTransaction.recover(
+        store: self, outcome: outcome, checkpoint: checkpoint)
       _ = try readWatch()
       let cache = SourceCache(store: self, checkpoint: checkpoint)
       let referencesRecovered = try cache.recoverWatchReferences()

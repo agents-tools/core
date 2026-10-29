@@ -1407,70 +1407,10 @@ syntax; editability remains a document-layer capability.
 
 ## State Transaction and Recovery
 
-These guarantees extend [State and Source Cache](../Architecture/State.md) when
-implemented. The existing journal remains the sole persistence owner. Validated
-source bytes replace declaration re-encoding; lock/watch retain their encoders.
-One transaction includes source, ledger, affected watch state, native artifacts,
-cache retention and pruning. Source-only changes use the same protocol.
+[State Transaction and Recovery](../Architecture/State.md#state-transaction-and-recovery)
+owns the current publication, precondition and recovery guarantees.
 
-Prepare records presence, physical identity and byte digest for the manifest,
-ledger, watch state and relevant targets, plus source snapshot identities.
-Under the scope writer lock, recover first, re-read/compare preconditions before
-retention and again immediately before publication. A changed comment invalidates
-a preview even when semantics are equal. Apply never rebases a stale source patch.
-Descriptor-relative operations retain validated ancestors and reject symlinked or
-unregistered paths. Staging, backups, journal records and parent directories follow
-the existing fsync/metadata rules.
-
-### Publication and concurrent writers
-
-The transaction must read the exact preimage of any committed replacement.
-Presence checks alone never authorize a blind overwrite. Each journal operation
-records its expected presence/identity/hash, transaction-owned staging identity
-and intended postimage before publication:
-
-| Expected destination | Atomic operation and conflict handling |
-| --- | --- |
-| Absent | Publish with atomic no-replace semantics: Linux `renameat2(RENAME_NOREPLACE)`, macOS `renamex_np(RENAME_EXCL)` or a descriptor-relative/link-based equivalent with the same guarantee. A concurrent creator causes an existence conflict; its bytes and identity remain untouched. Ordinary replacing rename is never a fallback. |
-| Existing | Revalidate the read preimage, exchange atomically with staging and retain the displaced object. Read/compare that displaced object before confirming publication. Unexpected bytes are preserved as a conflict preimage; the operation cannot commit as a successful replacement. |
-| Deletion | Move the entry into unique journal-owned quarantine without replacing another entry; verify its identity/digest before destructive cleanup. Unexpected content remains recoverable, and restoration uses no-replace semantics if the original name is occupied. |
-
-For an absent destination, the staged inode identity and content digest are
-recorded durably before no-replace publication. After successful publication,
-sync the destination's parent before marking the operation applied. Recovery
-classifies the destination using that recorded physical identity and digest,
-not just its filename or equal content. In a link-based implementation it also
-accounts for the retained staging link until cleanup.
-
-If another file appeared and publication failed, the transaction rolls back its
-other verified changes, preserves the concurrent file, and reports a conflict.
-During migration, `agents.json` remains available or is restored through the
-same protected rollback; the tool does not accept the newly appeared Swift file
-as its own migration output. If a crash occurred before recording publication's
-result, recovery can recognize its own published inode. Any other inode, even
-with equal bytes, is external and must be preserved. Missing/changed evidence
-produces an unresolved conflict rather than guessed ownership.
-
-Recovery verifies exchanged/quarantined preimages even if a crash preceded the
-conflict marker. An unexpected preimage is never disposable staging. Restoring a
-preimage may replace only the verified transaction-owned postimage; if an external
-writer changed that path again, retain both versions and stop for owner resolution.
-Creation rollback removes only its verified transaction-owned object; it never
-unlinks a concurrent creator's file. Unsupported atomic primitives cause failure
-before mutation. These rules also protect creation/replacement of the ledger and
-other transaction destinations; there is no unguarded creation path.
-
-### Recovery outcomes and approvals
-
-An applying journal restores the previous verified generation; a committed journal
-finishes cleanup. Conflicted journals retain all data needed for resolution.
-Backup/staging cleanup requires both a durable terminal phase and verified
-ownership. Read-only operations report pending recovery and never replay it.
-Recovery remains repeatable across interruption and reports
-`CoreError.transactionRecovered`; consumers retry preparation. Outcome reporting
-distinguishes unchanged, committed and unresolved recovery, including failures
-after the commit marker. The scope lock serializes cooperating tools; the
-publication rules protect retained data when external editors ignore that lock.
+### Approvals
 
 Approval identity covers declarations, commands and shipped content, excluding
 comments and formatting. Approval is machine-local; a copied ledger disposition

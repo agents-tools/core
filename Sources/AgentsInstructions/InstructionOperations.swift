@@ -144,19 +144,22 @@ public enum InstructionOperations {
     beforeApply: ((InstructionUpdateReport) throws -> Void)? = nil
   ) throws -> InstructionUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: apply) { previousDeclaration, previous in
+    return try operate(store, apply: apply) { _, _ in
+      let baseline = try StatePrecondition(store: store)
+      let previousDeclaration = try store.readDeclaration()
+      let previous = try store.readResolved()
       var declaration = previousDeclaration
       if let agents {
         var instructions = declaration.instructions ?? InstructionsDeclaration()
         instructions.agents = agents
         declaration.instructions = instructions
       }
-      let baseline = try StatePrecondition(store: store)
       let resolutions = try SourceResolutionSession(store: store)
       let plan = try prepareUpdate(
         store: store, declaration: declaration, previousDeclaration: previousDeclaration,
         previous: previous, resolutions: resolutions, replace: replace)
       try plan.next.validate()
+      try baseline.validate()
       if apply {
         if !replace { try requireOwnership(plan.report) }
         try beforeApply?(plan.report)
@@ -166,6 +169,10 @@ public enum InstructionOperations {
         try baseline.validate()
         try plan.validate()
         let transaction = FileTransaction(store: store)
+        transaction.validateBeforePublication = {
+          try baseline.validate()
+          try plan.validate()
+        }
         try plan.stage(transaction: transaction)
         try store.stageDeclaration(declaration, in: transaction)
         if let data = try plan.next.replacementData(

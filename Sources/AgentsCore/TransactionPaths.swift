@@ -53,6 +53,10 @@ struct TransactionPaths {
   func root(_ key: String, create: Bool = false, checkpoint: (String) throws -> Void = { _ in })
     throws -> DirectoryHandle
   {
+    try DirectoryHandle(at: rootURL(key), create: create, checkpoint: checkpoint)
+  }
+
+  func rootURL(_ key: String) throws -> URL {
     let url: URL
     if key == "state" {
       let base =
@@ -77,7 +81,7 @@ struct TransactionPaths {
     } else {
       throw CoreError.invalidState("unknown transaction root")
     }
-    return try DirectoryHandle(at: url, create: create, checkpoint: checkpoint)
+    return url
   }
 
   /// A top-level file in the project's own instructions container, `.agent/instructions/<name>.md`.

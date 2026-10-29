@@ -121,10 +121,51 @@ final class DirectoryHandle {
       ? platform_exchange(descriptor, name, destination)
       : renameat(descriptor, name, descriptor, destination)
     guard result == 0 else {
+      if swap, errno == ENOSYS || errno == ENOTSUP || errno == EINVAL {
+        throw CoreError.unsupported("atomic exchange is required: \(errno)")
+      }
       throw CoreError.invalidState("cannot replace \(destination): \(errno)")
     }
     try afterRename()
     try sync()
+  }
+
+  func renameExclusive(
+    _ name: String, to destination: String, afterRename: () throws -> Void = {}
+  ) throws {
+    guard platform_rename_exclusive(descriptor, name, destination) == 0 else {
+      let code = errno
+      if code == EEXIST || code == ENOTEMPTY {
+        throw CoreError.invalidState("transaction destination already exists: \(destination)")
+      }
+      if code == ENOSYS || code == ENOTSUP || code == EINVAL {
+        throw CoreError.unsupported("atomic no-replace publication is required: \(code)")
+      }
+      throw CoreError.invalidState("cannot publish exclusively \(destination): \(code)")
+    }
+    try afterRename()
+    try sync()
+  }
+
+  /// Checks flag admission without creating any object. FileTransaction also probes
+  /// the actual filesystem with journal-owned objects before publishing targets.
+  static func requireAtomicRenames(at destination: URL) throws {
+    var ancestor = destination.deletingLastPathComponent()
+    while !FileManager.default.fileExists(atPath: ancestor.path), ancestor.path != "/" {
+      ancestor.deleteLastPathComponent()
+    }
+    let directory = try DirectoryHandle(at: ancestor.resolvingSymlinksInPath())
+    let prefix = ".agents-probe-" + UUID().uuidString
+    for exclusive in [false, true] {
+      let result =
+        exclusive
+        ? platform_rename_exclusive(directory.descriptor, prefix + ".a", prefix + ".b")
+        : platform_exchange(directory.descriptor, prefix + ".a", prefix + ".b")
+      guard result < 0, errno == ENOENT else {
+        throw CoreError.unsupported(
+          "atomic exchange and no-replace publication are required: \(errno)")
+      }
+    }
   }
 
   func makeDirectory(_ name: String) throws {
@@ -196,9 +237,16 @@ final class DirectoryHandle {
     try sync()
   }
 
-  func read(_ name: String) throws -> Data {
+  func read(_ name: String, matching expected: stat? = nil) throws -> Data {
     let file = try regularFile(name)
     defer { close(file) }
+    var before = stat()
+    guard fstat(file, &before) == 0 else {
+      throw CoreError.invalidState("cannot identify opened file: \(name)")
+    }
+    if var expected, !platform_same_generation(&expected, &before) {
+      throw CoreError.invalidState("file changed before reading: \(name)")
+    }
     var data = Data()
     var buffer = [UInt8](repeating: 0, count: 65536)
     while true {
@@ -209,7 +257,13 @@ final class DirectoryHandle {
           errno, at: url.appendingPathComponent(name),
           otherwise: .invalidState("cannot read \(name)"))
       }
-      if count == 0 { return data }
+      if count == 0 {
+        var after = stat()
+        guard fstat(file, &after) == 0, platform_same_generation(&before, &after) else {
+          throw CoreError.invalidState("file changed while reading: \(name)")
+        }
+        return data
+      }
       data.append(contentsOf: buffer.prefix(count))
     }
   }
