@@ -1,0 +1,102 @@
+{
+  "swiftSyntax": "604.0.0",
+  "toolchain": "Apple Swift 6.4 (swiftlang-6.4.0.34.1), arm64 macOS 27",
+  "fixtures": {
+    "ConsumerExample.swift.txt": {
+      "tokens": 741,
+      "syntaxReservation": 2980,
+      "syntaxNodes": 1707,
+      "syntaxDepth": 31
+    },
+    "Contract00.swift.txt": {
+      "tokens": 82,
+      "syntaxReservation": 344,
+      "syntaxNodes": 199,
+      "syntaxDepth": 26
+    },
+    "Contract01.swift.txt": {
+      "tokens": 97,
+      "syntaxReservation": 404,
+      "syntaxNodes": 217,
+      "syntaxDepth": 25
+    },
+    "Contract05.swift.txt": {
+      "tokens": 34,
+      "syntaxReservation": 152,
+      "syntaxNodes": 88,
+      "syntaxDepth": 23
+    },
+    "Contract06.swift.txt": {
+      "tokens": 93,
+      "syntaxReservation": 388,
+      "syntaxNodes": 210,
+      "syntaxDepth": 29
+    },
+    "Contract07.swift.txt": {
+      "tokens": 741,
+      "syntaxReservation": 2980,
+      "syntaxNodes": 1707,
+      "syntaxDepth": 31
+    },
+    "CoreExample.swift.txt": {
+      "tokens": 82,
+      "syntaxReservation": 344,
+      "syntaxNodes": 199,
+      "syntaxDepth": 26
+    },
+    "MigrationEdgeExample.swift.txt": {
+      "tokens": 191,
+      "syntaxReservation": 780,
+      "syntaxNodes": 446,
+      "syntaxDepth": 32
+    },
+    "ProducerExample.swift.txt": {
+      "tokens": 93,
+      "syntaxReservation": 388,
+      "syntaxNodes": 210,
+      "syntaxDepth": 29
+    },
+    "RequirementValues.swift.txt": {
+      "tokens": 304,
+      "syntaxReservation": 1232,
+      "syntaxNodes": 823,
+      "syntaxDepth": 26
+    },
+    "RequirementsExample.swift.txt": {
+      "tokens": 503,
+      "syntaxReservation": 2028,
+      "syntaxNodes": 1251,
+      "syntaxDepth": 29
+    },
+    "SketchExample.swift.txt": {
+      "tokens": 97,
+      "syntaxReservation": 404,
+      "syntaxNodes": 217,
+      "syntaxDepth": 25
+    },
+    "SkillsExample.swift.txt": {
+      "tokens": 34,
+      "syntaxReservation": 152,
+      "syntaxNodes": 88,
+      "syntaxDepth": 23
+    },
+    "TasteSample.swift.txt": {
+      "tokens": 414,
+      "syntaxReservation": 1672,
+      "syntaxNodes": 961,
+      "syntaxDepth": 29
+    },
+    "VocabularyDepthExample.swift.txt": {
+      "tokens": 68,
+      "syntaxReservation": 288,
+      "syntaxNodes": 155,
+      "syntaxDepth": 43
+    },
+    "LiteralCoverage.swift.txt": {
+      "tokens": 729,
+      "syntaxReservation": 2932,
+      "syntaxNodes": 1805,
+      "syntaxDepth": 29
+    }
+  }
+}

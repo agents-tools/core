@@ -56,6 +56,16 @@ public struct SourceDeclaration: Codable, Equatable, Sendable {
     switch kind {
     case .local:
       return "local:" + localURL(environment: environment).path
+    case .wellKnown, .git:
+      return try transportIdentity()
+    }
+  }
+
+  /// Normalizes a transport location without a runtime filesystem context.
+  package func transportIdentity() throws -> String {
+    guard !location.isEmpty else { throw CoreError.invalidSource("empty source location") }
+    switch kind {
+    case .local: throw CoreError.invalidSource("local identity requires a package root")
     case .wellKnown:
       guard let components = URLComponents(string: location),
         ["http", "https"].contains(components.scheme), components.host != nil,

@@ -1,0 +1,97 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let base: [SectionReference] = ["guide"]
+let sections = base + [.section(name: "engineering", source: "rules")]
+let reviewer: Component = .subagent(
+  name: "reviewer",
+  description: "Review correctness and tests.",
+  prompt: "Check invariants and explain concrete failures.",
+  agents: [.claudeCode],
+  condition: .when(platforms: [.macOS]),
+  native: ["claude-code/subagent@1": ["memory": "project"]]
+)
+
+let agents = Agents(
+  sources: [
+    .source(name: "team", path: "./team"),
+    .source(name: "drafts", path: "./draft-skills"),
+    .source(name: "rules", url: "https://example.org/team/rules.git", from: "1.2.0"),
+    .source(name: "catalog", index: "https://example.org/skills/index.json"),
+    .source(name: "vendor", url: "https://example.org/vendor/tools.git", exact: "2.1.0"),
+  ],
+  components: [
+    .skills(
+      source: "rules", exclude: ["experimental"], mode: .copy,
+      overrides: [.skill(name: "testing", mode: .link, agents: [.codex])]
+    ),
+    .skills(
+      source: "drafts", select: ["draft"], mode: .edit,
+      condition: .when(agents: [.claudeCode], scopes: [.project])
+    ),
+    .instructions(
+      sections: sections,
+      chatGPT: [.prompt(name: "weekly", sections: base, append: "notes/weekly.md")]
+    ),
+    .mcpServer(
+      name: "workspace",
+      transport: .stdio(
+        "workspace-tools", arguments: ["serve"],
+        environment: ["TOKEN": .secret("workspace-token"), "LOG_LEVEL": "info"]
+      ),
+      agents: [.claudeCode]
+    ),
+    .mcpServer(
+      name: "reference",
+      transport: .streamableHTTP(
+        url: "https://example.org/mcp", headers: ["Authorization": .environment("MCP_AUTH")]
+      ),
+      agents: [.openCode]
+    ),
+    .hook(
+      name: "format", event: .afterTool,
+      run: .executable(
+        "swift", arguments: ["format", "--in-place", "Sources"],
+        workingDirectory: .path("tools", source: "rules")
+      ),
+      timeoutSeconds: 30, agents: [.claudeCode], condition: .when(scopes: [.project])
+    ),
+    .command(
+      name: "review/change", description: "Review a selected change.",
+      prompt: "Review ${input:change} and cite evidence.",
+      parameters: [.parameter(name: "change", description: "The change to review.")],
+      agents: [.claudeCode]
+    ),
+    .lspServer(
+      name: "swift", run: .executable("sourcekit-lsp"),
+      languages: [".swift": "swift"],
+      initializationOptions: ["backgroundIndexing": true],
+      agents: [.claudeCode], condition: .when(platforms: [.macOS])
+    ),
+    .permissions(
+      name: "private-files",
+      rules: [.deny(.read, "secrets/**")],
+      agents: [.claudeCode], condition: .when(scopes: [.project])
+    ),
+    .ignore(
+      name: "build-products", patterns: [".build/", "DerivedData/"], purpose: .indexing,
+      agents: [.cursor], condition: .when(scopes: [.project])
+    ),
+    .plugin(
+      name: "vendor-tools", path: "plugins/tools", source: "vendor", mode: .native,
+      agents: [.claudeCode], condition: .when(scopes: [.user])
+    ),
+    .plugin(
+      name: "shared-tools", path: "plugins/shared", source: "vendor",
+      exclude: [.hook(name: "format")], condition: .when(scopes: [.project])
+    ),
+  ],
+  groups: [
+    .group(
+      name: "review-tools", components: [reviewer],
+      uses: [.group(name: "review", source: "team", condition: .when(agents: [.codex]))]
+    ),
+  ],
+  uses: ["review-tools"],
+  watch: ["rules", "catalog"]
+)

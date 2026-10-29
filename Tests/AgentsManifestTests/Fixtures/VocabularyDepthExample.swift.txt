@@ -1,0 +1,22 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  groups: [
+    .group(
+      name: "review",
+      components: [
+        .instructions(
+          chatGPT: [
+            .prompt(
+              name: "review",
+              sections: [
+                .section(name: "guide", condition: .when(agents: [.codex])),
+              ]
+            ),
+          ]
+        ),
+      ]
+    ),
+  ]
+)

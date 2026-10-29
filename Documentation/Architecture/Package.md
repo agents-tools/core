@@ -12,6 +12,9 @@ with glibc 2.34 or newer.
 ## Products and Dependencies
 
 ```text
+AgentsDescription (standard library only)
+AgentsManifest ──> AgentsDescription, AgentsCore, SwiftSyntax, SwiftParser (swift-syntax)
+
 AgentsUpdates ──> AgentsCore, AgentsSkills, AgentsInstructions, CPlatform
 
 AgentsCore ──> Crypto (swift-crypto), CPlatform
@@ -24,6 +27,9 @@ AgentsInstructions ──> AgentsCore
          │
          └───────> Markdown (swift-markdown) ──> cmark-gfm
 
+ManifestTestProcess ──> AgentsManifest, AgentsCore, AgentsDescription
+AgentsManifestTests ──> AgentsManifest, AgentsDescription, AgentsCore, ManifestTestProcess, SwiftParser, SwiftSyntax
+
 StateTestProcess ──> AgentsCore, AgentsSkills, AgentsInstructions, AgentsUpdates, CPlatform
 AgentsCoreTests ──> AgentsCore, StateTestProcess, CPlatform
 AgentsSkillsTests ──> AgentsSkills, AgentsCore, AgentsInstructions, Yams, StateTestProcess, CPlatform
@@ -31,8 +37,10 @@ AgentsInstructionsTests ──> AgentsInstructions
 AgentsUpdatesTests ──> AgentsUpdates, StateTestProcess, CPlatform
 ```
 
-`AgentsCore`, `AgentsSkills`, `AgentsInstructions` and `AgentsUpdates` are library products with
-matching targets under `Sources/` and test targets under `Tests/`. Shared
+`AgentsDescription`, `AgentsManifest`, `AgentsCore`, `AgentsSkills`,
+`AgentsInstructions` and `AgentsUpdates` are library products with
+matching targets under `Sources/`. Tests under `Tests/` include construction
+vocabulary and compiler-oracle coverage in `AgentsManifestTests`. Shared
 implementation uses `package` access; consumers receive the
 workflow APIs and the state and result models they need. `Package.swift` owns
 this dependency graph.
@@ -52,6 +60,38 @@ bridges APIs missing from those overlays.
 `AgentsCore` hashes through swift-crypto's `Crypto` product, which delegates to
 CryptoKit on Apple platforms and supplies its own implementation on Linux.
 
+## AgentsDescription and AgentsManifest
+
+`AgentsDescription` owns the immutable language 1.0 authoring vocabulary. It uses
+only the standard library, with private payload storage and closed literal
+conformances. `Scripts/ManifestVocabulary.json` is the construction signature and
+literal inventory; `Scripts/generate-manifest-vocabulary.py` generates the public
+factories and package-only static registrations together. Contract signature and
+compiler-backed fixture tests check that inventory.
+
+`AgentsManifest.DeclarationDocument` compiles supplied UTF-8 bytes without
+executing code or reading sources. Version selection, strict lexing and bounded
+grammar recognition complete before SwiftParser sees the exact snapshot. An
+iterative all-nodes guard precedes syntax inspection and independent projection
+comparison. Static typing, occurrence-based expanded-size accounting and offline
+domain validation produce `AgentsCore.DeclarationIR` and `DeclarationSourceMap`.
+Constants, inactive values and unused groups receive the same checks. Group
+references and conditions remain symbolic.
+
+The document retains original bytes, a lossless syntax tree, a byte digest and
+snapshot-bound `NodeID` handles. `preparing(_:)` accepts `ManifestEdit` batches,
+constructs expected intent, produces disjoint byte patches, reruns the complete
+front end and compares the resulting declaration. `DocumentChange` carries both
+byte digests, resulting bytes, diagnostics, impacted references and semantic delta
+for later orchestration. Source edits do not publish files. Shared constants
+require explicit impact acceptance; ambiguous comments or separators are refused.
+
+`ManifestTestProcess` is a test-only executable. Parent watchdogs exercise
+admission, parsing, checking and tree teardown, including fixed adversarial forms
+and deterministic differential fuzzing. Positive corpus sources are also compiled
+as ordinary Swift in the test target and compared using value equality. Parser
+baselines and seeds belong to the test corpus, not the runtime language.
+
 ## AgentsCore
 
 - `SourceParser` and `ParsedSource` parse local paths, Git URLs and HTTP indexes.
@@ -69,7 +109,10 @@ CryptoKit on Apple platforms and supplies its own implementation on Linux.
 - `SourceRequirement` expresses branch, revision, exact version, next-major,
   next-minor and half-open version ranges. Semantic-version comparison governs
   Git tag selection, including prerelease bounds.
-- `Declaration` and `ResolvedState` define intent and resolved version 1 state,
+- `DeclarationIR`, `DeclarationRecord` and `DeclarationValue` hold syntax-independent
+  manifest intent; `SourceSpan`, `SourceProvenance` and `DeclarationSourceMap`
+  carry document coordinates and origins without syntax or source access.
+- `Declaration` and `ResolvedState` define the current stored intent and resolved version 1 state,
   including the complete instruction section, prompt and physical-target models.
 - `StateStore` owns scope paths, validation, deterministic encoding and state
   persistence. `FileLock` serializes state access; `FileTransaction` durably

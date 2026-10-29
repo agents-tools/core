@@ -1,0 +1,1684 @@
+{
+  "enums": {
+    "Agent": [
+      {
+        "name": "claudeCode",
+        "parameters": []
+      },
+      {
+        "name": "codex",
+        "parameters": []
+      },
+      {
+        "name": "cursor",
+        "parameters": []
+      },
+      {
+        "name": "geminiCLI",
+        "parameters": []
+      },
+      {
+        "name": "openCode",
+        "parameters": []
+      }
+    ],
+    "Scope": [
+      {
+        "name": "project",
+        "parameters": []
+      },
+      {
+        "name": "user",
+        "parameters": []
+      }
+    ],
+    "Platform": [
+      {
+        "name": "macOS",
+        "parameters": []
+      },
+      {
+        "name": "linux",
+        "parameters": []
+      }
+    ],
+    "InstallMode": [
+      {
+        "name": "link",
+        "parameters": []
+      },
+      {
+        "name": "copy",
+        "parameters": []
+      },
+      {
+        "name": "edit",
+        "parameters": []
+      }
+    ],
+    "RuntimeValue": [
+      {
+        "name": "literal",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "environment",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "secret",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "String"
+          }
+        ]
+      }
+    ],
+    "ConfigurationValue": [
+      {
+        "name": "string",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "integer",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "Int"
+          }
+        ]
+      },
+      {
+        "name": "decimal",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "boolean",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "Bool"
+          }
+        ]
+      },
+      {
+        "name": "null",
+        "parameters": []
+      },
+      {
+        "name": "array",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "[ConfigurationValue]"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "[String: ConfigurationValue]"
+          }
+        ]
+      }
+    ],
+    "HookEvent": [
+      {
+        "name": "beforeTool",
+        "parameters": []
+      },
+      {
+        "name": "afterTool",
+        "parameters": []
+      },
+      {
+        "name": "sessionStart",
+        "parameters": []
+      },
+      {
+        "name": "sessionEnd",
+        "parameters": []
+      },
+      {
+        "name": "native",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "String"
+          }
+        ]
+      }
+    ],
+    "PermissionOperation": [
+      {
+        "name": "read",
+        "parameters": []
+      },
+      {
+        "name": "write",
+        "parameters": []
+      },
+      {
+        "name": "execute",
+        "parameters": []
+      },
+      {
+        "name": "tool",
+        "parameters": [
+          {
+            "label": "_",
+            "name": "value",
+            "type": "String"
+          }
+        ]
+      }
+    ],
+    "IgnorePurpose": [
+      {
+        "name": "context",
+        "parameters": []
+      },
+      {
+        "name": "indexing",
+        "parameters": []
+      }
+    ],
+    "PluginMode": [
+      {
+        "name": "native",
+        "parameters": []
+      },
+      {
+        "name": "components",
+        "parameters": []
+      }
+    ],
+    "ComponentKind": [
+      {
+        "name": "skills",
+        "parameters": []
+      },
+      {
+        "name": "instructions",
+        "parameters": []
+      },
+      {
+        "name": "mcpServer",
+        "parameters": []
+      },
+      {
+        "name": "hook",
+        "parameters": []
+      },
+      {
+        "name": "subagent",
+        "parameters": []
+      },
+      {
+        "name": "command",
+        "parameters": []
+      },
+      {
+        "name": "lspServer",
+        "parameters": []
+      },
+      {
+        "name": "permissions",
+        "parameters": []
+      },
+      {
+        "name": "ignore",
+        "parameters": []
+      },
+      {
+        "name": "plugin",
+        "parameters": []
+      }
+    ],
+    "ComponentReference": [
+      {
+        "name": "skill",
+        "parameters": [
+          {
+            "label": "name",
+            "name": "name",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "instruction",
+        "parameters": [
+          {
+            "label": "name",
+            "name": "name",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "mcpServer",
+        "parameters": [
+          {
+            "label": "name",
+            "name": "name",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "hook",
+        "parameters": [
+          {
+            "label": "name",
+            "name": "name",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "subagent",
+        "parameters": [
+          {
+            "label": "name",
+            "name": "name",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "command",
+        "parameters": [
+          {
+            "label": "name",
+            "name": "name",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "lspServer",
+        "parameters": [
+          {
+            "label": "name",
+            "name": "name",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "permissions",
+        "parameters": [
+          {
+            "label": "name",
+            "name": "name",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "ignore",
+        "parameters": [
+          {
+            "label": "name",
+            "name": "name",
+            "type": "String"
+          }
+        ]
+      },
+      {
+        "name": "plugin",
+        "parameters": [
+          {
+            "label": "name",
+            "name": "name",
+            "type": "String"
+          }
+        ]
+      }
+    ]
+  },
+  "structs": [
+    "Condition",
+    "Agents",
+    "Source",
+    "ComponentGroup",
+    "GroupReference",
+    "SkillSelection",
+    "SkillOverride",
+    "SectionReference",
+    "ChatGPTPrompt",
+    "Resource",
+    "PromptContent",
+    "ExecutableInvocation",
+    "MCPTransport",
+    "PromptParameter",
+    "PermissionRule",
+    "Component"
+  ],
+  "factories": [
+    {
+      "type": "Condition",
+      "name": "when",
+      "parameters": [
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "scopes",
+          "name": "scopes",
+          "default": "nil",
+          "type": "[Scope]?"
+        },
+        {
+          "label": "platforms",
+          "name": "platforms",
+          "default": "nil",
+          "type": "[Platform]?"
+        }
+      ]
+    },
+    {
+      "type": "Agents",
+      "name": "Agents",
+      "parameters": [
+        {
+          "label": "defaultAgents",
+          "name": "defaultAgents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "exports",
+          "name": "exports",
+          "default": "[]",
+          "type": "[String]"
+        },
+        {
+          "label": "sources",
+          "name": "sources",
+          "default": "[]",
+          "type": "[Source]"
+        },
+        {
+          "label": "components",
+          "name": "components",
+          "default": "[]",
+          "type": "[Component]"
+        },
+        {
+          "label": "groups",
+          "name": "groups",
+          "default": "[]",
+          "type": "[ComponentGroup]"
+        },
+        {
+          "label": "uses",
+          "name": "uses",
+          "default": "[]",
+          "type": "[GroupReference]"
+        },
+        {
+          "label": "watch",
+          "name": "watch",
+          "default": "[]",
+          "type": "[String]"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "url",
+          "name": "url",
+          "type": "String"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "url",
+          "name": "url",
+          "type": "String"
+        },
+        {
+          "label": "from",
+          "name": "from",
+          "type": "Version"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "url",
+          "name": "url",
+          "type": "String"
+        },
+        {
+          "label": "exact",
+          "name": "exact",
+          "type": "Version"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "url",
+          "name": "url",
+          "type": "String"
+        },
+        {
+          "label": "branch",
+          "name": "branch",
+          "type": "String"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "url",
+          "name": "url",
+          "type": "String"
+        },
+        {
+          "label": "revision",
+          "name": "revision",
+          "type": "String"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "url",
+          "name": "url",
+          "type": "String"
+        },
+        {
+          "label": "_",
+          "name": "range",
+          "type": "Range<Version>"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "path",
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "path",
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "label": "from",
+          "name": "from",
+          "type": "Version"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "path",
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "label": "exact",
+          "name": "exact",
+          "type": "Version"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "path",
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "label": "branch",
+          "name": "branch",
+          "type": "String"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "path",
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "label": "revision",
+          "name": "revision",
+          "type": "String"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "path",
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "label": "_",
+          "name": "range",
+          "type": "Range<Version>"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "Source",
+      "name": "source",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "index",
+          "name": "index",
+          "type": "String"
+        },
+        {
+          "label": "subpath",
+          "name": "subpath",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "ComponentGroup",
+      "name": "group",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "components",
+          "name": "components",
+          "default": "[]",
+          "type": "[Component]"
+        },
+        {
+          "label": "uses",
+          "name": "uses",
+          "default": "[]",
+          "type": "[GroupReference]"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        }
+      ]
+    },
+    {
+      "type": "GroupReference",
+      "name": "group",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        }
+      ]
+    },
+    {
+      "type": "GroupReference",
+      "name": "group",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "source",
+          "name": "source",
+          "type": "String"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        }
+      ]
+    },
+    {
+      "type": "SkillSelection",
+      "name": "all",
+      "property": true,
+      "parameters": []
+    },
+    {
+      "type": "SkillOverride",
+      "name": "skill",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "mode",
+          "name": "mode",
+          "default": "nil",
+          "type": "InstallMode?"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        }
+      ]
+    },
+    {
+      "type": "SectionReference",
+      "name": "section",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "source",
+          "name": "source",
+          "default": "nil",
+          "type": "String?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        }
+      ]
+    },
+    {
+      "type": "ChatGPTPrompt",
+      "name": "prompt",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "sections",
+          "name": "sections",
+          "type": "[SectionReference]"
+        },
+        {
+          "label": "append",
+          "name": "append",
+          "default": "nil",
+          "type": "String?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        }
+      ]
+    },
+    {
+      "type": "Resource",
+      "name": "path",
+      "parameters": [
+        {
+          "label": "_",
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "label": "source",
+          "name": "source",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "PromptContent",
+      "name": "file",
+      "parameters": [
+        {
+          "label": "_",
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "label": "source",
+          "name": "source",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "ExecutableInvocation",
+      "name": "executable",
+      "parameters": [
+        {
+          "label": "_",
+          "name": "executable",
+          "type": "String"
+        },
+        {
+          "label": "arguments",
+          "name": "arguments",
+          "default": "[]",
+          "type": "[String]"
+        },
+        {
+          "label": "environment",
+          "name": "environment",
+          "default": "[:]",
+          "type": "[String: RuntimeValue]"
+        },
+        {
+          "label": "workingDirectory",
+          "name": "workingDirectory",
+          "default": "nil",
+          "type": "Resource?"
+        }
+      ]
+    },
+    {
+      "type": "MCPTransport",
+      "name": "stdio",
+      "parameters": [
+        {
+          "label": "_",
+          "name": "executable",
+          "type": "String"
+        },
+        {
+          "label": "arguments",
+          "name": "arguments",
+          "default": "[]",
+          "type": "[String]"
+        },
+        {
+          "label": "environment",
+          "name": "environment",
+          "default": "[:]",
+          "type": "[String: RuntimeValue]"
+        },
+        {
+          "label": "workingDirectory",
+          "name": "workingDirectory",
+          "default": "nil",
+          "type": "Resource?"
+        }
+      ]
+    },
+    {
+      "type": "MCPTransport",
+      "name": "streamableHTTP",
+      "parameters": [
+        {
+          "label": "url",
+          "name": "url",
+          "type": "String"
+        },
+        {
+          "label": "headers",
+          "name": "headers",
+          "default": "[:]",
+          "type": "[String: RuntimeValue]"
+        }
+      ]
+    },
+    {
+      "type": "MCPTransport",
+      "name": "sse",
+      "parameters": [
+        {
+          "label": "url",
+          "name": "url",
+          "type": "String"
+        },
+        {
+          "label": "headers",
+          "name": "headers",
+          "default": "[:]",
+          "type": "[String: RuntimeValue]"
+        }
+      ]
+    },
+    {
+      "type": "PromptParameter",
+      "name": "parameter",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "description",
+          "name": "description",
+          "type": "String"
+        },
+        {
+          "label": "defaultValue",
+          "name": "defaultValue",
+          "default": "nil",
+          "type": "String?"
+        }
+      ]
+    },
+    {
+      "type": "PermissionRule",
+      "name": "allow",
+      "parameters": [
+        {
+          "label": "_",
+          "name": "operation",
+          "type": "PermissionOperation"
+        },
+        {
+          "label": "_",
+          "name": "pattern",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "type": "PermissionRule",
+      "name": "ask",
+      "parameters": [
+        {
+          "label": "_",
+          "name": "operation",
+          "type": "PermissionOperation"
+        },
+        {
+          "label": "_",
+          "name": "pattern",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "type": "PermissionRule",
+      "name": "deny",
+      "parameters": [
+        {
+          "label": "_",
+          "name": "operation",
+          "type": "PermissionOperation"
+        },
+        {
+          "label": "_",
+          "name": "pattern",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "type": "Component",
+      "name": "skills",
+      "parameters": [
+        {
+          "label": "source",
+          "name": "source",
+          "type": "String"
+        },
+        {
+          "label": "select",
+          "name": "select",
+          "default": ".all",
+          "type": "SkillSelection"
+        },
+        {
+          "label": "exclude",
+          "name": "exclude",
+          "default": "[]",
+          "type": "[String]"
+        },
+        {
+          "label": "mode",
+          "name": "mode",
+          "default": "nil",
+          "type": "InstallMode?"
+        },
+        {
+          "label": "overrides",
+          "name": "overrides",
+          "default": "[]",
+          "type": "[SkillOverride]"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        },
+        {
+          "label": "native",
+          "name": "native",
+          "default": "[:]",
+          "type": "NativeConfiguration"
+        }
+      ]
+    },
+    {
+      "type": "Component",
+      "name": "instructions",
+      "parameters": [
+        {
+          "label": "sections",
+          "name": "sections",
+          "default": "[]",
+          "type": "[SectionReference]"
+        },
+        {
+          "label": "chatGPT",
+          "name": "chatGPT",
+          "default": "[]",
+          "type": "[ChatGPTPrompt]"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        },
+        {
+          "label": "native",
+          "name": "native",
+          "default": "[:]",
+          "type": "NativeConfiguration"
+        }
+      ]
+    },
+    {
+      "type": "Component",
+      "name": "mcpServer",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "transport",
+          "name": "transport",
+          "type": "MCPTransport"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        },
+        {
+          "label": "native",
+          "name": "native",
+          "default": "[:]",
+          "type": "NativeConfiguration"
+        }
+      ]
+    },
+    {
+      "type": "Component",
+      "name": "hook",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "event",
+          "name": "event",
+          "type": "HookEvent"
+        },
+        {
+          "label": "run",
+          "name": "run",
+          "type": "ExecutableInvocation"
+        },
+        {
+          "label": "matcher",
+          "name": "matcher",
+          "default": "nil",
+          "type": "String?"
+        },
+        {
+          "label": "timeoutSeconds",
+          "name": "timeoutSeconds",
+          "default": "nil",
+          "type": "Int?"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        },
+        {
+          "label": "native",
+          "name": "native",
+          "default": "[:]",
+          "type": "NativeConfiguration"
+        }
+      ]
+    },
+    {
+      "type": "Component",
+      "name": "subagent",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "description",
+          "name": "description",
+          "type": "String"
+        },
+        {
+          "label": "prompt",
+          "name": "prompt",
+          "type": "PromptContent"
+        },
+        {
+          "label": "model",
+          "name": "model",
+          "default": "nil",
+          "type": "String?"
+        },
+        {
+          "label": "tools",
+          "name": "tools",
+          "default": "nil",
+          "type": "[String]?"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        },
+        {
+          "label": "native",
+          "name": "native",
+          "default": "[:]",
+          "type": "NativeConfiguration"
+        }
+      ]
+    },
+    {
+      "type": "Component",
+      "name": "command",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "description",
+          "name": "description",
+          "type": "String"
+        },
+        {
+          "label": "prompt",
+          "name": "prompt",
+          "type": "PromptContent"
+        },
+        {
+          "label": "parameters",
+          "name": "parameters",
+          "default": "[]",
+          "type": "[PromptParameter]"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        },
+        {
+          "label": "native",
+          "name": "native",
+          "default": "[:]",
+          "type": "NativeConfiguration"
+        }
+      ]
+    },
+    {
+      "type": "Component",
+      "name": "lspServer",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "run",
+          "name": "run",
+          "type": "ExecutableInvocation"
+        },
+        {
+          "label": "languages",
+          "name": "languages",
+          "type": "[String: String]"
+        },
+        {
+          "label": "initializationOptions",
+          "name": "initializationOptions",
+          "default": "[:]",
+          "type": "[String: ConfigurationValue]"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        },
+        {
+          "label": "native",
+          "name": "native",
+          "default": "[:]",
+          "type": "NativeConfiguration"
+        }
+      ]
+    },
+    {
+      "type": "Component",
+      "name": "permissions",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "rules",
+          "name": "rules",
+          "type": "[PermissionRule]"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        },
+        {
+          "label": "native",
+          "name": "native",
+          "default": "[:]",
+          "type": "NativeConfiguration"
+        }
+      ]
+    },
+    {
+      "type": "Component",
+      "name": "ignore",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "patterns",
+          "name": "patterns",
+          "type": "[String]"
+        },
+        {
+          "label": "purpose",
+          "name": "purpose",
+          "default": ".context",
+          "type": "IgnorePurpose"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        },
+        {
+          "label": "native",
+          "name": "native",
+          "default": "[:]",
+          "type": "NativeConfiguration"
+        }
+      ]
+    },
+    {
+      "type": "Component",
+      "name": "plugin",
+      "parameters": [
+        {
+          "label": "name",
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "label": "path",
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "label": "source",
+          "name": "source",
+          "type": "String"
+        },
+        {
+          "label": "mode",
+          "name": "mode",
+          "default": ".components",
+          "type": "PluginMode"
+        },
+        {
+          "label": "select",
+          "name": "select",
+          "default": "nil",
+          "type": "[ComponentKind]?"
+        },
+        {
+          "label": "exclude",
+          "name": "exclude",
+          "default": "[]",
+          "type": "[ComponentReference]"
+        },
+        {
+          "label": "agents",
+          "name": "agents",
+          "default": "nil",
+          "type": "[Agent]?"
+        },
+        {
+          "label": "condition",
+          "name": "condition",
+          "default": "nil",
+          "type": "Condition?"
+        },
+        {
+          "label": "native",
+          "name": "native",
+          "default": "[:]",
+          "type": "NativeConfiguration"
+        }
+      ]
+    }
+  ],
+  "literals": {
+    "SectionReference": {
+      "protocols": [
+        "ExpressibleByStringLiteral"
+      ],
+      "kinds": [
+        "string"
+      ],
+      "initializers": [
+        "public init(stringLiteral value: String) { self.init(value: .construct(type: \"SectionReference\", member: \"section\", fields: [\"name\": .text(value), \"source\": .none, \"condition\": .none])) }"
+      ]
+    },
+    "GroupReference": {
+      "protocols": [
+        "ExpressibleByStringLiteral"
+      ],
+      "kinds": [
+        "string"
+      ],
+      "initializers": [
+        "public init(stringLiteral value: String) { self.init(value: .construct(type: \"GroupReference\", member: \"group\", fields: [\"name\": .text(value), \"source\": .none, \"condition\": .none])) }"
+      ]
+    },
+    "PromptContent": {
+      "protocols": [
+        "ExpressibleByStringLiteral"
+      ],
+      "kinds": [
+        "string"
+      ],
+      "initializers": [
+        "public init(stringLiteral value: String) { self.init(value: .node(type: \"PromptContent\", member: \"literal\", fields: [\"value\": .text(value)])) }"
+      ]
+    },
+    "RuntimeValue": {
+      "protocols": [
+        "ExpressibleByStringLiteral"
+      ],
+      "kinds": [
+        "string"
+      ],
+      "initializers": [
+        "public init(stringLiteral value: String) { self = .literal(value) }"
+      ]
+    },
+    "SkillSelection": {
+      "protocols": [
+        "ExpressibleByArrayLiteral"
+      ],
+      "kinds": [
+        "array"
+      ],
+      "initializers": [
+        "public init(arrayLiteral elements: String...) { self.init(value: .node(type: \"SkillSelection\", member: \"names\", fields: [\"names\": elements.constructionValue])) }"
+      ]
+    },
+    "ConfigurationValue": {
+      "protocols": [
+        "ExpressibleByStringLiteral",
+        "ExpressibleByIntegerLiteral",
+        "ExpressibleByBooleanLiteral",
+        "ExpressibleByNilLiteral",
+        "ExpressibleByArrayLiteral",
+        "ExpressibleByDictionaryLiteral"
+      ],
+      "kinds": [
+        "string",
+        "integer",
+        "boolean",
+        "nil",
+        "array",
+        "dictionary"
+      ],
+      "initializers": [
+        "public init(stringLiteral value: String) { self = .string(value) }",
+        "public init(integerLiteral value: Int) { self = .integer(value) }",
+        "public init(booleanLiteral value: Bool) { self = .boolean(value) }",
+        "public init(nilLiteral: ()) { self = .null }",
+        "public init(arrayLiteral elements: ConfigurationValue...) { self = .array(elements) }",
+        "public init(dictionaryLiteral elements: (String, ConfigurationValue)...) { self = .object(Dictionary(elements, uniquingKeysWith: { _, last in last })) }"
+      ]
+    },
+    "Version": {
+      "protocols": [
+        "ExpressibleByStringLiteral"
+      ],
+      "kinds": [
+        "string"
+      ],
+      "initializers": []
+    }
+  }
+}
