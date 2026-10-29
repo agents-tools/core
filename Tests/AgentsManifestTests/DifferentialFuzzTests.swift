@@ -1,4 +1,5 @@
 import Foundation
+import ManifestTestSupport
 import Testing
 
 @testable import AgentsManifest
@@ -105,7 +106,7 @@ struct DifferentialFuzzTests {
     )
     for fixture in fuzzAdmissionCases() {
       let result = try probe(fixture.name, fixture.bytes, in: directory)
-      if result.report.stage == "parser" {
+      if result.report.stage == .parser {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
           .deletingLastPathComponent().deletingLastPathComponent()
         let retained = root.appendingPathComponent(".build/manifest-counterexamples")
@@ -122,7 +123,7 @@ struct DifferentialFuzzTests {
             candidate.removeSubrange(offset..<(offset + chunk))
             attempts += 1
             let check = try probe("minimize", candidate, in: directory)
-            if check.report.stage == "parser" {
+            if check.report.stage == .parser {
               minimized = candidate
               found = true
               break

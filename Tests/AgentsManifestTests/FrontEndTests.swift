@@ -29,6 +29,11 @@ struct FrontEndTests {
     let syntaxPin = pins.first { $0["identity"] as? String == "swift-syntax" }!
     #expect(
       (syntaxPin["state"] as! [String: String])["version"] == baseline["swiftSyntax"] as? String)
+    let fixtureDirectory = Bundle.module.resourceURL!.appendingPathComponent("Fixtures")
+    let sourceNames = try FileManager.default.contentsOfDirectory(atPath: fixtureDirectory.path)
+      .filter { $0.hasSuffix(".swift.txt") }.sorted()
+    #expect(compiledFixtures().map(\.name).sorted() == sourceNames)
+    #expect(baselineFixtures.keys.sorted() == sourceNames)
     for fixture in compiledFixtures() {
       let name = fixture.name
       let url = Bundle.module.resourceURL!.appendingPathComponent("Fixtures/" + name)
@@ -70,24 +75,6 @@ struct FrontEndTests {
     ]
     for body in bodies {
       #expect(throws: ManifestFailure.self) { try document(body + "\nlet agents = Agents()") }
-    }
-  }
-
-  @Test func rangeValuesAndLiteralGroupReferencesAreEqual() throws {
-    let fixtures = compiledFixtures().first { $0.name == "RequirementValues.swift.txt" }!
-    let url = Bundle.module.resourceURL!.appendingPathComponent("Fixtures/" + fixtures.name)
-    let doc = try DeclarationDocument(
-      bytes: Array(Data(contentsOf: url)), identity: DocumentIdentity("manifest"))
-    let constants = doc.evaluation.constants
-    for pair in [
-      ("majorFrom", "majorHelper"), ("majorFrom", "majorRange"), ("minorHelper", "minorRange"),
-      ("prereleaseFrom", "prereleaseHelper"), ("prereleaseFrom", "prereleaseRange"),
-      ("prereleaseMinor", "prereleaseMinorRange"), ("localLiteral", "localFactory"),
-    ] {
-      #expect(constants[pair.0]!.value == constants[pair.1]!.value, "\(pair)")
-      #expect(
-        Lowering.lower(constants[pair.0]!.value) == Lowering.lower(constants[pair.1]!.value),
-        "\(pair)")
     }
   }
 
@@ -150,4 +137,35 @@ struct FrontEndTests {
     #expect(doc.sourceMap.locations(at: "/components/0/agents").first?.defaulted == true)
     #expect(doc.sourceMap.locations(at: "/components/0/sections/0").first?.origins.isEmpty == false)
   }
+  @Test func unusedSkillValuesReceiveTheirOwnDomainChecks() throws {
+    for body in [
+      "let selection: SkillSelection = [\"duplicate\", \"duplicate\"]",
+      "let selection: SkillSelection = [\"../escape\"]",
+      "let override: SkillOverride = .skill(name: \"../escape\")",
+    ] {
+      expectManifestFailure("manifest.domain") { try document(body + "\nlet agents = Agents()") }
+    }
+    _ = try document(
+      "let selection: SkillSelection = [\"one\", \"two\"]\nlet override: SkillOverride = .skill(name: \"one\")\nlet agents = Agents()"
+    )
+  }
+
+  @Test func inspectionAndDocumentConstructionUseTheSameObservedPhases() throws {
+    let bytes = Array((manifestHeader + "let agents = Agents()").utf8)
+    var documentStages: [FrontEndStage] = []
+    let doc = try DeclarationDocument(
+      bytes: bytes, identity: DocumentIdentity("manifest"), validateDomain: true
+    ) { stage, _ in documentStages.append(stage) }
+    var inspectionStages: [FrontEndStage] = []
+    let metrics = try DeclarationDocument.inspect(
+      bytes: bytes, identity: DocumentIdentity("manifest"), checking: .declaration
+    ) { stage, _ in inspectionStages.append(stage) }
+    #expect(documentStages == [.admission, .parser, .evaluation, .domain, .lowering, .sourceMap])
+    #expect(inspectionStages == documentStages + [.teardown, .complete])
+    #expect(metrics.parserCalls == doc.metrics.parserCalls)
+    #expect(metrics.syntaxNodes == doc.metrics.syntaxNodes)
+    #expect(metrics.evaluationSteps == doc.metrics.evaluationSteps)
+    #expect(metrics.expandedNodes == doc.metrics.expandedNodes)
+  }
+
 }

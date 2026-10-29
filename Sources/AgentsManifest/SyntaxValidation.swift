@@ -3,14 +3,14 @@ import Foundation
 import SwiftParser
 import SwiftSyntax
 
-package struct CheckedSyntax: Sendable {
-  package let tree: SourceFileSyntax
-  package let metrics: FrontEndMetrics
+struct CheckedSyntax: Sendable {
+  let tree: SourceFileSyntax
+  let metrics: FrontEndMetrics
 }
 
-package enum SyntaxValidation {
+enum SyntaxValidation {
   /// All-nodes view, with cached lengths only until the complete tree fits.
-  package static func guardTree(_ root: Syntax, source: SourceText) throws -> (
+  static func guardTree(_ root: Syntax, source: SourceText) throws -> (
     nodes: Int, depth: Int
   ) {
     var pending: [(Syntax, Int, Int)] = [(root, 1, 0)]
@@ -18,15 +18,19 @@ package enum SyntaxValidation {
     var count = 0
     var maximum = 0
     while let (node, depth, offset) = pending.popLast() {
-      if depth > 128 { throw source.failure("manifest.limit", "syntax tree depth", offset) }
+      if depth > ManifestLimits.Syntax.depth {
+        throw source.failure("manifest.limit", "syntax tree depth", offset)
+      }
       count += 1
       maximum = max(maximum, depth)
       var childOffset = offset
       for child in node.children(viewMode: .all) {
-        if scheduled == 100_000 {
+        if scheduled == ManifestLimits.Syntax.nodes {
           throw source.failure("manifest.limit", "syntax tree nodes", childOffset)
         }
-        if depth == 128 { throw source.failure("manifest.limit", "syntax tree depth", childOffset) }
+        if depth == ManifestLimits.Syntax.depth {
+          throw source.failure("manifest.limit", "syntax tree depth", childOffset)
+        }
         scheduled += 1
         pending.append((child, depth + 1, childOffset))
         childOffset += child.totalLength.utf8Length
@@ -35,14 +39,14 @@ package enum SyntaxValidation {
     return (count, maximum)
   }
 
-  package static func parse(
+  static func parse(
     _ source: SourceText, admission: Admission, metrics initial: FrontEndMetrics
   ) throws -> CheckedSyntax {
     var metrics = initial
     let clock = ContinuousClock()
     let parseStart = clock.now
     let tree = source.bytes.withUnsafeBufferPointer {
-      Parser.parse(source: $0, maximumNestingLevel: 20)
+      Parser.parse(source: $0, maximumNestingLevel: ManifestLimits.Syntax.parserNesting)
     }
     metrics.parserCalls += 1
     metrics.parsingSeconds = seconds(parseStart.duration(to: clock.now))
@@ -52,11 +56,13 @@ package enum SyntaxValidation {
       metrics.syntaxNodes = bounds.nodes
       metrics.syntaxDepth = bounds.depth
     } catch let failure as ManifestFailure {
+      metrics.guardSeconds = seconds(guardStart.duration(to: clock.now))
       throw ManifestFailure(failure.diagnostics[0], metrics: metrics)
     }
     metrics.guardSeconds = seconds(guardStart.duration(to: clock.now))
     let inspectionStart = clock.now
     if tree.hasError {
+      metrics.inspectionSeconds = seconds(inspectionStart.duration(to: clock.now))
       throw ManifestFailure(
         ManifestDiagnostic(
           code: "manifest.syntax", message: "SwiftParser disagreed with grammar admission",
@@ -64,6 +70,7 @@ package enum SyntaxValidation {
     }
     // This independent projection is also a dependency-upgrade regression gate.
     let actual = projection(Syntax(tree), source: source)
+    metrics.inspectionSeconds = seconds(inspectionStart.duration(to: clock.now))
     guard actual == admission.projection, metrics.syntaxNodes <= admission.reservation else {
       let offset = zip(actual, admission.projection).first(where: { $0 != $1 })?.0.start ?? 0
       throw ManifestFailure(
@@ -76,7 +83,7 @@ package enum SyntaxValidation {
     return CheckedSyntax(tree: tree, metrics: metrics)
   }
 
-  package static func projection(_ root: Syntax, source: SourceText) -> [ProjectionEvent] {
+  static func projection(_ root: Syntax, source: SourceText) -> [ProjectionEvent] {
     var pending = [root]
     var events: [ProjectionEvent] = []
     func emit(_ node: Syntax, _ kind: String, _ detail: String = "") {
@@ -142,6 +149,6 @@ package enum SyntaxValidation {
   }
 }
 
-package func seconds(_ duration: Duration) -> Double {
+func seconds(_ duration: Duration) -> Double {
   Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
 }

@@ -166,9 +166,7 @@ package struct CanonicalPrinter {
     switch value {
     case .array, .object: return true
     case .node(let type, let member, _):
-      return ![
-        "Agent", "Scope", "Platform", "InstallMode", "IgnorePurpose", "PluginMode", "ComponentKind",
-      ].contains(type)
+      return Vocabulary.scalarValues[type] == nil
         && !(type == "SkillSelection" && member == "all")
     case .range: return true
     default: return false

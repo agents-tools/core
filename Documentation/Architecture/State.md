@@ -1,25 +1,5 @@
 # State and Source Cache
 
-## Manifest Front End
-
-`AgentsManifest.DeclarationDocument` accepts a supplied `Agents.swift` snapshot
-and produces `AgentsCore.DeclarationIR`, diagnostics and `DeclarationSourceMap`.
-The IR distinguishes inherited Optional values from explicit empty recipients,
-retains ordered section streams, and keeps conditions and group references
-symbolic. Span and provenance values contain stable document/source coordinates;
-cache paths and deployment targets are not declaration identity.
-
-A prepared `DocumentChange` contains its original byte digest, disjoint source
-patches, candidate bytes/digest, expected complete declaration, impacted references
-and semantic delta. It is an input to state orchestration, not a second state
-store or a file-saving API. Parsing and edit preparation perform no deployment,
-source discovery, secret lookup or filesystem validation.
-
-The storage and lifecycle APIs below continue to own `agents.json` and the current
-lock format. They do not yet load or publish `DocumentChange`. Manifest selection,
-migration detection, transactional source publication and recovery belong to the
-state integration; an accepted document alone does not authorize publication.
-
 ## Scope Locations
 
 | Scope | Declaration | Lock | Watch state | Cache |

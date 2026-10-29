@@ -1,27 +1,8 @@
 import AgentsCore
 import AgentsManifest
 import Foundation
+import ManifestTestSupport
 import Testing
-
-#if DEBUG
-  let probeConfiguration = "debug"
-  let probeWatchdogSeconds = 30.0
-#else
-  let probeConfiguration = "release"
-  let probeWatchdogSeconds = 2.0
-#endif
-
-struct ProbeReport: Codable {
-  let configuration: String
-  let status: String
-  let stage: String
-  let offset: Int
-  let line: Int
-  let column: Int
-  let message: String
-  let metrics: FrontEndMetrics
-  let peakMemoryBytes: UInt64
-}
 
 struct ProbeResult: Codable {
   let name: String
@@ -86,7 +67,8 @@ func probe(
     #endif
   }
   process.waitUntilExit()
-  let elapsed = seconds(start.duration(to: clock.now))
+  let duration = start.duration(to: clock.now).components
+  let elapsed = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
   let errorText = (try? String(contentsOf: errors, encoding: .utf8)) ?? ""
   try #require(
     !timedOut,
@@ -100,9 +82,9 @@ func probe(
   #expect(report.configuration == probeConfiguration, "\(name): child build configuration")
   #expect(report.peakMemoryBytes < 536_870_912, "\(name): peak memory \(report.peakMemoryBytes)")
   #expect(report.status != "unexpected", "\(report.message)")
-  if report.stage == "admission" { #expect(report.metrics.parserCalls == 0) }
+  if report.stage == .admission { #expect(report.metrics.parserCalls == 0) }
   if report.status == "accepted" {
-    #expect(report.stage == "complete")
+    #expect(report.stage == .complete)
     #expect(report.metrics.parserCalls == 1)
     #expect(report.metrics.syntaxNodes <= report.metrics.syntaxReservation)
   }

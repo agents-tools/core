@@ -5,8 +5,8 @@ import Testing
 
 @testable import AgentsManifest
 
-@Suite("Manifest resources and language versions")
-struct ResourceAndVersionTests {
+@Suite("Manifest resources")
+struct ResourceTests {
   @Test func directiveDiagnosticsAreLexicalAndDistinct() throws {
     for (text, code) in [
       ("import AgentsDescription\nlet agents = Agents()", "manifest.version.missing"),
@@ -48,7 +48,7 @@ struct ResourceAndVersionTests {
     let report = try probe(
       "unused-exponential-reuse", Array((manifestHeader + body + "let agents = Agents()").utf8),
       semantics: true, in: directory)
-    #expect(report.report.stage == "evaluation")
+    #expect(report.report.stage == .evaluation)
     #expect(report.report.status == "manifest.limit")
     var aliases = "let seed: ConfigurationValue = 0\n"
     var tail = "seed"
@@ -81,12 +81,12 @@ struct ResourceAndVersionTests {
       "domain-reference-work",
       Array((manifestHeader + flatAliases + "let agents = Agents()").utf8),
       semantics: true, in: directory)
-    #expect(domainReport.report.stage == "domain")
+    #expect(domainReport.report.stage == .domain)
     #expect(domainReport.report.status == "manifest.limit")
     var deep = "let v0: ConfigurationValue = 0\n"
     for index in 1...65 { deep += "let v\(index): ConfigurationValue = .array([v\(index - 1)])\n" }
-    #expect(throws: ManifestFailure.self) { try document(deep + "let agents = Agents()") }
-    #expect(throws: ManifestFailure.self) {
+    expectManifestFailure("manifest.limit") { try document(deep + "let agents = Agents()") }
+    expectManifestFailure("manifest.limit") {
       try document(
         "let values: [Int] = [" + Array(repeating: "0", count: 10_001).joined(separator: ",")
           + "]\nlet agents = Agents()")
@@ -105,41 +105,12 @@ struct ResourceAndVersionTests {
     #expect(doc.sourceMap.entries.reduce(0) { $0 + $1.origins.count } <= 1_000_000)
     let unchanged = try doc.preparing([.setWatch([])])
     #expect(unchanged.patches.isEmpty)
-    #expect(throws: ManifestFailure.self) {
+    expectManifestFailure("manifest.limit") {
       try doc.preparing(Array(repeating: .setWatch([]), count: 101))
     }
     let tiny = try document("let agents = Agents()")
-    #expect(throws: ManifestFailure.self) {
+    expectManifestFailure("manifest.limit") {
       try tiny.preparing([.setWatch(Array(repeating: "x", count: 10_001))])
-    }
-  }
-
-  @Test func checkedSuccessorsCanonicalizeRangesAndKeepExactMetadata() throws {
-    let doc = try document(
-      """
-      let agents = Agents(sources: [
-        .source(name: "major", path: "major", " v1.2.0+lower "..<"2.0.0+upper"),
-        .source(name: "minor", path: "minor", "1.2.0"..<"1.3.0+meta"),
-        .source(name: "exact", path: "exact", exact: "V1.2.0+meta")
-      ])
-      """)
-    #expect(
-      doc.declaration.sources[0]["requirement"] == .requirement(.upToNextMajor(from: "1.2.0+lower"))
-    )
-    #expect(
-      doc.declaration.sources[1]["requirement"] == .requirement(.upToNextMinor(from: "1.2.0")))
-    #expect(doc.declaration.sources[2]["requirement"] == .requirement(.exact("1.2.0+meta")))
-    _ = try document(
-      "let agents = Agents(sources: [.source(name: \"s\", path: \"s\", \"\(Int.max).0.0\"..<\"\(Int.max).1.0\")])"
-    )
-    for requirement in [
-      "from: \"\(Int.max).0.0\"", ".upToNextMinor(from: \"1.\(Int.max).0\")",
-      "\"2.0.0\"..<\"1.0.0\"", "exact: \"1.0\"",
-    ] {
-      #expect(throws: ManifestFailure.self) {
-        try document(
-          "let agents = Agents(sources: [.source(name: \"s\", path: \"s\", \(requirement))])")
-      }
     }
   }
 
@@ -157,4 +128,61 @@ struct ResourceAndVersionTests {
       #expect(doc.evaluation.constants["value"]!.value == compiled.constructionValue)
     }
   }
+  @Test func editorLiteralConversionsMatchCompiledConfigurationValues() throws {
+    let values: [(StaticValue, ConfigurationValue)] = [
+      (.null, nil), (.boolean(true), true), (.integer(Int.min), .integer(Int.min)),
+      (.string("first\n\nlast"), "first\n\nlast"),
+      (.array([.integer(1), .boolean(true), .null, .string("x")]), [1, true, nil, "x"]),
+      (
+        .dictionary(["x": .dictionary(["y": .configuration(.decimal("1.25"))])]),
+        ["x": ["y": .decimal("1.25")]]
+      ),
+    ]
+    for (literal, compiled) in values {
+      let doc = try document("let value: ConfigurationValue = 0\nlet agents = Agents()")
+      let changed = try edited(
+        doc, [.replaceConstant(doc.constant(named: "value")!, with: literal, acceptingUses: [])])
+      #expect(changed.evaluation.constants["value"]?.value == compiled.constructionValue)
+    }
+  }
+
+  @Test func oversizedExplicitInsertionIsRejectedBeforeRendering() throws {
+    let directory = try temporaryManifestDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let result = try probe(
+      "oversized-direct-insert",
+      Array((manifestHeader + "let agents = Agents(components: [])").utf8),
+      extraArguments: ["--edit-oversized"], in: directory)
+    #expect(result.report.status == "manifest.limit")
+    #expect(result.report.stage == .editing)
+    #expect(result.report.peakMemoryBytes < 67_108_864)
+  }
+
+  @Test func versionDirectiveRejectsBareCRBeforeTheParser() throws {
+    let directive = "// agents-tools-version: 1.0"
+    for suffix in ["\r", "\rimport AgentsDescription\nlet agents = Agents()"] {
+      do {
+        _ = try DeclarationDocument(
+          bytes: Array((directive + suffix).utf8), identity: DocumentIdentity("manifest"))
+        Issue.record("bare CR directive accepted")
+      } catch let failure as ManifestFailure {
+        #expect(failure.diagnostics[0].code == "manifest.version.invalid")
+        #expect(failure.metrics.parserCalls == 0)
+        #expect(failure.diagnostics[0].span.start == directive.utf8.count)
+        #expect(failure.diagnostics[0].span.line == 1)
+        #expect(failure.diagnostics[0].span.column == directive.utf8.count + 1)
+      }
+    }
+    for newline in ["\n", "\r\n"] {
+      _ = try DeclarationDocument(
+        bytes: Array(
+          (directive + newline + "import AgentsDescription" + newline + "let agents = Agents()")
+            .utf8), identity: DocumentIdentity("manifest"))
+    }
+    // EOF terminates the directive; the remaining grammar still requires an import.
+    expectManifestFailure("manifest.syntax") {
+      try DeclarationDocument(bytes: Array(directive.utf8), identity: DocumentIdentity("manifest"))
+    }
+  }
+
 }

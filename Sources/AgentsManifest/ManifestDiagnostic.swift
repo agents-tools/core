@@ -24,10 +24,15 @@ public struct ManifestDiagnostic: Sendable, Equatable {
 
 public struct ManifestFailure: Error, Sendable {
   public let diagnostics: [ManifestDiagnostic]
-  public let metrics: FrontEndMetrics
-  package init(_ diagnostic: ManifestDiagnostic, metrics: FrontEndMetrics = FrontEndMetrics()) {
+  package let metrics: FrontEndMetrics
+  package let stage: FrontEndStage
+  package init(
+    _ diagnostic: ManifestDiagnostic, metrics: FrontEndMetrics = FrontEndMetrics(),
+    stage: FrontEndStage = .admission
+  ) {
     diagnostics = [diagnostic]
     self.metrics = metrics
+    self.stage = stage
   }
 }
 
@@ -40,70 +45,23 @@ public struct SourcePatch: Sendable, Equatable {
   }
 }
 
-public struct FrontEndMetrics: Sendable, Codable {
-  public package(set) var parserCalls = 0
-  public package(set) var tokens = 0
-  public package(set) var syntaxReservation = 0
-  public package(set) var syntaxNodes = 0
-  public package(set) var syntaxDepth = 0
-  public package(set) var evaluationSteps = 0
-  public package(set) var expandedNodes = 0
-  public package(set) var decodedBytes = 0
-  public package(set) var admissionSeconds = 0.0
-  public package(set) var parsingSeconds = 0.0
-  public package(set) var guardSeconds = 0.0
-  public package(set) var inspectionSeconds = 0.0
-  public package(set) var evaluationSeconds = 0.0
-  public package(set) var domainSeconds = 0.0
-  public package(set) var loweringSeconds = 0.0
-  public package(set) var sourceMapSeconds = 0.0
-  public package(set) var teardownSeconds = 0.0
-  public init() {}
-}
-
-package struct SourceText: Sendable {
-  package let bytes: [UInt8]
-  package let identity: DocumentIdentity
-  private let lines: [Int]
-
-  package init(_ bytes: [UInt8], identity: DocumentIdentity) {
-    self.bytes = bytes
-    self.identity = identity
-    var starts = [0]
-    var i = 0
-    while i < min(bytes.count, 2_097_153) {
-      if bytes[i] == 13 {
-        if i + 1 < bytes.count && bytes[i + 1] == 10 { i += 1 }
-        starts.append(i + 1)
-      } else if bytes[i] == 10 {
-        starts.append(i + 1)
-      }
-      i += 1
-    }
-    lines = starts
-  }
-
-  package func span(_ range: Range<Int>) -> SourceSpan {
-    let start = min(max(0, range.lowerBound), bytes.count)
-    var lo = 0
-    var hi = lines.count
-    while lo + 1 < hi {
-      let mid = (lo + hi) / 2
-      if lines[mid] <= start { lo = mid } else { hi = mid }
-    }
-    return SourceSpan(
-      document: identity, start: start, end: min(max(start, range.upperBound), bytes.count),
-      line: lo + 1, column: start - lines[lo] + 1)
-  }
-
-  package func failure(_ code: String, _ message: String, _ offset: Int, end: Int? = nil)
-    -> ManifestFailure
-  {
-    ManifestFailure(
-      ManifestDiagnostic(code: code, message: message, span: span(offset..<(end ?? offset))))
-  }
-
-  package func spelling(_ range: Range<Int>) -> String {
-    String(decoding: bytes[range], as: UTF8.self)
-  }
+package struct FrontEndMetrics: Sendable, Codable {
+  package var parserCalls = 0
+  package var tokens = 0
+  package var syntaxReservation = 0
+  package var syntaxNodes = 0
+  package var syntaxDepth = 0
+  package var evaluationSteps = 0
+  package var expandedNodes = 0
+  package var decodedBytes = 0
+  package var admissionSeconds = 0.0
+  package var parsingSeconds = 0.0
+  package var guardSeconds = 0.0
+  package var inspectionSeconds = 0.0
+  package var evaluationSeconds = 0.0
+  package var domainSeconds = 0.0
+  package var loweringSeconds = 0.0
+  package var sourceMapSeconds = 0.0
+  package var teardownSeconds = 0.0
+  package init() {}
 }

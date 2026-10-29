@@ -53,14 +53,18 @@ let package = Package(
     .testTarget(
       name: "AgentsCoreTests", dependencies: ["AgentsCore", "StateTestProcess", "CPlatform"]),
     .testTarget(name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions"]),
+    .target(
+      name: "ManifestTestSupport", dependencies: ["AgentsManifest"],
+      path: "Tests/ManifestTestSupport"),
     .executableTarget(
       name: "ManifestTestProcess",
-      dependencies: ["AgentsManifest", "AgentsCore", "AgentsDescription"],
+      dependencies: ["AgentsManifest", "AgentsCore", "AgentsDescription", "ManifestTestSupport"],
       path: "Tests/ManifestTestProcess"),
     .testTarget(
       name: "AgentsManifestTests",
       dependencies: [
         "AgentsManifest", "AgentsDescription", "AgentsCore", "ManifestTestProcess",
+        "ManifestTestSupport",
         .product(name: "SwiftParser", package: "swift-syntax"),
         .product(name: "SwiftSyntax", package: "swift-syntax"),
       ],

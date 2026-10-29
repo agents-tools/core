@@ -51,6 +51,10 @@ Both [agents](https://github.com/agents-tools/cli) and
 [skill](https://github.com/skill-cli/cli) consume this package. Consumers own
 command parsing, terminal output and executable distribution.
 
+- **AgentsDescription**: standard-library-only types for authoring the Swift
+  manifest construction vocabulary.
+- **AgentsManifest**: parses and statically evaluates manifest snapshots into
+  declaration IR and source maps, and prepares byte-preserving edits.
 - **AgentsCore**: source parsing and identity, Git requirements, declaration and
   resolved-state models, atomic state storage, bare mirrors and immutable source
   materializations, watch subscriptions, hashing, path safety, process execution
@@ -97,6 +101,8 @@ targets: [
   .executableTarget(
     name: "YourCLI",
     dependencies: [
+      .product(name: "AgentsDescription", package: "core"),
+      .product(name: "AgentsManifest", package: "core"),
       .product(name: "AgentsCore", package: "core"),
       .product(name: "AgentsSkills", package: "core"),
       .product(name: "AgentsInstructions", package: "core"),
@@ -280,6 +286,9 @@ Read the [organization contributing guide][contributing] and the
 [development checks](#development) for the candidate you submit.
 
 ### Development
+
+Manifest generation checks require `python3` and `swift format` from the toolchain.
+They regenerate into a temporary directory and leave checked-in sources unchanged.
 
 Run the package's build, test, release and formatting checks:
 

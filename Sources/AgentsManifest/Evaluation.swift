@@ -1,15 +1,15 @@
 import AgentsDescription
 
-package struct Evaluation: Sendable {
-  package let root: EvaluatedValue
-  package let constants: [String: EvaluatedValue]
-  package let expressions: [Int: EvaluatedValue]
-  package let references: [String: [Int]]
-  package let steps: Int
-  package let total: ValueCost
+struct Evaluation: Sendable {
+  let root: EvaluatedValue
+  let constants: [String: EvaluatedValue]
+  let expressions: [Int: EvaluatedValue]
+  let references: [String: [Int]]
+  let steps: Int
+  let total: ValueCost
 }
 
-package final class Evaluator {
+final class Evaluator {
   private let source: SourceText
   private let admission: Admission
   private let replacements: [String: StaticValue]
@@ -20,8 +20,7 @@ package final class Evaluator {
   private var frames = 0
   private var total = ValueCost(nodes: 0, strings: 0, encoded: 0, depth: 0, origins: 0)
 
-  package init(source: SourceText, admission: Admission, replacements: [String: StaticValue] = [:])
-  {
+  init(source: SourceText, admission: Admission, replacements: [String: StaticValue] = [:]) {
     self.source = source
     self.admission = admission
     self.replacements = replacements
@@ -33,7 +32,7 @@ package final class Evaluator {
     )
   }
   private func charge(_ amount: Int = 1, at id: Int) throws {
-    guard amount <= 100_000 - steps else {
+    guard amount <= ManifestLimits.Evaluation.steps - steps else {
       throw fail("manifest.limit", "evaluation work steps", id)
     }
     steps += amount
@@ -44,7 +43,7 @@ package final class Evaluator {
     }
   }
 
-  package func evaluate() throws -> Evaluation {
+  func evaluate() throws -> Evaluation {
     for declaration in admission.declarations {
       if constants[declaration.name] != nil || Vocabulary.typeNames.contains(declaration.name) {
         throw source.failure(
@@ -74,7 +73,7 @@ package final class Evaluator {
     }
     guard let root = constants["agents"], root.type == .named("Agents"),
       let declaration = admission.declarations.first(where: { $0.name == "agents" }),
-      admission.nodes[declaration.expression].kind == "call",
+      admission.nodes[declaration.expression].kind == .call,
       admission.nodes[declaration.expression].text == "Agents"
     else {
       throw source.failure(
@@ -89,36 +88,39 @@ package final class Evaluator {
     try charge(at: id)
     frames += 1
     defer { frames -= 1 }
-    guard frames <= 64 else { throw fail("manifest.limit", "evaluation frames", id) }
+    guard frames <= ManifestLimits.Evaluation.frames else {
+      throw fail("manifest.limit", "evaluation frames", id)
+    }
     let node = admission.nodes[id]
     let expected = context?.unwrapped
     let result: EvaluatedValue
-    if node.kind == "nil", case .optional = context {
+    if node.kind == .nilLiteral, case .optional = context {
       result = EvaluatedValue(type: context!, value: .none, cost: ValueCost(), syntax: id)
     } else {
       switch node.kind {
-      case "group":
+      case .group:
         let child = try evaluate(node.children[0], context: context)
         result = EvaluatedValue(
-          type: child.type, value: child.value, cost: child.cost, syntax: id, referent: child)
-      case "string":
+          type: child.type, value: child.value, cost: child.cost, syntax: id, referent: child,
+          representation: .reference)
+      case .string:
         result = try literal(
-          .text(node.text), kind: "string", inferred: "String", context: expected, id: id)
-      case "integer", "negative":
-        let raw = (node.kind == "negative" ? "-" : "") + node.text.filter { $0 != "_" }
+          .text(node.text), inferred: .named("String"), context: expected, id: id)
+      case .integer, .negative:
+        let raw = (node.kind == .negative ? "-" : "") + node.text.filter { $0 != "_" }
         guard let integer = Int(raw) else {
           throw fail("manifest.type", "integer literal must fit signed 64-bit Int", id)
         }
         result = try literal(
-          .integer(integer), kind: "integer", inferred: "Int", context: expected, id: id)
-      case "boolean":
+          .integer(integer), inferred: .named("Int"), context: expected, id: id)
+      case .boolean:
         result = try literal(
-          .boolean(node.text == "true"), kind: "boolean", inferred: "Bool", context: expected,
+          .boolean(node.text == "true"), inferred: .named("Bool"), context: expected,
           id: id)
-      case "nil":
-        result = try literal(.none, kind: "nil", inferred: "", context: expected, id: id)
-      case "array", "dictionary": result = try collection(id, context: expected)
-      case "sequence":
+      case .nilLiteral:
+        result = try literal(.none, inferred: .untyped, context: expected, id: id)
+      case .array, .dictionary: result = try collection(id, context: expected)
+      case .sequence:
         var arrayType = expected
         if let expected, case .array = expected {
         } else if expected != nil {
@@ -134,7 +136,9 @@ package final class Evaluator {
           }
           arrayType = value.type
           count += value.elementsForUse.count
-          if count > 10_000 { throw fail("manifest.limit", "concatenation entries", id) }
+          if count > ManifestLimits.Values.entries {
+            throw fail("manifest.limit", "concatenation entries", id)
+          }
           // Cost is combined before copying any concatenated elements.
           operands.append(value)
           costs.append(contentsOf: value.elementsForUse.map(\.cost))
@@ -146,7 +150,7 @@ package final class Evaluator {
         result = EvaluatedValue(
           type: arrayType!, value: .array(elements.map(\.value)), cost: cost, syntax: id,
           elements: elements)
-      case "range":
+      case .range:
         let lower = try evaluate(node.children[0], context: .named("Version"))
         let upper = try evaluate(node.children[1], context: .named("Version"))
         guard case .version(let l) = lower.value, case .version(let u) = upper.value, l < u else {
@@ -157,13 +161,13 @@ package final class Evaluator {
         result = EvaluatedValue(
           type: .named("VersionRange"), value: .range(l..<u), cost: cost, syntax: id,
           elements: [lower, upper])
-      case "name", "call":
-        if node.kind == "name", !node.text.contains(".") {
+      case .name, .call:
+        if node.kind == .name, !node.text.contains(".") {
           try charge(at: id)
           guard let bound = constants[node.text] else {
             throw fail("manifest.reference", "unknown, forward or self reference: \(node.text)", id)
           }
-          if bound.referenceDepth >= 63 {
+          if bound.referenceDepth >= ManifestLimits.Evaluation.frames - 1 {
             throw fail("manifest.limit", "active reference frames", id)
           }
           references[node.text, default: []].append(id)
@@ -171,11 +175,11 @@ package final class Evaluator {
           cost.origins = ValueCost.add(cost.origins, cost.nodes)
           try check(cost, at: id)
           result = EvaluatedValue(
-            type: bound.type, value: bound.value, cost: cost, syntax: id, referent: bound)
+            type: bound.type, value: bound.value, cost: cost, syntax: id, referent: bound,
+            representation: .reference)
         } else {
           result = try call(id, context: expected)
         }
-      default: throw fail("manifest.syntax", "unhandled admitted production", id)
       }
     }
     try check(result.cost, at: id)
@@ -190,65 +194,34 @@ package final class Evaluator {
   }
 
   private func literal(
-    _ value: ConstructionValue, kind: String, inferred: String, context: ConstructionType?, id: Int
+    _ value: ConstructionValue, inferred: ConstructionType, context: ConstructionType?, id: Int
   ) throws -> EvaluatedValue {
-    let type = context ?? .named(inferred)
+    let type = context ?? inferred
     let converted: ConstructionValue
-    if type == .named(inferred), !inferred.isEmpty {
-      converted = value
-    } else if case .named(let name) = type, Vocabulary.literalTypes[name]?.contains(kind) == true {
-      switch name {
-      case "Version":
-        guard case .text(let text) = value else {
-          throw fail("manifest.type", "version requires a string literal", id)
-        }
-        let version = Version(stringLiteral: text)
-        guard version.valid else { throw fail("manifest.domain", "invalid semantic version", id) }
-        converted = .version(version)
-      case "SectionReference", "GroupReference":
-        converted = .node(
-          type: name, member: name == "SectionReference" ? "section" : "group",
-          fields: ["name": value, "source": .none, "condition": .none])
-      case "PromptContent", "RuntimeValue":
-        converted = .node(type: name, member: "literal", fields: ["value": value])
-      case "ConfigurationValue":
-        converted = .node(
-          type: name, member: kind == "nil" ? "null" : kind,
-          fields: kind == "nil" ? [:] : ["value": value])
-      default: throw fail("manifest.type", "unsupported literal conversion", id)
-      }
-    } else {
-      throw fail("manifest.type", "literal needs a compatible context", id)
+    do {
+      converted = try LiteralConversion.convert(value, to: type)
+    } catch let error as LiteralConversionError {
+      throw fail(error.code, error.message, id)
     }
     return EvaluatedValue(
-      type: type, value: converted, cost: constructionCost(converted), syntax: id)
+      type: type, value: converted, cost: constructionCost(converted), syntax: id,
+      representation: .scalarLiteral)
   }
 
   private func collection(_ id: Int, context: ConstructionType?) throws -> EvaluatedValue {
     let node = admission.nodes[id]
-    let dictionary = node.kind == "dictionary"
-    if node.children.count > 10_000 { throw fail("manifest.limit", "collection entries", id) }
-    let wrapper: String?
-    var elementType: ConstructionType?
-    switch context {
-    case .array(let type) where !dictionary:
-      elementType = type
-      wrapper = nil
-    case .dictionary(let type) where dictionary:
-      elementType = type
-      wrapper = nil
-    case .named("NativeConfiguration") where dictionary:
-      elementType = .dictionary(.named("ConfigurationValue"))
-      wrapper = nil
-    case .named("ConfigurationValue"):
-      elementType = .named("ConfigurationValue")
-      wrapper = "ConfigurationValue"
-    case .named("SkillSelection") where !dictionary:
-      elementType = .named("String")
-      wrapper = "SkillSelection"
-    case nil: wrapper = nil
-    default: throw fail("manifest.type", "collection is incompatible with contextual type", id)
+    let dictionary = node.kind == .dictionary
+    if node.children.count > ManifestLimits.Values.entries {
+      throw fail("manifest.limit", "collection entries", id)
     }
+    var elementType: ConstructionType?
+    do {
+      elementType = try LiteralConversion.elementType(
+        for: dictionary ? .dictionary : .array, context: context)
+    } catch let error as LiteralConversionError {
+      throw fail(error.code, error.message, id)
+    }
+    let wrapped = context.map { if case .named = $0 { true } else { false } } ?? false
     var values: [EvaluatedValue] = []
     var fields: [String: EvaluatedValue] = [:]
     var keySpans: [String: Range<Int>] = [:]
@@ -273,7 +246,7 @@ package final class Evaluator {
     }
     var cost = ValueCost.container(
       values.map(\.cost), keys: dictionary ? node.keys.map { $0.decoded! } : [])
-    if wrapper != nil {
+    if wrapped {
       cost.nodes += 1
       cost.depth += 1
       cost.encoded += 32
@@ -281,21 +254,17 @@ package final class Evaluator {
     try check(cost, at: id)
     let payload: ConstructionValue =
       dictionary ? .object(fields.mapValues(\.value)) : .array(values.map(\.value))
+    let inferred: ConstructionType = dictionary ? .dictionary(elementType) : .array(elementType)
+    let type = context ?? inferred
     let value: ConstructionValue
-    let type: ConstructionType
-    if let wrapper {
-      type = .named(wrapper)
-      value = .node(
-        type: wrapper,
-        member: wrapper == "SkillSelection" ? "names" : (dictionary ? "object" : "array"),
-        fields: [wrapper == "SkillSelection" ? "names" : "value": payload])
-    } else {
-      type = dictionary ? .dictionary(elementType) : .array(elementType)
-      value = payload
+    do {
+      value = try LiteralConversion.convert(payload, to: type)
+    } catch let error as LiteralConversionError {
+      throw fail(error.code, error.message, id)
     }
     return EvaluatedValue(
       type: type, value: value, cost: cost, syntax: id, fields: fields,
-      elements: dictionary ? [] : values)
+      elements: dictionary ? [] : values, representation: .collectionLiteral)
   }
 
   private func call(_ id: Int, context: ConstructionType?) throws -> EvaluatedValue {
@@ -303,7 +272,7 @@ package final class Evaluator {
     let parts = node.text.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
     let name: String
     let member: String
-    if node.text == "Agents", node.kind == "call" {
+    if node.text == "Agents", node.kind == .call {
       name = "Agents"
       member = "Agents"
     } else if parts.count == 2, parts[0].isEmpty {
@@ -319,7 +288,7 @@ package final class Evaluator {
       throw fail("manifest.call", "unlisted call or member", id)
     }
     let candidates = Vocabulary.signatures.filter {
-      $0.type == name && $0.member == member && $0.callable == (node.kind == "call")
+      $0.type == name && $0.member == member && $0.callable == (node.kind == .call)
     }
     var match: ConstructionSignature?
     for signature in candidates {
@@ -375,13 +344,5 @@ package final class Evaluator {
     if name == "Source" { cost = constructionCost(value) }
     try check(cost, at: id)
     return EvaluatedValue(type: .named(name), value: value, cost: cost, syntax: id, fields: fields)
-  }
-}
-
-extension EvaluatedValue {
-  package var elementsForUse: [EvaluatedValue] {
-    var value = self
-    while let next = value.referent { value = next }
-    return value.elements
   }
 }

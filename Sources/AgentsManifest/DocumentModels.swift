@@ -40,7 +40,7 @@ public struct StaticValue: Sendable {
     Self(value, type)
   }
 
-  public static var null: Self { Self(.none, .named(""), literal: true) }
+  public static var null: Self { Self(.none, .untyped, literal: true) }
 
   public static func string(_ value: String) -> Self {
     Self(.text(value), .named("String"), literal: true)
@@ -50,93 +50,6 @@ public struct StaticValue: Sendable {
   }
   public static func boolean(_ value: Bool) -> Self {
     Self(.boolean(value), .named("Bool"), literal: true)
-  }
-  public static func configuration(_ value: ConfigurationValue) -> Self {
-    Self(value.constructionValue, .named("ConfigurationValue"))
-  }
-  public static func component(_ value: Component) -> Self {
-    Self(value.constructionValue, .named("Component"))
-  }
-  public static func source(_ value: Source) -> Self {
-    Self(value.constructionValue, .named("Source"))
-  }
-  public static func section(_ value: SectionReference) -> Self {
-    Self(value.constructionValue, .named("SectionReference"))
-  }
-  public static func groupReference(_ value: GroupReference) -> Self {
-    Self(value.constructionValue, .named("GroupReference"))
-  }
-  public static func version(_ value: Version) -> Self {
-    Self(value.constructionValue, .named("Version"))
-  }
-  public static func runtime(_ value: RuntimeValue) -> Self {
-    Self(value.constructionValue, .named("RuntimeValue"))
-  }
-  public static func condition(_ value: Condition) -> Self {
-    Self(value.constructionValue, .named("Condition"))
-  }
-  public static func selection(_ value: AgentsDescription.SkillSelection) -> Self {
-    Self(value.constructionValue, .named("SkillSelection"))
-  }
-  public static func skillOverride(_ value: AgentsDescription.SkillOverride) -> Self {
-    Self(value.constructionValue, .named("SkillOverride"))
-  }
-  public static func prompt(_ value: ChatGPTPrompt) -> Self {
-    Self(value.constructionValue, .named("ChatGPTPrompt"))
-  }
-  public static func resource(_ value: Resource) -> Self {
-    Self(value.constructionValue, .named("Resource"))
-  }
-  public static func promptContent(_ value: PromptContent) -> Self {
-    Self(value.constructionValue, .named("PromptContent"))
-  }
-  public static func executable(_ value: ExecutableInvocation) -> Self {
-    Self(value.constructionValue, .named("ExecutableInvocation"))
-  }
-  public static func transport(_ value: MCPTransport) -> Self {
-    Self(value.constructionValue, .named("MCPTransport"))
-  }
-  public static func parameter(_ value: PromptParameter) -> Self {
-    Self(value.constructionValue, .named("PromptParameter"))
-  }
-  public static func permissionRule(_ value: PermissionRule) -> Self {
-    Self(value.constructionValue, .named("PermissionRule"))
-  }
-  public static func agent(_ value: Agent) -> Self {
-    Self(value.constructionValue, .named("Agent"))
-  }
-  public static func scope(_ value: Scope) -> Self {
-    Self(value.constructionValue, .named("Scope"))
-  }
-  public static func platform(_ value: Platform) -> Self {
-    Self(value.constructionValue, .named("Platform"))
-  }
-  public static func installMode(_ value: AgentsDescription.InstallMode) -> Self {
-    Self(value.constructionValue, .named("InstallMode"))
-  }
-  public static func hookEvent(_ value: HookEvent) -> Self {
-    Self(value.constructionValue, .named("HookEvent"))
-  }
-  public static func permissionOperation(_ value: PermissionOperation) -> Self {
-    Self(value.constructionValue, .named("PermissionOperation"))
-  }
-  public static func ignorePurpose(_ value: IgnorePurpose) -> Self {
-    Self(value.constructionValue, .named("IgnorePurpose"))
-  }
-  public static func pluginMode(_ value: PluginMode) -> Self {
-    Self(value.constructionValue, .named("PluginMode"))
-  }
-  public static func componentKind(_ value: ComponentKind) -> Self {
-    Self(value.constructionValue, .named("ComponentKind"))
-  }
-  public static func componentReference(_ value: ComponentReference) -> Self {
-    Self(value.constructionValue, .named("ComponentReference"))
-  }
-  public static func group(_ value: ComponentGroup) -> Self {
-    Self(value.constructionValue, .named("ComponentGroup"))
-  }
-  public static func agents(_ value: Agents) -> Self {
-    Self(value.constructionValue, .named("Agents"))
   }
   public static func array(_ values: [StaticValue]) -> Self {
     Self(.array(values.map(\.value)), .array(values.first?.type ?? .named("String")), literal: true)

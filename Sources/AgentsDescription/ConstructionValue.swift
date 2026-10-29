@@ -1,4 +1,6 @@
 package indirect enum ConstructionType: Sendable, Hashable {
+  /// No contextual type: nil literals and synthesized provenance fields.
+  case untyped
   case named(String)
   case array(ConstructionType)
   case dictionary(ConstructionType)
@@ -15,6 +17,7 @@ package struct ConstructionParameter: Sendable {
   package let name: String
   package let type: ConstructionType
   package let defaultValue: ConstructionValue?
+  package let defaultExpression: String?
 }
 
 package struct ConstructionSignature: Sendable {
@@ -22,6 +25,18 @@ package struct ConstructionSignature: Sendable {
   package let member: String
   package let parameters: [ConstructionParameter]
   package let callable: Bool
+}
+
+package enum LiteralKind: String, Sendable, Hashable {
+  case string, integer, boolean, array, dictionary
+  case nilLiteral = "nil"
+}
+
+package struct LiteralConstruction: Sendable {
+  package let member: String
+  package let payload: String?
+  package let payloadType: ConstructionType?
+  package let defaults: [String: ConstructionValue]
 }
 
 package indirect enum ConstructionValue: Sendable, Equatable {

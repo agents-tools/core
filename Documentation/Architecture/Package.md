@@ -27,8 +27,9 @@ AgentsInstructions ──> AgentsCore
          │
          └───────> Markdown (swift-markdown) ──> cmark-gfm
 
-ManifestTestProcess ──> AgentsManifest, AgentsCore, AgentsDescription
-AgentsManifestTests ──> AgentsManifest, AgentsDescription, AgentsCore, ManifestTestProcess, SwiftParser, SwiftSyntax
+ManifestTestSupport ──> AgentsManifest
+ManifestTestProcess ──> AgentsManifest, AgentsCore, AgentsDescription, ManifestTestSupport
+AgentsManifestTests ──> AgentsManifest, AgentsDescription, AgentsCore, ManifestTestProcess, ManifestTestSupport, SwiftParser, SwiftSyntax
 
 StateTestProcess ──> AgentsCore, AgentsSkills, AgentsInstructions, AgentsUpdates, CPlatform
 AgentsCoreTests ──> AgentsCore, StateTestProcess, CPlatform
@@ -66,10 +67,11 @@ CryptoKit on Apple platforms and supplies its own implementation on Linux.
 only the standard library, with private payload storage and closed literal
 conformances. `Scripts/ManifestVocabulary.json` is the construction signature and
 literal inventory; `Scripts/generate-manifest-vocabulary.py` generates the public
-factories and package-only static registrations together. Contract signature and
-compiler-backed fixture tests check that inventory.
+factories, literal conversions, package-only registrations and `StaticValue` factories
+together. Byte-for-byte generation checks and exact contract signature comparisons
+cover factories and enum cases; compiler-backed fixture tests check ordinary values.
 
-`AgentsManifest.DeclarationDocument` compiles supplied UTF-8 bytes without
+`AgentsManifest.DeclarationDocument` parses and statically evaluates supplied UTF-8 bytes without
 executing code or reading sources. Version selection, strict lexing and bounded
 grammar recognition complete before SwiftParser sees the exact snapshot. An
 iterative all-nodes guard precedes syntax inspection and independent projection
@@ -77,6 +79,24 @@ comparison. Static typing, occurrence-based expanded-size accounting and offline
 domain validation produce `AgentsCore.DeclarationIR` and `DeclarationSourceMap`.
 Constants, inactive values and unused groups receive the same checks. Group
 references and conditions remain symbolic.
+
+`DeclarationDocument` is the public consumer surface:
+
+| Operation | Consumer API |
+| --- | --- |
+| Parse and statically evaluate supplied bytes | `init(bytes:identity:)` |
+| Read declaration and provenance | `declaration`, `sourceMap`, `diagnostics` |
+| Read the immutable snapshot | `bytes`, `digest` |
+| Address an occurrence | `node(at:)`, `constant(named:)`, `uses(ofConstant:)`, `NodeID` |
+| Check an editing boundary | `editability(of:)`, `Editability` |
+| Prepare checked source changes | `preparing(_:)`, `ManifestEdit`, `StaticValue`, `DocumentChange` |
+
+`node(at:)` accepts a JSON Pointer into lowered declaration fields. The empty
+pointer addresses the root, decimal segments index arrays, and dictionary keys
+escape `~` as `~0` and `/` as `~1`. Literal configuration payloads appear under
+`value`; source requirements use normalized requirement fields. `constant(named:)`
+and `uses(ofConstant:)` accept Swift identifiers directly. Handles belong to one
+snapshot digest and cannot be reused after preparing a new document.
 
 The document retains original bytes, a lossless syntax tree, a byte digest and
 snapshot-bound `NodeID` handles. `preparing(_:)` accepts `ManifestEdit` batches,
@@ -86,7 +106,9 @@ byte digests, resulting bytes, diagnostics, impacted references and semantic del
 for later orchestration. Source edits do not publish files. Shared constants
 require explicit impact acceptance; ambiguous comments or separators are refused.
 
-`ManifestTestProcess` is a test-only executable. Parent watchdogs exercise
+`ManifestTestProcess` is a test-only executable and calls the same instrumented
+front-end pipeline as document construction. `ManifestTestSupport` owns the
+shared process report and build-configuration watchdog limits. Parent watchdogs exercise
 admission, parsing, checking and tree teardown, including fixed adversarial forms
 and deterministic differential fuzzing. Positive corpus sources are also compiled
 as ordinary Swift in the test target and compared using value equality. Parser

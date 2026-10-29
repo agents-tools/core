@@ -484,7 +484,7 @@ public struct GroupReference: Sendable, Equatable, ExpressibleByStringLiteral {
     self.init(
       value: .construct(
         type: "GroupReference", member: "group",
-        fields: ["name": .text(value), "source": .none, "condition": .none]))
+        fields: ["source": .none, "condition": .none, "name": value.constructionValue]))
   }
   public static func group(name: String, condition: Condition? = nil) -> GroupReference {
     Self(
@@ -512,11 +512,11 @@ public struct SkillSelection: Sendable, Equatable, ExpressibleByArrayLiteral {
   package init(value: ConstructionValue) { storage = value }
   public init(arrayLiteral elements: String...) {
     self.init(
-      value: .node(
+      value: .construct(
         type: "SkillSelection", member: "names", fields: ["names": elements.constructionValue]))
   }
   public static var all: SkillSelection {
-    Self(value: .node(type: "SkillSelection", member: "all", fields: [:]))
+    Self(value: ConstructionValue.construct(type: "SkillSelection", member: "all", fields: [:]))
   }
 }
 extension SkillSelection: ConstructionRepresentable {}
@@ -547,7 +547,7 @@ public struct SectionReference: Sendable, Equatable, ExpressibleByStringLiteral 
     self.init(
       value: .construct(
         type: "SectionReference", member: "section",
-        fields: ["name": .text(value), "source": .none, "condition": .none]))
+        fields: ["source": .none, "condition": .none, "name": value.constructionValue]))
   }
   public static func section(name: String, source: String? = nil, condition: Condition? = nil)
     -> SectionReference
@@ -600,7 +600,8 @@ public struct PromptContent: Sendable, Equatable, ExpressibleByStringLiteral {
   package init(value: ConstructionValue) { storage = value }
   public init(stringLiteral value: String) {
     self.init(
-      value: .node(type: "PromptContent", member: "literal", fields: ["value": .text(value)]))
+      value: .construct(
+        type: "PromptContent", member: "literal", fields: ["value": value.constructionValue]))
   }
   public static func file(_ path: String, source: String? = nil) -> PromptContent {
     Self(

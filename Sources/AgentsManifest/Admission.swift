@@ -1,12 +1,12 @@
 import AgentsDescription
 import Foundation
 
-package struct ProjectionEvent: Sendable, Equatable, Comparable, Codable {
-  package let start: Int
-  package let end: Int
-  package let kind: String
-  package let detail: String
-  package static func < (lhs: Self, rhs: Self) -> Bool {
+struct ProjectionEvent: Sendable, Equatable, Comparable, Codable {
+  let start: Int
+  let end: Int
+  let kind: String
+  let detail: String
+  static func < (lhs: Self, rhs: Self) -> Bool {
     if lhs.start != rhs.start { return lhs.start < rhs.start }
     if lhs.end != rhs.end { return lhs.end < rhs.end }
     if lhs.kind != rhs.kind { return lhs.kind < rhs.kind }
@@ -14,46 +14,67 @@ package struct ProjectionEvent: Sendable, Equatable, Comparable, Codable {
   }
 }
 
-package struct Lexeme: Sendable {
-  package let text: String
-  package let range: Range<Int>
-  package let kind: String
-  package let decoded: String?
+enum LexemeKind: String, Sendable {
+  case identifier, string, integer
+  case rangeOperator = "..<"
+  case leftParenthesis = "("
+  case rightParenthesis = ")"
+  case leftSquare = "["
+  case rightSquare = "]"
+  case comma = ","
+  case colon = ":"
+  case period = "."
+  case assignment = "="
+  case plus = "+"
+  case minus = "-"
+  case endOfFile = "eof"
 }
 
-package struct GrammarArgument: Sendable {
-  package let label: String
-  package let labelRange: Range<Int>?
-  package let value: Int
+enum GrammarNodeKind: String, Sendable {
+  case string, integer, negative, boolean, array, dictionary, sequence, range, name, call, group
+  case nilLiteral = "nil"
 }
 
-package struct GrammarNode: Sendable {
-  package let kind: String
-  package let range: Range<Int>
-  package var text: String = ""
-  package var children: [Int] = []
-  package var arguments: [GrammarArgument] = []
-  package var keys: [Lexeme] = []
+struct Lexeme: Sendable {
+  let text: String
+  let range: Range<Int>
+  let kind: LexemeKind
+  let decoded: String?
 }
 
-package struct GrammarDeclaration: Sendable {
-  package let name: String
-  package let nameRange: Range<Int>
-  package let type: ConstructionType?
-  package let expression: Int
-  package let range: Range<Int>
+struct GrammarArgument: Sendable {
+  let label: String
+  let labelRange: Range<Int>?
+  let value: Int
 }
 
-package struct Admission: Sendable {
-  package let nodes: [GrammarNode]
-  package let declarations: [GrammarDeclaration]
-  package let tokens: [Lexeme]
-  package let comments: [Range<Int>]
-  package let projection: [ProjectionEvent]
-  package let reservation: Int
+struct GrammarNode: Sendable {
+  let kind: GrammarNodeKind
+  let range: Range<Int>
+  var text: String = ""
+  var children: [Int] = []
+  var arguments: [GrammarArgument] = []
+  var keys: [Lexeme] = []
 }
 
-package final class Recognizer {
+struct GrammarDeclaration: Sendable {
+  let name: String
+  let nameRange: Range<Int>
+  let type: ConstructionType?
+  let expression: Int
+  let range: Range<Int>
+}
+
+struct Admission: Sendable {
+  let nodes: [GrammarNode]
+  let declarations: [GrammarDeclaration]
+  let tokens: [Lexeme]
+  let comments: [Range<Int>]
+  let projection: [ProjectionEvent]
+  let reservation: Int
+}
+
+final class Recognizer {
   private let source: SourceText
   private let bytes: [UInt8]
   private var tokens: [Lexeme] = []
@@ -69,7 +90,7 @@ package final class Recognizer {
       .split(separator: " ").map(String.init))
   private let prefixes: Set<String> = ["await", "copy", "consume", "each", "unsafe"]
 
-  package init(source: SourceText) {
+  init(source: SourceText) {
     self.source = source
     bytes = source.bytes
   }
@@ -79,15 +100,17 @@ package final class Recognizer {
   {
     var metrics = FrontEndMetrics()
     metrics.tokens = tokens.count
-    metrics.syntaxReservation = 16 + 4 * (tokens.count + literalUnits)
+    metrics.syntaxReservation =
+      ManifestLimits.Admission.reservationBase + ManifestLimits.Admission.reservationPerUnit
+      * (tokens.count + literalUnits)
     return ManifestFailure(
       ManifestDiagnostic(code: code, message: message, span: source.span(offset..<offset)),
       metrics: metrics)
   }
 
-  package func recognize() throws -> Admission {
-    if bytes.count > 2_097_152 {
-      throw fail("input byte limit", at: 2_097_152, code: "manifest.limit")
+  func recognize() throws -> Admission {
+    if bytes.count > ManifestLimits.Input.bytes {
+      throw fail("input byte limit", at: ManifestLimits.Input.bytes, code: "manifest.limit")
     }
     try validateUTF8()
     let header = bytes.starts(with: [239, 187, 191]) ? 3 : 0
@@ -98,9 +121,9 @@ package final class Recognizer {
     emit("import", start..<module.range.upperBound, "AgentsDescription")
     var previous = module.range.upperBound
     var declarations: [GrammarDeclaration] = []
-    while peek().kind != "eof" {
+    while peek().kind != .endOfFile {
       let gap = bytes[previous..<peek().range.lowerBound]
-      guard gap.contains(10) || gap.contains(13) else {
+      guard gap.contains(UInt8(ascii: "\n")) || gap.contains(UInt8(ascii: "\r")) else {
         throw fail("declarations require a newline", at: peek().range.lowerBound)
       }
       let first = try take("let")
@@ -126,12 +149,21 @@ package final class Recognizer {
     return Admission(
       nodes: nodes, declarations: declarations, tokens: Array(tokens.dropLast()),
       comments: comments, projection: events.sorted(),
-      reservation: 16 + 4 * (tokens.count - 1 + literalUnits))
+      reservation: ManifestLimits.Admission.reservationBase + ManifestLimits.Admission
+        .reservationPerUnit * (tokens.count - 1 + literalUnits))
   }
 
   private func version(at start: Int) throws {
     var end = start
-    while end < bytes.count && bytes[end] != 10 && bytes[end] != 13 { end += 1 }
+    while end < bytes.count && bytes[end] != UInt8(ascii: "\n") && bytes[end] != UInt8(ascii: "\r")
+    { end += 1 }
+    if end < bytes.count && bytes[end] == UInt8(ascii: "\r")
+      && (end + 1 == bytes.count || bytes[end + 1] != UInt8(ascii: "\n"))
+    {
+      throw fail(
+        "version directive requires LF, CRLF or EOF", at: end,
+        code: "manifest.version.invalid")
+    }
     let line = source.spelling(start..<end)
     let prefix = "// agents-tools-version: "
     guard line.hasPrefix(prefix) else {
@@ -144,7 +176,8 @@ package final class Recognizer {
     let parts = raw.split(separator: ".", omittingEmptySubsequences: false)
     guard parts.count == 2,
       parts.allSatisfy({ part in
-        !part.isEmpty && part.utf8.allSatisfy { (48...57).contains($0) }
+        !part.isEmpty
+          && part.utf8.allSatisfy { (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0) }
           && (part.count == 1 || !part.hasPrefix("0"))
       })
     else {
@@ -193,10 +226,12 @@ package final class Recognizer {
   }
 
   private func isSpace(_ byte: UInt8) -> Bool {
-    byte == 32 || byte == 9 || byte == 10 || byte == 13
+    byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\t") || byte == UInt8(ascii: "\n")
+      || byte == UInt8(ascii: "\r")
   }
   private func isHead(_ byte: UInt8) -> Bool {
-    byte == 95 || (65...90).contains(byte) || (97...122).contains(byte)
+    byte == UInt8(ascii: "_") || (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains(byte)
+      || (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte)
   }
   private func starts(_ spelling: [UInt8], at offset: Int) -> Bool {
     offset + spelling.count <= bytes.count
@@ -213,10 +248,12 @@ package final class Recognizer {
         i += 1
         continue
       }
-      if starts([47, 47], at: i) {
+      if starts([UInt8(ascii: "/"), UInt8(ascii: "/")], at: i) {
         let first = i
         i += 2
-        while i < bytes.count && bytes[i] != 10 && bytes[i] != 13 { i += 1 }
+        while i < bytes.count && bytes[i] != UInt8(ascii: "\n") && bytes[i] != UInt8(ascii: "\r") {
+          i += 1
+        }
         let range = first..<i
         if first != start && source.spelling(range).hasPrefix("// agents-tools-version:") {
           throw fail(
@@ -225,16 +262,18 @@ package final class Recognizer {
         comments.append(range)
         continue
       }
-      if starts([47, 42], at: i) {
+      if starts([UInt8(ascii: "/"), UInt8(ascii: "*")], at: i) {
         let first = i
         i += 2
         var level = 1
         while i < bytes.count && level > 0 {
-          if starts([47, 42], at: i) {
+          if starts([UInt8(ascii: "/"), UInt8(ascii: "*")], at: i) {
             level += 1
-            if level > 20 { throw fail("block comment depth", at: i, code: "manifest.limit") }
+            if level > ManifestLimits.Admission.commentDepth {
+              throw fail("block comment depth", at: i, code: "manifest.limit")
+            }
             i += 2
-          } else if starts([42, 47], at: i) {
+          } else if starts([UInt8(ascii: "*"), UInt8(ascii: "/")], at: i) {
             level -= 1
             i += 2
           } else {
@@ -246,40 +285,53 @@ package final class Recognizer {
         continue
       }
       let first = i
-      let kind: String
+      let kind: LexemeKind
       var decoded: String?
-      if bytes[i] == 34 {
+      if bytes[i] == UInt8(ascii: "\"") {
         (i, decoded) = try string(at: i)
-        kind = "string"
+        kind = .string
       } else if isHead(bytes[i]) {
         i += 1
-        while i < bytes.count && (isHead(bytes[i]) || (48...57).contains(bytes[i])) { i += 1 }
-        kind = "identifier"
-      } else if (48...57).contains(bytes[i]) {
+        while i < bytes.count
+          && (isHead(bytes[i]) || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(bytes[i]))
+        { i += 1 }
+        kind = .identifier
+      } else if (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(bytes[i]) {
         i += 1
-        while i < bytes.count && ((48...57).contains(bytes[i]) || bytes[i] == 95) { i += 1 }
-        kind = "integer"
-      } else if starts([46, 46, 60], at: i) {
+        while i < bytes.count
+          && ((UInt8(ascii: "0")...UInt8(ascii: "9")).contains(bytes[i])
+            || bytes[i] == UInt8(ascii: "_"))
+        { i += 1 }
+        kind = .integer
+      } else if starts([UInt8(ascii: "."), UInt8(ascii: "."), UInt8(ascii: "<")], at: i) {
         i += 3
-        kind = "..<"
+        kind = .rangeOperator
         if (first > 0 && isSpace(bytes[first - 1])) != (i < bytes.count && isSpace(bytes[i])) {
           throw fail(
-            "range requires balanced whitespace; canonical spelling: \(canonical(kind))", at: first)
+            "range requires balanced whitespace; canonical spelling: \(canonical(kind.rawValue))",
+            at: first)
         }
-      } else if [40, 41, 91, 93, 44, 58, 46, 61, 43, 45].contains(bytes[i]) {
+      } else if [
+        UInt8(ascii: "("), UInt8(ascii: ")"), UInt8(ascii: "["), UInt8(ascii: "]"),
+        UInt8(ascii: ","), UInt8(ascii: ":"), UInt8(ascii: "."), UInt8(ascii: "="),
+        UInt8(ascii: "+"), UInt8(ascii: "-"),
+      ].contains(bytes[i]) {
         let byte = bytes[i]
         i += 1
-        kind = String(UnicodeScalar(byte))
-        if byte == 61 || byte == 43 {
+        kind = LexemeKind(rawValue: String(UnicodeScalar(byte)))!
+        if byte == UInt8(ascii: "=") || byte == UInt8(ascii: "+") {
           if first == 0 || i == bytes.count || !isSpace(bytes[first - 1]) || !isSpace(bytes[i]) {
             throw fail(
-              "operator requires whitespace on both sides; canonical spelling: \(canonical(kind))",
+              "operator requires whitespace on both sides; canonical spelling: \(canonical(kind.rawValue))",
               at: first)
           }
         }
-        if byte == 45 {
-          if i == bytes.count || !(48...57).contains(bytes[i]) || first == 0
-            || !(isSpace(bytes[first - 1]) || [40, 91, 44, 58].contains(bytes[first - 1]))
+        if byte == UInt8(ascii: "-") {
+          if i == bytes.count || !(UInt8(ascii: "0")...UInt8(ascii: "9")).contains(bytes[i])
+            || first == 0
+            || !(isSpace(bytes[first - 1])
+              || [UInt8(ascii: "("), UInt8(ascii: "["), UInt8(ascii: ","), UInt8(ascii: ":")]
+                .contains(bytes[first - 1]))
           {
             throw fail(
               "negative integer requires an adjacent sign and separated boundary; canonical spelling: let value = -1",
@@ -289,8 +341,15 @@ package final class Recognizer {
       } else {
         throw fail("token outside the lexical grammar", at: i)
       }
-      if tokens.count == 100_000 { throw fail("token count", at: first, code: "manifest.limit") }
-      if 16 + 4 * (tokens.count + 1 + literalUnits) > 100_000 {
+      if tokens.count == ManifestLimits.Admission.tokens {
+        throw fail("token count", at: first, code: "manifest.limit")
+      }
+      // Reserve container/wrapper storage before SwiftParser: the fixed base plus
+      // four nodes for every token, literal escape and physical literal line break.
+      // The independent all-node guard verifies this conservative reservation.
+      if ManifestLimits.Admission.reservationBase + ManifestLimits.Admission.reservationPerUnit
+        * (tokens.count + 1 + literalUnits) > ManifestLimits.Admission.syntaxReservation
+      {
         throw fail("syntax storage reservation", at: first, code: "manifest.limit")
       }
       tokens.append(
@@ -317,37 +376,46 @@ package final class Recognizer {
         ci += 1
       }
     }
-    tokens.append(Lexeme(text: "", range: bytes.count..<bytes.count, kind: "eof", decoded: nil))
+    tokens.append(
+      Lexeme(text: "", range: bytes.count..<bytes.count, kind: .endOfFile, decoded: nil))
   }
 
   private func string(at start: Int) throws -> (Int, String?) {
-    let multiline = starts([34, 34, 34], at: start)
+    let multiline = starts([UInt8(ascii: "\""), UInt8(ascii: "\""), UInt8(ascii: "\"")], at: start)
     let width = multiline ? 3 : 1
     var i = start + width
     var body = i
     if multiline {
-      guard i < bytes.count && (bytes[i] == 10 || bytes[i] == 13) else {
+      guard i < bytes.count && (bytes[i] == UInt8(ascii: "\n") || bytes[i] == UInt8(ascii: "\r"))
+      else {
         throw fail("multiline opener requires a newline", at: i)
       }
-      if starts([13, 10], at: i) { i += 2 } else { i += 1 }
+      if starts([UInt8(ascii: "\r"), UInt8(ascii: "\n")], at: i) { i += 2 } else { i += 1 }
       body = i
     }
     while i < bytes.count {
       let byte = bytes[i]
-      if byte < 32 && byte != 9 && byte != 10 && byte != 13 {
+      if byte < UInt8(ascii: " ") && byte != UInt8(ascii: "\t") && byte != UInt8(ascii: "\n")
+        && byte != UInt8(ascii: "\r")
+      {
         throw fail("control scalar in string", at: i)
       }
-      if !multiline && (byte == 10 || byte == 13) {
+      if !multiline && (byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r")) {
         throw fail("newline in single-line string", at: i)
       }
-      if byte == 92 {
+      if byte == UInt8(ascii: "\\") {
         let escape = i
         i += 1
-        if i < bytes.count && [48, 92, 116, 110, 114, 34, 39].contains(bytes[i]) {
+        if i < bytes.count
+          && [
+            UInt8(ascii: "0"), UInt8(ascii: "\\"), UInt8(ascii: "t"), UInt8(ascii: "n"),
+            UInt8(ascii: "r"), UInt8(ascii: "\""), UInt8(ascii: "'"),
+          ].contains(bytes[i])
+        {
           i += 1
           continue
         }
-        guard starts([117, 123], at: i) else {
+        guard starts([UInt8(ascii: "u"), UInt8(ascii: "{")], at: i) else {
           throw fail("unsupported escape or interpolation", at: escape)
         }
         i += 2
@@ -357,54 +425,69 @@ package final class Recognizer {
           scalar = scalar &* 16 &+ hex
           i += 1
         }
-        guard (1...8).contains(i - digits), i < bytes.count, bytes[i] == 125,
+        guard (1...8).contains(i - digits), i < bytes.count, bytes[i] == UInt8(ascii: "}"),
           scalar <= 0x10ffff, !(0xd800...0xdfff).contains(scalar)
         else { throw fail("invalid Unicode escape", at: escape) }
         i += 1
         continue
       }
-      if byte == 34 && (!multiline || starts([34, 34, 34], at: i)) {
+      if byte == UInt8(ascii: "\"")
+        && (!multiline
+          || starts([UInt8(ascii: "\""), UInt8(ascii: "\""), UInt8(ascii: "\"")], at: i))
+      {
         let closing = i
         let end = i + width
         let content: [UInt8]
         if multiline {
           var lineStart = i
-          while lineStart > body && bytes[lineStart - 1] != 10 && bytes[lineStart - 1] != 13 {
+          while lineStart > body && bytes[lineStart - 1] != UInt8(ascii: "\n")
+            && bytes[lineStart - 1] != UInt8(ascii: "\r")
+          {
             lineStart -= 1
           }
           let indent = i - lineStart
-          guard bytes[lineStart..<i].allSatisfy({ $0 == 32 }) else {
+          guard bytes[lineStart..<i].allSatisfy({ $0 == UInt8(ascii: " ") }) else {
             throw fail("multiline closing indentation uses spaces only", at: lineStart)
           }
           var decodedBody: [UInt8] = []
           var cursor = body
           while cursor < lineStart {
             let first = cursor
-            while cursor < lineStart && bytes[cursor] != 10 && bytes[cursor] != 13 { cursor += 1 }
+            while cursor < lineStart && bytes[cursor] != UInt8(ascii: "\n")
+              && bytes[cursor] != UInt8(ascii: "\r")
+            { cursor += 1 }
             let lineEnd = cursor
             var leading = first
-            while leading < lineEnd && (bytes[leading] == 32 || bytes[leading] == 9) {
-              if bytes[leading] == 9 {
+            while leading < lineEnd
+              && (bytes[leading] == UInt8(ascii: " ") || bytes[leading] == UInt8(ascii: "\t"))
+            {
+              if bytes[leading] == UInt8(ascii: "\t") {
                 throw fail("multiline leading indentation uses spaces only", at: leading)
               }
               leading += 1
             }
             if lineEnd > first
               && (lineEnd - first < indent
-                || !bytes[first..<(first + indent)].allSatisfy({ $0 == 32 }))
+                || !bytes[first..<(first + indent)].allSatisfy({ $0 == UInt8(ascii: " ") }))
             {
               throw fail("nonempty multiline line requires full indentation", at: first)
             }
             let contentStart = lineEnd == first ? first : first + indent
             decodedBody.append(contentsOf: bytes[contentStart..<lineEnd])
-            if starts([13, 10], at: cursor) { cursor += 2 } else { cursor += 1 }
-            if cursor < lineStart { decodedBody.append(10) }
+            if starts([UInt8(ascii: "\r"), UInt8(ascii: "\n")], at: cursor) {
+              cursor += 2
+            } else {
+              cursor += 1
+            }
+            if cursor < lineStart { decodedBody.append(UInt8(ascii: "\n")) }
           }
           content = decodedBody
         } else {
           content = Array(bytes[body..<closing])
         }
-        for byte in bytes[start..<end] where byte == 92 || byte == 10 || byte == 13 {
+        for byte in bytes[start..<end]
+        where byte == UInt8(ascii: "\\") || byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r")
+        {
           literalUnits += 1
         }
         return (end, decode(content))
@@ -415,32 +498,36 @@ package final class Recognizer {
   }
 
   private func hex(_ b: UInt8) -> UInt32? {
-    if (48...57).contains(b) { return UInt32(b - 48) }
-    if (65...70).contains(b) { return UInt32(b - 55) }
-    if (97...102).contains(b) { return UInt32(b - 87) }
+    if (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(b) { return UInt32(b - UInt8(ascii: "0")) }
+    if (UInt8(ascii: "A")...UInt8(ascii: "F")).contains(b) {
+      return UInt32(b - UInt8(ascii: "A")) + 10
+    }
+    if (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(b) {
+      return UInt32(b - UInt8(ascii: "a")) + 10
+    }
     return nil
   }
 
   private func decode(_ raw: [UInt8]) -> String {
-    if !raw.contains(92) { return String(decoding: raw, as: UTF8.self) }
+    if !raw.contains(UInt8(ascii: "\\")) { return String(decoding: raw, as: UTF8.self) }
     var result: [UInt8] = []
     var i = 0
     while i < raw.count {
-      if raw[i] != 92 {
+      if raw[i] != UInt8(ascii: "\\") {
         result.append(raw[i])
         i += 1
         continue
       }
       i += 1
       switch raw[i] {
-      case 48: result.append(0)
-      case 116: result.append(9)
-      case 110: result.append(10)
-      case 114: result.append(13)
-      case 117:
+      case UInt8(ascii: "0"): result.append(UInt8(ascii: "\0"))
+      case UInt8(ascii: "t"): result.append(UInt8(ascii: "\t"))
+      case UInt8(ascii: "n"): result.append(UInt8(ascii: "\n"))
+      case UInt8(ascii: "r"): result.append(UInt8(ascii: "\r"))
+      case UInt8(ascii: "u"):
         i += 2
         var scalar: UInt32 = 0
-        while raw[i] != 125 {
+        while raw[i] != UInt8(ascii: "}") {
           scalar = scalar * 16 + hex(raw[i])!
           i += 1
         }
@@ -457,12 +544,12 @@ package final class Recognizer {
   @discardableResult private func take(_ text: String? = nil) throws -> Lexeme {
     let token = peek()
     if let text, token.text != text { throw fail("expected \(text)", at: token.range.lowerBound) }
-    if token.kind != "eof" { index += 1 }
+    if token.kind != .endOfFile { index += 1 }
     return token
   }
   private func identifier(bare: Bool = false) throws -> Lexeme {
     let token = peek()
-    guard token.kind == "identifier", !reserved.contains(token.text),
+    guard token.kind == .identifier, !reserved.contains(token.text),
       !(bare && prefixes.contains(token.text))
     else { throw fail("expected an identifier", at: token.range.lowerBound) }
     return try take()
@@ -471,7 +558,9 @@ package final class Recognizer {
     let token = try take(text)
     depth += 1
     if text == "[" { square += 1 }
-    if depth > 20 || square > 8 {
+    if depth > ManifestLimits.Admission.delimiterDepth
+      || square > ManifestLimits.Admission.squareDepth
+    {
       throw fail("grammar delimiter depth", at: token.range.lowerBound, code: "manifest.limit")
     }
     return token.range.lowerBound
@@ -489,7 +578,7 @@ package final class Recognizer {
   private func node(_ value: GrammarNode, projection: Bool = true) -> Int {
     let id = nodes.count
     nodes.append(value)
-    if projection { emit(value.kind, value.range, value.text) }
+    if projection { emit(value.kind.rawValue, value.range, value.text) }
     return id
   }
 
@@ -518,8 +607,7 @@ package final class Recognizer {
       throw fail("type outside construction vocabulary", at: token.range.lowerBound)
     }
     emit("type", token.range, token.text)
-    return token.text == "NativeConfiguration"
-      ? .dictionary(.dictionary(.named("ConfigurationValue"))) : .named(token.text)
+    return Vocabulary.aliasTypes[token.text] ?? .named(token.text)
   }
 
   private func expression() throws -> Int {
@@ -527,7 +615,7 @@ package final class Recognizer {
     var terms = [first]
     while peek("+") {
       let op = try take("+")
-      if terms.count == 32 {
+      if terms.count == ManifestLimits.Admission.additiveTerms {
         throw fail(
           "additive chain exceeds 32 terms", at: op.range.lowerBound, code: "manifest.limit")
       }
@@ -536,7 +624,7 @@ package final class Recognizer {
     if terms.count == 1 { return first }
     return node(
       GrammarNode(
-        kind: "sequence",
+        kind: .sequence,
         range: nodes[first].range.lowerBound..<nodes[terms.last!].range.upperBound, children: terms)
     )
   }
@@ -544,12 +632,15 @@ package final class Recognizer {
   private func primary(rangeFactory: Bool = false) throws -> Int {
     let token = peek()
     let start = token.range.lowerBound
-    if token.kind == "string" || token.kind == "integer"
+    if token.kind == .string || token.kind == .integer
       || ["true", "false", "nil"].contains(token.text)
     {
       _ = try take()
-      let kind = token.kind == "identifier" ? (token.text == "nil" ? "nil" : "boolean") : token.kind
-      emit(kind, token.range, token.text)
+      let kind: GrammarNodeKind =
+        token.kind == .identifier
+        ? (token.text == "nil" ? .nilLiteral : .boolean)
+        : (token.kind == .string ? .string : .integer)
+      emit(kind.rawValue, token.range, token.text)
       return node(
         GrammarNode(kind: kind, range: token.range, text: token.decoded ?? token.text),
         projection: false)
@@ -557,33 +648,34 @@ package final class Recognizer {
     if peek("-") {
       _ = try take("-")
       let integer = try take()
-      guard integer.kind == "integer", integer.range.lowerBound == token.range.upperBound else {
+      guard integer.kind == .integer, integer.range.lowerBound == token.range.upperBound else {
         throw fail("minus requires adjacent decimal digits", at: integer.range.lowerBound)
       }
       emit("integer", integer.range, integer.text)
+      emit("negative", start..<integer.range.upperBound)
       return node(
-        GrammarNode(kind: "negative", range: start..<integer.range.upperBound, text: integer.text),
-        projection: falseWithEvent("negative", start..<integer.range.upperBound))
+        GrammarNode(kind: .negative, range: start..<integer.range.upperBound, text: integer.text),
+        projection: false)
     }
     if peek("(") {
       _ = try open("(")
       let child = try expression()
-      return node(GrammarNode(kind: "group", range: start..<(try close(")")), children: [child]))
+      return node(GrammarNode(kind: .group, range: start..<(try close(")")), children: [child]))
     }
     if peek("[") {
       _ = try open("[")
-      var kind = "array"
+      var kind = GrammarNodeKind.array
       var children: [Int] = []
       var keys: [Lexeme] = []
       if peek(":") {
         _ = try take(":")
-        kind = "dictionary"
+        kind = .dictionary
       } else if !peek("]") {
-        let dictionary = peek().kind == "string" && tokens[index + 1].text == ":"
-        kind = dictionary ? "dictionary" : "array"
+        let dictionary = peek().kind == .string && tokens[index + 1].text == ":"
+        kind = dictionary ? .dictionary : .array
         while true {
           if dictionary {
-            guard peek().kind == "string" else {
+            guard peek().kind == .string else {
               throw fail("dictionary key must be a string literal", at: peek().range.lowerBound)
             }
             let key = try take()
@@ -635,7 +727,7 @@ package final class Recognizer {
       throw fail("factory requires an argument list", at: last)
     }
     if !peek("(") {
-      return node(GrammarNode(kind: "name", range: start..<last, text: callee), projection: false)
+      return node(GrammarNode(kind: .name, range: start..<last, text: callee), projection: false)
     }
     guard peek().range.lowerBound == last else {
       throw fail("call opener must immediately follow callee", at: peek().range.lowerBound)
@@ -650,7 +742,7 @@ package final class Recognizer {
       while true {
         var label = "_"
         var labelRange: Range<Int>?
-        if peek().kind == "identifier" && tokens[index + 1].text == ":" {
+        if peek().kind == .identifier && tokens[index + 1].text == ":" {
           let name = try identifier()
           label = name.text
           labelRange = name.range
@@ -664,15 +756,11 @@ package final class Recognizer {
         if peek(")") { throw fail("calls have no trailing comma", at: peek().range.lowerBound) }
       }
     }
+    let end = try close(")")
+    emit("call", start..<end)
     return node(
-      GrammarNode(
-        kind: "call", range: start..<(try close(")")), text: callee, arguments: arguments),
-      projection: falseWithEvent("call", start..<tokens[index - 1].range.upperBound))
-  }
-
-  private func falseWithEvent(_ kind: String, _ range: Range<Int>) -> Bool {
-    emit(kind, range)
-    return false
+      GrammarNode(kind: .call, range: start..<end, text: callee, arguments: arguments),
+      projection: false)
   }
 
   private func argument(label: String) throws -> GrammarArgument {
@@ -701,18 +789,19 @@ package final class Recognizer {
     }
     if ["from", "exact", "branch", "revision"].contains(peek().text) {
       args.append(try argument(label: peek().text))
-    } else if peek().kind == "string" {
+    } else if peek().kind == .string {
       let first = try primary()
       let op = try take("..<")
       emit("reference", op.range, "..<")
-      guard peek().kind == "string" else {
+      guard peek().kind == .string else {
         throw fail("range endpoint must be a string literal", at: peek().range.lowerBound)
       }
       let second = try primary()
       let range = nodes[first].range.lowerBound..<nodes[second].range.upperBound
+      emit("sequence", range)
       let id = node(
-        GrammarNode(kind: "range", range: range, children: [first, second]),
-        projection: falseWithEvent("sequence", range))
+        GrammarNode(kind: .range, range: range, children: [first, second]),
+        projection: false)
       args.append(GrammarArgument(label: "_", labelRange: nil, value: id))
     } else if peek(".") && ["upToNextMajor", "upToNextMinor"].contains(tokens[index + 1].text) {
       args.append(

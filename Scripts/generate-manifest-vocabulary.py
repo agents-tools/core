@@ -1,103 +1,185 @@
 #!/usr/bin/env python3
-"""Generate authoring declarations and static registrations from the language inventory."""
+"""Generate authoring types, evaluation metadata and editor factories from one inventory."""
+import argparse
 import json
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = json.loads((ROOT / 'Scripts/ManifestVocabulary.json').read_text())
-DEST = ROOT / 'Sources/AgentsDescription'
-HEADER = '// Generated from Scripts/ManifestVocabulary.json. Run Scripts/generate-manifest-vocabulary.py.\n\n'
+SPEC = json.loads((ROOT / "Scripts/ManifestVocabulary.json").read_text())
+HEADER = "// Generated from Scripts/ManifestVocabulary.json. Run Scripts/generate-manifest-vocabulary.py.\n"
 
 
-def type_expr(t):
-    if t == 'NativeConfiguration':
-        return '.dictionary(.dictionary(.named("ConfigurationValue")))'
-    if t.endswith('?'):
-        return '.optional(' + type_expr(t[:-1]) + ')'
-    if t.startswith('['):
-        inner = t[1:-1]
-        if inner.startswith('String: '):
-            return '.dictionary(' + type_expr(inner[8:]) + ')'
-        return '.array(' + type_expr(inner) + ')'
-    if t == 'Range<Version>':
-        return '.named("VersionRange")'
-    return '.named(' + json.dumps(t) + ')'
+def quoted(value):
+    return json.dumps(value, ensure_ascii=False)
 
 
-def signature(p):
-    ext = p['label']
-    name = p['name']
-    s = (ext + ' ' if ext != name else '') + name + ': ' + p['type']
-    if 'default' in p:
-        s += ' = ' + p['default']
-    return s
+def type_expression(spelling):
+    if spelling in SPEC["aliases"]:
+        return type_expression(SPEC["aliases"][spelling])
+    if spelling.endswith("?"):
+        return ".optional(" + type_expression(spelling[:-1]) + ")"
+    if spelling.startswith("["):
+        inner = spelling[1:-1]
+        if inner.startswith("String: "):
+            return ".dictionary(" + type_expression(inner[8:]) + ")"
+        return ".array(" + type_expression(inner) + ")"
+    if spelling in SPEC["contextualTypes"]:
+        return ".named(" + quoted(SPEC["contextualTypes"][spelling]) + ")"
+    return ".named(" + quoted(spelling) + ")"
 
 
-def default_expr(p):
-    if 'default' not in p:
-        return 'nil'
-    return '(' + p['default'] + ' as ' + p['type'] + ').constructionValue'
+def parameters_declaration(parameters):
+    result = []
+    for parameter in parameters:
+        label, name = parameter["label"], parameter["name"]
+        spelling = (label + " " if label != name else "") + name + ": " + parameter["type"]
+        if "default" in parameter:
+            spelling += " = " + parameter["default"]
+        result.append(spelling)
+    return ", ".join(result)
 
 
-lines = [HEADER]
-for name, cases in SPEC['enums'].items():
-    recursive = 'indirect ' if name == 'ConfigurationValue' else ''
-    protocols = ['Sendable', 'Equatable'] + SPEC['literals'].get(name, {}).get('protocols', [])
-    lines.append(f'public {recursive}enum {name}: ' + ', '.join(protocols) + ' {')
-    for c in cases:
-        ps = c.get('parameters', [])
-        decl = c['name']
-        if ps:
-            decl += '(' + ', '.join((p['label'] + ': ' if p['label'] != '_' else '') + p['type'] for p in ps) + ')'
-        lines.append('  case ' + decl)
-    for init in SPEC['literals'].get(name, {}).get('initializers', []):
-        lines.append('  ' + init)
-    lines += ['}', '', f'extension {name}: ConstructionRepresentable {{', '  package var constructionValue: ConstructionValue {', '    switch self {']
-    for c in cases:
-        ps = c.get('parameters', [])
-        pattern = '.' + c['name']
-        if ps:
-            pattern += '(' + ', '.join('let ' + p['name'] for p in ps) + ')'
-        fields = ', '.join(json.dumps(p['name']) + ': ' + p['name'] + '.constructionValue' for p in ps)
-        lines.append(f'    case {pattern}: .node(type: "{name}", member: "{c["name"]}", fields: [' + (fields or ':') + '])')
-    lines += ['    }', '  }', '}', '']
+def fields_expression(parameters):
+    return dictionary_expression({p["name"]: p["name"] + ".constructionValue" for p in parameters})
 
-for name in SPEC['structs']:
-    protocols = ['Sendable', 'Equatable'] + SPEC['literals'].get(name, {}).get('protocols', [])
-    lines += [f'public struct {name}: ' + ', '.join(protocols) + ' {', '  private let storage: ConstructionValue', '  package var constructionValue: ConstructionValue { storage }', '  package init(value: ConstructionValue) { storage = value }']
-    for init in SPEC['literals'].get(name, {}).get('initializers', []):
-        lines.append('  ' + init)
-    for m in SPEC['factories']:
-        if m['type'] != name:
+
+def dictionary_expression(fields):
+    return "[" + (", ".join(quoted(k) + ": " + v for k, v in fields.items()) or ":") + "]"
+
+
+def literal_initializers(name):
+    result = []
+    for kind, conversion in SPEC["literals"].get(name, {}).get("conversions", {}).items():
+        payload_type = conversion.get("payloadType")
+        if kind == "nil":
+            declaration, payload = "nilLiteral: ()", None
+        elif kind == "array":
+            declaration, payload = "arrayLiteral elements: " + payload_type[1:-1] + "...", "elements"
+        elif kind == "dictionary":
+            element_type = payload_type[len("[String: "):-1]
+            declaration = "dictionaryLiteral elements: (String, " + element_type + ")..."
+            payload = "Dictionary(elements, uniquingKeysWith: { _, last in last })"
+        else:
+            declaration, payload = kind + "Literal value: " + payload_type, "value"
+        member = conversion["member"]
+        if name in SPEC["enums"]:
+            body = "self = ." + member + ("(" + payload + ")" if payload else "")
+        else:
+            fields = {k: ".none" if v == "nil" else v for k, v in conversion.get("defaults", {}).items()}
+            if payload:
+                fields[conversion["payload"]] = payload + ".constructionValue"
+            body = "self.init(value: .construct(type: " + quoted(name) + ", member: " + quoted(member) + ", fields: " + dictionary_expression(fields) + "))"
+        result.append("  public init(" + declaration + ") { " + body + " }")
+    return result
+
+
+def authoring_source():
+    lines = [HEADER]
+    for name, cases in SPEC["enums"].items():
+        recursive = "indirect " if name in SPEC["recursiveEnums"] else ""
+        protocols = ["Sendable", "Equatable"] + SPEC["literals"].get(name, {}).get("protocols", [])
+        lines.append("public " + recursive + "enum " + name + ": " + ", ".join(protocols) + " {")
+        for case in cases:
+            parameters = case.get("parameters", [])
+            declaration = case["name"]
+            if parameters:
+                declaration += "(" + ", ".join((p["label"] + ": " if p["label"] != "_" else "") + p["type"] for p in parameters) + ")"
+            lines.append("  case " + declaration)
+        lines += literal_initializers(name)
+        lines += ["}", "", "extension " + name + ": ConstructionRepresentable {", "  package var constructionValue: ConstructionValue {", "    switch self {"]
+        for case in cases:
+            parameters = case.get("parameters", [])
+            pattern = "." + case["name"]
+            if parameters:
+                pattern += "(" + ", ".join("let " + p["name"] for p in parameters) + ")"
+            lines.append("    case " + pattern + ": .node(type: " + quoted(name) + ", member: " + quoted(case["name"]) + ", fields: " + fields_expression(parameters) + ")")
+        lines += ["    }", "  }", "}", ""]
+    for name in SPEC["structs"]:
+        protocols = ["Sendable", "Equatable"] + SPEC["literals"].get(name, {}).get("protocols", [])
+        lines += ["public struct " + name + ": " + ", ".join(protocols) + " {", "  private let storage: ConstructionValue", "  package var constructionValue: ConstructionValue { storage }", "  package init(value: ConstructionValue) { storage = value }"]
+        lines += literal_initializers(name)
+        for factory in SPEC["factories"]:
+            if factory["type"] != name:
+                continue
+            member = factory["name"]
+            parameters = factory.get("parameters", [])
+            construct = "ConstructionValue.construct(type: " + quoted(name) + ", member: " + quoted(member) + ", fields: " + fields_expression(parameters) + ")"
+            if factory.get("property"):
+                declaration = "public static var " + member + ": " + name
+                body = "Self(value: " + construct + ")"
+            elif factory.get("initializer"):
+                declaration = "public init(" + parameters_declaration(parameters) + ")"
+                body = "self.init(value: " + construct + ")"
+            else:
+                declaration = "public static func " + member + "(" + parameters_declaration(parameters) + ") -> " + name
+                body = "Self(value: " + construct + ")"
+            lines.append("  " + declaration + " { " + body + " }")
+        lines += ["}", "extension " + name + ": ConstructionRepresentable {}", ""]
+    for name, spelling in SPEC["aliases"].items():
+        lines += ["public typealias " + name + " = " + spelling, ""]
+    return "\n".join(lines)
+
+
+def registration_source():
+    type_names = SPEC["primitiveTypes"] + SPEC["customTypes"] + list(SPEC["aliases"]) + list(SPEC["enums"]) + SPEC["structs"]
+    lines = [HEADER, "package enum Vocabulary {", "  package static let typeNames: Set<String> = [" + ", ".join(map(quoted, type_names)) + "]", "  package static let signatures: [ConstructionSignature] = ["]
+    enum_cases = [dict(type=name, name=case["name"], parameters=case.get("parameters", []), enumCase=True) for name, cases in SPEC["enums"].items() for case in cases]
+    for factory in SPEC["factories"] + enum_cases + SPEC["rangeFactories"]:
+        parameters = []
+        for parameter in factory.get("parameters", []):
+            default = parameter.get("default")
+            value = "nil" if default is None else "(" + default + " as " + parameter["type"] + ").constructionValue"
+            parameters.append("ConstructionParameter(label: " + quoted(parameter["label"]) + ", name: " + quoted(parameter["name"]) + ", type: " + type_expression(parameter["type"]) + ", defaultValue: " + value + ", defaultExpression: " + (quoted(default) if default is not None else "nil") + ")")
+        callable_member = not factory.get("property") and (not factory.get("enumCase") or bool(factory.get("parameters")))
+        lines.append("    ConstructionSignature(type: " + quoted(factory["type"]) + ", member: " + quoted(factory["name"]) + ", parameters: [" + ", ".join(parameters) + "], callable: " + str(callable_member).lower() + "),")
+    lines += ["  ]", "  package static let literalTypes: [String: Set<LiteralKind>] = ["]
+    literal_case = lambda kind: ".nilLiteral" if kind == "nil" else "." + kind
+    for name, literal in SPEC["literals"].items():
+        lines.append("    " + quoted(name) + ": [" + ", ".join(map(literal_case, literal["kinds"])) + "],")
+    lines += ["  ]", "  package static let literalConstructions: [String: [LiteralKind: LiteralConstruction]] = ["]
+    for name, literal in SPEC["literals"].items():
+        if not literal["conversions"]:
             continue
-        if m.get('property'):
-            lines.append(f'  public static var {m["name"]}: {name} {{ Self(value: .node(type: "{name}", member: "{m["name"]}", fields: [:])) }}')
-            continue
-        ps = m['parameters']
-        decl = 'public init' if name == 'Agents' else 'public static func ' + m['name']
-        decl += '(' + ', '.join(signature(p) for p in ps) + ')'
-        if name != 'Agents':
-            decl += ' -> ' + name
-        fields = ', '.join(json.dumps(p['name']) + ': ' + p['name'] + '.constructionValue' for p in ps)
-        construct = f'ConstructionValue.construct(type: "{name}", member: "{m["name"]}", fields: [' + (fields or ':') + '])'
-        body = 'self.init(value: ' + construct + ')' if name == 'Agents' else 'Self(value: ' + construct + ')'
-        lines.append('  ' + decl + ' { ' + body + ' }')
-    lines += ['}', f'extension {name}: ConstructionRepresentable {{}}', '']
-lines += ['public typealias NativeConfiguration = [String: [String: ConfigurationValue]]', '']
-(DEST / 'Vocabulary.swift').write_text('\n'.join(lines))
+        lines.append("    " + quoted(name) + ": [")
+        for kind, conversion in literal["conversions"].items():
+            defaults = {k: ".none" if v == "nil" else v for k, v in conversion.get("defaults", {}).items()}
+            lines.append("      " + literal_case(kind) + ": LiteralConstruction(member: " + quoted(conversion["member"]) + ", payload: " + (quoted(conversion["payload"]) if "payload" in conversion else "nil") + ", payloadType: " + (type_expression(conversion["payloadType"]) if "payloadType" in conversion else "nil") + ", defaults: " + dictionary_expression(defaults) + "),")
+        lines.append("    ],")
+    lines += ["  ]", "  package static let scalarValues: [String: [String: String]] = ["]
+    for name, cases in SPEC["enums"].items():
+        if all(not case.get("parameters") for case in cases):
+            fields = {case["name"]: quoted(case.get("loweredValue", case["name"])) for case in cases}
+            lines.append("    " + quoted(name) + ": " + dictionary_expression(fields) + ",")
+    lines += ["  ]", "  package static let taggedRecordTypes: Set<String> = [" + ", ".join(map(quoted, SPEC["taggedRecordTypes"])) + "]", "  package static let aliasTypes: [String: ConstructionType] = " + dictionary_expression({k: type_expression(v) for k, v in SPEC["aliases"].items()}), "  package static let typeAliases: [String: String] = " + dictionary_expression({k: quoted(v) for k, v in SPEC["aliases"].items()}), "}", ""]
+    return "\n".join(lines)
 
-reg = [HEADER, 'package enum Vocabulary {', '  package static let typeNames: Set<String> = [' + ', '.join(json.dumps(n) for n in ['String', 'Int', 'Bool', 'Version', 'NativeConfiguration'] + list(SPEC['enums']) + SPEC['structs']) + ']', '  package static let signatures: [ConstructionSignature] = [']
-for m in SPEC['factories'] + [dict(type=n, name=c['name'], parameters=c.get('parameters', []), enumCase=True) for n, cases in SPEC['enums'].items() for c in cases]:
-    ps = ', '.join('ConstructionParameter(label: ' + json.dumps(p['label']) + ', name: ' + json.dumps(p['name']) + ', type: ' + type_expr(p['type']) + ', defaultValue: ' + default_expr(p) + ')' for p in m.get('parameters', []))
-    reg.append('    ConstructionSignature(type: ' + json.dumps(m['type']) + ', member: ' + json.dumps(m['name']) + ', parameters: [' + ps + '], callable: ' + str(not m.get('property') and (not m.get('enumCase') or bool(m.get('parameters')))).lower() + '),')
-# Range factories are only contextual at their grammar slot.
-for name in ['upToNextMajor', 'upToNextMinor']:
-    reg.append('    ConstructionSignature(type: "VersionRange", member: "' + name + '", parameters: [ConstructionParameter(label: "from", name: "from", type: .named("Version"), defaultValue: nil)], callable: true),')
-reg += ['  ]', '  package static let literalTypes: [String: Set<String>] = [']
-for n, lit in SPEC['literals'].items():
-    reg.append('    ' + json.dumps(n) + ': [' + ', '.join(json.dumps(x) for x in lit['kinds']) + '],')
-reg += ['  ]', '}', '']
-(DEST / 'VocabularyInventory.swift').write_text('\n'.join(reg))
 
-import subprocess
-subprocess.run(["swift", "format", "format", "--in-place", "--configuration", str(ROOT / ".swift-format"), str(ROOT / 'Sources/AgentsDescription/Vocabulary.swift'), str(ROOT / 'Sources/AgentsDescription/VocabularyInventory.swift')], check=True)
+def editor_factories_source():
+    lines = [HEADER, "import AgentsDescription", "", "extension StaticValue {"]
+    for factory in SPEC["staticValueFactories"]:
+        name, value_type = factory["name"], factory["type"]
+        lines += ["  public static func " + name + "(_ value: AgentsDescription." + value_type + ") -> Self {", "    Self.checked(value.constructionValue, type: .named(" + quoted(value_type) + "))", "  }"]
+    return "\n".join(lines + ["}", ""])
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-root", type=Path, default=ROOT)
+    arguments = parser.parse_args()
+    outputs = {
+        "Sources/AgentsDescription/Vocabulary.swift": authoring_source(),
+        "Sources/AgentsDescription/VocabularyInventory.swift": registration_source(),
+        "Sources/AgentsManifest/StaticValueVocabulary.swift": editor_factories_source(),
+    }
+    paths = []
+    for relative, source in outputs.items():
+        path = arguments.output_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source)
+        paths.append(str(path))
+    subprocess.run(["swift", "format", "format", "--in-place", "--configuration", str(ROOT / ".swift-format"), *paths], check=True)
+
+
+if __name__ == "__main__":
+    main()

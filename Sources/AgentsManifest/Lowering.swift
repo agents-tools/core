@@ -35,15 +35,8 @@ package enum Lowering {
     case .array(let values): return .array(values.map(lower))
     case .object(let fields): return .dictionary(fields.mapValues(lower))
     case .node(let type, let member, let fields):
-      let scalarEnums: Set<String> = [
-        "Agent", "Scope", "Platform", "InstallMode", "IgnorePurpose", "PluginMode", "ComponentKind",
-      ]
-      if scalarEnums.contains(type) {
-        let ids = [
-          "claudeCode": "claude-code", "geminiCLI": "gemini-cli", "openCode": "opencode",
-          "macOS": "macos",
-        ]
-        return .string(ids[member] ?? member)
+      if let spelling = Vocabulary.scalarValues[type]?[member] {
+        return .string(spelling)
       }
       if type == "SkillSelection" {
         return member == "all" ? .string("all") : .array((fields["names"]?.array ?? []).map(lower))

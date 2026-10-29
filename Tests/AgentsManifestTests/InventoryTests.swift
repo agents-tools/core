@@ -24,12 +24,28 @@ struct InventoryTests {
     }.filter { $0.hasPrefix("public ") }
     var signatures: [String] = []
     var namedTypes = Set(["String", "Int", "Bool"])
-    var literalTypes: [String: Set<String>] = [:]
-    let protocolKinds = [
-      "ExpressibleByStringLiteral": "string", "ExpressibleByIntegerLiteral": "integer",
-      "ExpressibleByBooleanLiteral": "boolean", "ExpressibleByNilLiteral": "nil",
-      "ExpressibleByArrayLiteral": "array", "ExpressibleByDictionaryLiteral": "dictionary",
+    var literalTypes: [String: Set<LiteralKind>] = [:]
+    let protocolKinds: [String: LiteralKind] = [
+      "ExpressibleByStringLiteral": .string, "ExpressibleByIntegerLiteral": .integer,
+      "ExpressibleByBooleanLiteral": .boolean, "ExpressibleByNilLiteral": .nilLiteral,
+      "ExpressibleByArrayLiteral": .array, "ExpressibleByDictionaryLiteral": .dictionary,
     ]
+    func typeSpelling(_ raw: String) -> String {
+      var value = raw
+      for (alias, type) in Vocabulary.typeAliases {
+        value = value.replacingOccurrences(of: alias, with: type)
+      }
+      return value.replacingOccurrences(of: "Range<Version>", with: "VersionRange")
+        .filter { !$0.isWhitespace }
+    }
+    func signature(
+      _ owner: String, _ member: String, _ parameters: [(String, String, String?)], callable: Bool
+    ) -> String {
+      owner + "." + member + "("
+        + parameters.map {
+          $0.0 + ":" + typeSpelling($0.1) + "=" + ($0.2?.filter { !$0.isWhitespace } ?? "required")
+        }.joined(separator: ",") + ")" + (callable ? " call" : " member")
+    }
     for block in blocks {
       let tree = Parser.parse(source: block)
       let source = SourceText(Array(block.utf8), identity: DocumentIdentity("interface"))
@@ -37,66 +53,111 @@ struct InventoryTests {
       var pending: [(Syntax, String)] = [(Syntax(tree), "")]
       while let (node, owner) = pending.popLast() {
         var name = owner
+        let inheritance: InheritanceClauseSyntax?
         if let declaration = node.as(StructDeclSyntax.self) {
           name = declaration.name.text
           namedTypes.insert(name)
-          for inherited in declaration.inheritanceClause?.inheritedTypes ?? [] {
-            if let kind = protocolKinds[inherited.type.trimmedDescription] {
-              literalTypes[name, default: []].insert(kind)
-            }
-          }
+          inheritance = declaration.inheritanceClause
         } else if let declaration = node.as(EnumDeclSyntax.self) {
           name = declaration.name.text
           namedTypes.insert(name)
-          for inherited in declaration.inheritanceClause?.inheritedTypes ?? [] {
-            if let kind = protocolKinds[inherited.type.trimmedDescription] {
-              literalTypes[name, default: []].insert(kind)
-            }
+          inheritance = declaration.inheritanceClause
+        } else {
+          inheritance = nil
+        }
+        for inherited in inheritance?.inheritedTypes ?? [] {
+          if let kind = protocolKinds[inherited.type.trimmedDescription] {
+            literalTypes[name, default: []].insert(kind)
           }
+        }
+        if let declaration = node.as(ExtensionDeclSyntax.self),
+          declaration.extendedType.trimmedDescription == "Range"
+        {
+          name = "VersionRange"
         } else if let declaration = node.as(TypeAliasDeclSyntax.self) {
           namedTypes.insert(declaration.name.text)
         } else if let method = node.as(FunctionDeclSyntax.self), name != "Version" {
-          let parameters = method.signature.parameterClause.parameters.map { parameter in
-            let defaultValue = parameter.defaultValue?.value.trimmedDescription ?? "required"
-            return parameter.firstName.text + ":"
-              + parameter.type.trimmedDescription.replacingOccurrences(of: " ", with: "") + "="
-              + defaultValue
-          }.joined(separator: ",")
-          signatures.append(name + "." + method.name.text + "(" + parameters + ")")
+          let parameters = method.signature.parameterClause.parameters.map {
+            (
+              $0.firstName.text, $0.type.trimmedDescription,
+              $0.defaultValue?.value.trimmedDescription
+            )
+          }
+          signatures.append(signature(name, method.name.text, parameters, callable: true))
         } else if let initializer = node.as(InitializerDeclSyntax.self), name == "Agents" {
-          let parameters = initializer.signature.parameterClause.parameters.map { parameter in
-            parameter.firstName.text + ":"
-              + parameter.type.trimmedDescription.replacingOccurrences(of: " ", with: "") + "="
-              + (parameter.defaultValue?.value.trimmedDescription ?? "required")
-          }.joined(separator: ",")
-          signatures.append("Agents.Agents(" + parameters + ")")
+          let parameters = initializer.signature.parameterClause.parameters.map {
+            (
+              $0.firstName.text, $0.type.trimmedDescription,
+              $0.defaultValue?.value.trimmedDescription
+            )
+          }
+          signatures.append(signature(name, "Agents", parameters, callable: true))
+        } else if let declaration = node.as(EnumCaseDeclSyntax.self) {
+          for element in declaration.elements {
+            let parameters = (element.parameterClause?.parameters ?? []).map {
+              (
+                $0.firstName?.text ?? "_", $0.type.trimmedDescription,
+                $0.defaultValue?.value.trimmedDescription
+              )
+            }
+            signatures.append(
+              signature(name, element.name.text, parameters, callable: !parameters.isEmpty))
+          }
+        } else if let declaration = node.as(VariableDeclSyntax.self),
+          declaration.modifiers.contains(where: { $0.name.text == "static" })
+        {
+          for binding in declaration.bindings {
+            let member = try #require(
+              binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text)
+            signatures.append(signature(name, member, [], callable: false))
+          }
         }
         for child in node.children(viewMode: .sourceAccurate) { pending.append((child, name)) }
       }
     }
+    func registeredType(_ type: ConstructionType) -> String {
+      switch type {
+      case .untyped: return "untyped"
+      case .named(let name): return name
+      case .array(let element): return "[" + registeredType(element) + "]"
+      case .dictionary(let element): return "[String:" + registeredType(element) + "]"
+      case .optional(let element): return registeredType(element) + "?"
+      }
+    }
+    let registered = Vocabulary.signatures.map { value in
+      signature(
+        value.type, value.member,
+        value.parameters.map {
+          ($0.label, registeredType($0.type), $0.defaultExpression)
+        }, callable: value.callable)
+    }
     #expect(namedTypes == Vocabulary.typeNames)
     #expect(literalTypes == Vocabulary.literalTypes)
-    let inventory =
-      try JSONSerialization.jsonObject(
-        with: Data(contentsOf: root.appendingPathComponent("Scripts/ManifestVocabulary.json")))
-      as! [String: Any]
-    let factories = inventory["factories"] as! [[String: Any]]
-    let registered = factories.filter { $0["property"] == nil }.map { method in
-      let parameters = (method["parameters"] as! [[String: String]]).map { parameter in
-        parameter["label"]! + ":" + parameter["type"]!.replacingOccurrences(of: " ", with: "") + "="
-          + (parameter["default"] ?? "required")
-      }.joined(separator: ",")
-      return (method["type"] as! String) + "." + (method["name"] as! String) + "(" + parameters
-        + ")"
+    #expect(signatures.sorted() == registered.sorted())
+    #expect(Set(Vocabulary.scalarValues["Agent"]!.values) == Set(AgentID.allCases.map(\.rawValue)))
+  }
+
+  @Test func generatedVocabularyAndCompilerFixturesMatchTheirSourcesByteForByte() throws {
+    let directory = try temporaryManifestDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    for script in ["generate-manifest-vocabulary.py", "generate-manifest-fixtures.py"] {
+      _ = try ProcessRunner.run(
+        "/usr/bin/env",
+        arguments: [
+          "python3", root.appendingPathComponent("Scripts/" + script).path,
+          "--output-root", directory.path,
+        ])
     }
-    #expect(Set(signatures.filter { !$0.hasPrefix(".upToNext") }) == Set(registered))
-    let enumCount = (inventory["enums"] as! [String: [[String: Any]]]).values.reduce(0) {
-      $0 + $1.count
+    for path in [
+      "Sources/AgentsDescription/Vocabulary.swift",
+      "Sources/AgentsDescription/VocabularyInventory.swift",
+      "Sources/AgentsManifest/StaticValueVocabulary.swift",
+      "Tests/AgentsManifestTests/CompiledFixtures.swift",
+    ] {
+      #expect(
+        try Data(contentsOf: root.appendingPathComponent(path))
+          == Data(contentsOf: directory.appendingPathComponent(path)), "generated drift: \(path)")
     }
-    #expect(Vocabulary.signatures.count == factories.count + enumCount + 2)
-    #expect(Vocabulary.signatures.filter { $0.type == "VersionRange" }.count == 2)
-    #expect(
-      Vocabulary.signatures.filter { $0.type == "SkillSelection" && $0.member == "all" }.count == 1)
   }
 
   @Test func allContractSwiftBlocksPassTheRealParser() throws {

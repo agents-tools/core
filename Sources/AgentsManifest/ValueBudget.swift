@@ -1,21 +1,23 @@
 import AgentsDescription
 
-package struct ValueCost: Sendable {
-  package var nodes = 1
-  package var strings = 0
-  package var encoded = 16
-  package var depth = 1
-  package var origins = 1
+struct ValueCost: Sendable {
+  var nodes = 1
+  var strings = 0
+  var encoded = 16
+  var depth = 1
+  var origins = 1
 
-  package static func scalar(_ text: String = "") -> Self {
+  static func scalar(_ text: String = "") -> Self {
     var encoded = 2
     for byte in text.utf8 {
-      encoded += byte < 32 ? 6 : (byte == 34 || byte == 92 ? 2 : 1)
+      encoded +=
+        byte < UInt8(ascii: " ")
+        ? 6 : (byte == UInt8(ascii: "\"") || byte == UInt8(ascii: "\\") ? 2 : 1)
     }
     return Self(strings: text.utf8.count, encoded: encoded)
   }
 
-  package static func container(_ children: [ValueCost], keys: [String] = []) -> Self {
+  static func container(_ children: [ValueCost], keys: [String] = []) -> Self {
     var result = Self()
     for child in children {
       result.nodes = add(result.nodes, child.nodes)
@@ -32,46 +34,21 @@ package struct ValueCost: Sendable {
     return result
   }
 
-  package var fits: Bool {
-    nodes <= 100_000 && strings <= 16_777_216 && encoded <= 33_554_432
-      && depth <= 64 && origins <= 1_000_000
+  var fits: Bool {
+    nodes <= ManifestLimits.Values.nodes && strings <= ManifestLimits.Values.stringBytes
+      && encoded <= ManifestLimits.Output.encodedBytes
+      && depth <= ManifestLimits.Values.depth && origins <= ManifestLimits.SourceMap.origins
   }
 
-  package static func add(_ lhs: Int, _ rhs: Int) -> Int {
+  static func add(_ lhs: Int, _ rhs: Int) -> Int {
     let (result, overflow) = lhs.addingReportingOverflow(rhs)
-    return overflow ? 33_554_433 : min(result, 33_554_433)
+    return overflow
+      ? (ManifestLimits.Output.encodedBytes + 1)
+      : min(result, (ManifestLimits.Output.encodedBytes + 1))
   }
 }
 
-package final class EvaluatedValue: Sendable {
-  package let type: ConstructionType
-  package let value: ConstructionValue
-  package let cost: ValueCost
-  package let syntax: Int
-  package let fields: [String: EvaluatedValue]
-  package let elements: [EvaluatedValue]
-  package let referent: EvaluatedValue?
-  package let defaulted: Bool
-  package let referenceDepth: Int
-
-  package init(
-    type: ConstructionType, value: ConstructionValue, cost: ValueCost, syntax: Int,
-    fields: [String: EvaluatedValue] = [:], elements: [EvaluatedValue] = [],
-    referent: EvaluatedValue? = nil, defaulted: Bool = false
-  ) {
-    self.type = type
-    self.value = value
-    self.cost = cost
-    self.syntax = syntax
-    self.fields = fields
-    self.elements = elements
-    self.referent = referent
-    self.defaulted = defaulted
-    referenceDepth = (referent?.referenceDepth ?? 0) + (referent == nil ? 0 : 1)
-  }
-}
-
-package func constructionCost(_ value: ConstructionValue) -> ValueCost {
+func constructionCost(_ value: ConstructionValue) -> ValueCost {
   switch value {
   case .text(let text): return .scalar(text)
   case .version(let version): return .scalar(version.normalized)

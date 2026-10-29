@@ -1,5 +1,6 @@
 import AgentsCore
 import Foundation
+import ManifestTestSupport
 import SwiftSyntax
 import Testing
 
@@ -216,6 +217,15 @@ func fixedAdmissionCases() -> [AdmissionCase] {
       "byte-boundary-comment",
       bytes: comment + Array(repeating: 91, count: 2_097_152 - comment.count), expected: "accepted")
   )
+  for (name, suffix) in [
+    ("eof", ""), ("import", "import AgentsDescription\nlet agents = Agents()"),
+  ] {
+    cases.append(
+      AdmissionCase(
+        "directive-bare-cr-" + name,
+        "// agents-tools-version: 1.0\r" + suffix,
+        expected: "manifest.version.invalid", complete: true))
+  }
   return cases
 }
 
@@ -246,7 +256,7 @@ struct AdversarialTests {
         #expect(result.report.offset == fixture.bytes.firstIndex(of: 35))
         #expect(result.report.metrics.parserCalls == 0)
       }
-      if result.report.stage == "admission" {
+      if result.report.stage == .admission {
         var line = 1
         var column = 1
         var index = 0

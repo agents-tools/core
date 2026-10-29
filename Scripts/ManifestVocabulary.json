@@ -3,7 +3,8 @@
     "Agent": [
       {
         "name": "claudeCode",
-        "parameters": []
+        "parameters": [],
+        "loweredValue": "claude-code"
       },
       {
         "name": "codex",
@@ -15,11 +16,13 @@
       },
       {
         "name": "geminiCLI",
-        "parameters": []
+        "parameters": [],
+        "loweredValue": "gemini-cli"
       },
       {
         "name": "openCode",
-        "parameters": []
+        "parameters": [],
+        "loweredValue": "opencode"
       }
     ],
     "Scope": [
@@ -35,7 +38,8 @@
     "Platform": [
       {
         "name": "macOS",
-        "parameters": []
+        "parameters": [],
+        "loweredValue": "macos"
       },
       {
         "name": "linux",
@@ -460,7 +464,8 @@
           "default": "[]",
           "type": "[String]"
         }
-      ]
+      ],
+      "initializer": true
     },
     {
       "type": "Source",
@@ -1597,9 +1602,17 @@
       "kinds": [
         "string"
       ],
-      "initializers": [
-        "public init(stringLiteral value: String) { self.init(value: .construct(type: \"SectionReference\", member: \"section\", fields: [\"name\": .text(value), \"source\": .none, \"condition\": .none])) }"
-      ]
+      "conversions": {
+        "string": {
+          "member": "section",
+          "payload": "name",
+          "payloadType": "String",
+          "defaults": {
+            "source": "nil",
+            "condition": "nil"
+          }
+        }
+      }
     },
     "GroupReference": {
       "protocols": [
@@ -1608,9 +1621,17 @@
       "kinds": [
         "string"
       ],
-      "initializers": [
-        "public init(stringLiteral value: String) { self.init(value: .construct(type: \"GroupReference\", member: \"group\", fields: [\"name\": .text(value), \"source\": .none, \"condition\": .none])) }"
-      ]
+      "conversions": {
+        "string": {
+          "member": "group",
+          "payload": "name",
+          "payloadType": "String",
+          "defaults": {
+            "source": "nil",
+            "condition": "nil"
+          }
+        }
+      }
     },
     "PromptContent": {
       "protocols": [
@@ -1619,9 +1640,13 @@
       "kinds": [
         "string"
       ],
-      "initializers": [
-        "public init(stringLiteral value: String) { self.init(value: .node(type: \"PromptContent\", member: \"literal\", fields: [\"value\": .text(value)])) }"
-      ]
+      "conversions": {
+        "string": {
+          "member": "literal",
+          "payload": "value",
+          "payloadType": "String"
+        }
+      }
     },
     "RuntimeValue": {
       "protocols": [
@@ -1630,9 +1655,13 @@
       "kinds": [
         "string"
       ],
-      "initializers": [
-        "public init(stringLiteral value: String) { self = .literal(value) }"
-      ]
+      "conversions": {
+        "string": {
+          "member": "literal",
+          "payload": "value",
+          "payloadType": "String"
+        }
+      }
     },
     "SkillSelection": {
       "protocols": [
@@ -1641,9 +1670,13 @@
       "kinds": [
         "array"
       ],
-      "initializers": [
-        "public init(arrayLiteral elements: String...) { self.init(value: .node(type: \"SkillSelection\", member: \"names\", fields: [\"names\": elements.constructionValue])) }"
-      ]
+      "conversions": {
+        "array": {
+          "member": "names",
+          "payload": "names",
+          "payloadType": "[String]"
+        }
+      }
     },
     "ConfigurationValue": {
       "protocols": [
@@ -1662,14 +1695,36 @@
         "array",
         "dictionary"
       ],
-      "initializers": [
-        "public init(stringLiteral value: String) { self = .string(value) }",
-        "public init(integerLiteral value: Int) { self = .integer(value) }",
-        "public init(booleanLiteral value: Bool) { self = .boolean(value) }",
-        "public init(nilLiteral: ()) { self = .null }",
-        "public init(arrayLiteral elements: ConfigurationValue...) { self = .array(elements) }",
-        "public init(dictionaryLiteral elements: (String, ConfigurationValue)...) { self = .object(Dictionary(elements, uniquingKeysWith: { _, last in last })) }"
-      ]
+      "conversions": {
+        "string": {
+          "member": "string",
+          "payload": "value",
+          "payloadType": "String"
+        },
+        "integer": {
+          "member": "integer",
+          "payload": "value",
+          "payloadType": "Int"
+        },
+        "boolean": {
+          "member": "boolean",
+          "payload": "value",
+          "payloadType": "Bool"
+        },
+        "nil": {
+          "member": "null"
+        },
+        "array": {
+          "member": "array",
+          "payload": "value",
+          "payloadType": "[ConfigurationValue]"
+        },
+        "dictionary": {
+          "member": "object",
+          "payload": "value",
+          "payloadType": "[String: ConfigurationValue]"
+        }
+      }
     },
     "Version": {
       "protocols": [
@@ -1678,7 +1733,180 @@
       "kinds": [
         "string"
       ],
-      "initializers": []
+      "conversions": {}
     }
+  },
+  "aliases": {
+    "NativeConfiguration": "[String: [String: ConfigurationValue]]"
+  },
+  "recursiveEnums": [
+    "ConfigurationValue"
+  ],
+  "taggedRecordTypes": [
+    "Source",
+    "Component",
+    "MCPTransport",
+    "ExecutableInvocation",
+    "GroupReference",
+    "PromptContent",
+    "RuntimeValue",
+    "ConfigurationValue",
+    "HookEvent",
+    "PermissionOperation",
+    "ComponentReference",
+    "PermissionRule"
+  ],
+  "rangeFactories": [
+    {
+      "type": "VersionRange",
+      "name": "upToNextMajor",
+      "parameters": [
+        {
+          "label": "from",
+          "name": "from",
+          "type": "Version"
+        }
+      ]
+    },
+    {
+      "type": "VersionRange",
+      "name": "upToNextMinor",
+      "parameters": [
+        {
+          "label": "from",
+          "name": "from",
+          "type": "Version"
+        }
+      ]
+    }
+  ],
+  "staticValueFactories": [
+    {
+      "type": "ConfigurationValue",
+      "name": "configuration"
+    },
+    {
+      "type": "Component",
+      "name": "component"
+    },
+    {
+      "type": "Source",
+      "name": "source"
+    },
+    {
+      "type": "SectionReference",
+      "name": "section"
+    },
+    {
+      "type": "GroupReference",
+      "name": "groupReference"
+    },
+    {
+      "type": "Version",
+      "name": "version"
+    },
+    {
+      "type": "RuntimeValue",
+      "name": "runtime"
+    },
+    {
+      "type": "Condition",
+      "name": "condition"
+    },
+    {
+      "type": "SkillSelection",
+      "name": "selection"
+    },
+    {
+      "type": "SkillOverride",
+      "name": "skillOverride"
+    },
+    {
+      "type": "ChatGPTPrompt",
+      "name": "prompt"
+    },
+    {
+      "type": "Resource",
+      "name": "resource"
+    },
+    {
+      "type": "PromptContent",
+      "name": "promptContent"
+    },
+    {
+      "type": "ExecutableInvocation",
+      "name": "executable"
+    },
+    {
+      "type": "MCPTransport",
+      "name": "transport"
+    },
+    {
+      "type": "PromptParameter",
+      "name": "parameter"
+    },
+    {
+      "type": "PermissionRule",
+      "name": "permissionRule"
+    },
+    {
+      "type": "Agent",
+      "name": "agent"
+    },
+    {
+      "type": "Scope",
+      "name": "scope"
+    },
+    {
+      "type": "Platform",
+      "name": "platform"
+    },
+    {
+      "type": "InstallMode",
+      "name": "installMode"
+    },
+    {
+      "type": "HookEvent",
+      "name": "hookEvent"
+    },
+    {
+      "type": "PermissionOperation",
+      "name": "permissionOperation"
+    },
+    {
+      "type": "IgnorePurpose",
+      "name": "ignorePurpose"
+    },
+    {
+      "type": "PluginMode",
+      "name": "pluginMode"
+    },
+    {
+      "type": "ComponentKind",
+      "name": "componentKind"
+    },
+    {
+      "type": "ComponentReference",
+      "name": "componentReference"
+    },
+    {
+      "type": "ComponentGroup",
+      "name": "group"
+    },
+    {
+      "type": "Agents",
+      "name": "agents"
+    }
+  ],
+  "primitiveTypes": [
+    "String",
+    "Int",
+    "Bool"
+  ],
+  "customTypes": [
+    "Version"
+  ],
+  "contextualTypes": {
+    "Range<Version>": "VersionRange"
   }
 }

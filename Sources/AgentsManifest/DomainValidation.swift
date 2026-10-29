@@ -2,7 +2,7 @@ import AgentsCore
 import AgentsDescription
 import Foundation
 
-package final class DomainValidator {
+final class DomainValidator {
   private let source: SourceText
   private let admission: Admission
   private let evaluation: Evaluation
@@ -11,7 +11,7 @@ package final class DomainValidator {
   private var groups: [String: EvaluatedValue] = [:]
   private var work = 0
 
-  package init(source: SourceText, admission: Admission, evaluation: Evaluation) {
+  init(source: SourceText, admission: Admission, evaluation: Evaluation) {
     self.source = source
     self.admission = admission
     self.evaluation = evaluation
@@ -27,7 +27,7 @@ package final class DomainValidator {
         related: related))
   }
 
-  package func validate() throws -> [ManifestDiagnostic] {
+  func validate() throws -> [ManifestDiagnostic] {
     let root = evaluation.root
     let fields = root.value.fields
     var identities: [String: EvaluatedValue] = [:]
@@ -48,14 +48,14 @@ package final class DomainValidator {
         if declaration.gitURL != url {
           let target = value.field("url") ?? value
           let range = admission.nodes[target.syntax].range
-          if diagnostics.count < 100 {
+          if diagnostics.count < ManifestLimits.Diagnostics.warnings {
             diagnostics.append(
               ManifestDiagnostic(
                 code: "manifest.domain", severity: .warning,
                 message: "use the complete Git transport URL", span: source.span(range),
                 fixIt: SourcePatch(
                   range: range, replacement: Array(quoted(declaration.gitURL).utf8))))
-          } else if diagnostics.count == 100 {
+          } else if diagnostics.count == ManifestLimits.Diagnostics.warnings {
             diagnostics.append(
               ManifestDiagnostic(
                 code: "manifest.diagnostics.truncated", severity: .warning,
@@ -106,7 +106,9 @@ package final class DomainValidator {
     var pending = [(value, anchor)]
     while let (value, anchor) = pending.popLast() {
       work += 1
-      if work > 100_000 { throw failure("domain traversal budget", anchor, code: "manifest.limit") }
+      if work > ManifestLimits.Domain.steps {
+        throw failure("domain traversal budget", anchor, code: "manifest.limit")
+      }
       if let referent = value.referent {
         pending.append((referent, value))
         continue
@@ -132,7 +134,9 @@ package final class DomainValidator {
     }
     for child in children {
       work += 1
-      if work > 100_000 { throw failure("domain traversal budget", anchor, code: "manifest.limit") }
+      if work > ManifestLimits.Domain.steps {
+        throw failure("domain traversal budget", anchor, code: "manifest.limit")
+      }
       try check(child, at: anchor)
       try checkChildren(child, at: anchor)
     }
@@ -180,6 +184,9 @@ package final class DomainValidator {
           }
         }
       }
+    case "SkillSelection":
+      if let names = f["names"]?.strings { try skillNames(names, anchor) }
+    case "SkillOverride": try skillNames([f["name"]?.text ?? ""], anchor)
     case "ComponentGroup": try name(f["name"]?.text ?? "", anchor)
     case "GroupReference":
       let group = f["name"]?.text ?? ""
@@ -244,13 +251,11 @@ package final class DomainValidator {
       try sourceAlias(alias, anchor)
       let selection = f["select"]!
       let names = selection.fields["names"]?.strings
-      if let names { try skillNames(names, anchor) }
       try skillNames(f["exclude"]?.strings ?? [], anchor)
       let overrides = f["overrides"]?.array ?? []
       try uniqueNames(overrides, anchor)
       for override in overrides {
         let n = override.fields["name"]?.text ?? ""
-        try skillNames([n], anchor)
         if let names, !names.contains(n) {
           throw failure("override is outside explicit skill selection", anchor)
         }
@@ -309,11 +314,11 @@ package final class DomainValidator {
         while i < bytes.count {
           if bytes[i...].starts(with: escapedInput) {
             i += 2
-            while i < bytes.count && bytes[i] != 125 { i += 1 }
+            while i < bytes.count && bytes[i] != UInt8(ascii: "}") { i += 1 }
           } else if bytes[i...].starts(with: input) {
             let first = i + 8
             i = first
-            while i < bytes.count && bytes[i] != 125 { i += 1 }
+            while i < bytes.count && bytes[i] != UInt8(ascii: "}") { i += 1 }
             if i == bytes.count
               || !declared.contains(String(decoding: bytes[first..<i], as: UTF8.self))
             {
@@ -336,7 +341,7 @@ package final class DomainValidator {
         code: "manifest.group.cycle", related: spans)
     }
     if completed.contains(name) { return }
-    if stack.count == 64 {
+    if stack.count == ManifestLimits.Groups.activeReferences {
       throw failure("local group reference depth", value, code: "manifest.limit")
     }
     for reference in value.field("uses")?.elementsForUse ?? []
@@ -380,7 +385,7 @@ package final class DomainValidator {
     let parts = value.split(separator: "/", omittingEmptySubsequences: false)
     if parts.isEmpty || parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
       || value.contains(":") || value.contains("\\")
-      || value.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 })
+      || value.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f })
     {
       throw failure("invalid relative name", anchor)
     }
@@ -413,28 +418,4 @@ package final class DomainValidator {
     }
     return prefix + parts.joined(separator: "/")
   }
-}
-
-extension ConstructionValue {
-  package var text: String? {
-    if case .text(let value) = self { return value }
-    return nil
-  }
-  package var array: [ConstructionValue]? {
-    if case .array(let value) = self { return value }
-    return nil
-  }
-  package var strings: [String]? { array?.compactMap(\.text) }
-  package var fields: [String: ConstructionValue] {
-    if case .node(_, _, let fields) = self { return fields }
-    return [:]
-  }
-  package var member: String {
-    if case .node(_, let member, _) = self { return member }
-    return ""
-  }
-}
-
-extension EvaluatedValue {
-  package func field(_ name: String) -> EvaluatedValue? { referent?.field(name) ?? fields[name] }
 }

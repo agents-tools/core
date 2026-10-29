@@ -1,5 +1,5 @@
-/// Syntax-independent declaration data. Collections retain authored order; recipients are IDs,
-/// conditions remain data, and group references are symbolic until linking.
+/// Syntax-independent declaration data. Arrays retain authored order; dictionaries are unordered.
+/// Recipients use agent IDs, conditions remain data, and group references stay symbolic until linking.
 public indirect enum DeclarationValue: Sendable, Equatable {
   case string(String)
   case integer(Int)
