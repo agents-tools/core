@@ -51,6 +51,10 @@ Both [agents](https://github.com/agents-tools/cli) and
 [skill](https://github.com/skill-cli/cli) consume this package. Consumers own
 command parsing, terminal output and executable distribution.
 
+- **AgentsDescription**: standard-library-only types for authoring the Swift
+  manifest construction vocabulary.
+- **AgentsManifest**: parses and statically evaluates manifest snapshots into
+  declaration IR and source maps, and prepares byte-preserving edits.
 - **AgentsCore**: source parsing and identity, Git requirements, declaration and
   resolved-state models, atomic state storage, bare mirrors and immutable source
   materializations, watch subscriptions, hashing, path safety, process execution
@@ -97,6 +101,8 @@ targets: [
   .executableTarget(
     name: "YourCLI",
     dependencies: [
+      .product(name: "AgentsDescription", package: "core"),
+      .product(name: "AgentsManifest", package: "core"),
       .product(name: "AgentsCore", package: "core"),
       .product(name: "AgentsSkills", package: "core"),
       .product(name: "AgentsInstructions", package: "core"),
@@ -281,13 +287,21 @@ Read the [organization contributing guide][contributing] and the
 
 ### Development
 
-Run the package's build, test, release and formatting checks:
+The generation commands in `.github/swift-package.json` run on the last
+compiler entry's runner, using `python3` and the toolchain's `swift format`.
+They regenerate into temporary directories and compare committed bytes.
+`swift test` checks contract signatures and the complete compiler-backed fixture
+inventory without invoking these generators.
+
+Run the package's build, test, generation and formatting checks:
 
 ```bash
 swift build
 env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME \
   -u XDG_STATE_HOME -u XDG_CACHE_HOME swift test
 swift build -c release
+python3 Scripts/generate-manifest-vocabulary.py --check
+python3 Scripts/generate-manifest-fixtures.py --check
 swift format lint --strict --configuration .swift-format \
   --recursive Package.swift Sources Tests
 ```
@@ -295,10 +309,11 @@ swift format lint --strict --configuration .swift-format \
 The required checks are `policy / policy` and `validate / result`, provided by
 full-SHA-pinned reusable workflows from `agents-tools/github-workflows`.
 Source policy validates PR titles, new commit messages and added lines.
-[Package validation configuration](.github/swift-package.json) selects Xcode 26.6 on `macos-26` and a digest-pinned official Swift Linux
-container. macOS validation runs tests and a release build, plus strict
-formatting with `.swift-format` over `Package.swift`, `Sources` and `Tests`.
-Linux runs the full test suite, including the subprocess recovery tests. The
+[Package validation configuration](.github/swift-package.json) selects Xcode
+26.6 on `macos-26` and a digest-pinned official Swift Linux container. macOS and
+Linux validation run the full Debug and Release test suites. macOS also runs a
+release build and strict formatting with `.swift-format` over `Package.swift`,
+`Sources` and `Tests`. The test suites include subprocess recovery tests. The
 configuration owns the Linux compiler version and image digest. Tests also
 require Perl, which is included by the Linux image's Git dependencies.
 

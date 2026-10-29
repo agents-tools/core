@@ -1706,10 +1706,15 @@ tree-budget failure or structural/literal disagreement is a test failure. Retain
 and minimize counterexamples. Scheduled fuzzing extends the same bounded corpus.
 
 Each input must finish admission, parsing, iterative checking, syntax-error
-inspection and tree teardown, when reached, within **2 seconds wall-clock** on
-each required CI runner, separately from compiler build time. The parent watchdog
-covers the entire child lifetime; a timeout or signal fails the test, never counts
-as a successful rejection. Record runner/toolchain identity, seeds, stage, token
+inspection and tree teardown, when reached, within **2 seconds wall-clock** in
+the release test configuration on each required CI runner, separately from
+compiler build time. The release configuration is the shipped front end, so it is
+the performance gate. CI runs both the debug and release test configurations on
+macOS and Linux. The debug configuration runs the same inputs with a 30-second
+watchdog that detects hangs; unoptimized dependencies make its timings a hang
+check, not the performance gate. The parent watchdog covers the entire child
+lifetime; a timeout or signal fails the test, never counts as a successful
+rejection. Record runner/toolchain identity, seeds, stage, token
 and tree counts and timings. These are regression gates, not permission to relax
 language limits on slower machines. Every SwiftParser dependency or host-toolchain
 update reruns the fixed and fuzz suites at the candidate version and compares

@@ -1,7 +1,9 @@
 # Architecture
 
 This directory holds the current truth for `core`, a SwiftPM library package.
-`AgentsCore` owns shared sources, declaration and lock storage, cache, watch subscriptions, and agent locations;
+`AgentsDescription` supplies the types-only construction vocabulary, and
+`AgentsManifest` statically evaluates and edits supplied manifest snapshots without I/O.
+`AgentsCore` owns syntax-independent declaration IR, spans, provenance, shared sources, declaration and lock storage, cache, watch subscriptions, and agent locations;
 `AgentsSkills` owns skill discovery and lifecycle operations and depends on
 `AgentsCore` and Yams. `AgentsInstructions` owns instruction lifecycle and text
 transformations. It depends on `AgentsCore` for sources and state, and on

@@ -225,3 +225,36 @@ struct SemanticVersion: Comparable, Equatable, Sendable, CustomStringConvertible
       }
   }
 }
+
+extension SourceRequirement {
+  /// Declaration comparison expands range spellings; exact requirements retain metadata.
+  package func declarationEquivalent(to other: SourceRequirement) -> Bool {
+    switch (self, other) {
+    case (.branch(let lhs), .branch(let rhs)), (.revision(let lhs), .revision(let rhs)):
+      return lhs == rhs
+    case (.exact(let lhs), .exact(let rhs)):
+      guard let left = SemanticVersion(lhs), let right = SemanticVersion(rhs) else { return false }
+      return left.description == right.description
+    default:
+      guard let left = declarationBounds, let right = other.declarationBounds else { return false }
+      return left.0 == right.0 && left.1 == right.1
+    }
+  }
+
+  private var declarationBounds: (SemanticVersion, SemanticVersion)? {
+    switch self {
+    case .range(let from, let to):
+      guard let lower = SemanticVersion(from), let upper = SemanticVersion(to) else { return nil }
+      return (lower, upper)
+    case .upToNextMajor(let from), .upToNextMinor(let from):
+      guard let lower = SemanticVersion(from) else { return nil }
+      if case .upToNextMajor = self {
+        let (major, overflow) = lower.major.addingReportingOverflow(1)
+        return overflow ? nil : (lower, SemanticVersion(major: major, minor: 0, patch: 0))
+      }
+      let (minor, overflow) = lower.minor.addingReportingOverflow(1)
+      return overflow ? nil : (lower, SemanticVersion(major: lower.major, minor: minor, patch: 0))
+    default: return nil
+    }
+  }
+}

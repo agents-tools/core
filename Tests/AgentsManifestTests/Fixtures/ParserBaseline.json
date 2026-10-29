@@ -1,0 +1,108 @@
+{
+  "fixtures": {
+    "ConsumerExample.swift.txt": {
+      "syntaxDepth": 31,
+      "syntaxNodes": 1707,
+      "syntaxReservation": 2980,
+      "tokens": 741
+    },
+    "CoreExample.swift.txt": {
+      "syntaxDepth": 26,
+      "syntaxNodes": 199,
+      "syntaxReservation": 344,
+      "tokens": 82
+    },
+    "ExportedGroup.swift.txt": {
+      "syntaxDepth": 29,
+      "syntaxNodes": 210,
+      "syntaxReservation": 388,
+      "tokens": 93
+    },
+    "InstructionRecipients.swift.txt": {
+      "syntaxDepth": 23,
+      "syntaxNodes": 88,
+      "syntaxReservation": 152,
+      "tokens": 34
+    },
+    "LiteralCoverage.swift.txt": {
+      "syntaxDepth": 29,
+      "syntaxNodes": 1805,
+      "syntaxReservation": 2932,
+      "tokens": 729
+    },
+    "MigrationEdgeExample.swift.txt": {
+      "syntaxDepth": 32,
+      "syntaxNodes": 446,
+      "syntaxReservation": 780,
+      "tokens": 191
+    },
+    "ProducerExample.swift.txt": {
+      "syntaxDepth": 29,
+      "syntaxNodes": 210,
+      "syntaxReservation": 388,
+      "tokens": 93
+    },
+    "RecipientConditions.swift.txt": {
+      "syntaxDepth": 25,
+      "syntaxNodes": 217,
+      "syntaxReservation": 404,
+      "tokens": 97
+    },
+    "RequirementValues.swift.txt": {
+      "syntaxDepth": 26,
+      "syntaxNodes": 823,
+      "syntaxReservation": 1232,
+      "tokens": 304
+    },
+    "RequirementsExample.swift.txt": {
+      "syntaxDepth": 29,
+      "syntaxNodes": 1251,
+      "syntaxReservation": 2028,
+      "tokens": 503
+    },
+    "SectionConcatenation.swift.txt": {
+      "syntaxDepth": 31,
+      "syntaxNodes": 1707,
+      "syntaxReservation": 2980,
+      "tokens": 741
+    },
+    "SharedRules.swift.txt": {
+      "syntaxDepth": 26,
+      "syntaxNodes": 199,
+      "syntaxReservation": 344,
+      "tokens": 82
+    },
+    "SketchExample.swift.txt": {
+      "syntaxDepth": 25,
+      "syntaxNodes": 217,
+      "syntaxReservation": 404,
+      "tokens": 97
+    },
+    "SkillsExample.swift.txt": {
+      "syntaxDepth": 23,
+      "syntaxNodes": 88,
+      "syntaxReservation": 152,
+      "tokens": 34
+    },
+    "TeamConfiguration.swift.txt": {
+      "syntaxDepth": 29,
+      "syntaxNodes": 961,
+      "syntaxReservation": 1672,
+      "tokens": 414
+    },
+    "VersionCollections.swift.txt": {
+      "syntaxDepth": 14,
+      "syntaxNodes": 143,
+      "syntaxReservation": 208,
+      "tokens": 48
+    },
+    "VocabularyDepthExample.swift.txt": {
+      "syntaxDepth": 43,
+      "syntaxNodes": 155,
+      "syntaxReservation": 288,
+      "tokens": 68
+    }
+  },
+  "swiftSyntax": "604.0.0",
+  "toolchain": "Apple Swift 6.4 (swiftlang-6.4.0.34.1), arm64 macOS 27"
+}
