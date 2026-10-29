@@ -1520,7 +1520,7 @@ never triggers truncation or partial migration.
 
 ### Compatibility transformations
 
-Two explicit transformations precede printing and are included in the migration
+Three explicit transformations precede printing and are included in the migration
 result's ordered diagnostics:
 
 1. For an explicit skill selection, an override whose name is not in `select` is
@@ -1536,10 +1536,15 @@ result's ordered diagnostics:
    in both native instructions and ChatGPT prompts. Bare section names still mean
    own sections and are not rewritten. Normalized source identities and pins do
    not change.
+3. In each `agents` array at the root, in instructions, in a skill selection or
+   in a skill override, retain the first occurrence of each recipient ID and remove
+   subsequent occurrences. Report `migration.duplicateRecipient` for every removed
+   element with its original JSON Pointer and recipient ID. A nonempty array stays
+   nonempty, and explicit versus inherited recipients remain distinct.
 
 Diagnostics sort by original JSON Pointer and code. They are returned in preview
-and apply reports; conversion never silently discards the removed override or
-hides a rename. The compatibility projection compares effective selections,
+and apply reports; conversion never silently discards a removed override or
+recipient, or hides a rename. The compatibility projection compares effective selections,
 recipients, modes, ordered content, subscriptions and source identities after
 applying precisely those reported transformations. Apart from them, explicit
 versus inherited intent and every field above are preserved. No groups, native

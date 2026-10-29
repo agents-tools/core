@@ -23,6 +23,7 @@ func compiledFixtures() -> [CompiledManifestFixture] {
     compiledLiteralCoverage(),
     compiledMigrationAliasGap(),
     compiledMigrationAliases(),
+    compiledMigrationDuplicateRecipients(),
     compiledMigrationEdgeExample(),
     compiledMigrationEmpty(),
     compiledMigrationEscapes(),
@@ -414,6 +415,62 @@ private func compiledMigrationAliases() -> CompiledManifestFixture {
   )
   return CompiledManifestFixture(
     name: "MigrationAliases.swift.txt", agents: agents,
+    constants: [
+      "agents": agents.constructionValue
+    ])
+}
+
+private func compiledMigrationDuplicateRecipients() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let agents = Agents(
+    defaultAgents: [.claudeCode, .codex],
+    sources: [
+      .source(name: "a~/b", path: "./other"),
+      .source(name: "source", path: "./inherited"),
+      .source(name: "source-2", path: "./rules"),
+    ],
+    components: [
+      .skills(
+        source: "a~/b",
+        overrides: [
+          .skill(
+            name: "future",
+            agents: [.openCode]
+          )
+        ],
+        agents: []
+      ),
+      .skills(source: "source"),
+      .skills(
+        source: "source-2",
+        select: ["empty", "inherited", "review"],
+        exclude: ["review"],
+        overrides: [
+          .skill(
+            name: "empty",
+            agents: []
+          ),
+          .skill(name: "inherited", mode: .copy),
+          .skill(
+            name: "review",
+            agents: [.codex, .cursor]
+          ),
+        ],
+        agents: [.claudeCode, .openCode]
+      ),
+      .instructions(
+        sections: [
+          "guide",
+          .section(name: "rule", source: "source-2"),
+        ],
+        agents: [.codex, .geminiCLI]
+      ),
+    ],
+    watch: ["source-2"]
+  )
+  return CompiledManifestFixture(
+    name: "MigrationDuplicateRecipients.swift.txt", agents: agents,
     constants: [
       "agents": agents.constructionValue
     ])

@@ -63,6 +63,7 @@ public enum ManifestMigration {
     let input = try JSONSerialization.jsonObject(with: Data(bytes)) as! [String: Any]
     try validateKeys(input)
     var diagnostics: [MigrationDiagnostic] = []
+    removeDuplicateRecipients(from: &legacy, diagnostics: &diagnostics)
     for alias in (legacy.skills ?? [:]).keys.sorted(by: utf8Less) {
       guard let selection = legacy.skills?[alias], case .names(let names) = selection.select else {
         continue
@@ -134,6 +135,47 @@ public enum ManifestMigration {
       ])
     }
     return ManifestMigrationResult(bytes: output, declaration: projection, diagnostics: diagnostics)
+  }
+
+  private static func removeDuplicateRecipients(
+    from legacy: inout Declaration, diagnostics: inout [MigrationDiagnostic]
+  ) {
+    func recipients(_ agents: [AgentID]?, at pointer: String) -> [AgentID]? {
+      guard let agents else { return nil }
+      var seen = Set<AgentID>()
+      var unique: [AgentID] = []
+      for (index, agent) in agents.enumerated() {
+        if seen.insert(agent).inserted {
+          unique.append(agent)
+        } else {
+          diagnostics.append(
+            MigrationDiagnostic(
+              pointer: pointer + "/\(index)", code: "migration.duplicateRecipient",
+              message: "recipient repeats an earlier entry in the same agents array",
+              value: .string(agent.rawValue)))
+        }
+      }
+      return unique
+    }
+    // Preserve original element indices and aliases before any other transformation removes
+    // overrides or renames sources. Optional arrays retain their inheritance boundary.
+    legacy.agents = recipients(legacy.agents, at: "/agents")
+    if var instructions = legacy.instructions {
+      instructions.agents = recipients(instructions.agents, at: "/instructions/agents")
+      legacy.instructions = instructions
+    }
+    for alias in (legacy.skills ?? [:]).keys.sorted(by: utf8Less) {
+      var selection = legacy.skills![alias]!
+      let pointer = "/skills/" + pointerEscape(alias)
+      selection.agents = recipients(selection.agents, at: pointer + "/agents")
+      for name in (selection.overrides ?? [:]).keys.sorted(by: utf8Less) {
+        var override = selection.overrides![name]!
+        override.agents = recipients(
+          override.agents, at: pointer + "/overrides/" + pointerEscape(name) + "/agents")
+        selection.overrides?[name] = override
+      }
+      legacy.skills?[alias] = selection
+    }
   }
 
   static func preflight(_ value: ConstructionValue) throws {

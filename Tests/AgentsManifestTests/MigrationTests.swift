@@ -8,6 +8,7 @@ import Testing
 private let migrationCases = [
   "MigrationEmpty", "MigrationExplicitEmpty", "MigrationFields", "MigrationAliases",
   "MigrationRanges", "MigrationEscapes", "MigrationWidth", "MigrationAliasGap",
+  "MigrationDuplicateRecipients",
 ]
 
 func manifestFixture(_ name: String) throws -> [UInt8] {
@@ -71,6 +72,71 @@ struct MigrationTests {
       json: manifestFixture("MigrationAliasGap.migration.json"))
     #expect(result.diagnostics.count == 1 && result.diagnostics[0].newAlias == "source")
     #expect(result.declaration.components[0]["overrides"]?.elements?.count == 1)
+  }
+
+  @Test func duplicateRecipientsReportOriginalElementsAndRoundtripTheTransformedProjection() throws
+  {
+    let input = try manifestFixture("MigrationDuplicateRecipients.migration.json")
+    let legacy = try StateStore.decode(Data(input), as: Declaration.self)
+    try legacy.validate(environment: RuntimeEnvironment())
+    #expect(legacy.agents == [.codex, .claudeCode, .codex, .codex, .claudeCode])
+    let result = try ManifestMigration.generate(json: input)
+    #expect(
+      result.diagnostics.map(\.pointer) == [
+        "/agents/2", "/agents/3", "/agents/4",
+        "/instructions/agents/2", "/instructions/agents/3",
+        "/skills/./agents/2", "/skills/./agents/3",
+        "/skills/./overrides/review/agents/2", "/skills/./overrides/review/agents/3",
+        "/skills/./overrides/unused", "/skills/./overrides/unused/agents/1",
+        "/skills/a~0~1b/overrides/future/agents/1", "/sources/.",
+      ])
+    #expect(
+      result.diagnostics.map(\.code)
+        == Array(repeating: "migration.duplicateRecipient", count: 9)
+        + [
+          "migration.inertOverride", "migration.duplicateRecipient",
+          "migration.duplicateRecipient", "migration.sourceAliasRenamed",
+        ])
+    #expect(
+      result.diagnostics.filter { $0.code == "migration.duplicateRecipient" }.map(\.value)
+        == [
+          .string("codex"), .string("codex"), .string("claude-code"),
+          .string("gemini-cli"), .string("codex"),
+          .string("opencode"), .string("claude-code"),
+          .string("cursor"), .string("codex"), .string("gemini-cli"), .string("opencode"),
+        ])
+    #expect(
+      result.diagnostics[9].value
+        == .object([
+          "agents": .array([.string("gemini-cli"), .string("gemini-cli")]),
+          "mode": .string("copy"),
+        ]))
+    #expect(result.diagnostics[12].oldAlias == "." && result.diagnostics[12].newAlias == "source-2")
+
+    var transformed = legacy
+    transformed.agents = [.codex, .claudeCode]
+    transformed.instructions?.agents = [.geminiCLI, .codex]
+    transformed.instructions?.sections = ["guide", "source-2:rule"]
+    let originalSelection = transformed.skills?.removeValue(forKey: ".")
+    var selection = try #require(originalSelection)
+    selection.agents = [.opencode, .claudeCode]
+    selection.overrides?["review"]?.agents = [.cursor, .codex]
+    selection.overrides?.removeValue(forKey: "unused")
+    transformed.skills?["source-2"] = selection
+    transformed.skills?["a~/b"]?.overrides?["future"]?.agents = [.opencode]
+    let source = transformed.sources.removeValue(forKey: ".")
+    transformed.sources["source-2"] = source
+    transformed.watch = ["source-2"]
+    let projection = try transformed.compatibilityProjection()
+    let doc = try DeclarationDocument(bytes: result.bytes, identity: DocumentIdentity("manifest"))
+    #expect(doc.declaration == projection)
+    #expect(result.declaration == projection)
+    #expect(projection.defaultAgents == ["claude-code", "codex"])
+    #expect(projection.components[0]["agents"] == .array([]))
+    #expect(projection.components[1]["agents"] == .null)
+    let overrides = try #require(projection.components[2]["overrides"]?.elements)
+    #expect(overrides[0].record?["agents"] == .array([]))
+    #expect(overrides[1].record?["agents"] == .null)
   }
 
   @Test func compatibilityProjectionRetainsInheritanceAndCanonicalizesCoreRequirements() throws {

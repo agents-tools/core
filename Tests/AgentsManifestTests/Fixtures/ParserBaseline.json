@@ -48,6 +48,12 @@
       "syntaxReservation": 680,
       "tokens": 166
     },
+    "MigrationDuplicateRecipients.swift.txt": {
+      "syntaxDepth": 28,
+      "syntaxNodes": 520,
+      "syntaxReservation": 920,
+      "tokens": 226
+    },
     "MigrationEdgeExample.swift.txt": {
       "syntaxDepth": 32,
       "syntaxNodes": 446,
