@@ -1,0 +1,18 @@
+{
+  "sources": {
+    ".": {
+      "local": "live"
+    },
+    "source-2": {
+      "local": "other"
+    }
+  },
+  "skills": {
+    ".": {
+      "select": "all",
+      "overrides": {
+        "future": {}
+      }
+    }
+  }
+}

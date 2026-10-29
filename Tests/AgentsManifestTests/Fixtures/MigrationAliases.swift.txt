@@ -1,0 +1,37 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  sources: [
+    .source(name: "source", path: "./s"),
+    .source(name: "source-2", path: "./s2"),
+    .source(name: "source-3", url: "git@Intranet:team/rules.git"),
+  ],
+  components: [
+    .skills(
+      source: "source-3",
+      select: ["a"],
+      exclude: ["a"],
+      overrides: [
+        .skill(name: "a", mode: .copy),
+      ]
+    ),
+    .instructions(
+      sections: [
+        "guide",
+        .section(name: "rule", source: "source-3"),
+        .section(name: "rule", source: "source-3"),
+      ],
+      chatGPT: [
+        .prompt(
+          name: "",
+          sections: [
+            .section(name: "rule", source: "source-3"),
+            "guide",
+          ]
+        ),
+      ]
+    ),
+  ],
+  watch: ["source", "source-3"]
+)

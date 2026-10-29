@@ -1,0 +1,4 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents()

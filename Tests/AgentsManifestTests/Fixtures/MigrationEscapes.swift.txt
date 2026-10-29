@@ -1,0 +1,27 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  defaultAgents: [],
+  sources: [
+    .source(
+      name: "é/别名~\"\\\n\r\t\u{1}\u{7f}\u{85}",
+      url: "https://example.org/escape.git"
+    ),
+  ],
+  components: [
+    .skills(
+      source: "é/别名~\"\\\n\r\t\u{1}\u{7f}\u{85}",
+      select: ["selected"]
+    ),
+    .instructions(
+      chatGPT: [
+        .prompt(
+          name: "\"\\\n\r\t\u{1}\u{7f}\u{85} é 😀",
+          sections: ["own"],
+          append: "notes/内容.md"
+        ),
+      ]
+    ),
+  ]
+)

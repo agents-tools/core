@@ -1,0 +1,5690 @@
+{
+  "declaration": {
+    "components": [
+      {
+        "agents": null,
+        "condition": null,
+        "exclude": [
+          "experimental"
+        ],
+        "kind": "skills",
+        "mode": "copy",
+        "native": {},
+        "overrides": [
+          {
+            "agents": [
+              "codex"
+            ],
+            "mode": "link",
+            "name": "testing"
+          }
+        ],
+        "select": "all",
+        "source": "rules"
+      },
+      {
+        "agents": null,
+        "condition": {
+          "agents": [
+            "claude-code"
+          ],
+          "platforms": null,
+          "scopes": [
+            "project"
+          ]
+        },
+        "exclude": [],
+        "kind": "skills",
+        "mode": "edit",
+        "native": {},
+        "overrides": [],
+        "select": [
+          "draft"
+        ],
+        "source": "drafts"
+      },
+      {
+        "agents": null,
+        "chatGPT": [
+          {
+            "append": "notes/weekly.md",
+            "condition": null,
+            "name": "weekly",
+            "sections": [
+              {
+                "condition": null,
+                "name": "guide",
+                "source": null
+              }
+            ]
+          }
+        ],
+        "condition": null,
+        "kind": "instructions",
+        "native": {},
+        "sections": [
+          {
+            "condition": null,
+            "name": "guide",
+            "source": null
+          },
+          {
+            "condition": null,
+            "name": "engineering",
+            "source": "rules"
+          }
+        ]
+      },
+      {
+        "agents": [
+          "claude-code"
+        ],
+        "condition": null,
+        "kind": "mcpServer",
+        "name": "workspace",
+        "native": {},
+        "transport": {
+          "arguments": [
+            "serve"
+          ],
+          "environment": {
+            "LOG_LEVEL": {
+              "kind": "literal",
+              "value": "info"
+            },
+            "TOKEN": {
+              "kind": "secret",
+              "value": "workspace-token"
+            }
+          },
+          "executable": "workspace-tools",
+          "kind": "stdio",
+          "workingDirectory": null
+        }
+      },
+      {
+        "agents": [
+          "opencode"
+        ],
+        "condition": null,
+        "kind": "mcpServer",
+        "name": "reference",
+        "native": {},
+        "transport": {
+          "headers": {
+            "Authorization": {
+              "kind": "environment",
+              "value": "MCP_AUTH"
+            }
+          },
+          "kind": "streamableHTTP",
+          "url": "https://example.org/mcp"
+        }
+      },
+      {
+        "agents": [
+          "claude-code"
+        ],
+        "condition": {
+          "agents": null,
+          "platforms": null,
+          "scopes": [
+            "project"
+          ]
+        },
+        "event": {
+          "kind": "afterTool"
+        },
+        "kind": "hook",
+        "matcher": null,
+        "name": "format",
+        "native": {},
+        "run": {
+          "arguments": [
+            "format",
+            "--in-place",
+            "Sources"
+          ],
+          "environment": {},
+          "executable": "swift",
+          "kind": "executable",
+          "workingDirectory": {
+            "path": "tools",
+            "source": "rules"
+          }
+        },
+        "timeoutSeconds": 30
+      },
+      {
+        "agents": [
+          "claude-code"
+        ],
+        "condition": null,
+        "description": "Review a selected change.",
+        "kind": "command",
+        "name": "review/change",
+        "native": {},
+        "parameters": [
+          {
+            "defaultValue": null,
+            "description": "The change to review.",
+            "name": "change"
+          }
+        ],
+        "prompt": {
+          "kind": "literal",
+          "value": "Review ${input:change} and cite evidence."
+        }
+      },
+      {
+        "agents": [
+          "claude-code"
+        ],
+        "condition": {
+          "agents": null,
+          "platforms": [
+            "macos"
+          ],
+          "scopes": null
+        },
+        "initializationOptions": {
+          "backgroundIndexing": {
+            "kind": "boolean",
+            "value": true
+          }
+        },
+        "kind": "lspServer",
+        "languages": {
+          ".swift": "swift"
+        },
+        "name": "swift",
+        "native": {},
+        "run": {
+          "arguments": [],
+          "environment": {},
+          "executable": "sourcekit-lsp",
+          "kind": "executable",
+          "workingDirectory": null
+        }
+      },
+      {
+        "agents": [
+          "claude-code"
+        ],
+        "condition": {
+          "agents": null,
+          "platforms": null,
+          "scopes": [
+            "project"
+          ]
+        },
+        "kind": "permissions",
+        "name": "private-files",
+        "native": {},
+        "rules": [
+          {
+            "kind": "deny",
+            "operation": {
+              "kind": "read"
+            },
+            "pattern": "secrets/**"
+          }
+        ]
+      },
+      {
+        "agents": [
+          "cursor"
+        ],
+        "condition": {
+          "agents": null,
+          "platforms": null,
+          "scopes": [
+            "project"
+          ]
+        },
+        "kind": "ignore",
+        "name": "build-products",
+        "native": {},
+        "patterns": [
+          ".build/",
+          "DerivedData/"
+        ],
+        "purpose": "indexing"
+      },
+      {
+        "agents": [
+          "claude-code"
+        ],
+        "condition": {
+          "agents": null,
+          "platforms": null,
+          "scopes": [
+            "user"
+          ]
+        },
+        "exclude": [],
+        "kind": "plugin",
+        "mode": "native",
+        "name": "vendor-tools",
+        "native": {},
+        "path": "plugins/tools",
+        "select": null,
+        "source": "vendor"
+      },
+      {
+        "agents": null,
+        "condition": {
+          "agents": null,
+          "platforms": null,
+          "scopes": [
+            "project"
+          ]
+        },
+        "exclude": [
+          {
+            "kind": "hook",
+            "name": "format"
+          }
+        ],
+        "kind": "plugin",
+        "mode": "components",
+        "name": "shared-tools",
+        "native": {},
+        "path": "plugins/shared",
+        "select": null,
+        "source": "vendor"
+      }
+    ],
+    "defaultAgents": null,
+    "exports": [],
+    "groups": [
+      {
+        "components": [
+          {
+            "agents": [
+              "claude-code"
+            ],
+            "condition": {
+              "agents": null,
+              "platforms": [
+                "macos"
+              ],
+              "scopes": null
+            },
+            "description": "Review correctness and tests.",
+            "kind": "subagent",
+            "model": null,
+            "name": "reviewer",
+            "native": {
+              "claude-code/subagent@1": {
+                "memory": {
+                  "kind": "string",
+                  "value": "project"
+                }
+              }
+            },
+            "prompt": {
+              "kind": "literal",
+              "value": "Check invariants and explain concrete failures."
+            },
+            "tools": null
+          }
+        ],
+        "condition": null,
+        "name": "review-tools",
+        "uses": [
+          {
+            "condition": {
+              "agents": [
+                "codex"
+              ],
+              "platforms": null,
+              "scopes": null
+            },
+            "kind": "exported",
+            "name": "review",
+            "source": "team"
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "index": "https://example.org/skills/index.json",
+        "kind": "index",
+        "name": "catalog",
+        "requirement": null,
+        "subpath": null
+      },
+      {
+        "kind": "local",
+        "name": "drafts",
+        "path": "./draft-skills",
+        "requirement": null,
+        "subpath": null
+      },
+      {
+        "kind": "git",
+        "name": "rules",
+        "requirement": {
+          "from": "1.2.0"
+        },
+        "subpath": null,
+        "url": "https://example.org/team/rules.git"
+      },
+      {
+        "kind": "local",
+        "name": "team",
+        "path": "./team",
+        "requirement": null,
+        "subpath": null
+      },
+      {
+        "kind": "git",
+        "name": "vendor",
+        "requirement": {
+          "exact": "2.1.0"
+        },
+        "subpath": null,
+        "url": "https://example.org/vendor/tools.git"
+      }
+    ],
+    "uses": [
+      {
+        "condition": null,
+        "kind": "local",
+        "name": "review-tools",
+        "source": null
+      }
+    ],
+    "watch": [
+      "catalog",
+      "rules"
+    ]
+  },
+  "diagnostics": [],
+  "kind": "manifest",
+  "languageVersion": "1.0",
+  "locations": [
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "",
+      "span": {
+        "column": 14,
+        "document": "manifest",
+        "end": 3467,
+        "line": 15,
+        "start": 475
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 3231,
+        "line": 23,
+        "start": 865
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/0",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1022,
+        "line": 24,
+        "start": 871
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/0/agents",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1022,
+        "line": 24,
+        "start": 871
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/0/condition",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1022,
+        "line": 24,
+        "start": 871
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/0/exclude",
+      "span": {
+        "column": 33,
+        "document": "manifest",
+        "end": 928,
+        "line": 25,
+        "start": 912
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/0/exclude/0",
+      "span": {
+        "column": 34,
+        "document": "manifest",
+        "end": 927,
+        "line": 25,
+        "start": 913
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/0/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1022,
+        "line": 24,
+        "start": 871
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/0/mode",
+      "span": {
+        "column": 57,
+        "document": "manifest",
+        "end": 941,
+        "line": 25,
+        "start": 936
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/0/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1022,
+        "line": 24,
+        "start": 871
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/0/overrides",
+      "span": {
+        "column": 18,
+        "document": "manifest",
+        "end": 1016,
+        "line": 26,
+        "start": 960
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/0/overrides/0",
+      "span": {
+        "column": 19,
+        "document": "manifest",
+        "end": 1015,
+        "line": 26,
+        "start": 961
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/0/overrides/0/agents",
+      "span": {
+        "column": 64,
+        "document": "manifest",
+        "end": 1014,
+        "line": 26,
+        "start": 1006
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/0/overrides/0/agents/0",
+      "span": {
+        "column": 65,
+        "document": "manifest",
+        "end": 1013,
+        "line": 26,
+        "start": 1007
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/0/overrides/0/mode",
+      "span": {
+        "column": 49,
+        "document": "manifest",
+        "end": 996,
+        "line": 26,
+        "start": 991
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/0/overrides/0/name",
+      "span": {
+        "column": 32,
+        "document": "manifest",
+        "end": 983,
+        "line": 26,
+        "start": 974
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/0/select",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1022,
+        "line": 24,
+        "start": 871
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/0/source",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 901,
+        "line": 25,
+        "start": 894
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/1",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1164,
+        "line": 28,
+        "start": 1028
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/1/agents",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1164,
+        "line": 28,
+        "start": 1028
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/1/condition",
+      "span": {
+        "column": 18,
+        "document": "manifest",
+        "end": 1158,
+        "line": 30,
+        "start": 1110
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/1/condition/agents",
+      "span": {
+        "column": 32,
+        "document": "manifest",
+        "end": 1137,
+        "line": 30,
+        "start": 1124
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/1/condition/agents/0",
+      "span": {
+        "column": 33,
+        "document": "manifest",
+        "end": 1136,
+        "line": 30,
+        "start": 1125
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/1/condition/platforms",
+      "span": {
+        "column": 18,
+        "document": "manifest",
+        "end": 1158,
+        "line": 30,
+        "start": 1110
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/1/condition/scopes",
+      "span": {
+        "column": 55,
+        "document": "manifest",
+        "end": 1157,
+        "line": 30,
+        "start": 1147
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/1/condition/scopes/0",
+      "span": {
+        "column": 56,
+        "document": "manifest",
+        "end": 1156,
+        "line": 30,
+        "start": 1148
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/1/exclude",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1164,
+        "line": 28,
+        "start": 1028
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/1/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1164,
+        "line": 28,
+        "start": 1028
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/1/mode",
+      "span": {
+        "column": 50,
+        "document": "manifest",
+        "end": 1091,
+        "line": 29,
+        "start": 1086
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/1/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1164,
+        "line": 28,
+        "start": 1028
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/1/overrides",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1164,
+        "line": 28,
+        "start": 1028
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/1/select",
+      "span": {
+        "column": 33,
+        "document": "manifest",
+        "end": 1078,
+        "line": 29,
+        "start": 1069
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/1/select/0",
+      "span": {
+        "column": 34,
+        "document": "manifest",
+        "end": 1077,
+        "line": 29,
+        "start": 1070
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/1/source",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 1059,
+        "line": 29,
+        "start": 1051
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/10",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3059,
+        "line": 80,
+        "start": 2898
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/10/agents",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 3018,
+        "line": 82,
+        "start": 3005
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/10/agents/0",
+      "span": {
+        "column": 16,
+        "document": "manifest",
+        "end": 3017,
+        "line": 82,
+        "start": 3006
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/10/condition",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 3053,
+        "line": 82,
+        "start": 3031
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/10/condition/agents",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 3053,
+        "line": 82,
+        "start": 3031
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/10/condition/platforms",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 3053,
+        "line": 82,
+        "start": 3031
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/10/condition/scopes",
+      "span": {
+        "column": 55,
+        "document": "manifest",
+        "end": 3052,
+        "line": 82,
+        "start": 3045
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/10/condition/scopes/0",
+      "span": {
+        "column": 56,
+        "document": "manifest",
+        "end": 3051,
+        "line": 82,
+        "start": 3046
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/10/exclude",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3059,
+        "line": 80,
+        "start": 2898
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/10/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3059,
+        "line": 80,
+        "start": 2898
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/10/mode",
+      "span": {
+        "column": 76,
+        "document": "manifest",
+        "end": 2989,
+        "line": 81,
+        "start": 2982
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/10/name",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 2933,
+        "line": 81,
+        "start": 2919
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/10/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3059,
+        "line": 80,
+        "start": 2898
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/10/path",
+      "span": {
+        "column": 35,
+        "document": "manifest",
+        "end": 2956,
+        "line": 81,
+        "start": 2941
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/10/select",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3059,
+        "line": 80,
+        "start": 2898
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/10/source",
+      "span": {
+        "column": 60,
+        "document": "manifest",
+        "end": 2974,
+        "line": 81,
+        "start": 2966
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/11",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3226,
+        "line": 84,
+        "start": 3065
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/11/agents",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3226,
+        "line": 84,
+        "start": 3065
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/11/condition",
+      "span": {
+        "column": 52,
+        "document": "manifest",
+        "end": 3220,
+        "line": 86,
+        "start": 3195
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/11/condition/agents",
+      "span": {
+        "column": 52,
+        "document": "manifest",
+        "end": 3220,
+        "line": 86,
+        "start": 3195
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/11/condition/platforms",
+      "span": {
+        "column": 52,
+        "document": "manifest",
+        "end": 3220,
+        "line": 86,
+        "start": 3195
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/11/condition/scopes",
+      "span": {
+        "column": 66,
+        "document": "manifest",
+        "end": 3219,
+        "line": 86,
+        "start": 3209
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/11/condition/scopes/0",
+      "span": {
+        "column": 67,
+        "document": "manifest",
+        "end": 3218,
+        "line": 86,
+        "start": 3210
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/11/exclude",
+      "span": {
+        "column": 16,
+        "document": "manifest",
+        "end": 3182,
+        "line": 86,
+        "start": 3159
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/11/exclude/0",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 3181,
+        "line": 86,
+        "start": 3160
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/11/exclude/0/kind",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 3181,
+        "line": 86,
+        "start": 3160
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/11/exclude/0/name",
+      "span": {
+        "column": 29,
+        "document": "manifest",
+        "end": 3180,
+        "line": 86,
+        "start": 3172
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/11/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3226,
+        "line": 84,
+        "start": 3065
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/11/mode",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3226,
+        "line": 84,
+        "start": 3065
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/11/name",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 3100,
+        "line": 85,
+        "start": 3086
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/11/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3226,
+        "line": 84,
+        "start": 3065
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/11/path",
+      "span": {
+        "column": 35,
+        "document": "manifest",
+        "end": 3124,
+        "line": 85,
+        "start": 3108
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/11/select",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3226,
+        "line": 84,
+        "start": 3065
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/11/source",
+      "span": {
+        "column": 61,
+        "document": "manifest",
+        "end": 3142,
+        "line": 85,
+        "start": 3134
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/2",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1300,
+        "line": 32,
+        "start": 1170
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/2/agents",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1300,
+        "line": 32,
+        "start": 1170
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/2/chatGPT",
+      "span": {
+        "column": 16,
+        "document": "manifest",
+        "end": 1294,
+        "line": 34,
+        "start": 1226
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/2/chatGPT/0",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1293,
+        "line": 34,
+        "start": 1227
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/2/chatGPT/0/append",
+      "span": {
+        "column": 65,
+        "document": "manifest",
+        "end": 1292,
+        "line": 34,
+        "start": 1275
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/2/chatGPT/0/condition",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1293,
+        "line": 34,
+        "start": 1227
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/2/chatGPT/0/name",
+      "span": {
+        "column": 31,
+        "document": "manifest",
+        "end": 1249,
+        "line": 34,
+        "start": 1241
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 32,
+          "document": "manifest",
+          "end": 95,
+          "line": 4,
+          "start": 86
+        }
+      ],
+      "pointer": "/components/2/chatGPT/0/sections",
+      "span": {
+        "column": 51,
+        "document": "manifest",
+        "end": 1265,
+        "line": 34,
+        "start": 1261
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 32,
+          "document": "manifest",
+          "end": 95,
+          "line": 4,
+          "start": 86
+        },
+        {
+          "column": 33,
+          "document": "manifest",
+          "end": 94,
+          "line": 4,
+          "start": 87
+        }
+      ],
+      "pointer": "/components/2/chatGPT/0/sections/0",
+      "span": {
+        "column": 51,
+        "document": "manifest",
+        "end": 1265,
+        "line": 34,
+        "start": 1261
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 32,
+          "document": "manifest",
+          "end": 95,
+          "line": 4,
+          "start": 86
+        },
+        {
+          "column": 33,
+          "document": "manifest",
+          "end": 94,
+          "line": 4,
+          "start": 87
+        }
+      ],
+      "pointer": "/components/2/chatGPT/0/sections/0/condition",
+      "span": {
+        "column": 51,
+        "document": "manifest",
+        "end": 1265,
+        "line": 34,
+        "start": 1261
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 32,
+          "document": "manifest",
+          "end": 95,
+          "line": 4,
+          "start": 86
+        },
+        {
+          "column": 33,
+          "document": "manifest",
+          "end": 94,
+          "line": 4,
+          "start": 87
+        }
+      ],
+      "pointer": "/components/2/chatGPT/0/sections/0/name",
+      "span": {
+        "column": 51,
+        "document": "manifest",
+        "end": 1265,
+        "line": 34,
+        "start": 1261
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 32,
+          "document": "manifest",
+          "end": 95,
+          "line": 4,
+          "start": 86
+        },
+        {
+          "column": 33,
+          "document": "manifest",
+          "end": 94,
+          "line": 4,
+          "start": 87
+        }
+      ],
+      "pointer": "/components/2/chatGPT/0/sections/0/source",
+      "span": {
+        "column": 51,
+        "document": "manifest",
+        "end": 1265,
+        "line": 34,
+        "start": 1261
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/2/condition",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1300,
+        "line": 32,
+        "start": 1170
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/2/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1300,
+        "line": 32,
+        "start": 1170
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/2/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1300,
+        "line": 32,
+        "start": 1170
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 16,
+          "document": "manifest",
+          "end": 166,
+          "line": 5,
+          "start": 111
+        }
+      ],
+      "pointer": "/components/2/sections",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1209,
+        "line": 33,
+        "start": 1201
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 16,
+          "document": "manifest",
+          "end": 166,
+          "line": 5,
+          "start": 111
+        },
+        {
+          "column": 33,
+          "document": "manifest",
+          "end": 94,
+          "line": 4,
+          "start": 87
+        }
+      ],
+      "pointer": "/components/2/sections/0",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1209,
+        "line": 33,
+        "start": 1201
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 16,
+          "document": "manifest",
+          "end": 166,
+          "line": 5,
+          "start": 111
+        },
+        {
+          "column": 33,
+          "document": "manifest",
+          "end": 94,
+          "line": 4,
+          "start": 87
+        }
+      ],
+      "pointer": "/components/2/sections/0/condition",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1209,
+        "line": 33,
+        "start": 1201
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 16,
+          "document": "manifest",
+          "end": 166,
+          "line": 5,
+          "start": 111
+        },
+        {
+          "column": 33,
+          "document": "manifest",
+          "end": 94,
+          "line": 4,
+          "start": 87
+        }
+      ],
+      "pointer": "/components/2/sections/0/name",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1209,
+        "line": 33,
+        "start": 1201
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 16,
+          "document": "manifest",
+          "end": 166,
+          "line": 5,
+          "start": 111
+        },
+        {
+          "column": 33,
+          "document": "manifest",
+          "end": 94,
+          "line": 4,
+          "start": 87
+        }
+      ],
+      "pointer": "/components/2/sections/0/source",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1209,
+        "line": 33,
+        "start": 1201
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 16,
+          "document": "manifest",
+          "end": 166,
+          "line": 5,
+          "start": 111
+        },
+        {
+          "column": 24,
+          "document": "manifest",
+          "end": 165,
+          "line": 5,
+          "start": 119
+        }
+      ],
+      "pointer": "/components/2/sections/1",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1209,
+        "line": 33,
+        "start": 1201
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 16,
+          "document": "manifest",
+          "end": 166,
+          "line": 5,
+          "start": 111
+        },
+        {
+          "column": 24,
+          "document": "manifest",
+          "end": 165,
+          "line": 5,
+          "start": 119
+        }
+      ],
+      "pointer": "/components/2/sections/1/condition",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1209,
+        "line": 33,
+        "start": 1201
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 16,
+          "document": "manifest",
+          "end": 166,
+          "line": 5,
+          "start": 111
+        },
+        {
+          "column": 24,
+          "document": "manifest",
+          "end": 165,
+          "line": 5,
+          "start": 119
+        },
+        {
+          "column": 39,
+          "document": "manifest",
+          "end": 147,
+          "line": 5,
+          "start": 134
+        }
+      ],
+      "pointer": "/components/2/sections/1/name",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1209,
+        "line": 33,
+        "start": 1201
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 16,
+          "document": "manifest",
+          "end": 166,
+          "line": 5,
+          "start": 111
+        },
+        {
+          "column": 24,
+          "document": "manifest",
+          "end": 165,
+          "line": 5,
+          "start": 119
+        },
+        {
+          "column": 62,
+          "document": "manifest",
+          "end": 164,
+          "line": 5,
+          "start": 157
+        }
+      ],
+      "pointer": "/components/2/sections/1/source",
+      "span": {
+        "column": 17,
+        "document": "manifest",
+        "end": 1209,
+        "line": 33,
+        "start": 1201
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1539,
+        "line": 36,
+        "start": 1306
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3/agents",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 1533,
+        "line": 42,
+        "start": 1520
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/3/agents/0",
+      "span": {
+        "column": 16,
+        "document": "manifest",
+        "end": 1532,
+        "line": 42,
+        "start": 1521
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/3/condition",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1539,
+        "line": 36,
+        "start": 1306
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/3/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1539,
+        "line": 36,
+        "start": 1306
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3/name",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 1341,
+        "line": 37,
+        "start": 1330
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/3/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1539,
+        "line": 36,
+        "start": 1306
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport",
+      "span": {
+        "column": 18,
+        "document": "manifest",
+        "end": 1504,
+        "line": 38,
+        "start": 1360
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/arguments",
+      "span": {
+        "column": 39,
+        "document": "manifest",
+        "end": 1415,
+        "line": 39,
+        "start": 1406
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/arguments/0",
+      "span": {
+        "column": 40,
+        "document": "manifest",
+        "end": 1414,
+        "line": 39,
+        "start": 1407
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/environment",
+      "span": {
+        "column": 22,
+        "document": "manifest",
+        "end": 1496,
+        "line": 40,
+        "start": 1438
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/environment/LOG_LEVEL",
+      "span": {
+        "column": 73,
+        "document": "manifest",
+        "end": 1495,
+        "line": 40,
+        "start": 1489
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/environment/LOG_LEVEL/kind",
+      "span": {
+        "column": 73,
+        "document": "manifest",
+        "end": 1495,
+        "line": 40,
+        "start": 1489
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/environment/LOG_LEVEL/value",
+      "span": {
+        "column": 73,
+        "document": "manifest",
+        "end": 1495,
+        "line": 40,
+        "start": 1489
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/environment/TOKEN",
+      "span": {
+        "column": 32,
+        "document": "manifest",
+        "end": 1474,
+        "line": 40,
+        "start": 1448
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/environment/TOKEN/kind",
+      "span": {
+        "column": 32,
+        "document": "manifest",
+        "end": 1474,
+        "line": 40,
+        "start": 1448
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/environment/TOKEN/value",
+      "span": {
+        "column": 40,
+        "document": "manifest",
+        "end": 1473,
+        "line": 40,
+        "start": 1456
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/executable",
+      "span": {
+        "column": 9,
+        "document": "manifest",
+        "end": 1393,
+        "line": 39,
+        "start": 1376
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/kind",
+      "span": {
+        "column": 18,
+        "document": "manifest",
+        "end": 1504,
+        "line": 38,
+        "start": 1360
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/3/transport/workingDirectory",
+      "span": {
+        "column": 18,
+        "document": "manifest",
+        "end": 1504,
+        "line": 38,
+        "start": 1360
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/4",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1749,
+        "line": 44,
+        "start": 1545
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/4/agents",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 1743,
+        "line": 49,
+        "start": 1732
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/4/agents/0",
+      "span": {
+        "column": 16,
+        "document": "manifest",
+        "end": 1742,
+        "line": 49,
+        "start": 1733
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/4/condition",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1749,
+        "line": 44,
+        "start": 1545
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/4/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1749,
+        "line": 44,
+        "start": 1545
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/4/name",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 1580,
+        "line": 45,
+        "start": 1569
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/4/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 1749,
+        "line": 44,
+        "start": 1545
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/4/transport",
+      "span": {
+        "column": 18,
+        "document": "manifest",
+        "end": 1716,
+        "line": 46,
+        "start": 1599
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/4/transport/headers",
+      "span": {
+        "column": 50,
+        "document": "manifest",
+        "end": 1708,
+        "line": 47,
+        "start": 1665
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/4/transport/headers/Authorization",
+      "span": {
+        "column": 68,
+        "document": "manifest",
+        "end": 1707,
+        "line": 47,
+        "start": 1683
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/4/transport/headers/Authorization/kind",
+      "span": {
+        "column": 68,
+        "document": "manifest",
+        "end": 1707,
+        "line": 47,
+        "start": 1683
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/4/transport/headers/Authorization/value",
+      "span": {
+        "column": 81,
+        "document": "manifest",
+        "end": 1706,
+        "line": 47,
+        "start": 1696
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/4/transport/kind",
+      "span": {
+        "column": 18,
+        "document": "manifest",
+        "end": 1716,
+        "line": 46,
+        "start": 1599
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/4/transport/url",
+      "span": {
+        "column": 14,
+        "document": "manifest",
+        "end": 1654,
+        "line": 47,
+        "start": 1629
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2050,
+        "line": 51,
+        "start": 1755
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/agents",
+      "span": {
+        "column": 35,
+        "document": "manifest",
+        "end": 2006,
+        "line": 57,
+        "start": 1993
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/agents/0",
+      "span": {
+        "column": 36,
+        "document": "manifest",
+        "end": 2005,
+        "line": 57,
+        "start": 1994
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/condition",
+      "span": {
+        "column": 61,
+        "document": "manifest",
+        "end": 2044,
+        "line": 57,
+        "start": 2019
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/condition/agents",
+      "span": {
+        "column": 61,
+        "document": "manifest",
+        "end": 2044,
+        "line": 57,
+        "start": 2019
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/condition/platforms",
+      "span": {
+        "column": 61,
+        "document": "manifest",
+        "end": 2044,
+        "line": 57,
+        "start": 2019
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/condition/scopes",
+      "span": {
+        "column": 75,
+        "document": "manifest",
+        "end": 2043,
+        "line": 57,
+        "start": 2033
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/condition/scopes/0",
+      "span": {
+        "column": 76,
+        "document": "manifest",
+        "end": 2042,
+        "line": 57,
+        "start": 2034
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/event",
+      "span": {
+        "column": 30,
+        "document": "manifest",
+        "end": 1801,
+        "line": 52,
+        "start": 1791
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/event/kind",
+      "span": {
+        "column": 30,
+        "document": "manifest",
+        "end": 1801,
+        "line": 52,
+        "start": 1791
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2050,
+        "line": 51,
+        "start": 1755
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/matcher",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2050,
+        "line": 51,
+        "start": 1755
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/name",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 1782,
+        "line": 52,
+        "start": 1774
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2050,
+        "line": 51,
+        "start": 1755
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/run",
+      "span": {
+        "column": 12,
+        "document": "manifest",
+        "end": 1957,
+        "line": 53,
+        "start": 1814
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/run/arguments",
+      "span": {
+        "column": 29,
+        "document": "manifest",
+        "end": 1890,
+        "line": 54,
+        "start": 1855
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/run/arguments/0",
+      "span": {
+        "column": 30,
+        "document": "manifest",
+        "end": 1864,
+        "line": 54,
+        "start": 1856
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/run/arguments/1",
+      "span": {
+        "column": 40,
+        "document": "manifest",
+        "end": 1878,
+        "line": 54,
+        "start": 1866
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/run/arguments/2",
+      "span": {
+        "column": 54,
+        "document": "manifest",
+        "end": 1889,
+        "line": 54,
+        "start": 1880
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/run/environment",
+      "span": {
+        "column": 12,
+        "document": "manifest",
+        "end": 1957,
+        "line": 53,
+        "start": 1814
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/run/executable",
+      "span": {
+        "column": 9,
+        "document": "manifest",
+        "end": 1842,
+        "line": 54,
+        "start": 1835
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/5/run/kind",
+      "span": {
+        "column": 12,
+        "document": "manifest",
+        "end": 1957,
+        "line": 53,
+        "start": 1814
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/run/workingDirectory",
+      "span": {
+        "column": 27,
+        "document": "manifest",
+        "end": 1949,
+        "line": 55,
+        "start": 1918
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/run/workingDirectory/path",
+      "span": {
+        "column": 33,
+        "document": "manifest",
+        "end": 1931,
+        "line": 55,
+        "start": 1924
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/run/workingDirectory/source",
+      "span": {
+        "column": 50,
+        "document": "manifest",
+        "end": 1948,
+        "line": 55,
+        "start": 1941
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/5/timeoutSeconds",
+      "span": {
+        "column": 23,
+        "document": "manifest",
+        "end": 1983,
+        "line": 57,
+        "start": 1981
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/6",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2315,
+        "line": 59,
+        "start": 2056
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/6/agents",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 2309,
+        "line": 63,
+        "start": 2296
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/6/agents/0",
+      "span": {
+        "column": 16,
+        "document": "manifest",
+        "end": 2308,
+        "line": 63,
+        "start": 2297
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/6/condition",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2315,
+        "line": 59,
+        "start": 2056
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/6/description",
+      "span": {
+        "column": 43,
+        "document": "manifest",
+        "end": 2135,
+        "line": 60,
+        "start": 2108
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/6/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2315,
+        "line": 59,
+        "start": 2056
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/6/name",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 2093,
+        "line": 60,
+        "start": 2078
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/6/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2315,
+        "line": 59,
+        "start": 2056
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/6/parameters",
+      "span": {
+        "column": 19,
+        "document": "manifest",
+        "end": 2280,
+        "line": 62,
+        "start": 2214
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/6/parameters/0",
+      "span": {
+        "column": 20,
+        "document": "manifest",
+        "end": 2279,
+        "line": 62,
+        "start": 2215
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/6/parameters/0/defaultValue",
+      "span": {
+        "column": 20,
+        "document": "manifest",
+        "end": 2279,
+        "line": 62,
+        "start": 2215
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/6/parameters/0/description",
+      "span": {
+        "column": 60,
+        "document": "manifest",
+        "end": 2278,
+        "line": 62,
+        "start": 2255
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/6/parameters/0/name",
+      "span": {
+        "column": 37,
+        "document": "manifest",
+        "end": 2240,
+        "line": 62,
+        "start": 2232
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/6/prompt",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 2194,
+        "line": 61,
+        "start": 2151
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/6/prompt/kind",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 2194,
+        "line": 61,
+        "start": 2151
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/6/prompt/value",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 2194,
+        "line": 61,
+        "start": 2151
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2558,
+        "line": 65,
+        "start": 2321
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/agents",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 2513,
+        "line": 69,
+        "start": 2500
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/agents/0",
+      "span": {
+        "column": 16,
+        "document": "manifest",
+        "end": 2512,
+        "line": 69,
+        "start": 2501
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/condition",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 2552,
+        "line": 69,
+        "start": 2526
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/condition/agents",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 2552,
+        "line": 69,
+        "start": 2526
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/condition/platforms",
+      "span": {
+        "column": 58,
+        "document": "manifest",
+        "end": 2551,
+        "line": 69,
+        "start": 2543
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/condition/platforms/0",
+      "span": {
+        "column": 59,
+        "document": "manifest",
+        "end": 2550,
+        "line": 69,
+        "start": 2544
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/condition/scopes",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 2552,
+        "line": 69,
+        "start": 2526
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/initializationOptions",
+      "span": {
+        "column": 30,
+        "document": "manifest",
+        "end": 2484,
+        "line": 68,
+        "start": 2456
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/initializationOptions/backgroundIndexing",
+      "span": {
+        "column": 53,
+        "document": "manifest",
+        "end": 2483,
+        "line": 68,
+        "start": 2479
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/initializationOptions/backgroundIndexing/kind",
+      "span": {
+        "column": 53,
+        "document": "manifest",
+        "end": 2483,
+        "line": 68,
+        "start": 2479
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/initializationOptions/backgroundIndexing/value",
+      "span": {
+        "column": 53,
+        "document": "manifest",
+        "end": 2483,
+        "line": 68,
+        "start": 2479
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2558,
+        "line": 65,
+        "start": 2321
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/languages",
+      "span": {
+        "column": 18,
+        "document": "manifest",
+        "end": 2425,
+        "line": 67,
+        "start": 2406
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/languages/.swift",
+      "span": {
+        "column": 29,
+        "document": "manifest",
+        "end": 2424,
+        "line": 67,
+        "start": 2417
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/name",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 2352,
+        "line": 66,
+        "start": 2345
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2558,
+        "line": 65,
+        "start": 2321
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/run",
+      "span": {
+        "column": 27,
+        "document": "manifest",
+        "end": 2387,
+        "line": 66,
+        "start": 2359
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/run/arguments",
+      "span": {
+        "column": 27,
+        "document": "manifest",
+        "end": 2387,
+        "line": 66,
+        "start": 2359
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/run/environment",
+      "span": {
+        "column": 27,
+        "document": "manifest",
+        "end": 2387,
+        "line": 66,
+        "start": 2359
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/7/run/executable",
+      "span": {
+        "column": 39,
+        "document": "manifest",
+        "end": 2386,
+        "line": 66,
+        "start": 2371
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/run/kind",
+      "span": {
+        "column": 27,
+        "document": "manifest",
+        "end": 2387,
+        "line": 66,
+        "start": 2359
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/7/run/workingDirectory",
+      "span": {
+        "column": 27,
+        "document": "manifest",
+        "end": 2387,
+        "line": 66,
+        "start": 2359
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/8",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2721,
+        "line": 71,
+        "start": 2564
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/8/agents",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 2677,
+        "line": 74,
+        "start": 2664
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/8/agents/0",
+      "span": {
+        "column": 16,
+        "document": "manifest",
+        "end": 2676,
+        "line": 74,
+        "start": 2665
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/8/condition",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 2715,
+        "line": 74,
+        "start": 2690
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/8/condition/agents",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 2715,
+        "line": 74,
+        "start": 2690
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/8/condition/platforms",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 2715,
+        "line": 74,
+        "start": 2690
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/8/condition/scopes",
+      "span": {
+        "column": 55,
+        "document": "manifest",
+        "end": 2714,
+        "line": 74,
+        "start": 2704
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/8/condition/scopes/0",
+      "span": {
+        "column": 56,
+        "document": "manifest",
+        "end": 2713,
+        "line": 74,
+        "start": 2705
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/8/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2721,
+        "line": 71,
+        "start": 2564
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/8/name",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 2605,
+        "line": 72,
+        "start": 2590
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/8/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2721,
+        "line": 71,
+        "start": 2564
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/8/rules",
+      "span": {
+        "column": 14,
+        "document": "manifest",
+        "end": 2648,
+        "line": 73,
+        "start": 2620
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/8/rules/0",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 2647,
+        "line": 73,
+        "start": 2621
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/8/rules/0/kind",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 2647,
+        "line": 73,
+        "start": 2621
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/8/rules/0/operation",
+      "span": {
+        "column": 21,
+        "document": "manifest",
+        "end": 2632,
+        "line": 73,
+        "start": 2627
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/8/rules/0/operation/kind",
+      "span": {
+        "column": 21,
+        "document": "manifest",
+        "end": 2632,
+        "line": 73,
+        "start": 2627
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/8/rules/0/pattern",
+      "span": {
+        "column": 28,
+        "document": "manifest",
+        "end": 2646,
+        "line": 73,
+        "start": 2634
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/9",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2892,
+        "line": 76,
+        "start": 2727
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/9/agents",
+      "span": {
+        "column": 15,
+        "document": "manifest",
+        "end": 2848,
+        "line": 78,
+        "start": 2839
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/9/agents/0",
+      "span": {
+        "column": 16,
+        "document": "manifest",
+        "end": 2847,
+        "line": 78,
+        "start": 2840
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/9/condition",
+      "span": {
+        "column": 37,
+        "document": "manifest",
+        "end": 2886,
+        "line": 78,
+        "start": 2861
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/9/condition/agents",
+      "span": {
+        "column": 37,
+        "document": "manifest",
+        "end": 2886,
+        "line": 78,
+        "start": 2861
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/9/condition/platforms",
+      "span": {
+        "column": 37,
+        "document": "manifest",
+        "end": 2886,
+        "line": 78,
+        "start": 2861
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/9/condition/scopes",
+      "span": {
+        "column": 51,
+        "document": "manifest",
+        "end": 2885,
+        "line": 78,
+        "start": 2875
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/9/condition/scopes/0",
+      "span": {
+        "column": 52,
+        "document": "manifest",
+        "end": 2884,
+        "line": 78,
+        "start": 2876
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/9/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2892,
+        "line": 76,
+        "start": 2727
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/9/name",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 2764,
+        "line": 77,
+        "start": 2748
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/components/9/native",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 2892,
+        "line": 76,
+        "start": 2727
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/9/patterns",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 2803,
+        "line": 77,
+        "start": 2776
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/9/patterns/0",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 2786,
+        "line": 77,
+        "start": 2777
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/components/9/patterns/1",
+      "span": {
+        "column": 53,
+        "document": "manifest",
+        "end": 2802,
+        "line": 77,
+        "start": 2788
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/components/9/purpose",
+      "span": {
+        "column": 79,
+        "document": "manifest",
+        "end": 2823,
+        "line": 77,
+        "start": 2814
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/defaultAgents",
+      "span": {
+        "column": 14,
+        "document": "manifest",
+        "end": 3467,
+        "line": 15,
+        "start": 475
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/exports",
+      "span": {
+        "column": 14,
+        "document": "manifest",
+        "end": 3467,
+        "line": 15,
+        "start": 475
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/groups",
+      "span": {
+        "column": 11,
+        "document": "manifest",
+        "end": 3408,
+        "line": 89,
+        "start": 3243
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/groups/0",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3403,
+        "line": 90,
+        "start": 3249
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/groups/0/components",
+      "span": {
+        "column": 41,
+        "document": "manifest",
+        "end": 3307,
+        "line": 91,
+        "start": 3297
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        }
+      ],
+      "pointer": "/groups/0/components/0",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 11,
+          "document": "manifest",
+          "end": 356,
+          "line": 10,
+          "start": 343
+        }
+      ],
+      "pointer": "/groups/0/components/0/agents",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 11,
+          "document": "manifest",
+          "end": 356,
+          "line": 10,
+          "start": 343
+        },
+        {
+          "column": 12,
+          "document": "manifest",
+          "end": 355,
+          "line": 10,
+          "start": 344
+        }
+      ],
+      "pointer": "/groups/0/components/0/agents/0",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 14,
+          "document": "manifest",
+          "end": 397,
+          "line": 11,
+          "start": 371
+        }
+      ],
+      "pointer": "/groups/0/components/0/condition",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 14,
+          "document": "manifest",
+          "end": 397,
+          "line": 11,
+          "start": 371
+        }
+      ],
+      "pointer": "/groups/0/components/0/condition/agents",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 14,
+          "document": "manifest",
+          "end": 397,
+          "line": 11,
+          "start": 371
+        },
+        {
+          "column": 31,
+          "document": "manifest",
+          "end": 396,
+          "line": 11,
+          "start": 388
+        }
+      ],
+      "pointer": "/groups/0/components/0/condition/platforms",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 14,
+          "document": "manifest",
+          "end": 397,
+          "line": 11,
+          "start": 371
+        },
+        {
+          "column": 31,
+          "document": "manifest",
+          "end": 396,
+          "line": 11,
+          "start": 388
+        },
+        {
+          "column": 32,
+          "document": "manifest",
+          "end": 395,
+          "line": 11,
+          "start": 389
+        }
+      ],
+      "pointer": "/groups/0/components/0/condition/platforms/0",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 14,
+          "document": "manifest",
+          "end": 397,
+          "line": 11,
+          "start": 371
+        }
+      ],
+      "pointer": "/groups/0/components/0/condition/scopes",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 16,
+          "document": "manifest",
+          "end": 270,
+          "line": 8,
+          "start": 239
+        }
+      ],
+      "pointer": "/groups/0/components/0/description",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        }
+      ],
+      "pointer": "/groups/0/components/0/kind",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        }
+      ],
+      "pointer": "/groups/0/components/0/model",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 9,
+          "document": "manifest",
+          "end": 222,
+          "line": 7,
+          "start": 212
+        }
+      ],
+      "pointer": "/groups/0/components/0/name",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 11,
+          "document": "manifest",
+          "end": 458,
+          "line": 12,
+          "start": 409
+        }
+      ],
+      "pointer": "/groups/0/components/0/native",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 11,
+          "document": "manifest",
+          "end": 458,
+          "line": 12,
+          "start": 409
+        },
+        {
+          "column": 38,
+          "document": "manifest",
+          "end": 457,
+          "line": 12,
+          "start": 436
+        }
+      ],
+      "pointer": "/groups/0/components/0/native/claude-code~1subagent@1",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 11,
+          "document": "manifest",
+          "end": 458,
+          "line": 12,
+          "start": 409
+        },
+        {
+          "column": 38,
+          "document": "manifest",
+          "end": 457,
+          "line": 12,
+          "start": 436
+        },
+        {
+          "column": 49,
+          "document": "manifest",
+          "end": 456,
+          "line": 12,
+          "start": 447
+        }
+      ],
+      "pointer": "/groups/0/components/0/native/claude-code~1subagent@1/memory",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 11,
+          "document": "manifest",
+          "end": 458,
+          "line": 12,
+          "start": 409
+        },
+        {
+          "column": 38,
+          "document": "manifest",
+          "end": 457,
+          "line": 12,
+          "start": 436
+        },
+        {
+          "column": 49,
+          "document": "manifest",
+          "end": 456,
+          "line": 12,
+          "start": 447
+        }
+      ],
+      "pointer": "/groups/0/components/0/native/claude-code~1subagent@1/memory/kind",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 11,
+          "document": "manifest",
+          "end": 458,
+          "line": 12,
+          "start": 409
+        },
+        {
+          "column": 38,
+          "document": "manifest",
+          "end": 457,
+          "line": 12,
+          "start": 436
+        },
+        {
+          "column": 49,
+          "document": "manifest",
+          "end": 456,
+          "line": 12,
+          "start": 447
+        }
+      ],
+      "pointer": "/groups/0/components/0/native/claude-code~1subagent@1/memory/value",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "shared constant or assembled value; replace its definition explicitly"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 11,
+          "document": "manifest",
+          "end": 331,
+          "line": 9,
+          "start": 282
+        }
+      ],
+      "pointer": "/groups/0/components/0/prompt",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 11,
+          "document": "manifest",
+          "end": 331,
+          "line": 9,
+          "start": 282
+        }
+      ],
+      "pointer": "/groups/0/components/0/prompt/kind",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        },
+        {
+          "column": 11,
+          "document": "manifest",
+          "end": 331,
+          "line": 9,
+          "start": 282
+        }
+      ],
+      "pointer": "/groups/0/components/0/prompt/value",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [
+        {
+          "column": 27,
+          "document": "manifest",
+          "end": 460,
+          "line": 6,
+          "start": 193
+        }
+      ],
+      "pointer": "/groups/0/components/0/tools",
+      "span": {
+        "column": 42,
+        "document": "manifest",
+        "end": 3306,
+        "line": 91,
+        "start": 3298
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/groups/0/condition",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 3403,
+        "line": 90,
+        "start": 3249
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/groups/0/name",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 3283,
+        "line": 91,
+        "start": 3269
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/groups/0/uses",
+      "span": {
+        "column": 13,
+        "document": "manifest",
+        "end": 3397,
+        "line": 92,
+        "start": 3321
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/groups/0/uses/0",
+      "span": {
+        "column": 14,
+        "document": "manifest",
+        "end": 3396,
+        "line": 92,
+        "start": 3322
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/groups/0/uses/0/condition",
+      "span": {
+        "column": 64,
+        "document": "manifest",
+        "end": 3395,
+        "line": 92,
+        "start": 3372
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/groups/0/uses/0/condition/agents",
+      "span": {
+        "column": 78,
+        "document": "manifest",
+        "end": 3394,
+        "line": 92,
+        "start": 3386
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "expanded value has no independent source range"
+      },
+      "origins": [],
+      "pointer": "/groups/0/uses/0/condition/agents/0",
+      "span": {
+        "column": 79,
+        "document": "manifest",
+        "end": 3393,
+        "line": 92,
+        "start": 3387
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/groups/0/uses/0/condition/platforms",
+      "span": {
+        "column": 64,
+        "document": "manifest",
+        "end": 3395,
+        "line": 92,
+        "start": 3372
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/groups/0/uses/0/condition/scopes",
+      "span": {
+        "column": 64,
+        "document": "manifest",
+        "end": 3395,
+        "line": 92,
+        "start": 3372
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/groups/0/uses/0/kind",
+      "span": {
+        "column": 14,
+        "document": "manifest",
+        "end": 3396,
+        "line": 92,
+        "start": 3322
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/groups/0/uses/0/name",
+      "span": {
+        "column": 27,
+        "document": "manifest",
+        "end": 3343,
+        "line": 92,
+        "start": 3335
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/groups/0/uses/0/source",
+      "span": {
+        "column": 45,
+        "document": "manifest",
+        "end": 3359,
+        "line": 92,
+        "start": 3353
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources",
+      "span": {
+        "column": 12,
+        "document": "manifest",
+        "end": 849,
+        "line": 16,
+        "start": 494
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/0",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 754,
+        "line": 20,
+        "start": 682
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/0/index",
+      "span": {
+        "column": 37,
+        "document": "manifest",
+        "end": 753,
+        "line": 20,
+        "start": 714
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/0/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 754,
+        "line": 20,
+        "start": 682
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/0/name",
+      "span": {
+        "column": 19,
+        "document": "manifest",
+        "end": 705,
+        "line": 20,
+        "start": 696
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/0/requirement",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 754,
+        "line": 20,
+        "start": 682
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/0/subpath",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 754,
+        "line": 20,
+        "start": 682
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/1",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 590,
+        "line": 18,
+        "start": 543
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/1/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 590,
+        "line": 18,
+        "start": 543
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/1/name",
+      "span": {
+        "column": 19,
+        "document": "manifest",
+        "end": 565,
+        "line": 18,
+        "start": 557
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/1/path",
+      "span": {
+        "column": 35,
+        "document": "manifest",
+        "end": 589,
+        "line": 18,
+        "start": 573
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/1/requirement",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 590,
+        "line": 18,
+        "start": 543
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/1/subpath",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 590,
+        "line": 18,
+        "start": 543
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/2",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 676,
+        "line": 19,
+        "start": 596
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/2/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 676,
+        "line": 19,
+        "start": 596
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/2/name",
+      "span": {
+        "column": 19,
+        "document": "manifest",
+        "end": 617,
+        "line": 19,
+        "start": 610
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/2/requirement",
+      "span": {
+        "column": 77,
+        "document": "manifest",
+        "end": 675,
+        "line": 19,
+        "start": 668
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/2/requirement/from",
+      "span": {
+        "column": 77,
+        "document": "manifest",
+        "end": 675,
+        "line": 19,
+        "start": 668
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/2/subpath",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 676,
+        "line": 19,
+        "start": 596
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/2/url",
+      "span": {
+        "column": 33,
+        "document": "manifest",
+        "end": 660,
+        "line": 19,
+        "start": 624
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/3",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 537,
+        "line": 17,
+        "start": 500
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/3/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 537,
+        "line": 17,
+        "start": 500
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/3/name",
+      "span": {
+        "column": 19,
+        "document": "manifest",
+        "end": 520,
+        "line": 17,
+        "start": 514
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/3/path",
+      "span": {
+        "column": 33,
+        "document": "manifest",
+        "end": 536,
+        "line": 17,
+        "start": 528
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/3/requirement",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 537,
+        "line": 17,
+        "start": 500
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/3/subpath",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 537,
+        "line": 17,
+        "start": 500
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/4",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 844,
+        "line": 21,
+        "start": 760
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/4/kind",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 844,
+        "line": 21,
+        "start": 760
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/4/name",
+      "span": {
+        "column": 19,
+        "document": "manifest",
+        "end": 782,
+        "line": 21,
+        "start": 774
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/4/requirement",
+      "span": {
+        "column": 81,
+        "document": "manifest",
+        "end": 843,
+        "line": 21,
+        "start": 836
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/4/requirement/exact",
+      "span": {
+        "column": 81,
+        "document": "manifest",
+        "end": 843,
+        "line": 21,
+        "start": 836
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/sources/4/subpath",
+      "span": {
+        "column": 5,
+        "document": "manifest",
+        "end": 844,
+        "line": 21,
+        "start": 760
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/sources/4/url",
+      "span": {
+        "column": 34,
+        "document": "manifest",
+        "end": 827,
+        "line": 21,
+        "start": 789
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/uses",
+      "span": {
+        "column": 9,
+        "document": "manifest",
+        "end": 3434,
+        "line": 95,
+        "start": 3418
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/uses/0",
+      "span": {
+        "column": 10,
+        "document": "manifest",
+        "end": 3433,
+        "line": 95,
+        "start": 3419
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/uses/0/condition",
+      "span": {
+        "column": 10,
+        "document": "manifest",
+        "end": 3433,
+        "line": 95,
+        "start": 3419
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/uses/0/kind",
+      "span": {
+        "column": 10,
+        "document": "manifest",
+        "end": 3433,
+        "line": 95,
+        "start": 3419
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/uses/0/name",
+      "span": {
+        "column": 10,
+        "document": "manifest",
+        "end": 3433,
+        "line": 95,
+        "start": 3419
+      }
+    },
+    {
+      "defaulted": true,
+      "editability": {
+        "kind": "readOnly",
+        "reason": "default field has no source range"
+      },
+      "origins": [],
+      "pointer": "/uses/0/source",
+      "span": {
+        "column": 10,
+        "document": "manifest",
+        "end": 3433,
+        "line": 95,
+        "start": 3419
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/watch",
+      "span": {
+        "column": 10,
+        "document": "manifest",
+        "end": 3465,
+        "line": 96,
+        "start": 3445
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/watch/0",
+      "span": {
+        "column": 20,
+        "document": "manifest",
+        "end": 3464,
+        "line": 96,
+        "start": 3455
+      }
+    },
+    {
+      "defaulted": false,
+      "editability": {
+        "kind": "direct"
+      },
+      "origins": [],
+      "pointer": "/watch/1",
+      "span": {
+        "column": 11,
+        "document": "manifest",
+        "end": 3453,
+        "line": 96,
+        "start": 3446
+      }
+    }
+  ],
+  "schemaVersion": 1,
+  "sourceDigest": "sha256:62b31c7e40fb0b847ed6fb2fd5ef2b7895da18b8f65b4bbef90383be64eb061a"
+}

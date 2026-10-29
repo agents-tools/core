@@ -274,7 +274,12 @@ final class DocumentEditor {
   func replacementText(_ value: ConstructionValue, at range: Range<Int>) throws -> String {
     _ = try valueCost(value)
     let (style, indentation) = try style(at: range)
-    var text = CanonicalPrinter(style: style).render(value, indentation: indentation)
+    let lineEnd =
+      current.bytes[range.upperBound...].firstIndex(where: { $0 == 10 || $0 == 13 })
+      ?? current.bytes.count
+    var text = CanonicalPrinter(style: style).render(
+      value, indentation: indentation, column: range.lowerBound - lineStart(range.lowerBound),
+      trailing: lineEnd - range.upperBound)
     if text.hasPrefix("-"), range.lowerBound > 0 {
       let previous = current.bytes[range.lowerBound - 1]
       if ![

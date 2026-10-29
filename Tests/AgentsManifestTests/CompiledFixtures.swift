@@ -17,10 +17,20 @@ func compiledFixtures() -> [CompiledManifestFixture] {
   [
     compiledConsumerExample(),
     compiledCoreExample(),
+    compiledDumpSymbolic(),
     compiledExportedGroup(),
     compiledInstructionRecipients(),
     compiledLiteralCoverage(),
+    compiledMigrationAliasGap(),
+    compiledMigrationAliases(),
+    compiledMigrationDuplicateRecipients(),
     compiledMigrationEdgeExample(),
+    compiledMigrationEmpty(),
+    compiledMigrationEscapes(),
+    compiledMigrationExplicitEmpty(),
+    compiledMigrationFields(),
+    compiledMigrationRanges(),
+    compiledMigrationWidth(),
     compiledProducerExample(),
     compiledRecipientConditions(),
     compiledRequirementValues(),
@@ -172,6 +182,44 @@ private func compiledCoreExample() -> CompiledManifestFixture {
     ])
 }
 
+private func compiledDumpSymbolic() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let shared: Condition = .when(
+    agents: [.openCode, .codex], scopes: [.user, .project], platforms: [.linux, .macOS])
+  let agents = Agents(
+    defaultAgents: [],
+    exports: ["z", "a"],
+    sources: [
+      .source(name: "z", url: "intranet/team.git", "1.2.0"..<"1.3.0"),
+      .source(name: "a", path: "./a"),
+    ],
+    components: [
+      .instructions(
+        sections: ["own", .section(name: "rule", source: "z", condition: shared)],
+        chatGPT: [.prompt(name: "z", sections: []), .prompt(name: "a", sections: ["own"])],
+        agents: []),
+      .skills(
+        source: "z", select: ["z", "a"], exclude: ["z", "a"],
+        overrides: [.skill(name: "z", agents: []), .skill(name: "a")]),
+      .plugin(
+        name: "bundle", path: "bundle", source: "z",
+        exclude: [
+          .hook(name: "aaa"), .command(name: "zzz"), .hook(name: "bbb"), .skill(name: "ccc"),
+        ]),
+    ],
+    groups: [.group(name: "z", condition: shared), .group(name: "a")],
+    uses: [.group(name: "review", source: "z", condition: shared), "a"],
+    watch: ["z", "a"]
+  )
+  return CompiledManifestFixture(
+    name: "DumpSymbolic.swift.txt", agents: agents,
+    constants: [
+      "shared": shared.constructionValue,
+      "agents": agents.constructionValue,
+    ])
+}
+
 private func compiledExportedGroup() -> CompiledManifestFixture {
   // agents-tools-version: 1.0
 
@@ -304,6 +352,130 @@ private func compiledLiteralCoverage() -> CompiledManifestFixture {
     ])
 }
 
+private func compiledMigrationAliasGap() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let agents = Agents(
+    sources: [
+      .source(name: "source", path: "live"),
+      .source(name: "source-2", path: "other"),
+    ],
+    components: [
+      .skills(
+        source: "source",
+        overrides: [
+          .skill(name: "future")
+        ]
+      )
+    ]
+  )
+  return CompiledManifestFixture(
+    name: "MigrationAliasGap.swift.txt", agents: agents,
+    constants: [
+      "agents": agents.constructionValue
+    ])
+}
+
+private func compiledMigrationAliases() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let agents = Agents(
+    sources: [
+      .source(name: "source", path: "./s"),
+      .source(name: "source-2", path: "./s2"),
+      .source(name: "source-3", url: "git@Intranet:team/rules.git"),
+    ],
+    components: [
+      .skills(
+        source: "source-3",
+        select: ["a"],
+        exclude: ["a"],
+        overrides: [
+          .skill(name: "a", mode: .copy)
+        ]
+      ),
+      .instructions(
+        sections: [
+          "guide",
+          .section(name: "rule", source: "source-3"),
+          .section(name: "rule", source: "source-3"),
+        ],
+        chatGPT: [
+          .prompt(
+            name: "",
+            sections: [
+              .section(name: "rule", source: "source-3"),
+              "guide",
+            ]
+          )
+        ]
+      ),
+    ],
+    watch: ["source", "source-3"]
+  )
+  return CompiledManifestFixture(
+    name: "MigrationAliases.swift.txt", agents: agents,
+    constants: [
+      "agents": agents.constructionValue
+    ])
+}
+
+private func compiledMigrationDuplicateRecipients() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let agents = Agents(
+    defaultAgents: [.claudeCode, .codex],
+    sources: [
+      .source(name: "a~/b", path: "./other"),
+      .source(name: "source", path: "./inherited"),
+      .source(name: "source-2", path: "./rules"),
+    ],
+    components: [
+      .skills(
+        source: "a~/b",
+        overrides: [
+          .skill(
+            name: "future",
+            agents: [.openCode]
+          )
+        ],
+        agents: []
+      ),
+      .skills(source: "source"),
+      .skills(
+        source: "source-2",
+        select: ["empty", "inherited", "review"],
+        exclude: ["review"],
+        overrides: [
+          .skill(
+            name: "empty",
+            agents: []
+          ),
+          .skill(name: "inherited", mode: .copy),
+          .skill(
+            name: "review",
+            agents: [.codex, .cursor]
+          ),
+        ],
+        agents: [.claudeCode, .openCode]
+      ),
+      .instructions(
+        sections: [
+          "guide",
+          .section(name: "rule", source: "source-2"),
+        ],
+        agents: [.codex, .geminiCLI]
+      ),
+    ],
+    watch: ["source-2"]
+  )
+  return CompiledManifestFixture(
+    name: "MigrationDuplicateRecipients.swift.txt", agents: agents,
+    constants: [
+      "agents": agents.constructionValue
+    ])
+}
+
 private func compiledMigrationEdgeExample() -> CompiledManifestFixture {
   // agents-tools-version: 1.0
 
@@ -357,6 +529,234 @@ private func compiledMigrationEdgeExample() -> CompiledManifestFixture {
   )
   return CompiledManifestFixture(
     name: "MigrationEdgeExample.swift.txt", agents: agents,
+    constants: [
+      "agents": agents.constructionValue
+    ])
+}
+
+private func compiledMigrationEmpty() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let agents = Agents()
+  return CompiledManifestFixture(
+    name: "MigrationEmpty.swift.txt", agents: agents,
+    constants: [
+      "agents": agents.constructionValue
+    ])
+}
+
+private func compiledMigrationEscapes() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let agents = Agents(
+    defaultAgents: [],
+    sources: [
+      .source(
+        name: "é/别名~\"\\\n\r\t\u{1}\u{7f}\u{85}",
+        url: "https://example.org/escape.git"
+      )
+    ],
+    components: [
+      .skills(
+        source: "é/别名~\"\\\n\r\t\u{1}\u{7f}\u{85}",
+        select: ["selected"]
+      ),
+      .instructions(
+        chatGPT: [
+          .prompt(
+            name: "\"\\\n\r\t\u{1}\u{7f}\u{85} é 😀",
+            sections: ["own"],
+            append: "notes/内容.md"
+          )
+        ]
+      ),
+    ]
+  )
+  return CompiledManifestFixture(
+    name: "MigrationEscapes.swift.txt", agents: agents,
+    constants: [
+      "agents": agents.constructionValue
+    ])
+}
+
+private func compiledMigrationExplicitEmpty() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let agents = Agents(
+    defaultAgents: [],
+    components: [
+      .instructions(
+        agents: []
+      )
+    ]
+  )
+  return CompiledManifestFixture(
+    name: "MigrationExplicitEmpty.swift.txt", agents: agents,
+    constants: [
+      "agents": agents.constructionValue
+    ])
+}
+
+private func compiledMigrationFields() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let agents = Agents(
+    defaultAgents: [.claudeCode, .codex, .openCode],
+    sources: [
+      .source(name: "empty", path: "./live"),
+      .source(
+        name: "git",
+        url: "https://intranet/team.git",
+        branch: "main",
+        subpath: "skills"
+      ),
+      .source(
+        name: "index",
+        index: "https://example.org/.well-known/skills/index.json",
+        subpath: "bundle"
+      ),
+      .source(name: "local", path: "./drafts", revision: "abc123"),
+    ],
+    components: [
+      .skills(source: "empty", mode: .edit),
+      .skills(
+        source: "git",
+        select: ["a", "b"],
+        exclude: ["b"],
+        mode: .copy,
+        overrides: [
+          .skill(
+            name: "a",
+            mode: .link,
+            agents: [.codex]
+          ),
+          .skill(
+            name: "b",
+            agents: []
+          ),
+        ],
+        agents: []
+      ),
+      .skills(
+        source: "index",
+        select: []
+      ),
+      .skills(
+        source: "local",
+        overrides: [
+          .skill(name: "future", mode: .copy)
+        ]
+      ),
+      .instructions(
+        sections: [
+          "own",
+          .section(name: "rule", source: "git"),
+          "own",
+          .section(name: "nested/rule", source: "local"),
+        ],
+        chatGPT: [
+          .prompt(
+            name: "",
+            sections: []
+          ),
+          .prompt(
+            name: "周报",
+            sections: [
+              .section(name: "rule", source: "git"),
+              "own",
+            ],
+            append: "notes/周报.md"
+          ),
+        ],
+        agents: [.codex, .geminiCLI]
+      ),
+    ],
+    watch: ["git", "index", "local"]
+  )
+  return CompiledManifestFixture(
+    name: "MigrationFields.swift.txt", agents: agents,
+    constants: [
+      "agents": agents.constructionValue
+    ])
+}
+
+private func compiledMigrationRanges() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let agents = Agents(
+    sources: [
+      .source(name: "a", url: "https://Example.org/a.git", exact: "1.2.3+build"),
+      .source(name: "b", path: "./b", from: "1.2.0"),
+      .source(
+        name: "c",
+        path: "./c",
+        .upToNextMinor(from: "1.2.0-beta+build")
+      ),
+      .source(name: "d", path: "./d", from: "1.2.0"),
+      .source(
+        name: "e",
+        path: "./e",
+        .upToNextMinor(from: "1.2.0+lower")
+      ),
+      .source(
+        name: "f",
+        path: "./f",
+        "1.2.0"..<"1.8.0-beta+bound"
+      ),
+      .source(
+        name: "g",
+        path: "./g",
+        .upToNextMinor(from: "9223372036854775807.1.0")
+      ),
+      .source(
+        name: "h",
+        url: "ssh://User@INTRANET:2222/team/h.git",
+        revision: "abc123"
+      ),
+      .source(
+        name: "i",
+        path: "./i",
+        .upToNextMinor(
+          from:
+            "1.2.0-alphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalpha"
+        )
+      ),
+      .source(name: "j", url: "https://intranet/team@variant"),
+    ]
+  )
+  return CompiledManifestFixture(
+    name: "MigrationRanges.swift.txt", agents: agents,
+    constants: [
+      "agents": agents.constructionValue
+    ])
+}
+
+private func compiledMigrationWidth() -> CompiledManifestFixture {
+  // agents-tools-version: 1.0
+
+  let agents = Agents(
+    sources: [
+      .source(name: "s", path: "./s"),
+      .source(name: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", path: "p"),
+      .source(
+        name: "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+        path: "p2"
+      ),
+    ],
+    components: [
+      .skills(
+        source: "s",
+        select: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbb"],
+        exclude: [
+          "ccccccccccccccccccccccccccccccccc",
+          "dddddddddddddddddddddddd",
+        ],
+        mode: .link
+      )
+    ]
+  )
+  return CompiledManifestFixture(
+    name: "MigrationWidth.swift.txt", agents: agents,
     constants: [
       "agents": agents.constructionValue
     ])

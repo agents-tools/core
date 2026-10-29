@@ -58,7 +58,7 @@ struct TargetLifecycleTests {
       })
   }
 
-  @Test func updateApplyWritesStateInTheStandardLayout() throws {
+  @Test func updateApplyFormatsDeclarationAndPreservesUnchangedLedger() throws {
     let fixture = try InstructionFixture()
     try fixture.own("guide")
     try fixture.addOwn(names: ["guide"], agents: [.codex])
@@ -73,15 +73,15 @@ struct TargetLifecycleTests {
     let lockText = String(decoding: lock, as: UTF8.self)
     #expect(lockText.contains("\"chatgpt\": {}") && lockText.contains("\"skills\": {}"))
     #expect(!lockText.contains(" : "))
-    // An earlier version wrote this content in Foundation's layout.
     try StateStore.encode(fixture.store().loadDeclaration()).write(to: declarationFile)
-    try StateStore.encode(fixture.store().loadResolved()).write(to: lockFile)
+    let existingLockBytes = try StateStore.encode(fixture.store().loadResolved())
+    try existingLockBytes.write(to: lockFile)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(try Data(contentsOf: declarationFile) == declaration)
-    #expect(try Data(contentsOf: lockFile) == lock)
+    #expect(try Data(contentsOf: lockFile) == existingLockBytes)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(try Data(contentsOf: declarationFile) == declaration)
-    #expect(try Data(contentsOf: lockFile) == lock)
+    #expect(try Data(contentsOf: lockFile) == existingLockBytes)
   }
 
   @Test func pathsPlaceSectionsInNestedTargets() throws {
