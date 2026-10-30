@@ -95,17 +95,18 @@ preserve both and existing watch-state bytes.
 
 | Declaration | Lock or watch state | Behavior |
 | --- | --- | --- |
-| Absent | Absent | An empty declaration. Reads return empty results; the first write creates `Agents.swift` with no-replace publication. |
+| Absent | Absent | An empty declaration. Reads return empty results; the first write that declares something creates `Agents.swift` with no-replace publication. A write whose declaration and resulting lock are both empty creates neither file. |
 | Present | Any | Normal. An absent lock is an empty resolved state: `update` creates it and `install` has nothing to restore. |
 | Absent | Present | Every read and write path, including the `load*` accessors, listings, previews, doctor, install, initialization and export, throws `CoreError.missingDeclaration` with the declaration path. Nothing is written, and no `.agents.lock` is created. |
 
 Read paths apply the rule after their pending-recovery check, and writers after
-transaction recovery; the check before taking the writer lock runs only when no
-journal or pending marker exists. An interrupted first write of the declaration
-and lock therefore recovers on the next write instead of reporting a missing
-declaration. Watch state counts because its baselines derive from the
-declaration; treating a missing declaration as empty would let the next update
-remove what was deployed.
+transaction recovery. Before taking the writer lock, a writer in a scope without
+`.agents.lock`, journal or pending watch-reference marker validates the lock and
+watch state and checks only the declaration's presence. An interrupted first
+write of the declaration and lock therefore recovers on the next write instead
+of reporting a missing declaration. Watch state counts because its baselines
+derive from the declaration; treating a missing declaration as empty would let
+the next update remove what was deployed.
 
 ### Declaration writes
 
@@ -117,16 +118,19 @@ bytes that passed the complete front end and the projection check.
 `stageDeclaration(_:in:prepared:)` in `AgentsCore` publishes those bytes in the
 operation's transaction, expecting the baseline's evidence for the declaration.
 Skill, instruction, watch and update writes use only these entries; adding or
-changing a source is a difference in the declaration's sources. A combined
-update leaves the declaration unchanged, and `validateBeforePublication` still
-checks its evidence.
+changing a source is a difference in the declaration's sources. Combined and
+skill updates leave the declaration unchanged; the transaction still checks its
+prepared evidence through `FileTransaction.requireUnchanged(since:)` before
+publication.
 
 Planning completes before `beforeApply`, cache retention, a watch's Git fetch
 and any staging, so an edit that cannot be addressed exactly fails without side
 effects. When the previous declaration differs from the projection of the
-baseline bytes, planning fails with `manifest.edit.baseline` rather than
-overwriting an external change. Under the scope writer lock, a later writer reads
-its own baseline and plans again, so concurrent writers lose no update.
+baseline bytes, planning reports a stale preparation,
+`CoreError.invalidState("declaration changed during preparation: <path>")`,
+rather than overwriting an external change. Under the scope writer lock, a
+later writer reads its own baseline and plans again, so concurrent writers lose
+no update.
 
 Semantic equality decides whether anything changes:
 
@@ -201,9 +205,12 @@ containers as `{}` and `[]`, and an array without objects on one line when it
 fits in 80 columns. A repository whose Prettier configuration uses another print
 width may lay out an array between the two widths differently. A semantically
 unchanged lock keeps its original bytes; a changed lock is written in that
-layout. Empty lock sections such as `"skills": {}` remain, because earlier
-readers require them. Journals, `agents.watch` and content hashes keep the
-encoder's fixed layout.
+layout. When the prepared generation has neither a lock nor a declaration and
+the resulting lock is empty, no lock is created, because lock state without a
+declaration would stop every later access to the scope. A scope with a
+declaration receives a lock even when it is empty. Empty lock sections such as
+`"skills": {}` remain, because earlier readers require them. Journals,
+`agents.watch` and content hashes keep the encoder's fixed layout.
 
 A locked source records its kind, Git URL where applicable, requirement and
 search path. A skill records its source ID, its own revision and optional
@@ -468,9 +475,10 @@ recovery material changed. A committed failure is never described as rollback.
 
 The public `StateStore.loadResolved()` and `loadWatch()` in `AgentsCore` and
 `loadDeclaration()` and `loadManifest()` in `AgentsManifest` are read-only, as
-described below. `loadDeclaration()` returns the deployable projection;
-`loadManifest()` returns the complete `DeclarationDocument` without subset
-projection, or `nil` when no declaration exists.
+described below; the latter two require `import AgentsManifest`.
+`loadDeclaration()` returns the deployable projection; `loadManifest()` returns
+the complete `DeclarationDocument` without subset projection, or `nil` for a
+scope without state. Both can also throw the declaration's `ManifestFailure`.
 
 ### Read-only access
 
@@ -479,15 +487,19 @@ and watch diff take an existing shared lock, report pending recovery and never
 replay it or create state files. With no lock, inspection rechecks for a new
 lock or recovery marker before returning either its result or its error. A
 writer causes that attempt to be discarded and retried under the shared lock.
-Writers create the scope lock before mutation and never remove it.
+Writers create the scope lock before mutation and never remove it. The scope
+lock exists before the declaration is parsed, so a first writer that meets an
+invalid `Agents.swift` reports its `ManifestFailure` after creating
+`.agents.lock`; invalid lock or watch state stops the writer before the lock
+exists.
 
 The `load*` accessors follow the same rules and never create `.agents.lock`.
 Pending journals and watch-reference markers stop inspection with
-`CoreError.recoveryPending`, which carries the recovery diagnostic; a mutating
-operation on the scope performs the recovery. The absent-declaration rule
-applies after this check. Doctor distinguishes pending automatic recovery from
-an unresolved conflict requiring owner action, and skips checks needing a
-consistent generation. Skill doctor uses `pending-recovery` or
+`CoreError.recoveryPending`, whose description is the recovery diagnostic text
+itself; a mutating operation on the scope performs the recovery. The
+absent-declaration rule applies after this check. Doctor distinguishes pending
+automatic recovery from an unresolved conflict requiring owner action, and skips
+checks needing a consistent generation. Skill doctor uses `pending-recovery` or
 `unresolved-transaction`; instruction doctor uses `pendingRecovery` or
 `unresolvedTransaction`. Explicit multi-root instruction audits never write.
 Corrupt or foreign-version journals remain available rather than being replayed.

@@ -17,7 +17,7 @@ AgentsManifest ──> AgentsDescription, AgentsCore, SwiftSyntax, SwiftParser (
 
 AgentsUpdates ──> AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, CPlatform
 
-AgentsCore ──> Crypto (swift-crypto), CPlatform
+AgentsCore ──> CPlatform, Crypto (swift-crypto)
 
 AgentsSkills ──> AgentsCore, AgentsManifest
       │
@@ -32,7 +32,7 @@ ManifestTestProcess ──> AgentsManifest, AgentsCore, AgentsDescription, Manif
 AgentsManifestTests ──> AgentsManifest, AgentsDescription, AgentsCore, ManifestTestProcess, ManifestTestSupport, SwiftParser, SwiftSyntax
 
 StateTestSupport (Foundation only)
-StateTestProcess ──> AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, AgentsUpdates, CPlatform
+StateTestProcess ──> AgentsCore, AgentsManifest, AgentsInstructions, AgentsSkills, AgentsUpdates, CPlatform, StateTestSupport
 AgentsCoreTests ──> AgentsCore, AgentsManifest, StateTestProcess, StateTestSupport, CPlatform
 AgentsSkillsTests ──> AgentsSkills, AgentsCore, AgentsManifest, AgentsInstructions, Yams, StateTestProcess, StateTestSupport, CPlatform
 AgentsInstructionsTests ──> AgentsInstructions, AgentsManifest
@@ -122,7 +122,9 @@ language, editing rules and dump schema.
 
 `AgentsManifest` also connects `Agents.swift` to scope state through
 `extension StateStore`. The public `loadDeclaration()` returns the deployable
-projection and `loadManifest()` the complete document; both are read-only.
+projection and `loadManifest()` the complete document; both are read-only and,
+like the public `WatchOperations.init(discoverSkills:fetchArtifacts:)`, require
+`import AgentsManifest`.
 Package-level declaration reading and planning, the projection onto
 `AgentsCore.Declaration` and the declaration edit planner serve the domain
 modules, and `DeclarationAccess.manifest` supplies the same access to

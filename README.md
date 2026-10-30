@@ -147,10 +147,11 @@ Mutating state operations recover interrupted transactions before proceeding and
 report `CoreError.transactionRecovered` when the command should be retried. The
 durable scope journal covers installations, declaration, lock, watch state and
 cache pruning. Corrupt watch state stops scope mutations before any replacement.
-Read-only access, including `loadDeclaration()`, `loadManifest()`,
-`loadResolved()` and `loadWatch()`, never recovers and reports a pending
-transaction with `CoreError.recoveryPending`. A scope with a lock or watch state
-but no `Agents.swift` reports `CoreError.missingDeclaration`.
+Read-only access, including `loadResolved()`, `loadWatch()` and, with `import
+AgentsManifest`, `loadDeclaration()` and `loadManifest()`, never recovers and
+reports a pending transaction with `CoreError.recoveryPending`. A scope with a
+lock or watch state but no `Agents.swift` reports
+`CoreError.missingDeclaration`.
 
 ### Skills
 

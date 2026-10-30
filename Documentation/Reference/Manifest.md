@@ -1101,7 +1101,7 @@ no partial declaration is published.
 | `manifest.limit` | Recognizer: byte, token, syntax-storage reservation, comment, delimiter or chain limit. Iterative tree guard: node/depth limit. Later stages: evaluation, expansion, domain traversal, local group depth, output, generated source or edit budget. |
 | `manifest.diagnostics.truncated` | The warning that replaces diagnostics beyond the limit. |
 | `manifest.edit.readOnly`, `.stale`, `.overlap`, `.impact`, `.mismatch` | Document editing, as described under Document Editing. Declaration edit planning also reports `.mismatch` when a batch makes no progress or the final projection differs from the intended declaration. |
-| `manifest.edit.baseline` | Declaration edit planning: the declaration an operation read differs from the projection of the bytes it prepared. |
+| `manifest.edit.baseline` | Declaration edit planning: the declaration an operation read differs from the projection of the bytes it prepared. The state layer reports it as a stale preparation; see [Declaration writes](../Architecture/State.md#declaration-writes). |
 | `manifest.unsupported` | The state layer's deployable-subset projection meets an active structure outside that subset; the span locates it. See [State](../Architecture/State.md#deployable-subset). |
 | `manifest.dump.mismatch` | A source-map pointer is absent from the evaluated declaration while building a dump; this is an implementation regression. |
 

@@ -12,11 +12,12 @@ skill selections, locked records and installed content.
 Both CLI consumers can construct `SkillOperations.watchOperations()` from
 `AgentsSkills`. It supplies the existing skill discovery rules and well-known
 loader to `AgentsCore`. Callers implementing another content provider can use
-`WatchOperations.init(discoverSkills:fetchArtifacts:)`, which `AgentsManifest`
-provides because it also supplies the declaration access that core receives by
-injection. This keeps frontmatter, skill discovery, artifact format parsing and
-manifest syntax in their owning modules; core has no dependency on
-`AgentsManifest`, `AgentsSkills`, Yams or instruction rendering.
+`WatchOperations.init(discoverSkills:fetchArtifacts:)` after `import
+AgentsManifest`; that module provides the initializer because it also supplies
+the declaration access that core receives by injection. This keeps frontmatter,
+skill discovery, artifact format parsing and manifest syntax in their owning
+modules; core has no dependency on `AgentsManifest`, `AgentsSkills`, Yams or
+instruction rendering.
 
 Every operation accepts `scope` and `RuntimeEnvironment`:
 
@@ -28,8 +29,9 @@ Every operation accepts `scope` and `RuntimeEnvironment`:
 | `seen(_:revision:scope:environment:)` | Acknowledge the current head or resolve a supplied Git revision to a full commit ID. Well-known sources accept no revision argument. Returns `WatchChange`. |
 | `remove(_:scope:environment:)` | Remove the alias from `watch` and delete its baseline without changing installations. Returns `WatchChange` without a baseline. |
 
-`WatchChange` contains the alias, normalized source ID and the recorded
-`WatchSeen` baseline, so callers need no separate declaration read. Existing
+`WatchChange` has `alias`, the normalized `sourceID` and `seen`, the
+acknowledged `WatchSeen` baseline or `nil` after removal, so callers need no
+separate declaration read. Existing
 subscriptions can be addressed by alias, normalized source ID or source
 location. Repeating `add` records current content as seen. Missing subscriptions,
 invalid revisions and missing baseline content produce errors. A local directory
@@ -116,8 +118,9 @@ revisions or digests are errors. Subscriptions cannot repeat an alias.
 
 Add, seen and remove hold the scope writer lock and recover interrupted
 transactions and pending ref cleanup before proceeding. They capture declaration,
-lock and watch evidence and plan the `Agents.swift` change before contacting Git,
-so a declaration the editor cannot change fails before any fetch. Add and seen
+lock and watch evidence before contacting Git. Add and remove plan the
+`Agents.swift` change at that point, so a declaration the editor cannot change
+fails before any fetch; seen leaves the declaration unchanged. Add and seen
 prepare cached content before publishing its baseline. Declaration and watch
 replacements and cache pruning commit through the existing scope transaction
 journal, expecting the captured evidence; recovery follows the same retry
