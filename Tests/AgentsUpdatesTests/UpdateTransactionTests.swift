@@ -37,7 +37,7 @@ struct UpdateTransactionTests {
     let retained = try FileManager.default.contentsOfDirectory(atPath: moved.path)
     #expect(retained.contains { $0.hasPrefix(".agents-") })
     #expect(throws: CoreError.invalidState("transaction root identity changed")) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
     #expect(try FileManager.default.contentsOfDirectory(atPath: moved.path) == retained)
     try FileManager.default.removeItem(at: root)
@@ -117,7 +117,7 @@ struct UpdateTransactionTests {
     defer { terminate(child) }
     try waitFor("ready", fixture: fixture, child: child)
     terminate(child)
-    #expect(throws: CoreError.invalidState("transaction recovery is required before inspection")) {
+    #expect(throws: CoreError.recoveryPending(TransactionRecoveryDiagnostic.pendingMessage)) {
       try fixture.preview()
     }
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {

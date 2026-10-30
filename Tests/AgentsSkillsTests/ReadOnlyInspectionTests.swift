@@ -1,4 +1,5 @@
 import AgentsInstructions
+import AgentsManifest
 import AgentsSkills
 import CPlatform
 import Foundation
@@ -142,14 +143,11 @@ struct ReadOnlyInspectionTests {
     }
     let store = fixture.store(scope)
     if existingDirectory {
-      try FileManager.default.createDirectory(
-        at: store.directory, withIntermediateDirectories: true)
-      try StateStore.encode(
+      try store.writeDeclaration(
         Declaration(sources: [
           "relative": SourceDeclaration(kind: .local, location: "../source"),
           "remote": SourceDeclaration(kind: .git, location: "file://localhost" + fixture.repo.path),
-        ])
-      ).write(to: store.declarationURL)
+        ]))
     }
     let before = try snapshot(fixture.root)
     let sources =
@@ -267,7 +265,7 @@ struct ReadOnlyInspectionTests {
     if existingDirectory {
       try FileManager.default.createDirectory(
         at: store.directory, withIntermediateDirectories: true)
-      try StateStore.encode(Declaration()).write(to: store.declarationURL)
+      try manifestText().write(to: store.declarationURL)
     }
     let before = try snapshot(fixture.root)
     #expect(
@@ -337,7 +335,7 @@ struct ReadOnlyInspectionTests {
       report.diagnostics.first?.message.contains("next command that changes this scope") == true)
     #expect(try snapshot(root) == before)
 
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
+    let pending = CoreError.recoveryPending(TransactionRecoveryDiagnostic.pendingMessage)
     #expect(throws: pending) {
       try SkillOperations.listManaged(scope: scope, environment: environment)
     }

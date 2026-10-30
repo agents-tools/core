@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import StateTestSupport
 import Testing
@@ -80,7 +81,7 @@ struct CheckpointUniquenessTests {
     try ProcessWait.stopped(child, root: interrupted.root)
     terminateProcess(child)
     #expect(throws: CoreError.transactionRecovered(interrupted.store.directory.path)) {
-      try interrupted.store.loadWatch()
+      try interrupted.store.withLock {}
     }
     #expect(try interrupted.store.loadWatch().sources.isEmpty)
     let contents = interrupted.store.cacheDirectory.appendingPathComponent("artifact-content")

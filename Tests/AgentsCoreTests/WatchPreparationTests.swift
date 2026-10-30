@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -7,15 +8,13 @@ import Testing
 /// which can be slow; editors that ignore the scope lock may change state meanwhile.
 @Suite("Watch preparation evidence")
 struct WatchPreparationTests {
+  /// A comment-only edit changes no declared intent but still invalidates the preparation.
   @Test func declarationEditedDuringAcknowledgmentIsPreserved() throws {
     let fixture = try WatchGitFixture()
     let watchBefore = try FileSnapshot.read(at: fixture.store.watchURL)
-    let edited = try StateStore.encodeState(
-      Declaration(
-        agents: [.codex],
-        sources: ["source": SourceDeclaration(kind: .local, location: fixture.repo.path)]))
     let external = ExternalEdit()
     let watch = fixture.operations { [store = fixture.store] in
+      let edited = try Data(contentsOf: store.declarationURL) + Data("// Edited.\n".utf8)
       try edited.write(to: store.declarationURL)
       external.snapshot = try FileSnapshot.read(at: store.declarationURL)
     }
@@ -91,7 +90,7 @@ extension WatchGitFixture {
   fileprivate func operations(edit: @escaping @Sendable () throws -> Void) -> WatchOperations {
     WatchOperations(
       discoverSkills: { _ in [] },
-      fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+      fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") }, declarations: .manifest,
       checkpoint: { step in
         if step == "watch.mirror.fetched" { try edit() }
       })

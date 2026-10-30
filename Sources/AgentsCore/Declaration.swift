@@ -6,8 +6,8 @@ public enum SourceKind: String, Codable, Sendable {
   case wellKnown = "well-known"
 }
 
-/// A source alias's location, requirement and discovery root in agents.json.
-public struct SourceDeclaration: Codable, Equatable, Sendable {
+/// A source alias's location, requirement and discovery root.
+public struct SourceDeclaration: Equatable, Sendable {
   public var kind: SourceKind
   public var location: String
   public var requirement: SourceRequirement?
@@ -20,35 +20,6 @@ public struct SourceDeclaration: Codable, Equatable, Sendable {
     self.location = location
     self.requirement = requirement
     self.path = path
-  }
-
-  private enum CodingKeys: String, CodingKey {
-    case git, local
-    case wellKnown = "well-known"
-    case path
-  }
-
-  public init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    let kinds: [(CodingKeys, SourceKind)] = [
-      (.git, .git), (.local, .local), (.wellKnown, .wellKnown),
-    ]
-    let present = kinds.filter { container.contains($0.0) }
-    guard present.count == 1, let (key, kind) = present.first else {
-      throw CoreError.invalidState("a source must specify exactly one of git, local or well-known")
-    }
-    self.kind = kind
-    location = try container.decode(String.self, forKey: key)
-    path = try container.decodeIfPresent(String.self, forKey: .path)
-    requirement = try SourceRequirement.decodeIfPresent(from: decoder)
-  }
-
-  public func encode(to encoder: Encoder) throws {
-    var container = encoder.container(keyedBy: CodingKeys.self)
-    let key: CodingKeys = kind == .git ? .git : (kind == .local ? .local : .wellKnown)
-    try container.encode(location, forKey: key)
-    try container.encodeIfPresent(path, forKey: .path)
-    try requirement?.encode(to: encoder)
   }
 
   public func identity(environment: RuntimeEnvironment) throws -> String {
@@ -116,29 +87,12 @@ public struct SourceDeclaration: Codable, Equatable, Sendable {
   }
 }
 
-public enum SkillSelection: Codable, Equatable, Sendable {
+public enum SkillSelection: Equatable, Sendable {
   case all
   case names([String])
-
-  public init(from decoder: Decoder) throws {
-    let container = try decoder.singleValueContainer()
-    if let value = try? container.decode(String.self), value == "all" {
-      self = .all
-    } else {
-      self = .names(try container.decode([String].self))
-    }
-  }
-
-  public func encode(to encoder: Encoder) throws {
-    var container = encoder.singleValueContainer()
-    switch self {
-    case .all: try container.encode("all")
-    case .names(let names): try container.encode(names.sorted())
-    }
-  }
 }
 
-public struct SkillOverride: Codable, Equatable, Sendable {
+public struct SkillOverride: Equatable, Sendable {
   public var agents: [AgentID]?
   public var mode: InstallMode?
 
@@ -148,7 +102,7 @@ public struct SkillOverride: Codable, Equatable, Sendable {
   }
 }
 
-public struct SkillDeclaration: Codable, Equatable, Sendable {
+public struct SkillDeclaration: Equatable, Sendable {
   public var select: SkillSelection
   public var exclude: [String]?
   public var agents: [AgentID]?
@@ -167,7 +121,7 @@ public struct SkillDeclaration: Codable, Equatable, Sendable {
   }
 }
 
-public struct PromptDeclaration: Codable, Equatable, Sendable {
+public struct PromptDeclaration: Equatable, Sendable {
   /// Source alias and section name pairs, in rendering order.
   public var sections: [String]
   public var append: String?
@@ -178,7 +132,7 @@ public struct PromptDeclaration: Codable, Equatable, Sendable {
   }
 }
 
-public struct InstructionsDeclaration: Codable, Equatable, Sendable {
+public struct InstructionsDeclaration: Equatable, Sendable {
   public var agents: [AgentID]?
   public var sections: [String]
   public var chatgpt: [String: PromptDeclaration]?
@@ -192,8 +146,9 @@ public struct InstructionsDeclaration: Codable, Equatable, Sendable {
   }
 }
 
-/// User intent. Section order is significant; other collections are emitted in identity order.
-public struct Declaration: Codable, Equatable, Sendable {
+/// User intent from the scope's declaration document. Section order is significant; other
+/// collections are unordered.
+public struct Declaration: Equatable, Sendable {
   public var agents: [AgentID]?
   public var sources: [String: SourceDeclaration]
   public var skills: [String: SkillDeclaration]?
@@ -212,25 +167,12 @@ public struct Declaration: Codable, Equatable, Sendable {
     self.watch = watch
   }
 
-  /// A missing `sources` key means no declared sources, as in a project that selects only its
-  /// own instructions.
-  public init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    agents = try container.decodeIfPresent([AgentID].self, forKey: .agents)
-    sources =
-      try container.decodeIfPresent([String: SourceDeclaration].self, forKey: .sources) ?? [:]
-    skills = try container.decodeIfPresent([String: SkillDeclaration].self, forKey: .skills)
-    instructions = try container.decodeIfPresent(
-      InstructionsDeclaration.self, forKey: .instructions)
-    watch = try container.decodeIfPresent([String].self, forKey: .watch)
-  }
-
   public var defaultAgents: [AgentID] { agents ?? [.codex, .claudeCode] }
 
   public func validate(environment: RuntimeEnvironment) throws {
     var identities = Set<String>()
     for (alias, source) in sources {
-      guard !alias.isEmpty, !alias.contains(":") else {
+      guard !alias.isEmpty, alias != ".", !alias.contains(":") else {
         throw CoreError.invalidState("invalid source alias: \(alias)")
       }
       guard try identities.insert(source.identity(environment: environment)).inserted else {

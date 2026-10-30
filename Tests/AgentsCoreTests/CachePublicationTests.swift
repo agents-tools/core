@@ -1,3 +1,4 @@
+import AgentsManifest
 import CPlatform
 import Foundation
 import StateTestSupport
@@ -29,7 +30,7 @@ struct CachePublicationTests {
       #expect(try FileSnapshot.read(at: fixture.destination) == nil)
     }
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
     #expect(FileManager.default.fileExists(atPath: fixture.destination.path) == committed)
     #expect(try Data(contentsOf: fixture.store.resolvedURL) == fixture.lockBytes)
@@ -53,7 +54,7 @@ struct CachePublicationTests {
     let fixture = try CacheFixture()
     try interrupt(fixture, kind: "cache-bytes", point: point)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
     let cache = SourceCache(store: fixture.store)
     let payload = try Data(contentsOf: fixture.root.appendingPathComponent("payload"))
@@ -73,7 +74,7 @@ struct CachePublicationTests {
     try interrupt(fixture, kind: "cache-git", point: point)
     #expect(try FileSnapshot.read(at: fixture.destination) == nil)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
     #expect(
       try FileManager.default.contentsOfDirectory(

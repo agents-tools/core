@@ -1,3 +1,4 @@
+import AgentsManifest
 import CPlatform
 import Foundation
 import StateTestSupport
@@ -376,7 +377,7 @@ struct PublicationTests {
         "transaction conflict at instructions-project/AGENTS.md: \(reason); retained container: \(location)"
       )
     ) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
     #expect(try FileSnapshot.read(at: fixture.root) == before)
   }
@@ -389,12 +390,14 @@ struct PublicationTests {
     let directory = try #require(try fixture.store.openDirectoryIfPresent())
     let backup = directory.url.appendingPathComponent(".agents-\(id.uuidString)-0.old")
     try FileManager.default.moveItem(at: fixture.store.declarationURL, to: backup)
-    try Data("{\"agents\":[\"codex\"]}".utf8).write(to: fixture.store.declarationURL)
+    try manifestText("defaultAgents: [.codex]").write(to: fixture.store.declarationURL)
     var old = try StateStore.encode(
       LegacyJournal(
         id: id, scope: directory.identity,
         roots: ["state": directory.identity], phase: "applying",
-        entries: [.init(path: "state/agents.json", existed: true, replacement: true)]))
+        entries: [
+          .init(path: "state/" + StateStore.declarationFileName, existed: true, replacement: true)
+        ]))
     if let version {
       var encoded = try #require(JSONSerialization.jsonObject(with: old) as? [String: Any])
       encoded["version"] = version
@@ -407,7 +410,7 @@ struct PublicationTests {
         "transaction journal was written by another version; recover it with the version that wrote it (journal version: \(version.map(String.init) ?? "missing"))"
       )
     ) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
     #expect(try FileSnapshot.read(at: fixture.root) == before)
     let diagnostic = FileTransaction.recoveryDiagnostic(store: fixture.store)
@@ -434,7 +437,7 @@ struct PublicationTests {
         field == "identity"
           ? "sealed operation is missing private container identity"
           : "terminal container is missing user-object disposal evidence")
-    ) { try fixture.store.loadResolved() }
+    ) { try fixture.store.withLock {} }
     #expect(try FileSnapshot.read(at: fixture.root) == before)
   }
 
@@ -446,7 +449,7 @@ struct PublicationTests {
     let transaction = FileTransaction(store: fixture.store)
     let target = try cache.artifactURL(digest: digest)
     try transaction.replace(target, with: .data(bytes), expectedHash: digest)
-    try Data("{\"agents\":[]}".utf8).write(to: fixture.store.declarationURL)
+    try manifestText("defaultAgents: []").write(to: fixture.store.declarationURL)
     let state = try FileSnapshot.read(at: fixture.store.declarationURL)
     try transaction.commit()
     #expect(try Data(contentsOf: target) == bytes)

@@ -15,23 +15,39 @@ public struct StateStore: Sendable {
       ? environment.projectDirectory.appendingPathComponent(".agent")
       : environment.homeDirectory.appendingPathComponent(".agents")
   }
-  public var declarationURL: URL { directory.appendingPathComponent("agents.json") }
-  public var resolvedURL: URL { directory.appendingPathComponent("agents.resolved") }
-  public var watchURL: URL { directory.appendingPathComponent("agents.watch") }
+  public var declarationURL: URL { directory.appendingPathComponent(Self.declarationFileName) }
+  public var resolvedURL: URL { directory.appendingPathComponent(Self.resolvedFileName) }
+  public var watchURL: URL { directory.appendingPathComponent(Self.watchFileName) }
   public var cacheDirectory: URL { directory.appendingPathComponent("cache") }
 
-  public func loadDeclaration() throws -> Declaration {
-    try withLock(createIfMissing: false) { try readDeclaration() }
+  package static let declarationFileName = "Agents.swift"
+  package static let resolvedFileName = "agents.resolved"
+  package static let watchFileName = "agents.watch"
+  /// The scope files a state transaction may replace.
+  package static let stateFileNames: Set<String> = [
+    declarationFileName, resolvedFileName, watchFileName,
+  ]
+
+  /// The declaration's bytes, or nil when the scope has no declaration and no lock or watch
+  /// state. Lock or watch state without a declaration is `CoreError.missingDeclaration`; a
+  /// prepared generation answers from its captured bytes.
+  package func declarationBytes(prepared: StatePrecondition? = nil) throws -> Data? {
+    func bytes(_ url: URL) throws -> Data? {
+      try prepared.map { try $0.bytes(for: url) } ?? existingData(url)
+    }
+    if let declaration = try bytes(declarationURL) { return declaration }
+    guard try bytes(resolvedURL) == nil, try bytes(watchURL) == nil else {
+      throw CoreError.missingDeclaration(declarationURL.path)
+    }
+    return nil
   }
 
-  package func readDeclaration(prepared: StatePrecondition? = nil) throws -> Declaration {
-    let declaration: Declaration = try load(declarationURL, prepared: prepared) ?? Declaration()
-    try declaration.validate(environment: environment)
-    return declaration
-  }
-
+  /// Reads the lock under a shared lock, without recovery or creating files.
   public func loadResolved() throws -> ResolvedState {
-    try withLock(createIfMissing: false) { try readResolved() }
+    try withReadLock {
+      _ = try declarationBytes()
+      return try readResolved()
+    }
   }
 
   package func readResolved(prepared: StatePrecondition? = nil) throws -> ResolvedState {
@@ -40,8 +56,12 @@ public struct StateStore: Sendable {
     return lock
   }
 
+  /// Reads watch state under a shared lock, without recovery or creating files.
   public func loadWatch() throws -> WatchState {
-    try withLock(createIfMissing: false) { try readWatch() }
+    try withReadLock {
+      _ = try declarationBytes()
+      return try readWatch()
+    }
   }
 
   package func readWatch(prepared: StatePrecondition? = nil) throws -> WatchState {
@@ -50,46 +70,15 @@ public struct StateStore: Sendable {
     return watch
   }
 
-  /// Commits state through the scope journal. Omitting watch preserves its existing bytes.
-  public func save(
-    declaration: Declaration, resolved: ResolvedState, watch: WatchState? = nil
-  ) throws {
-    try withLock {
-      try declaration.validate(environment: environment)
-      try resolved.validate()
-      try watch?.validate()
-      let baseline = try StatePrecondition(store: self)
-      _ = try readDeclaration(prepared: baseline)
-      _ = try readResolved(prepared: baseline)
-      let transaction = FileTransaction(store: self)
-      transaction.requireUnchanged(since: baseline)
-      try stageDeclaration(declaration, in: transaction, prepared: baseline)
-      try transaction.replace(
-        resolvedURL, with: .data(Self.encodeState(resolved.normalized)),
-        expecting: baseline.evidence(for: resolvedURL))
-      if let watch {
-        try transaction.replace(
-          watchURL, with: .data(Self.encode(watch)), expecting: baseline.evidence(for: watchURL))
-      }
-      try transaction.commit()
-    }
-  }
-
-  /// Stages the declaration when the file's bytes differ from its standard layout, so a file
-  /// written by hand or by an earlier version is rewritten even when its content is unchanged.
+  /// Publishes a planned declaration change in the transaction, expecting the prepared
+  /// generation. Without a change the declaration stays unchanged.
   package func stageDeclaration(
-    _ declaration: Declaration, in transaction: FileTransaction,
-    prepared: StatePrecondition? = nil
+    _ change: DeclarationChange?, in transaction: FileTransaction, prepared: StatePrecondition
   ) throws {
-    let data = try Self.encodeState(declaration.normalized)
-    let input: (bytes: Data?, evidence: TargetPrecondition)
-    if let prepared {
-      input = try (prepared.bytes(for: declarationURL), prepared.evidence(for: declarationURL))
-    } else {
-      input = try TargetPrecondition.readingFile(declarationURL)
-    }
-    guard input.bytes != data else { return }
-    try transaction.replace(declarationURL, with: .data(data), expecting: input.evidence)
+    guard let change else { return }
+    try transaction.replace(
+      declarationURL, with: .data(change.bytes),
+      expecting: prepared.evidence(for: declarationURL))
   }
 
   package func withLock<T>(
@@ -100,14 +89,14 @@ public struct StateStore: Sendable {
     if try openDirectoryIfPresent() == nil, !createIfMissing {
       return try body()
     }
-    if !FileManager.default.fileExists(
-      atPath: directory.appendingPathComponent(".agents.lock").path),
-      !FileManager.default.fileExists(
-        atPath: directory.appendingPathComponent(TransactionJournal.fileName).path)
-    {
-      _ = try readDeclaration()
+    // Without a scope lock, journal or ref-cleanup marker, invalid or orphaned state stops the
+    // operation before the scope lock exists. Otherwise recovery precedes these checks.
+    if ![".agents.lock", TransactionJournal.fileName, "watch-refs.pending"].contains(where: {
+      FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
+    }) {
       _ = try readResolved()
       _ = try readWatch()
+      _ = try declarationBytes()
     }
     let base = scope == .project ? environment.projectDirectory : environment.homeDirectory
     let physicalDirectory = base.resolvingSymlinksInPath().appendingPathComponent(
@@ -150,7 +139,7 @@ public struct StateStore: Sendable {
     return try parent.child(name)
   }
 
-  /// Encodes `agents.json` or `agents.resolved` in the layout `StateJSON` describes.
+  /// Encodes `agents.resolved` in the layout `StateJSON` describes.
   package static func encodeState<T: Encodable>(_ value: T) throws -> Data {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]

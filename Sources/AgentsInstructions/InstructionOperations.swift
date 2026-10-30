@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 
 /// Scope-bound instruction workflows. Consumers own argument parsing and difference presentation.
@@ -98,11 +99,13 @@ public enum InstructionOperations {
         declaration: declaration, previousDeclaration: previousDeclaration,
         previous: previous, prepared: prepared, store: store)
       try plan.lock.validate()
+      let change = try store.planDeclaration(
+        declaration, replacing: previousDeclaration, prepared: baseline)
       if !options.replace { try requireOwnership(plan.report) }
       try beforeApply?(plan.report)
       try Self.apply(
-        declaration: declaration, next: plan.lock, report: plan.report, sources: sources,
-        baseline: baseline, expectations: plan.expectations)
+        declaration: declaration, change: change, next: plan.lock, report: plan.report,
+        sources: sources, baseline: baseline, expectations: plan.expectations)
       return InstructionAddOutcome(sourceID: id, available: available, result: plan.report)
     }
   }
@@ -159,6 +162,8 @@ public enum InstructionOperations {
       try plan.next.validate()
       try baseline.validate()
       if apply {
+        let change = try store.planDeclaration(
+          declaration, replacing: previousDeclaration, prepared: baseline)
         if !replace { try requireOwnership(plan.report) }
         try beforeApply?(plan.report)
         try baseline.validate()
@@ -167,11 +172,8 @@ public enum InstructionOperations {
         let transaction = FileTransaction(store: store)
         transaction.requireUnchanged(since: baseline, plan)
         try plan.stage(transaction: transaction)
-        try store.stageDeclaration(
-          declaration, in: transaction, prepared: baseline)
-        if let data = try plan.next.replacementData(
-          comparedTo: baseline.bytes(for: store.resolvedURL))
-        {
+        try store.stageDeclaration(change, in: transaction, prepared: baseline)
+        if let data = try plan.next.replacementData(in: store, prepared: baseline) {
           try transaction.replace(
             store.resolvedURL, with: .data(data),
             expecting: baseline.evidence(for: store.resolvedURL))
@@ -222,7 +224,7 @@ public enum InstructionOperations {
         hasChanges: targets.changes.contains(where: \.changed))
       try requireOwnership(report)
       try apply(
-        declaration: declaration, next: lock, report: report, sources: sources,
+        declaration: declaration, change: nil, next: lock, report: report, sources: sources,
         baseline: baseline, expectations: targets.expectations, writeState: false)
       return report
     }
@@ -271,11 +273,13 @@ public enum InstructionOperations {
         declaration: declaration, previousDeclaration: previousDeclaration,
         previous: previous, prepared: prepared, store: store)
       try plan.lock.validate()
+      let change = try store.planDeclaration(
+        declaration, replacing: previousDeclaration, prepared: baseline)
       try requireOwnership(plan.report)
       try beforeApply?(plan.report)
       try apply(
-        declaration: declaration, next: plan.lock, report: plan.report, sources: sources,
-        baseline: baseline, expectations: plan.expectations)
+        declaration: declaration, change: change, next: plan.lock, report: plan.report,
+        sources: sources, baseline: baseline, expectations: plan.expectations)
       return plan.report
     }
   }
@@ -316,6 +320,7 @@ public enum InstructionOperations {
     }
     let store = StateStore(scope: .project, environment: environment)
     return try store.withLock {
+      _ = try store.declarationBytes()
       let file = environment.projectDirectory.resolvingSymlinksInPath()
         .appendingPathComponent(InstructionSources.ownContainer)
         .appendingPathComponent(name + ".md")
@@ -420,9 +425,10 @@ public enum InstructionOperations {
     guard foreign.isEmpty else { throw InstructionError.unownedTargets(foreign) }
   }
 
+  /// `change` is the declaration edit planned before any callback, retention or staging.
   private static func apply(
-    declaration: Declaration, next: ResolvedState, report: InstructionUpdateReport,
-    sources: InstructionSources, baseline: StatePrecondition,
+    declaration: Declaration, change: DeclarationChange?, next: ResolvedState,
+    report: InstructionUpdateReport, sources: InstructionSources, baseline: StatePrecondition,
     expectations: [String: TargetPrecondition], writeState: Bool = true
   ) throws {
     let store = sources.store
@@ -438,8 +444,8 @@ public enum InstructionOperations {
       transaction.requireUnchanged(since: baseline, plan)
       try plan.stage(transaction: transaction)
       if writeState {
-        try store.stageDeclaration(declaration, in: transaction, prepared: baseline)
-        if let data = try next.replacementData(comparedTo: baseline.bytes(for: store.resolvedURL)) {
+        try store.stageDeclaration(change, in: transaction, prepared: baseline)
+        if let data = try next.replacementData(in: store, prepared: baseline) {
           try transaction.replace(
             store.resolvedURL, with: .data(data),
             expecting: baseline.evidence(for: store.resolvedURL))

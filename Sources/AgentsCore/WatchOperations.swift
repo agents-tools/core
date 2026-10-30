@@ -1,39 +1,38 @@
 import Foundation
 
-/// Scope-bound subscriptions. Discovery and artifact loading are supplied by the owning module.
+/// Scope-bound subscriptions. Discovery and artifact loading are supplied by the owning module,
+/// and declaration reading and planning by the declaration format's module.
 public struct WatchOperations: Sendable {
   private let discoverSkills: @Sendable (URL) throws -> [WatchSkill]
   private let fetchArtifacts: @Sendable (String) throws -> [WatchArtifact]
+  private let declarations: DeclarationAccess
   private let checkpoint: @Sendable (String) throws -> Void
-
-  public init(
-    discoverSkills: @escaping @Sendable (URL) throws -> [WatchSkill],
-    fetchArtifacts: @escaping @Sendable (String) throws -> [WatchArtifact]
-  ) {
-    self.init(discoverSkills: discoverSkills, fetchArtifacts: fetchArtifacts, checkpoint: { _ in })
-  }
 
   package init(
     discoverSkills: @escaping @Sendable (URL) throws -> [WatchSkill],
     fetchArtifacts: @escaping @Sendable (String) throws -> [WatchArtifact],
-    checkpoint: @escaping @Sendable (String) throws -> Void
+    declarations: DeclarationAccess,
+    checkpoint: @escaping @Sendable (String) throws -> Void = { _ in }
   ) {
     self.discoverSkills = discoverSkills
     self.fetchArtifacts = fetchArtifacts
+    self.declarations = declarations
     self.checkpoint = checkpoint
   }
 
   /// Declares a source when needed and acknowledges its current content without installing it.
+  /// The declaration change is planned before Git or an index is contacted.
   @discardableResult
   public func add(
     _ source: String, alias: String? = nil, requirement: SourceRequirement? = nil,
     path: String? = nil, scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment()
-  ) throws -> WatchSeen {
+  ) throws -> WatchChange {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withLock(checkpoint: checkpoint) {
       let baseline = try StatePrecondition(store: store)
-      var declaration = try store.readDeclaration(prepared: baseline)
+      let previous = try declarations.read(store, baseline)
+      var declaration = previous
       let lock = try store.readResolved(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       let argument = try SourceArgument(source)
@@ -57,11 +56,11 @@ public struct WatchOperations: Sendable {
       declaration.sources[name] = declared
       declaration.watch = Array(Set((declaration.watch ?? []) + [name])).sorted()
       try declaration.validate(environment: environment)
+      let change = try declarations.plan(store, previous, declaration, baseline)
       let current = try acknowledge(declared, revision: nil, store: store)
       watch.sources[id] = WatchSourceState(seen: current)
-      try commit(
-        declaration: declaration, watch: watch, lock: lock, store: store, baseline: baseline)
-      return current
+      try commit(change, watch: watch, lock: lock, store: store, baseline: baseline)
+      return WatchChange(alias: name, sourceID: id, seen: current)
     }
   }
 
@@ -71,7 +70,7 @@ public struct WatchOperations: Sendable {
   ) throws -> [WatchStatus] {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
-      let declaration = try store.readDeclaration()
+      let declaration = try declarations.read(store, nil)
       _ = try store.readResolved()
       let watch = try store.readWatch()
       return try (declaration.watch ?? []).sorted().map { alias in
@@ -87,7 +86,7 @@ public struct WatchOperations: Sendable {
   ) throws -> WatchStatus {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
-      let declaration = try store.readDeclaration()
+      let declaration = try declarations.read(store, nil)
       _ = try store.readResolved()
       let watch = try store.readWatch()
       let alias = try subscription(source, declaration: declaration, environment: environment)
@@ -103,11 +102,11 @@ public struct WatchOperations: Sendable {
   public func seen(
     _ source: String, revision: String? = nil, scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment()
-  ) throws -> WatchSeen {
+  ) throws -> WatchChange {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withLock(checkpoint: checkpoint) {
       let baseline = try StatePrecondition(store: store)
-      let declaration = try store.readDeclaration(prepared: baseline)
+      let declaration = try declarations.read(store, baseline)
       let lock = try store.readResolved(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
@@ -115,28 +114,31 @@ public struct WatchOperations: Sendable {
       let id = try declared.identity(environment: environment)
       let current = try acknowledge(declared, revision: revision, store: store)
       watch.sources[id] = WatchSourceState(seen: current)
-      try commit(declaration: nil, watch: watch, lock: lock, store: store, baseline: baseline)
-      return current
+      try commit(nil, watch: watch, lock: lock, store: store, baseline: baseline)
+      return WatchChange(alias: alias, sourceID: id, seen: current)
     }
   }
 
   /// Removes only the subscription and baseline. Source declarations and installations remain.
+  @discardableResult
   public func remove(
     _ source: String, scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment()
-  ) throws {
+  ) throws -> WatchChange {
     let store = StateStore(scope: scope, environment: environment)
-    try store.withLock(checkpoint: checkpoint) {
+    return try store.withLock(checkpoint: checkpoint) {
       let baseline = try StatePrecondition(store: store)
-      var declaration = try store.readDeclaration(prepared: baseline)
+      let previous = try declarations.read(store, baseline)
+      var declaration = previous
       let lock = try store.readResolved(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
       let id = try declaration.sources[alias]!.identity(environment: environment)
       declaration.watch?.removeAll { $0 == alias }
       watch.sources.removeValue(forKey: id)
-      try commit(
-        declaration: declaration, watch: watch, lock: lock, store: store, baseline: baseline)
+      let change = try declarations.plan(store, previous, declaration, baseline)
+      try commit(change, watch: watch, lock: lock, store: store, baseline: baseline)
+      return WatchChange(alias: alias, sourceID: id, seen: nil)
     }
   }
 
@@ -172,15 +174,13 @@ public struct WatchOperations: Sendable {
   /// The prepared generation, captured before any network acknowledgment, is the journal's
   /// preimage evidence and also guards the lock that pruning follows.
   private func commit(
-    declaration: Declaration?, watch: WatchState, lock: ResolvedState, store: StateStore,
+    _ change: DeclarationChange?, watch: WatchState, lock: ResolvedState, store: StateStore,
     baseline: StatePrecondition
   ) throws {
     try watch.validate()
     let transaction = FileTransaction(store: store, checkpoint: checkpoint)
     transaction.requireUnchanged(since: baseline)
-    if let declaration {
-      try store.stageDeclaration(declaration, in: transaction, prepared: baseline)
-    }
+    try store.stageDeclaration(change, in: transaction, prepared: baseline)
     try transaction.replace(
       store.watchURL, with: .data(StateStore.encode(watch)),
       expecting: baseline.evidence(for: store.watchURL))

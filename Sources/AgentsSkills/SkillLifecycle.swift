@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 
 struct DiscoveredSource {
@@ -34,11 +35,15 @@ final class SkillLifecycle {
   let provider: WellKnownProvider
   let workspace: URL
   let resolutions: SourceResolutionSession?
+  /// Receives the applying transaction's checkpoints.
+  let checkpoint: (String) throws -> Void
 
   init(
-    store: StateStore, provider: WellKnownProvider, resolutions: SourceResolutionSession? = nil
+    store: StateStore, provider: WellKnownProvider, resolutions: SourceResolutionSession? = nil,
+    checkpoint: @escaping (String) throws -> Void = { _ in }
   ) throws {
     self.resolutions = resolutions
+    self.checkpoint = checkpoint
     self.store = store
     self.cache = SourceCache(store: store)
     self.provider = provider
@@ -212,13 +217,20 @@ final class SkillLifecycle {
     return try PreparedSkill(lock: skill, directory: directory, payloads: payloads)
   }
 
+  /// `declaration` replaces `previousDeclaration`, which was read from `baseline`. Its edit is
+  /// planned before content retention, so a declaration that cannot be edited fails without
+  /// side effects. Without `writeState` the declaration and lock stay unchanged.
   func apply(
-    declaration: Declaration, previous: ResolvedState, next: ResolvedState,
-    prepared: [String: PreparedSkill], names: Set<String>, baseline: StatePrecondition,
-    writeState: Bool = true
+    declaration: Declaration, replacing previousDeclaration: Declaration,
+    previous: ResolvedState, next: ResolvedState, prepared: [String: PreparedSkill],
+    names: Set<String>, baseline: StatePrecondition, writeState: Bool = true
   ) throws -> [InstallResult] {
     try declaration.validate(environment: store.environment)
     try next.validate()
+    let change =
+      writeState
+      ? try store.planDeclaration(declaration, replacing: previousDeclaration, prepared: baseline)
+      : nil
     let plan = try SkillUpdatePlan(
       lifecycle: self, previous: previous, next: next, prepared: prepared, names: names, results: []
     )
@@ -226,14 +238,12 @@ final class SkillLifecycle {
     try baseline.validate()
     try plan.validate()
     let retained = try plan.retain()
-    let transaction = FileTransaction(store: store)
+    let transaction = FileTransaction(store: store, checkpoint: checkpoint)
     transaction.requireUnchanged(since: baseline, plan)
     try plan.stage(retained: retained, transaction: transaction)
     if writeState {
-      try store.stageDeclaration(declaration, in: transaction, prepared: baseline)
-      if let data = try next.replacementData(
-        comparedTo: baseline.bytes(for: store.resolvedURL))
-      {
+      try store.stageDeclaration(change, in: transaction, prepared: baseline)
+      if let data = try next.replacementData(in: store, prepared: baseline) {
         try transaction.replace(
           store.resolvedURL, with: .data(data), expecting: baseline.evidence(for: store.resolvedURL)
         )

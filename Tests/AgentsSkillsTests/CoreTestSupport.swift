@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import StateTestSupport
 import Testing
@@ -47,4 +48,15 @@ func gitHead(_ repo: URL) throws -> String {
   try ProcessRunner.run("/usr/bin/env", arguments: ["git", "-C", repo.path, "rev-parse", "HEAD"])
     .stdout
     .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+extension StateStore {
+  /// Writes the document that a first write of `declaration` creates, without a lock, watch
+  /// state or scope lock.
+  func writeDeclaration(_ declaration: Declaration) throws {
+    let change = try planDeclaration(
+      declaration, replacing: Declaration(), prepared: StatePrecondition(store: self))
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try (change?.bytes ?? manifestText()).write(to: declarationURL)
+  }
 }

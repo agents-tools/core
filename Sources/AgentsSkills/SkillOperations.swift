@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 
 public enum SkillOperations {
@@ -6,7 +7,17 @@ public enum SkillOperations {
     try add(options, provider: WellKnownProvider())
   }
 
-  static func add(_ options: AddOptions, provider: WellKnownProvider) throws -> AddOutcome {
+  /// Reports the scope lock's and the applying transaction's named checkpoints.
+  package static func add(
+    _ options: AddOptions, checkpoint: @escaping (String) throws -> Void
+  ) throws -> AddOutcome {
+    try add(options, provider: WellKnownProvider(), checkpoint: checkpoint)
+  }
+
+  static func add(
+    _ options: AddOptions, provider: WellKnownProvider,
+    checkpoint: @escaping (String) throws -> Void = { _ in }
+  ) throws -> AddOutcome {
     var options = options
     if let name = try SourceArgument(options.source).name {
       guard !options.all else {
@@ -20,17 +31,21 @@ public enum SkillOperations {
       if options.listOnly || outcome.availableSkills.count > 1 { return outcome }
       automaticSelection = outcome.availableSkills.first.map { (outcome.sourceID, $0.name) }
     }
-    return try add(options, provider: provider, apply: true, automaticSelection: automaticSelection)
+    return try add(
+      options, provider: provider, apply: true, automaticSelection: automaticSelection,
+      checkpoint: checkpoint)
   }
 
   private static func add(
     _ options: AddOptions, provider: WellKnownProvider, apply: Bool,
-    automaticSelection: (sourceID: String, name: String)? = nil
+    automaticSelection: (sourceID: String, name: String)? = nil,
+    checkpoint: @escaping (String) throws -> Void = { _ in }
   ) throws -> AddOutcome {
     let store = StateStore(scope: options.scope, environment: options.environment)
-    return try operate(store, apply: apply) { declaration, lock, baseline in
-      let lifecycle = try SkillLifecycle(store: store, provider: provider)
-      var declaration = declaration
+    return try operate(store, apply: apply, checkpoint: checkpoint) {
+      previousDeclaration, lock, baseline in
+      let lifecycle = try SkillLifecycle(store: store, provider: provider, checkpoint: checkpoint)
+      var declaration = previousDeclaration
       let selectionChanged = CoreError.invalidState(
         "automatic skill selection changed during discovery; retry the command")
       let source: SourceDeclaration
@@ -119,8 +134,8 @@ public enum SkillOperations {
       }
       try next.validate()
       let installed = try lifecycle.apply(
-        declaration: declaration, previous: lock, next: next, prepared: prepared, names: Set(names),
-        baseline: baseline)
+        declaration: declaration, replacing: previousDeclaration, previous: lock, next: next,
+        prepared: prepared, names: Set(names), baseline: baseline)
       return AddOutcome(
         source: source, sourceID: id, availableSkills: selected, installed: installed)
     }
@@ -159,11 +174,7 @@ public enum SkillOperations {
         let transaction = FileTransaction(store: store)
         transaction.requireUnchanged(since: baseline, plan)
         try plan.stage(retained: retained, transaction: transaction)
-        try store.stageDeclaration(
-          declaration, in: transaction, prepared: baseline)
-        if let data = try plan.next.replacementData(
-          comparedTo: baseline.bytes(for: store.resolvedURL))
-        {
+        if let data = try plan.next.replacementData(in: store, prepared: baseline) {
           try transaction.replace(
             store.resolvedURL, with: .data(data),
             expecting: baseline.evidence(for: store.resolvedURL))
@@ -312,8 +323,9 @@ public enum SkillOperations {
       }
       return ResolvedInstallReport(
         installed: try lifecycle.apply(
-          declaration: declaration, previous: lock, next: lock, prepared: prepared,
-          names: Set(lock.skills.keys), baseline: baseline, writeState: false))
+          declaration: declaration, replacing: declaration, previous: lock, next: lock,
+          prepared: prepared, names: Set(lock.skills.keys), baseline: baseline,
+          writeState: false))
     }
   }
 
@@ -323,8 +335,8 @@ public enum SkillOperations {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> [String] {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: true) { declaration, lock, baseline in
-      var declaration = declaration
+    return try operate(store, apply: true) { previousDeclaration, lock, baseline in
+      var declaration = previousDeclaration
       var next = lock
       let names = Set(skillNames.map(PathSafety.sanitizeName))
       guard names.isSubset(of: Set(lock.skills.keys)) else {
@@ -361,8 +373,8 @@ public enum SkillOperations {
       }
       let lifecycle = try SkillLifecycle(store: store, provider: WellKnownProvider())
       _ = try lifecycle.apply(
-        declaration: declaration, previous: lock, next: next, prepared: [:], names: names,
-        baseline: baseline)
+        declaration: declaration, replacing: previousDeclaration, previous: lock, next: next,
+        prepared: [:], names: names, baseline: baseline)
       return names.sorted()
     }
   }
@@ -560,10 +572,11 @@ public enum SkillOperations {
     }
   }
 
-  private static func operate<T>(_ store: StateStore, apply: Bool, _ body: () throws -> T) throws
-    -> T
-  {
-    if apply { return try store.withLock(body) }
+  private static func operate<T>(
+    _ store: StateStore, apply: Bool, checkpoint: @escaping (String) throws -> Void = { _ in },
+    _ body: () throws -> T
+  ) throws -> T {
+    if apply { return try store.withLock(checkpoint: checkpoint, body) }
     return try store.withReadLock(body)
   }
 
@@ -577,10 +590,10 @@ public enum SkillOperations {
   }
 
   private static func operate<T>(
-    _ store: StateStore, apply: Bool,
+    _ store: StateStore, apply: Bool, checkpoint: @escaping (String) throws -> Void = { _ in },
     _ body: (Declaration, ResolvedState, StatePrecondition) throws -> T
   ) throws -> T {
-    try operate(store, apply: apply) {
+    try operate(store, apply: apply, checkpoint: checkpoint) {
       let baseline = try StatePrecondition(store: store)
       return try body(
         store.readDeclaration(prepared: baseline), store.readResolved(prepared: baseline), baseline)

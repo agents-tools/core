@@ -32,6 +32,9 @@ func makeDirectoriesWritable(_ root: URL) {
   }
 }
 
+/// The inspection error while automatic recovery is pending.
+let pendingRecovery = CoreError.recoveryPending(TransactionRecoveryDiagnostic.pendingMessage)
+
 func initGitRepo(_ repo: URL) throws {
   try ProcessRunner.run(
     "/usr/bin/env", arguments: ["git", "init", "--initial-branch=master", repo.path])

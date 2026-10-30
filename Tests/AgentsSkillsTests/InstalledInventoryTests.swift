@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -98,24 +99,32 @@ struct InstalledInventoryTests {
       let file = corruptDeclaration ? store.declarationURL : store.resolvedURL
       let bytes = Data("{corrupt".utf8)
       try bytes.write(to: file)
-      #expect(throws: CoreError.self) { try fixture.add(mode: mode, scope: scope) }
-      #expect(throws: CoreError.self) {
-        try SkillOperations.listManaged(scope: scope, environment: fixture.environment)
+      // Declaration diagnostics come from the manifest front end; a corrupt lock is a state error.
+      func expectFailure(_ body: () throws -> Void) {
+        if corruptDeclaration {
+          #expect(throws: ManifestFailure.self, performing: body)
+        } else {
+          #expect(throws: CoreError.self, performing: body)
+        }
       }
-      #expect(throws: CoreError.self) {
-        try SkillOperations.listInstalled(scope: scope, environment: fixture.environment)
+      expectFailure { _ = try fixture.add(mode: mode, scope: scope) }
+      expectFailure {
+        _ = try SkillOperations.listManaged(scope: scope, environment: fixture.environment)
       }
-      #expect(throws: CoreError.self) {
-        try SkillOperations.removableSkillNames(scope: scope, environment: fixture.environment)
+      expectFailure {
+        _ = try SkillOperations.listInstalled(scope: scope, environment: fixture.environment)
       }
-      #expect(throws: CoreError.self) {
-        try SkillOperations.doctor(scope: scope, environment: fixture.environment)
+      expectFailure {
+        _ = try SkillOperations.removableSkillNames(scope: scope, environment: fixture.environment)
+      }
+      expectFailure {
+        _ = try SkillOperations.doctor(scope: scope, environment: fixture.environment)
       }
       #expect(try Data(contentsOf: file) == bytes)
+      // The declaration is parsed under the scope lock, which a first writer creates.
       #expect(
-        try FileManager.default.contentsOfDirectory(atPath: store.directory.path) == [
-          file.lastPathComponent
-        ])
+        try Set(FileManager.default.contentsOfDirectory(atPath: store.directory.path))
+          == Set([file.lastPathComponent] + (corruptDeclaration ? [".agents.lock"] : [])))
       #expect(!FileManager.default.fileExists(atPath: store.cacheDirectory.path))
       #expect(
         !FileManager.default.fileExists(

@@ -1,3 +1,4 @@
+import AgentsManifest
 import CPlatform
 import Foundation
 import StateTestSupport
@@ -80,7 +81,7 @@ struct StateTransactionTests {
     TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name,
     TransactionCheckpoint.phase(.committed).name, TransactionCheckpoint.containerRemoved(0).name,
   ])
-  func killedWriterRecoversOnNextStateRead(_ step: String) throws {
+  func killedWriterIsReportedToReadersAndRecoveredByTheNextWriter(_ step: String) throws {
     let fixture = try TransactionFixture()
     let child = try stateTestProcess(root: fixture.root, arguments: ["crash", step])
     defer { terminateProcess(child) }
@@ -92,8 +93,9 @@ struct StateTransactionTests {
         atPath: fixture.root.appendingPathComponent(".agents/skills/target/SKILL.md").path))
     terminateProcess(child)
     #expect(child.terminationReason == .uncaughtSignal)
+    #expect(throws: pendingRecovery) { try fixture.store.loadResolved() }
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      _ = try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
     let committed = [
       TransactionCheckpoint.persisted(.committed, .terminal, .renamed),
@@ -148,7 +150,7 @@ final class TransactionFixture {
         root.appendingPathComponent(".agents/skills/target"),
         with: .copy(root.appendingPathComponent("new")))
       try transaction.replace(
-        store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.codex]))))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [.codex]")))
       try transaction.replace(
         store.resolvedURL,
         with: .data(
@@ -162,7 +164,9 @@ final class TransactionFixture {
       try transaction.commit()
     }
   }
+  /// Recovers as the next writer would, then compares the selected generation.
   func check(committed: Bool) throws {
+    do { try store.withLock {} } catch CoreError.transactionRecovered {}
     #expect(
       try Data(contentsOf: root.appendingPathComponent("AGENTS.md"))
         == Data((committed ? "new instructions" : "old instructions").utf8))
@@ -192,7 +196,7 @@ extension StateTransactionTests {
     let staging = store.directory.appendingPathComponent("transaction.new")
     try Data("partial journal".utf8).write(to: staging)
     #expect(throws: CoreError.transactionRecovered(store.directory.path)) {
-      try store.loadDeclaration()
+      try store.withLock {}
     }
     #expect(try Data(contentsOf: store.resolvedURL) == before)
     #expect(!FileManager.default.fileExists(atPath: staging.path))
@@ -211,6 +215,10 @@ extension StateTransactionTests {
     let journal = store.directory.appendingPathComponent("transaction.json")
     try Data(json.utf8).write(to: journal)
     #expect { try store.loadResolved() } throws: { error in
+      guard case CoreError.recoveryPending(let message) = error else { return false }
+      return message.hasPrefix(TransactionRecoveryDiagnostic.conflictMessage)
+    }
+    #expect { try store.withLock {} } throws: { error in
       if json == "{broken" {
         let error = error as NSError
         return error.domain == NSCocoaErrorDomain && error.code == 3840
@@ -339,7 +347,7 @@ extension StateTransactionTests {
     }
     terminateProcess(recovery)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
     try fixture.check(committed: true)
   }
@@ -355,7 +363,7 @@ extension StateTransactionTests {
     try Data("keep".utf8).write(to: victim.appendingPathComponent("sentinel"))
     let maliciousPaths = [
       victim.path, "file://" + victim.path, "state/../../Documents/victim", "state/cache/../victim",
-      "state/agents.json/child", "codex/../victim", "codex/other/child", "unknown/victim",
+      "state/Agents.swift/child", "codex/../victim", "codex/other/child", "unknown/victim",
       "state/cache/artifact-content/../../victim",
     ]
     for path in maliciousPaths {
@@ -374,14 +382,14 @@ extension StateTransactionTests {
       } else {
         expected = .unsafePath("unmanaged installation transaction path")
       }
-      #expect(throws: expected) { try fixture.store.loadResolved() }
+      #expect(throws: expected) { try fixture.store.withLock {} }
       #expect(try FileSnapshot.read(at: fixture.root) == snapshot)
     }
     var directories = try #require(JSONSerialization.jsonObject(with: original) as? [String: Any])
     directories["directories"] = [victim.absoluteString]
     try JSONSerialization.data(withJSONObject: directories).write(to: journalURL)
     let directorySnapshot = try FileSnapshot.read(at: fixture.root)
-    #expect { try fixture.store.loadResolved() } throws: { error in
+    #expect { try fixture.store.withLock {} } throws: { error in
       guard case CoreError.invalidState(let reason) = error else { return false }
       return reason.contains("unknown state field: directories")
     }
@@ -396,14 +404,14 @@ extension StateTransactionTests {
       throws: CoreError.invalidState(
         "transaction journal was written by another version; recover it with the version that wrote it (journal version: missing)"
       )
-    ) { try fixture.store.loadResolved() }
+    ) { try fixture.store.withLock {} }
     #expect(
       try String(contentsOf: victim.appendingPathComponent("sentinel"), encoding: .utf8) == "keep")
     try FileManager.default.removeItem(at: victim.deletingLastPathComponent())
     try original.write(to: journalURL)
     #expect(try FileSnapshot.read(at: fixture.root) == before)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
   }
 
@@ -425,7 +433,7 @@ extension StateTransactionTests {
     }
     try StateStore.encode(journal).write(to: url)
     let before = try FileSnapshot.read(at: fixture.root)
-    #expect { try fixture.store.loadResolved() } throws: { error in
+    #expect { try fixture.store.withLock {} } throws: { error in
       guard case CoreError.invalidState(let reason) = error else { return false }
       return reason.contains("state/cache/materialized/source/pin: overlapping destinations")
     }
@@ -443,7 +451,7 @@ extension StateTransactionTests {
     let copyHash = try FileSnapshot.read(at: copy)
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: copy))
     #expect(throws: CoreError.invalidState("transaction root identity changed")) {
-      try store.loadDeclaration()
+      try store.withLock {}
     }
     #expect(try FileSnapshot.read(at: fixture.root) == originalHash)
     #expect(try FileSnapshot.read(at: copy) == copyHash)
@@ -466,7 +474,7 @@ extension StateTransactionTests {
     try FileManager.default.moveItem(at: original, to: external)
     try FileManager.default.createSymbolicLink(at: original, withDestinationURL: external)
     let snapshot = try FileSnapshot.read(at: fixture.root)
-    #expect { try fixture.store.loadResolved() } throws: { error in
+    #expect { try fixture.store.withLock {} } throws: { error in
       if component == "agent" {
         return error as? CoreError == .invalidState("transaction root identity changed")
       }
@@ -496,7 +504,7 @@ extension StateTransactionTests {
       for (index, bytes) in encodings.enumerated() {
         try bytes.write(to: url)
         let snapshot = try FileSnapshot.read(at: fixture.root)
-        #expect { try fixture.store.loadResolved() } throws: { error in
+        #expect { try fixture.store.withLock {} } throws: { error in
           if index < 4 {
             return error as? CoreError
               == .invalidState("JSON must be UTF-8 without a byte order mark")
@@ -509,11 +517,11 @@ extension StateTransactionTests {
     }
     try Data(duplicate.utf8).write(to: url)
     #expect(throws: CoreError.invalidState("duplicate JSON key: phase")) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
     try original.write(to: url)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
     try fixture.check(committed: false)
   }
@@ -608,7 +616,7 @@ extension StateTransactionTests {
           try transaction.replace(target, with: .copy(fixture.root.appendingPathComponent("new")))
         }
         try transaction.replace(
-          store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.codex]))))
+          store.declarationURL, with: .data(manifestText("defaultAgents: [.codex]")))
         try transaction.replace(
           store.resolvedURL,
           with: .data(

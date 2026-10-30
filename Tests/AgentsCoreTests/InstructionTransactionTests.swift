@@ -1,4 +1,6 @@
+import AgentsManifest
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -36,7 +38,7 @@ struct InstructionTransactionTests {
         try transaction.replace(file.resolvingSymlinksInPath(), with: .data(Data("new".utf8)))
       }
       try transaction.replace(
-        store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.codex]))))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [.codex]")))
       #expect(throws: Interrupted.self) { try transaction.commit() }
     }
     for file in files { #expect(try Data(contentsOf: file) == Data("original".utf8)) }

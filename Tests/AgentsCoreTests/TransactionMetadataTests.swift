@@ -72,7 +72,7 @@ struct TransactionMetadataTests {
     } else {
       try interrupt(fixture, command: "crash", at: point)
       #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-        try fixture.store.loadResolved()
+        try fixture.store.withLock {}
       }
     }
 
@@ -103,7 +103,7 @@ struct TransactionMetadataTests {
     try interrupt(fixture, command: "crash", at: TransactionCheckpoint.progress(4, .applied).name)
     try interrupt(fixture, command: "recover", at: point)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      try fixture.store.loadResolved()
+      try fixture.store.withLock {}
     }
 
     try fixture.check(committed: false)

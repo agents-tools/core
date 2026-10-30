@@ -76,7 +76,7 @@ struct WatchReferenceTests {
     try fixture.kill(child, at: "watch.mirror.synced")
     let corrupt = Data("invalid watch state".utf8)
     try corrupt.write(to: fixture.store.watchURL)
-    #expect(throws: CoreError.self) { try fixture.store.loadWatch() }
+    #expect(throws: CoreError.self) { try fixture.store.withLock {} }
     #expect(try Data(contentsOf: fixture.store.watchURL) == corrupt)
     #expect(try fixture.watchRefs() == [first, replacement])
     #expect(

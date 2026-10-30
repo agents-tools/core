@@ -1,10 +1,10 @@
 import Foundation
 
-/// The layout of `agents.json` and `agents.resolved`, as Prettier writes JSON with its default
-/// 80-column width: two-space indentation, `"key": value`, every non-empty object expanded one
-/// member per line, empty containers as `{}` and `[]`, and an array on one line when it holds no
-/// object and fits, else one element per line. Keys keep the encoder's sorted order and string
-/// bytes are copied as encoded.
+/// The layout of `agents.resolved`, as Prettier writes JSON with its default 80-column width:
+/// two-space indentation, `"key": value`, every non-empty object expanded one member per line,
+/// empty containers as `{}` and `[]`, and an array on one line when it holds no object and fits,
+/// else one element per line. Keys keep the encoder's sorted order and string bytes are copied
+/// as encoded.
 enum StateJSON {
   private static let width = 80
 

@@ -1,9 +1,11 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import AgentsSkills
 import AgentsUpdates
 import CPlatform
 import Foundation
+import StateTestSupport
 import Synchronization
 
 let arguments = CommandLine.arguments
@@ -139,7 +141,7 @@ if arguments[2] == "git-environment" {
 } else if ["watch-subscribe", "watch-acknowledge"].contains(arguments[2]) {
   let watch = WatchOperations(
     discoverSkills: { _ in [] },
-    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") }, declarations: .manifest,
     checkpoint: { step in
       if step.hasPrefix("mirror."), FileLock.isContentionCheckpoint(step) {
         try signalContention()
@@ -158,7 +160,7 @@ if arguments[2] == "git-environment" {
 } else if ["watch-add", "watch-seen", "watch-remove"].contains(arguments[2]) {
   let watch = WatchOperations(
     discoverSkills: { _ in [] },
-    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") }, declarations: .manifest,
     checkpoint: { try stop($0) })
   if arguments[2] == "watch-add" {
     try watch.add(
@@ -168,6 +170,12 @@ if arguments[2] == "git-environment" {
   } else {
     try watch.remove("source", environment: store.environment)
   }
+} else if arguments[2] == "skill-add" {
+  _ = try SkillOperations.add(
+    AddOptions(
+      source: root.appendingPathComponent("source").path, agents: [.codex],
+      skillNames: ["demo"], mode: .edit, environment: store.environment),
+    checkpoint: { try stop($0) })
 } else if arguments[2] == "watch-add-artifact" {
   let bytes = Data("---\nname: demo\ndescription: Fixture skill.\n---\nBody\n".utf8)
   let digest = "sha256:" + FileHash.sha256Hex(data: bytes)
@@ -177,7 +185,7 @@ if arguments[2] == "git-environment" {
       type: .skillMD, url: "https://watch.example.test/demo/SKILL.md", digest: digest),
     files: ["SKILL.md": bytes], payloads: [digest: bytes])
   let watch = WatchOperations(
-    discoverSkills: { _ in [] }, fetchArtifacts: { _ in [artifact] },
+    discoverSkills: { _ in [] }, fetchArtifacts: { _ in [artifact] }, declarations: .manifest,
     checkpoint: { try stop($0) })
   try watch.add("https://watch.example.test", alias: "site", environment: store.environment)
 } else if arguments[2] == "watch-recover" {
@@ -230,9 +238,8 @@ if arguments[2] == "git-environment" {
   }
 } else if arguments[2] == "read" {
   try Data().write(to: root.appendingPathComponent("reader-started"))
-  do { _ = try store.loadResolved() } catch CoreError.transactionRecovered {
-    _ = try store.loadResolved()
-  }
+  // The reader waits for the writer lock and reports, rather than replays, pending recovery.
+  do { _ = try store.loadResolved() } catch CoreError.recoveryPending {}
   try Data().write(to: root.appendingPathComponent("reader-finished"))
 } else if arguments[2] == "combined-crash" {
   _ = try UpdateOperations.withPreparedUpdate(
@@ -317,27 +324,35 @@ if arguments[2] == "git-environment" {
         InstructionLocations.file(for: .geminiCLI, scope: scope, environment: store.environment)!,
         with: .data(Data("New instructions\n".utf8)))
       try transaction.replace(
-        store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.cursor]))))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [.cursor]")))
       try transaction.replace(store.resolvedURL, with: .data(StateStore.encode(ResolvedState())))
       try transaction.commit()
     } else if arguments[2] == "watch-crash" {
-      var declaration = try store.readDeclaration()
+      let baseline = try StatePrecondition(store: store)
+      let previous = try store.readDeclaration(prepared: baseline)
+      var declaration = previous
       declaration.watch = ["source"]
       let watch = WatchState(sources: [
         "local:/source": WatchSourceState(seen: .revision(String(repeating: "b", count: 40)))
       ])
       let transaction = FileTransaction(store: store) { try stop($0) }
-      try transaction.replace(store.declarationURL, with: .data(StateStore.encode(declaration)))
+      try store.stageDeclaration(
+        store.planDeclaration(declaration, replacing: previous, prepared: baseline),
+        in: transaction, prepared: baseline)
       try transaction.replace(store.watchURL, with: .data(StateStore.encode(watch)))
       try transaction.commit()
     } else if arguments[2] == "writer" {
       for index in 0..<5 {
-        var declaration = try store.readDeclaration()
+        let baseline = try StatePrecondition(store: store)
+        let previous = try store.readDeclaration(prepared: baseline)
+        var declaration = previous
         declaration.sources["\(arguments[3])-\(index)"] = SourceDeclaration(
           kind: .local, location: root.appendingPathComponent("\(arguments[3])-\(index)").path)
         usleep(10_000)
         let transaction = FileTransaction(store: store)
-        try transaction.replace(store.declarationURL, with: .data(StateStore.encode(declaration)))
+        try store.stageDeclaration(
+          store.planDeclaration(declaration, replacing: previous, prepared: baseline),
+          in: transaction, prepared: baseline)
         try transaction.commit()
       }
     } else {
@@ -350,7 +365,7 @@ if arguments[2] == "git-environment" {
         )
         .appendingPathComponent("target"), with: .copy(root.appendingPathComponent("new")))
       try transaction.replace(
-        store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.codex]))))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [.codex]")))
       try transaction.replace(
         store.resolvedURL,
         with: .data(

@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -82,9 +83,8 @@ struct StateInspectionTests {
         atPath: fixture.store.directory.appendingPathComponent(".agents.lock").path))
     var reads = 0
     var interruptedState: String?
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
 
-    #expect(throws: pending) {
+    #expect(throws: pendingRecovery) {
       try fixture.store.withReadLock {
         reads += 1
         let child = try stateTestProcess(
