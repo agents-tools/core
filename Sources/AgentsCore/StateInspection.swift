@@ -1,19 +1,13 @@
+import CPlatform
 import Foundation
-
-#if canImport(Darwin)
-  import Darwin
-#else
-  import Glibc
-#endif
 
 extension StateStore {
   /// Takes an existing scope lock without creating files or replaying recovery.
-  /// Pending recovery runs the diagnostic callback instead of inspecting inconsistent state.
+  /// Pending recovery runs the diagnostic callback instead of inspecting inconsistent state;
+  /// by default it throws `CoreError.recoveryPending`.
   /// The body may be retried when a first writer creates the scope lock.
   package func withReadLock<T>(
-    onPendingRecovery: () throws -> T = {
-      throw CoreError.invalidState("transaction recovery is required before inspection")
-    },
+    onPendingRecovery: (() throws -> T)? = nil,
     _ body: () throws -> T
   ) throws -> T {
     while true {
@@ -23,17 +17,26 @@ extension StateStore {
           openat($0.descriptor, ".agents.lock", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         } ?? -1
       if directory != nil, descriptor < 0, errno != ENOENT {
-        throw CoreError.invalidState("cannot open scope lock for inspection")
+        throw FileSystem.posixError(
+          errno, at: self.directory.appendingPathComponent(".agents.lock"),
+          otherwise: .invalidState("cannot open scope lock for inspection"))
       }
       defer { if descriptor >= 0 { close(descriptor) } }
       if descriptor >= 0 {
-        while flock(descriptor, LOCK_SH) != 0 {
+        while platform_flock(descriptor, LOCK_SH) != 0 {
           if errno != EINTR { throw CoreError.invalidState("cannot acquire scope inspection lock") }
         }
       }
-      defer { if descriptor >= 0 { flock(descriptor, LOCK_UN) } }
+      defer { if descriptor >= 0 { platform_flock(descriptor, LOCK_UN) } }
       let pending = try hasPendingRecovery(in: directory)
-      let result = Result { try pending ? onPendingRecovery() : body() }
+      let result = Result {
+        guard pending else { return try body() }
+        guard let onPendingRecovery else {
+          throw CoreError.recoveryPending(
+            FileTransaction.recoveryDiagnostic(store: self).message)
+        }
+        return try onPendingRecovery()
+      }
       // Writers create the lock before mutation and never remove it. A failed
       // unlocked read also needs revalidation before its error can be trusted.
       if descriptor < 0, let current = try openDirectoryIfPresent(),
@@ -46,7 +49,8 @@ extension StateStore {
   }
 
   private func hasPendingRecovery(in directory: DirectoryHandle?) throws -> Bool {
-    try directory?.info("transaction.json") != nil || directory?.info("transaction.new") != nil
-      || directory?.info("watch-refs.pending") != nil
+    guard let directory else { return false }
+    return try TransactionJournal.isPresent(in: directory)
+      || directory.info("watch-refs.pending") != nil
   }
 }

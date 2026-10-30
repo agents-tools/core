@@ -10,6 +10,11 @@ This directory holds durable decision records for `skill-cli`.
 - `SPMInspiredRegistry.md`: SPM-inspired first-party skill registry schema
 - `SwiftStyleFlagSurface.md`: Swift-style canonical flag spelling for
   install/list/remove/update
+- `SwiftManifest.md`: `Agents.swift` as a statically evaluated Swift
+  declaration with lossless edits
+- `AgentComponents.md`: component model, capability registry, input adapters
+  and native deployment
+- `ExecutableApproval.md`: per-machine approval of components that run code
 
 ## Placement
 

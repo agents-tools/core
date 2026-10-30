@@ -1,0 +1,43 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  sources: [
+    .source(name: "a", url: "https://Example.org/a.git", exact: "1.2.3+build"),
+    .source(name: "b", path: "./b", from: "1.2.0"),
+    .source(
+      name: "c",
+      path: "./c",
+      .upToNextMinor(from: "1.2.0-beta+build")
+    ),
+    .source(name: "d", path: "./d", from: "1.2.0"),
+    .source(
+      name: "e",
+      path: "./e",
+      .upToNextMinor(from: "1.2.0+lower")
+    ),
+    .source(
+      name: "f",
+      path: "./f",
+      "1.2.0"..<"1.8.0-beta+bound"
+    ),
+    .source(
+      name: "g",
+      path: "./g",
+      .upToNextMinor(from: "9223372036854775807.1.0")
+    ),
+    .source(
+      name: "h",
+      url: "ssh://User@INTRANET:2222/team/h.git",
+      revision: "abc123"
+    ),
+    .source(
+      name: "i",
+      path: "./i",
+      .upToNextMinor(
+        from: "1.2.0-alphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalphaalpha"
+      )
+    ),
+    .source(name: "j", url: "https://intranet/team@variant"),
+  ]
+)

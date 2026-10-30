@@ -1,0 +1,16 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  exports: ["review"],
+  groups: [
+    .group(
+      name: "review",
+      components: [
+        .instructions(sections: ["review-principles"], agents: [.claudeCode, .codex]),
+        .skills(source: ".", select: ["review"], mode: .copy, agents: [.claudeCode, .codex]),
+      ],
+      condition: .when(scopes: [.project])
+    ),
+  ]
+)

@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 
 struct DiscoveredSource {
@@ -34,17 +35,21 @@ final class SkillLifecycle {
   let provider: WellKnownProvider
   let workspace: URL
   let resolutions: SourceResolutionSession?
+  /// Receives the applying transaction's checkpoints.
+  let checkpoint: (String) throws -> Void
 
   init(
-    store: StateStore, provider: WellKnownProvider, resolutions: SourceResolutionSession? = nil
+    store: StateStore, provider: WellKnownProvider, resolutions: SourceResolutionSession? = nil,
+    checkpoint: @escaping (String) throws -> Void = { _ in }
   ) throws {
     self.resolutions = resolutions
+    self.checkpoint = checkpoint
     self.store = store
     self.cache = SourceCache(store: store)
     self.provider = provider
     workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
       "agents-operation-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: workspace)
   }
 
   deinit { try? FileManager.default.removeItem(at: workspace) }
@@ -84,7 +89,9 @@ final class SkillLifecycle {
       root = workspace.appendingPathComponent(UUID().uuidString)
       func copy(_ resolved: SourceRevision, _ snapshot: URL) throws {
         pin = resolved
-        try FileManager.default.copyItem(at: snapshot, to: root)
+        try FileSystem.withAccessErrors(at: root) {
+          try FileManager.default.copyItem(at: snapshot, to: root)
+        }
       }
       if let resolutions {
         try resolutions.withSnapshot(source, copy)
@@ -195,7 +202,9 @@ final class SkillLifecycle {
         root = workspace.appendingPathComponent(UUID().uuidString)
         try cache.withSnapshot(sourceID: skill.source, source: source, revision: revision) {
           snapshot in
-          try FileManager.default.copyItem(at: snapshot, to: root)
+          try FileSystem.withAccessErrors(at: root) {
+            try FileManager.default.copyItem(at: snapshot, to: root)
+          }
         }
       }
       directory = try PathSafety.resolvedChild(base: root, subpath: path)
@@ -208,24 +217,40 @@ final class SkillLifecycle {
     return try PreparedSkill(lock: skill, directory: directory, payloads: payloads)
   }
 
+  /// `declaration` replaces `previousDeclaration`, which was read from `baseline`. Its edit is
+  /// planned before content retention, so a declaration that cannot be edited fails without
+  /// side effects. Without `writeState` the declaration and lock stay unchanged.
   func apply(
-    declaration: Declaration, previous: ResolvedState, next: ResolvedState,
-    prepared: [String: PreparedSkill], names: Set<String>, writeState: Bool = true
+    declaration: Declaration, replacing previousDeclaration: Declaration,
+    previous: ResolvedState, next: ResolvedState, prepared: [String: PreparedSkill],
+    names: Set<String>, baseline: StatePrecondition, writeState: Bool = true
   ) throws -> [InstallResult] {
     try declaration.validate(environment: store.environment)
     try next.validate()
-    try validateOwnership(previous: previous, next: next, names: names)
-    let retained = try retain(prepared: prepared, next: next)
-    let transaction = FileTransaction(store: store)
-    try stage(
-      previous: previous, next: next, prepared: prepared, retained: retained,
-      names: names, transaction: transaction)
+    let change =
+      writeState
+      ? try store.planDeclaration(declaration, replacing: previousDeclaration, prepared: baseline)
+      : nil
+    let plan = try SkillUpdatePlan(
+      lifecycle: self, previous: previous, next: next, prepared: prepared, names: names, results: []
+    )
+    try plan.validateOwnership()
+    try baseline.validate()
+    try plan.validate()
+    let retained = try plan.retain()
+    let transaction = FileTransaction(store: store, checkpoint: checkpoint)
+    transaction.requireUnchanged(since: baseline, plan)
+    try plan.stage(retained: retained, transaction: transaction)
     if writeState {
-      try store.stageDeclaration(declaration, in: transaction)
-      try transaction.replace(
-        store.resolvedURL, content: nil, data: StateStore.encodeState(next.normalized))
+      try store.stageDeclaration(change, in: transaction, prepared: baseline)
+      if let data = try next.replacementData(in: store, prepared: baseline) {
+        try transaction.replace(
+          store.resolvedURL, with: .data(data), expecting: baseline.evidence(for: store.resolvedURL)
+        )
+      }
     }
-    try cache.prune(referencedBy: next, transaction: transaction)
+    try cache.prune(
+      referencedBy: next, watch: store.readWatch(prepared: baseline), transaction: transaction)
     try transaction.commit()
     return receipts(next: next, names: names)
   }
@@ -291,7 +316,8 @@ final class SkillLifecycle {
 
   func stage(
     previous: ResolvedState, next: ResolvedState, prepared: [String: PreparedSkill],
-    retained: [String: URL], names: Set<String>, transaction: FileTransaction
+    retained: [String: URL], names: Set<String>, transaction: FileTransaction,
+    expectations: [String: TargetPrecondition]
   ) throws {
     let oldTargets = try targets(previous)
     let newTargets = try targets(next)
@@ -299,17 +325,22 @@ final class SkillLifecycle {
       if let target = newTargets[path], names.contains(target.name),
         let content = retained[target.name], let item = prepared[target.name]
       {
+        guard let evidence = expectations[path] else {
+          throw CoreError.invalidState("skill target has no prepared preimage")
+        }
         guard
           !PathSafety.isContained(
             content.resolvingSymlinksInPath(), in: URL(fileURLWithPath: path).standardizedFileURL)
         else { throw CoreError.unsafePath("installation would replace its own source") }
         try transaction.replace(
-          URL(fileURLWithPath: path), content: content, link: target.mode != .copy,
-          expectedHash: item.lock.hash,
-          executableFlags: item.executableFlags)
+          URL(fileURLWithPath: path), with: target.mode == .copy ? .copy(content) : .link(content),
+          expectedHash: item.lock.hash, executableFlags: item.executableFlags, expecting: evidence)
       } else if let target = oldTargets[path], names.contains(target.name), newTargets[path] == nil
       {
-        try transaction.replace(URL(fileURLWithPath: path), content: nil)
+        guard let evidence = expectations[path] else {
+          throw CoreError.invalidState("skill target has no prepared preimage")
+        }
+        try transaction.delete(URL(fileURLWithPath: path), expecting: evidence)
       }
     }
   }
@@ -414,12 +445,11 @@ final class SkillLifecycle {
   }
 
   private func write(_ files: [String: Data], to directory: URL) throws {
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: directory)
     for (path, data) in files {
       let url = try PathSafety.resolvedChild(base: directory, subpath: path)
-      try FileManager.default.createDirectory(
-        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-      try data.write(to: url)
+      try FileSystem.createDirectory(at: url.deletingLastPathComponent())
+      try FileSystem.write(data, to: url)
     }
   }
 
@@ -434,7 +464,7 @@ final class SkillLifecycle {
       case .typeDirectory: return .directory
       case .typeRegular:
         let mode = (attributes[.posixPermissions] as? NSNumber)?.uint16Value ?? 0
-        return .file(try Data(contentsOf: url), executable: mode & 0o111 != 0)
+        return .file(try FileSystem.read(at: url), executable: mode & 0o111 != 0)
       default: throw CoreError.unsafePath("unsupported installed entry: \(url.path)")
       }
     }

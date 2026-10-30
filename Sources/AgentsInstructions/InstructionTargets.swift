@@ -10,7 +10,11 @@ struct InstructionTargets {
   func plan(
     sections: [InstructionSection], agents: [AgentID], previous: LockedInstructions,
     restoring: Bool = false
-  ) throws -> (targets: [String: LockedTarget], changes: [InstructionTargetChange]) {
+  ) throws -> (
+    targets: [String: LockedTarget], changes: [InstructionTargetChange],
+    expectations: [String: TargetPrecondition]
+  ) {
+    var expectations: [String: TargetPrecondition] = [:]
     var targets: [String: LockedTarget] = [:]
     var rendered: [String: String] = [:]
     if !sections.isEmpty {
@@ -43,16 +47,26 @@ struct InstructionTargets {
         }
       }
       if !restoring, store.scope == .project, recipients.contains(.claudeCode),
-        targets["AGENTS.md"] != nil, let path = try forwardingPath()
+        targets["AGENTS.md"] != nil
       {
-        let file = store.environment.projectDirectory.appendingPathComponent(path.rawValue)
-        let key = InstructionLocations.key(for: InstructionLocations.physical(file), store: store)
-        guard targets[key] == nil else {
-          throw CoreError.invalidState("forwarding overlaps an instruction target")
+        for path in ClaudeInstructionPath.allCases {
+          let file = store.environment.projectDirectory.appendingPathComponent(path.rawValue)
+          expectations[file.path] = try TargetPrecondition(file)
+          let physical = file.resolvingSymlinksInPath()
+          if physical.path != file.path {
+            expectations[physical.path] = try TargetPrecondition(physical)
+          }
         }
-        targets[key] = LockedTarget(
-          agents: [.claudeCode], import: String(path.importLine.dropFirst()), blockHash: "",
-          created: false)
+        if let path = try forwardingPath() {
+          let file = store.environment.projectDirectory.appendingPathComponent(path.rawValue)
+          let key = InstructionLocations.key(for: InstructionLocations.physical(file), store: store)
+          guard targets[key] == nil else {
+            throw CoreError.invalidState("forwarding overlaps an instruction target")
+          }
+          targets[key] = LockedTarget(
+            agents: [.claudeCode], import: String(path.importLine.dropFirst()), blockHash: "",
+            created: false)
+        }
       }
     }
     if restoring {
@@ -65,7 +79,16 @@ struct InstructionTargets {
     var problems: [InstructionLinkProblem] = []
     for key in Set(previous.targets.keys).union(targets.keys).sorted() {
       let file = try InstructionLocations.file(for: key, store: store)
-      let before = try Self.read(file)
+      let input = try TargetPrecondition.readingFile(file)
+      let before = input.bytes
+      if let earlier = expectations[file.path] {
+        guard earlier.sameGeneration(as: input.evidence) else {
+          throw CoreError.invalidState(
+            "instruction target changed during preparation: \(file.path)")
+        }
+      } else {
+        expectations[file.path] = input.evidence
+      }
       let old = previous.targets[key]
       var after: Data?
       var foreign = false
@@ -116,7 +139,8 @@ struct InstructionTargets {
           afterAgents: targets[key]?.agents ?? [], drift: drift, foreign: foreign))
     }
     guard problems.isEmpty else { throw InstructionError.invalidLinks(problems) }
-    return (targets, changes)
+    for evidence in expectations.values { try evidence.validate() }
+    return (targets, changes, expectations)
   }
 
   /// The file an agent reads for sections placed in `directory`, or nil when the agent has no file.
@@ -288,7 +312,7 @@ struct InstructionTargets {
     guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
       throw CoreError.unsafePath("instruction target is not a regular file: \(file.path)")
     }
-    return try Data(contentsOf: file)
+    return try FileSystem.read(at: file)
   }
 
   private static func importBlock(in bytes: Data, at path: ClaudeInstructionPath) throws

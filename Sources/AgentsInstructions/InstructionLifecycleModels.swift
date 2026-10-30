@@ -112,7 +112,7 @@ public struct InstructionDiagnostic: Sendable, Equatable {
     case sourceResolutionFailed
     case invalidConfiguration
     case stateUnavailable
-    case pendingRecovery
+    case pendingRecovery, unresolvedTransaction
   }
 
   public let kind: Kind

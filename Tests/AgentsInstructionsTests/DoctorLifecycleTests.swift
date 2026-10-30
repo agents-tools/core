@@ -24,11 +24,11 @@ struct InstructionDoctorTests {
     let before = try fixture.snapshot()
     let report = try InstructionOperations.doctor(
       scope: pendingScope, environment: fixture.environment)
-    #expect(report.diagnostics.map(\.kind) == [.pendingRecovery])
+    #expect(report.diagnostics.map(\.kind) == [.unresolvedTransaction])
     #expect(report.diagnostics.first?.path == pending.directory)
     let healthy = try InstructionOperations.doctor(
       scope: healthyScope, environment: fixture.environment)
-    #expect(healthy.diagnostics.filter { $0.kind == .pendingRecovery }.count == 1)
+    #expect(healthy.diagnostics.filter { $0.kind == .unresolvedTransaction }.count == 1)
     #expect(healthy.diagnostics.contains { $0.kind == .missingTarget && $0.path == healthyFile })
     #expect(!healthy.diagnostics.contains { $0.kind == .duplicateScope })
     #expect(try fixture.snapshot() == before)
@@ -180,7 +180,7 @@ struct InstructionDoctorTests {
       projectRoots: [fixture.project, empty, pending], environment: fixture.environment)
     #expect(reports.count == 3)
     #expect(reports[0].diagnostics.contains { $0.kind == .missingTarget })
-    #expect(reports[2].diagnostics.map(\.kind) == [.pendingRecovery])
+    #expect(reports[2].diagnostics.map(\.kind) == [.unresolvedTransaction])
     #expect(try fixture.snapshot() == before)
     #expect(!FileManager.default.fileExists(atPath: empty.appendingPathComponent(".agent").path))
     #expect(

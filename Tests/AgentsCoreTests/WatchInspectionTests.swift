@@ -1,10 +1,15 @@
-import AgentsCore
+import AgentsManifest
 import Foundation
 import Testing
 
+@testable import AgentsCore
+
 @Suite("Read-only watch inspection")
 struct WatchInspectionTests {
-  @Test(arguments: ["replace.0.renamed", "journal.committed"])
+  @Test(arguments: [
+    TransactionCheckpoint.publication(0, .exchanged).name,
+    TransactionCheckpoint.phase(.committed).name,
+  ])
   func pendingTransactionLeavesStateUnchanged(_ step: String) throws {
     let fixture = try WatchGitFixture()
     try fixture.watch.add("source", environment: fixture.environment)
@@ -16,15 +21,16 @@ struct WatchInspectionTests {
       FileManager.default.fileExists(
         atPath: fixture.store.directory.appendingPathComponent("transaction.json").path))
     let before = try FileHash.folderHash(fixture.store.directory)
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
 
-    #expect(throws: pending) { try fixture.watch.status(environment: fixture.environment) }
+    #expect(throws: pendingRecovery) { try fixture.watch.status(environment: fixture.environment) }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
-    #expect(throws: pending) { try fixture.watch.diff("source", environment: fixture.environment) }
+    #expect(throws: pendingRecovery) {
+      try fixture.watch.diff("source", environment: fixture.environment)
+    }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
   }
 
-  @Test(arguments: ["journal.removed", "watch.references.deleted"])
+  @Test(arguments: [TransactionCheckpoint.journalRemoved.name, "watch.references.0.0.deleted"])
   func pendingRefCleanupLeavesStateUnchanged(_ step: String) throws {
     let fixture = try WatchGitFixture()
     let first = try fixture.head()
@@ -40,15 +46,17 @@ struct WatchInspectionTests {
     try #require(
       FileManager.default.fileExists(
         atPath: fixture.store.directory.appendingPathComponent("watch-refs.pending").path))
-    let refs: Set<String> = step == "journal.removed" ? [first, committed] : [committed]
+    let refs: Set<String> =
+      step == TransactionCheckpoint.journalRemoved.name ? [first, committed] : [committed]
     try #require(try fixture.watchRefs() == refs)
     try fixture.rewrite("later")
     let before = try FileHash.folderHash(fixture.store.directory)
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
 
-    #expect(throws: pending) { try fixture.watch.status(environment: fixture.environment) }
+    #expect(throws: pendingRecovery) { try fixture.watch.status(environment: fixture.environment) }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
-    #expect(throws: pending) { try fixture.watch.diff("source", environment: fixture.environment) }
+    #expect(throws: pendingRecovery) {
+      try fixture.watch.diff("source", environment: fixture.environment)
+    }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
     #expect(try fixture.watchRefs() == refs)
   }

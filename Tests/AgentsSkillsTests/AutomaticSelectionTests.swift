@@ -1,6 +1,8 @@
 import AgentsCore
-import Darwin
+import AgentsManifest
+import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Automatic add selection")
@@ -15,11 +17,10 @@ struct AutomaticSelectionTests {
       to: instructions.appendingPathComponent("demo.md"))
     try fixture.commit()
     let store = fixture.store()
-    try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
     var declaration = Declaration(sources: [
       "source": SourceDeclaration(kind: .local, location: fixture.repo.path)
     ])
-    try StateStore.encode(declaration).write(to: store.declarationURL)
+    try store.writeDeclaration(declaration)
 
     let root = fixture.environment.projectDirectory
     let resume = root.appendingPathComponent("resume-discovery")
@@ -31,10 +32,7 @@ struct AutomaticSelectionTests {
     defer {
       // Release the Git wrapper even if fixture preparation fails.
       _ = "\n".withCString { write(descriptor, $0, 1) }
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
+      terminateProcess(child)
     }
     try wait(for: child) {
       FileManager.default.fileExists(atPath: root.appendingPathComponent("discovery-ready").path)
@@ -130,7 +128,6 @@ struct AutomaticSelectionTests {
     ).write(to: git)
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: git.path)
     var directory = Bundle(for: AutomaticSelectionTestBundle.self).bundleURL
-      .deletingLastPathComponent()
     while !FileManager.default.isExecutableFile(
       atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
     {
@@ -148,9 +145,9 @@ struct AutomaticSelectionTests {
   }
 
   private func wait(for process: Process, until ready: () -> Bool) throws {
-    let deadline = Date().addingTimeInterval(20)
-    while !ready(), process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
-    try #require(ready())
+    try ProcessWait.condition(
+      process, root: URL(fileURLWithPath: process.arguments![0]),
+      description: "automatic selection handshake", ready: ready)
   }
 }
 

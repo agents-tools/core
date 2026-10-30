@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -126,20 +127,24 @@ struct UpdateReportingTests {
       } else {
         let retained = try plan.retain()
         let transaction = FileTransaction(store: store) { step in
-          if step == "stage.0.ready" {
+          if step == TransactionCheckpoint.stage(0, .constructed).name {
             let parent = fixture.target("demo").deletingLastPathComponent()
             let staged = try #require(
               FileManager.default.contentsOfDirectory(
                 at: parent,
                 includingPropertiesForKeys: nil
-              ).first { $0.lastPathComponent.hasSuffix(".new") })
+              ).first { $0.lastPathComponent.hasPrefix(".agents-") }
+            )
+            .appendingPathComponent(TransactionSlot.exchanged.name(0))
             try FileManager.default.setAttributes(
               [.posixPermissions: 0o755],
               ofItemAtPath: staged.appendingPathComponent("SKILL.md").path)
           }
         }
         try plan.stage(retained: retained, transaction: transaction)
-        #expect(throws: CoreError.self) { try transaction.commit() }
+        #expect(throws: CoreError.invalidState("staged content executable mode mismatch")) {
+          try transaction.commit()
+        }
       }
     }
     #expect(try fixture.stateAndTargetBytes() == before)

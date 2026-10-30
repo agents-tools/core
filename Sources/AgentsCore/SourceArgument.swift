@@ -69,21 +69,23 @@ package struct SourceArgument: Equatable, Sendable {
   ) throws -> SourceSelection {
     let requirements = [requirement, explicitRequirement].compactMap { $0 }
     let paths = try [path, explicitPath.map(PathSafety.sanitizeSubpath)].compactMap { $0 }
-    guard requirements.allSatisfy({ $0 == requirements.first }) else {
+    guard requirements.allSatisfy({ $0.declarationEquivalent(to: requirements[0]) }) else {
       throw CoreError.invalidSource("the source selector and option give different requirements")
     }
     guard paths.allSatisfy({ $0 == paths.first }) else {
       throw CoreError.invalidSource("the source selector and option give different paths")
     }
     if let declared = declaration.sources[location] {
-      return SourceSelection(source: declared, requirement: requirements.first, path: paths.first)
+      return SourceSelection(
+        source: declared, requirement: requirements.first?.canonical, path: paths.first)
     }
     let parsed = try SourceParser.parse(
       location, currentDirectory: environment.projectDirectory,
       homeDirectory: environment.homeDirectory)
     return SourceSelection(
       source: SourceDeclaration(kind: parsed.type, location: parsed.localPath ?? parsed.url),
-      requirement: requirements.first ?? parsed.requirement, path: paths.first ?? parsed.subpath)
+      requirement: (requirements.first ?? parsed.requirement)?.canonical,
+      path: paths.first ?? parsed.subpath)
   }
 
   private static func selectorStart(in input: String) -> String.Index? {
@@ -109,7 +111,7 @@ package struct SourceSelection: Equatable, Sendable {
   /// `declared` with the command's requirement and path replacing its own.
   package func applied(to declared: SourceDeclaration) -> SourceDeclaration {
     var result = declared
-    if let requirement { result.requirement = requirement }
+    if let requirement { result.requirement = requirement.canonical }
     if let path { result.path = path }
     return result
   }

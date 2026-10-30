@@ -1,5 +1,6 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -156,8 +157,15 @@ struct OwnershipAndPlacementTests {
     let fixture = try InstructionFixture()
     try fixture.own("guide")
     try fixture.write(
-      "{\"instructions\": {\"sections\": [], \"chatgpt\": {\"weekly\": {\"sections\": [\"guide\"]}}}}\n",
-      to: fixture.store().declarationURL)
+      """
+      // agents-tools-version: 1.0
+      import AgentsDescription
+
+      let agents = Agents(
+        components: [.instructions(chatGPT: [.prompt(name: "weekly", sections: ["guide"])])]
+      )
+
+      """, to: fixture.store().declarationURL)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(
       try fixture.store().loadResolved().instructions.chatgpt["weekly"]?.sections.map(\.name)

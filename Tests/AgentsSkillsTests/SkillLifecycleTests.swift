@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -154,7 +155,9 @@ struct SkillLifecycleTests {
     #expect(!FileManager.default.fileExists(atPath: fixture.store().resolvedURL.path))
   }
 
-  @Test(arguments: ["agents.json", "agents.resolved"], ["add", "update", "install", "remove"])
+  @Test(
+    arguments: [StateStore.declarationFileName, StateStore.resolvedFileName],
+    ["add", "update", "install", "remove"])
   func corruptStateStopsEveryMutation(_ filename: String, _ operation: String) throws {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "A")

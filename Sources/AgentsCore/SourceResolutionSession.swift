@@ -18,7 +18,7 @@ package final class SourceResolutionSession {
     cache = SourceCache(store: store)
     workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
       "agents-resolution-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: workspace)
   }
 
   deinit { try? FileManager.default.removeItem(at: workspace) }
@@ -36,7 +36,9 @@ package final class SourceResolutionSession {
     }
     let snapshot = try cache.withResolvedSnapshot(source) { pin, tree in
       let root = workspace.appendingPathComponent(UUID().uuidString)
-      try FileManager.default.copyItem(at: tree, to: root)
+      try FileSystem.withAccessErrors(at: root) {
+        try FileManager.default.copyItem(at: tree, to: root)
+      }
       return Snapshot(identity: identity, source: effective, pin: pin, root: root)
     }
     snapshots.append(snapshot)

@@ -51,7 +51,7 @@ containing the skill fixture above. Unset `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
 
 The expected stdout is `review` followed by a newline. Verify that
 `.agents/skills/review` in the scratch project links to `skills/review` and that
-`.agent/agents.json` and `.agent/agents.resolved` record the selection. Remove
+`.agent/Agents.swift` and `.agent/agents.resolved` record the selection. Remove
 `.build/presentation/` after validation.
 
 [design]: https://github.com/agents-tools/.github/blob/master/DESIGN.md

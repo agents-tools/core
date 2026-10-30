@@ -1,0 +1,43 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let text: PromptContent = "Review invariants."
+let section: SectionReference = "guide"
+let local: GroupReference = "review"
+let selection: SkillSelection = ["review", "testing"]
+let configuration: ConfigurationValue = [
+  "string": "value", "integer": -1, "boolean": true, "null": nil,
+  "array": [1, "two", false, nil], "object": ["enabled": true], "decimal": .decimal("1.25")
+]
+let environment: [String: RuntimeValue] = ["LEVEL": "info", "TOKEN": .secret("token")]
+let emptySelection: SkillSelection = []
+let emptyObject: ConfigurationValue = [:]
+let emptyArray: ConfigurationValue = []
+let emptyTools: Component = .subagent(name: "empty-tools", description: "No tools", prompt: "Read", tools: [])
+let invocation: ExecutableInvocation = .executable("server", environment: environment, workingDirectory: .path("tools", source: "vendor"))
+let runtime: RuntimeValue = .literal("literal")
+let scalar: ConfigurationValue = .string("x")
+let integer: ConfigurationValue = .integer(-9223372036854775808)
+let boolean: ConfigurationValue = .boolean(false)
+let null: ConfigurationValue = .null
+let array: ConfigurationValue = .array([scalar, integer, boolean, null])
+let object: ConfigurationValue = .object(["array": array])
+let agents = Agents(
+  exports: ["review"],
+  sources: [.source(name: "team", path: "team"), .source(name: "vendor", path: "vendor")],
+  components: [
+    .mcpServer(name: "tools", transport: .stdio("server", environment: environment)),
+    .mcpServer(name: "sse", transport: .sse(url: "https://example.org/events")),
+    .command(name: "review", description: "Review", prompt: text),
+    .instructions(sections: [section]),
+    .skills(source: "team", select: selection, overrides: [.skill(name: "review", mode: .copy, agents: [.codex])]),
+    .lspServer(name: "swift", run: invocation, languages: [".swift": "swift"], initializationOptions: ["config": configuration]),
+    .permissions(name: "policy", rules: [.allow(.read, "Sources/**"), .ask(.write, "**"), .deny(.execute, "rm *"), .deny(.tool("fetch"), "*")]),
+    .plugin(name: "tools", path: "plugins/tools", source: "vendor", select: [.skills, .instructions, .mcpServer, .hook, .subagent, .command, .lspServer, .permissions, .ignore, .plugin], exclude: [.skill(name: "a"), .instruction(name: "a"), .mcpServer(name: "a"), .hook(name: "a"), .subagent(name: "a"), .command(name: "a"), .lspServer(name: "a"), .permissions(name: "a"), .ignore(name: "a"), .plugin(name: "a")]),
+    .hook(name: "native", event: .native("Event"), run: invocation, agents: [.codex]),
+    .ignore(name: "context", patterns: [], purpose: .context, agents: [], condition: .when(scopes: [.project, .user], platforms: [.macOS, .linux])),
+    emptyTools
+  ],
+  groups: [.group(name: "review")],
+  uses: [local, .group(name: "review", condition: .when(agents: [.codex]))]
+)

@@ -1,4 +1,6 @@
+import AgentsManifest
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -30,14 +32,13 @@ struct InstructionTransactionTests {
     struct Interrupted: Error {}
     try store.withLock {
       let transaction = FileTransaction(store: store) { checkpoint in
-        if checkpoint == "replace.1" { throw Interrupted() }
+        if checkpoint == TransactionCheckpoint.progress(1, .applied).name { throw Interrupted() }
       }
       for file in files {
-        try transaction.replace(
-          file.resolvingSymlinksInPath(), content: nil, data: Data("new".utf8))
+        try transaction.replace(file.resolvingSymlinksInPath(), with: .data(Data("new".utf8)))
       }
       try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.codex])))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [.codex]")))
       #expect(throws: Interrupted.self) { try transaction.commit() }
     }
     for file in files { #expect(try Data(contentsOf: file) == Data("original".utf8)) }
@@ -54,16 +55,22 @@ struct InstructionTransactionTests {
       projectDirectory: root, homeDirectory: root, environment: [:])
     let store = StateStore(scope: .project, environment: environment)
     let paths = TransactionPaths(store: store)
-    #expect(throws: (any Error).self) { try paths.components("instructions-project/other.md") }
-    #expect(throws: (any Error).self) { try paths.components("instructions-project/../AGENTS.md") }
-    #expect(throws: (any Error).self) { try paths.components("instructions-codex/AGENTS.md") }
-    #expect(throws: (any Error).self) {
+    #expect(throws: CoreError.unsafePath("unmanaged project instruction path")) {
+      try paths.components("instructions-project/other.md")
+    }
+    #expect(throws: CoreError.invalidState("invalid scope-relative transaction path")) {
+      try paths.components("instructions-project/../AGENTS.md")
+    }
+    #expect(throws: CoreError.unsafePath("unmanaged installation transaction path")) {
+      try paths.components("instructions-codex/AGENTS.md")
+    }
+    #expect(throws: CoreError.unsafePath("unmanaged project instruction path")) {
       try paths.components("instructions-project/.git/AGENTS.md")
     }
-    #expect(throws: (any Error).self) {
+    #expect(throws: CoreError.unsafePath("unmanaged project instruction path")) {
       try paths.components("instructions-project/.agent/instructions/AGENTS.md")
     }
-    #expect(throws: (any Error).self) {
+    #expect(throws: CoreError.unsafePath("unmanaged project instruction path")) {
       try paths.components("instructions-project/Sources/CLAUDE.md")
     }
     #expect(throws: Never.self) {
@@ -79,7 +86,9 @@ struct InstructionTransactionTests {
       "instructions-authoring/.agent/instructions/Rules.md",
       "instructions-authoring/.agent/instructions/notes.txt",
     ] {
-      #expect(throws: (any Error).self) { try paths.components(path) }
+      #expect(throws: CoreError.unsafePath("invalid instruction authoring path")) {
+        try paths.components(path)
+      }
     }
     let outside = root.appendingPathComponent("outside")
     try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
@@ -89,8 +98,13 @@ struct InstructionTransactionTests {
     try store.withLock {
       let transaction = FileTransaction(store: store)
       try transaction.replace(
-        root.appendingPathComponent(".claude/CLAUDE.md"), content: nil, data: Data("new".utf8))
-      #expect(throws: (any Error).self) { try transaction.commit() }
+        root.appendingPathComponent(".claude/CLAUDE.md"), with: .data(Data("new".utf8)))
+      #expect {
+        try transaction.commit()
+      } throws: { error in
+        guard case CoreError.unsafePath(let reason) = error else { return false }
+        return reason.contains("unsafe directory") && reason.contains(".claude")
+      }
     }
     #expect(
       try String(contentsOf: outside.appendingPathComponent("CLAUDE.md"), encoding: .utf8)
