@@ -189,6 +189,94 @@ struct EditingTests {
     #expect(printer.render(unicode, indentation: "    ").contains("\n"))
   }
 
+  @Test func editabilityReportsExactlyTheValuesTheEditorChangesDirectly() throws {
+    let doc = try document(
+      """
+      let shared: [String] = ["x"]
+      let base = "guide"
+      let agents = Agents(
+        defaultAgents: [.codex, .claudeCode],
+        exports: ["review"],
+        sources: [
+          .source(name: "team", url: "https://e.org/team.git", branch: "main", subpath: "skills"),
+          .source(name: "local", path: "./drafts", "1.2.0"..<"1.5.0"),
+          .source(name: "pinned", url: "https://e.org/p.git", from: "1.0.0"),
+        ],
+        components: [
+          .skills(
+            source: "team", select: ["a", "b"], exclude: shared, mode: .copy,
+            overrides: [.skill(name: "a", mode: .link, agents: [.cursor])], agents: [.codex]),
+          .skills(source: "local"),
+          .instructions(
+            sections: ["guide", .section(name: base, source: "team")],
+            chatGPT: [.prompt(name: "weekly", sections: ["guide"], append: "notes/w.md")],
+            agents: []),
+        ],
+        groups: [
+          .group(
+            name: "review",
+            components: [
+              .ignore(name: "i", patterns: ["a"] + shared),
+              .lspServer(
+                name: "l", run: .executable("tool", arguments: ["-v"]),
+                languages: [".swift": "swift"],
+                initializationOptions: [
+                  "k": 1, "o": ["n": true], "c": .object(["m": nil]), "a": [1, "s"],
+                ]),
+            ])
+        ],
+        watch: ["team"]
+      )
+      """)
+    var checked = (direct: 0, readOnly: 0)
+    for pointer in doc.values.keys.sorted()
+    where !pointer.isEmpty && !pointer.hasPrefix("/constants/") {
+      let node = try #require(doc.node(at: pointer))
+      let slash = pointer.lastIndex(of: "/")!
+      let parent = String(pointer[..<slash])
+      let field = pointerUnescape(String(pointer[pointer.index(after: slash)...]))
+      let owner = try #require(doc.values[parent])
+      let value = try #require(doc.values[pointer])
+      let editor = DocumentEditor(document: doc)
+      // The edit that addresses this value directly: a configuration collection's payload takes
+      // entries, a dictionary entry or array element is removed, and an argument is replaced.
+      let operation: DocumentOperation
+      if field == "value", owner.type.unwrapped == .named("ConfigurationValue"),
+        [.array, .dictionary].contains(doc.admission.nodes[value.syntax].kind)
+      {
+        operation =
+          doc.admission.nodes[value.syntax].kind == .array
+          ? .insertElement(.integer(7), into: node, at: .last)
+          : .edit(.setDictionaryEntry(node, key: "probe", value: .integer(7)))
+      } else if doc.admission.nodes[owner.syntax].keys.contains(where: { $0.decoded == field }) {
+        operation = .edit(.removeDictionaryEntry(try #require(doc.node(at: parent)), key: field))
+      } else if editor.arrayElements(owner.value) != nil, Int(field) != nil {
+        operation = .removeElement(node)
+      } else {
+        operation = .setArgument(
+          try #require(doc.node(at: parent)), field: field, value: .text("probe"))
+      }
+      let accepted: Bool
+      do {
+        try editor.apply(operation)
+        accepted = true
+      } catch let failure as ManifestFailure {
+        #expect(failure.diagnostics.map(\.code) == ["manifest.edit.readOnly"], "\(pointer)")
+        accepted = false
+      }
+      let report = doc.editability(of: node)
+      #expect((report == .direct) == accepted, "\(pointer): \(report)")
+      if accepted { checked.direct += 1 } else { checked.readOnly += 1 }
+    }
+    #expect(checked.direct > 80 && checked.readOnly > 30)
+    for pointer in ["/components/0/mode", "/defaultAgents/0", "/components/1/agents"] {
+      #expect(doc.editability(of: doc.node(at: pointer)!) == .direct, "\(pointer)")
+    }
+    for pointer in ["/components/0/exclude", "/groups/0/components/0/patterns"] {
+      #expect(doc.editability(of: doc.node(at: pointer)!) != .direct, "\(pointer)")
+    }
+  }
+
   @Test func noOpsKeepOriginalBytesAndUnsafeEditsPublishNothing() throws {
     let doc = try document(
       "let agents = Agents(defaultAgents: nil, sources: [.source(name: \"s\", url: \"https://example.org/s.git\", \"1.2.0\" ..< \"2.0.0\")], components: [/*container*/])"

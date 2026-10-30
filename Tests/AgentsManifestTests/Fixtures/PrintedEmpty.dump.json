@@ -30,8 +30,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components",
@@ -46,8 +45,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/defaultAgents",
@@ -62,8 +60,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/exports",
@@ -78,8 +75,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/groups",
@@ -94,8 +90,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/sources",
@@ -110,8 +105,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/uses",
@@ -126,8 +120,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/watch",

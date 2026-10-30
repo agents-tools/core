@@ -441,8 +441,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/0/agents",
@@ -457,8 +456,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/0/condition",
@@ -474,7 +472,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/0/kind",
@@ -504,8 +502,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/0/native",
@@ -535,8 +532,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/0/transport/arguments",
@@ -607,7 +603,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -638,7 +634,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -700,7 +696,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -784,7 +780,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/0/transport/kind",
@@ -799,8 +795,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/0/transport/workingDirectory",
@@ -830,8 +825,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/1/agents",
@@ -846,8 +840,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/1/condition",
@@ -863,7 +856,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/1/kind",
@@ -893,8 +886,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/1/native",
@@ -924,8 +916,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/1/transport/headers",
@@ -941,7 +932,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/1/transport/kind",
@@ -996,7 +987,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1020,7 +1011,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1075,7 +1066,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1099,7 +1090,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1154,7 +1145,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1209,7 +1200,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1240,7 +1231,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1316,8 +1307,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/2/agents",
@@ -1332,8 +1322,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/2/condition",
@@ -1364,7 +1353,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/2/kind",
@@ -1394,8 +1383,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/2/native",
@@ -1410,8 +1398,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/2/parameters",
@@ -1451,7 +1438,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1475,7 +1462,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1513,8 +1500,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/3/agents",
@@ -1529,8 +1515,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/3/chatGPT",
@@ -1545,8 +1530,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/3/condition",
@@ -1562,7 +1546,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/3/kind",
@@ -1577,8 +1561,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/3/native",
@@ -1633,7 +1616,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1657,7 +1640,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1681,7 +1664,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -1719,8 +1702,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/4/agents",
@@ -1735,8 +1717,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/4/condition",
@@ -1751,8 +1732,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/4/exclude",
@@ -1768,7 +1748,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/4/kind",
@@ -1783,8 +1763,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/4/mode",
@@ -1799,8 +1778,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/4/native",
@@ -1860,8 +1838,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/4/overrides/0/agents/0",
@@ -1876,8 +1853,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/4/overrides/0/mode",
@@ -2023,8 +1999,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/5/agents",
@@ -2039,8 +2014,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/5/condition",
@@ -2095,7 +2069,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -2174,7 +2148,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -2274,7 +2248,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -2388,7 +2362,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -2502,7 +2476,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -2616,7 +2590,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -2685,7 +2659,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -2778,7 +2752,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -2878,7 +2852,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -2971,7 +2945,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -3033,7 +3007,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -3133,7 +3107,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -3240,7 +3214,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -3302,7 +3276,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/5/kind",
@@ -3362,8 +3336,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/5/native",
@@ -3403,7 +3376,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -3510,7 +3483,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -3555,7 +3528,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -3645,7 +3618,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -3773,7 +3746,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -3918,8 +3891,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/6/agents",
@@ -3934,8 +3906,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/6/condition",
@@ -3951,7 +3922,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/6/kind",
@@ -3981,8 +3952,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/6/native",
@@ -4028,7 +3998,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/6/rules/0/kind",
@@ -4043,8 +4013,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/6/rules/0/operation",
@@ -4060,7 +4029,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/6/rules/0/operation/kind",
@@ -4106,7 +4075,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/6/rules/1/kind",
@@ -4121,8 +4090,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/6/rules/1/operation",
@@ -4138,7 +4106,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/6/rules/1/operation/kind",
@@ -4184,7 +4152,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/6/rules/2/kind",
@@ -4199,8 +4167,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/6/rules/2/operation",
@@ -4216,7 +4183,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/6/rules/2/operation/kind",
@@ -4262,7 +4229,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/6/rules/3/kind",
@@ -4293,7 +4260,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/6/rules/3/operation/kind",
@@ -4353,8 +4320,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/agents",
@@ -4369,8 +4335,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/condition",
@@ -4416,7 +4381,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/exclude/0/kind",
@@ -4462,7 +4427,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/exclude/1/kind",
@@ -4508,7 +4473,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/exclude/2/kind",
@@ -4554,7 +4519,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/exclude/3/kind",
@@ -4600,7 +4565,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/exclude/4/kind",
@@ -4646,7 +4611,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/exclude/5/kind",
@@ -4692,7 +4657,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/exclude/6/kind",
@@ -4738,7 +4703,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/exclude/7/kind",
@@ -4784,7 +4749,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/exclude/8/kind",
@@ -4830,7 +4795,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/exclude/9/kind",
@@ -4861,7 +4826,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/7/kind",
@@ -4876,8 +4841,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/mode",
@@ -4907,8 +4871,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/native",
@@ -4953,8 +4916,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/select/0",
@@ -4969,8 +4931,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/select/1",
@@ -4985,8 +4946,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/select/2",
@@ -5001,8 +4961,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/select/3",
@@ -5017,8 +4976,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/select/4",
@@ -5033,8 +4991,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/select/5",
@@ -5049,8 +5006,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/select/6",
@@ -5065,8 +5021,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/select/7",
@@ -5081,8 +5036,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/select/8",
@@ -5097,8 +5051,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/7/select/9",
@@ -5158,8 +5111,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/8/agents/0",
@@ -5174,8 +5126,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/8/condition",
@@ -5206,7 +5157,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/8/event/kind",
@@ -5237,7 +5188,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/8/kind",
@@ -5252,8 +5203,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/8/matcher",
@@ -5283,8 +5233,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/8/native",
@@ -5324,7 +5273,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -5431,7 +5380,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -5476,7 +5425,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -5566,7 +5515,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -5694,7 +5643,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -5824,8 +5773,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/8/timeoutSeconds",
@@ -5885,8 +5833,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/9/condition/agents",
@@ -5916,8 +5863,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/9/condition/platforms/0",
@@ -5932,8 +5878,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/9/condition/platforms/1",
@@ -5963,8 +5908,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/9/condition/scopes/0",
@@ -5979,8 +5923,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/9/condition/scopes/1",
@@ -5996,7 +5939,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/components/9/kind",
@@ -6026,8 +5969,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/9/native",
@@ -6057,8 +5999,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/components/9/purpose",
@@ -6073,8 +6014,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/defaultAgents",
@@ -6149,8 +6089,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/groups/0/components",
@@ -6165,8 +6104,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/groups/0/condition",
@@ -6196,8 +6134,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/groups/0/uses",
@@ -6243,7 +6180,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/sources/0/kind",
@@ -6289,7 +6226,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/sources/0/requirement",
@@ -6304,8 +6241,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/sources/0/subpath",
@@ -6336,7 +6272,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/sources/1/kind",
@@ -6382,7 +6318,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/sources/1/requirement",
@@ -6397,8 +6333,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/sources/1/subpath",
@@ -6453,7 +6388,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -6477,7 +6412,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -6501,7 +6436,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -6525,7 +6460,7 @@
       "defaulted": true,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "shared constant or assembled value; replace its definition explicitly"
       },
       "origins": [
         {
@@ -6593,8 +6528,7 @@
     {
       "defaulted": false,
       "editability": {
-        "kind": "readOnly",
-        "reason": "expanded value has no independent source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/uses/1/condition/agents/0",
@@ -6609,8 +6543,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/uses/1/condition/platforms",
@@ -6625,8 +6558,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/uses/1/condition/scopes",
@@ -6642,7 +6574,7 @@
       "defaulted": false,
       "editability": {
         "kind": "readOnly",
-        "reason": "default field has no source range"
+        "reason": "normalized field; replace its containing construction"
       },
       "origins": [],
       "pointer": "/uses/1/kind",
@@ -6672,8 +6604,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/uses/1/source",
@@ -6688,8 +6619,7 @@
     {
       "defaulted": true,
       "editability": {
-        "kind": "readOnly",
-        "reason": "default field has no source range"
+        "kind": "direct"
       },
       "origins": [],
       "pointer": "/watch",
