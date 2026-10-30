@@ -5,8 +5,8 @@ import Testing
 
 @Suite("Transaction I/O cost")
 struct TransactionCostTests {
-  @Test(arguments: [false, true])
-  func twoSmallFiles(_ coldDevice: Bool) throws {
+  /// Every commit probes its device once; existing ancestry costs one barrier per component.
+  @Test func twoSmallFiles() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
     let store = StateStore(
@@ -16,31 +16,51 @@ struct TransactionCostTests {
     try store.save(declaration: Declaration(), resolved: ResolvedState())
     let targets = ["AGENTS.md", "GEMINI.md"].map { root.appendingPathComponent($0) }
     for target in targets { try Data("before".utf8).write(to: target) }
-    let count = TransactionIOCount()
-    try store.withLock {
-      let transaction = FileTransaction(store: store) { step in
-        if step.hasPrefix("journal."), step.hasSuffix(".renamed") { count.persist() }
-        if step.hasPrefix("directory.synced.") { count.ancestor() }
-      }
-      for target in targets {
-        try transaction.replace(target, content: nil, data: Data("after".utf8))
-      }
-      try DirectoryHandle.$synchronizationObserver.withValue({ count.sync() }) {
-        if coldDevice {
-          try DirectoryHandle.$atomicRenameFailure.withValue({ _ in nil }) {
-            try transaction.commit()
-          }
-        } else {
+    let ancestry = root.resolvingSymlinksInPath().pathComponents.count - 1
+    for _ in 0..<2 {
+      let count = TransactionIOCount()
+      try store.withLock {
+        let transaction = FileTransaction(store: store) { step in
+          if step.hasPrefix("journal."), step.hasSuffix(".renamed") { count.persist() }
+          if step == TransactionCheckpoint.probe(0, .verified).name { count.probe() }
+        }
+        for target in targets {
+          try transaction.replace(target, content: nil, data: Data("after".utf8))
+        }
+        try DirectoryHandle.$synchronizationObserver.withValue({ count.sync() }) {
           try transaction.commit()
         }
       }
+      print(
+        "TWO_SMALL_FILES persists=\(count.persists) barriers=\(count.barriers) ancestry=\(ancestry)"
+      )
+      #expect(count.persists == 10)
+      #expect(count.probes == 1)
+      #expect(count.barriers - ancestry == 38)
+      for target in targets { #expect(try Data(contentsOf: target) == Data("after".utf8)) }
     }
-    print(
-      "TWO_SMALL_FILES cold=\(coldDevice) persists=\(count.persists) barriers=\(count.barriers) ancestry=\(count.ancestors)"
+  }
+
+  @Test func containersOnOneDeviceShareOneProbe() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let store = StateStore(
+      scope: .project,
+      environment: RuntimeEnvironment(projectDirectory: root, homeDirectory: root, environment: [:])
     )
-    #expect(count.persists == 10)
-    #expect(count.barriers - count.ancestors == (coldDevice ? 38 : 36))
-    for target in targets { #expect(try Data(contentsOf: target) == Data("after".utf8)) }
+    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    var steps: [String] = []
+    try store.withLock {
+      let transaction = FileTransaction(store: store) { steps.append($0) }
+      try transaction.replace(
+        root.appendingPathComponent("AGENTS.md"), content: nil, data: Data("after".utf8))
+      try transaction.replace(
+        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.codex])))
+      try transaction.commit()
+    }
+    #expect(steps.contains(TransactionCheckpoint.containerCreated(1).name))
+    #expect(steps.contains(TransactionCheckpoint.probe(0, .verified).name))
+    #expect(!steps.contains(TransactionCheckpoint.probe(1, .firstCreated).name))
   }
 }
 
@@ -48,16 +68,16 @@ private final class TransactionIOCount: @unchecked Sendable {
   private let lock = NSLock()
   private(set) var persists = 0
   private(set) var barriers = 0
-  private(set) var ancestors = 0
-  func ancestor() {
-    lock.lock()
-    defer { lock.unlock() }
-    ancestors += 1
-  }
+  private(set) var probes = 0
   func persist() {
     lock.lock()
     defer { lock.unlock() }
     persists += 1
+  }
+  func probe() {
+    lock.lock()
+    defer { lock.unlock() }
+    probes += 1
   }
   func sync() {
     lock.lock()

@@ -14,11 +14,9 @@ func finishProcesses(
   pause?.completed()
 }
 
+/// A child that survives the termination deadline fails the test instead of blocking the run.
 func terminateProcess(_ process: Process) {
-  if process.isRunning {
-    CPlatform.kill(process.processIdentifier, SIGKILL)
-    process.waitUntilExit()
-  }
+  do { try ProcessWait.terminate(process) } catch { Issue.record(error) }
 }
 
 /// FIFO messages establish ordering; the timeout only bounds a failed handshake.

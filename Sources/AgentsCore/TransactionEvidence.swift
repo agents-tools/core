@@ -1,4 +1,3 @@
-import CPlatform
 import Foundation
 
 struct FileObjectIdentity: Codable, Equatable, Sendable {
@@ -13,6 +12,23 @@ struct FileObjectIdentity: Codable, Equatable, Sendable {
     inode = UInt64(info.st_ino)
     kind = info.st_mode & S_IFMT
   }
+}
+
+/// A recorded directory inode whose final mode lacks owner-write. While `publishing` or
+/// `restoring` intent is durable it admits the original mode or that mode plus owner-write.
+struct DirectoryWriteLease: Equatable {
+  let identity: FileObjectIdentity
+  let original: mode_t
+
+  init?(_ snapshot: FileSnapshot) {
+    guard snapshot.identity.isDirectory, snapshot.mode & 0o200 == 0 else { return nil }
+    identity = snapshot.identity
+    original = snapshot.mode
+  }
+
+  var grantedMode: mode_t { original | 0o200 }
+
+  func admits(_ mode: mode_t) -> Bool { mode == original || mode == grantedMode }
 }
 
 /// Content and physical ownership are separate evidence. Descendant identities let
@@ -94,17 +110,12 @@ struct FileSnapshot: Codable, Equatable, Sendable {
     _ name: String, from parent: DirectoryHandle, relative: String,
     collect: ((String, mode_t, Data, Bool) -> Void)?
   ) throws -> FileSnapshot? {
-    guard var before = try parent.info(name) else { return nil }
+    guard let before = try parent.info(name) else { return nil }
     let children: [String: FileSnapshot]?
     let payload: Data
     switch before.st_mode & S_IFMT {
     case S_IFDIR:
-      let directory = try parent.child(name)
-      var opened = stat()
-      guard fstat(directory.descriptor, &opened) == 0, platform_same_generation(&before, &opened)
-      else {
-        throw CoreError.invalidState("directory changed before reading: \(name)")
-      }
+      let directory = try parent.child(name, matching: before)
       var entries: [String: FileSnapshot] = [:]
       for child in try directory.names() {
         guard
@@ -128,7 +139,7 @@ struct FileSnapshot: Codable, Equatable, Sendable {
       payload = try parent.readLinkData(name)
     default: throw CoreError.unsafePath("unsupported transaction entry: \(name)")
     }
-    guard var after = try parent.info(name), platform_same_generation(&before, &after) else {
+    guard let after = try parent.info(name), DirectoryHandle.sameGeneration(before, after) else {
       throw CoreError.invalidState("entry changed while reading: \(name)")
     }
     collect?(relative, before.st_mode & S_IFMT, payload, before.st_mode & 0o111 != 0)
@@ -139,15 +150,15 @@ struct FileSnapshot: Codable, Equatable, Sendable {
       children: children)
   }
 
-  var needsDirectoryWriteLease: Bool { identity.isDirectory && mode & 0o200 == 0 }
+  var writeLease: DirectoryWriteLease? { DirectoryWriteLease(self) }
 
   func matches(_ current: Self, permittingDirectoryWrite: Bool) -> Bool {
     if self == current { return true }
-    guard permittingDirectoryWrite, needsDirectoryWriteLease, current.mode == mode | 0o200 else {
+    guard permittingDirectoryWrite, let lease = writeLease, lease.admits(current.mode) else {
       return false
     }
     return Self(
-      identity: identity, digest: digest, executable: executable, mode: mode | 0o200,
+      identity: identity, digest: digest, executable: executable, mode: current.mode,
       children: children) == current
   }
 
@@ -173,25 +184,4 @@ struct FileSnapshot: Codable, Equatable, Sendable {
     guard let children, let remaining = current.children else { return self == current }
     return remaining.allSatisfy { name, value in children[name]?.containsRemaining(value) == true }
   }
-
-  func synchronize(_ name: String, from parent: DirectoryHandle) throws {
-    guard try Self.read(name, from: parent) == self else {
-      throw CoreError.invalidState("transaction preimage changed before synchronization: \(name)")
-    }
-    try syncContents(name, from: parent)
-    try parent.sync()
-  }
-
-  private func syncContents(_ name: String, from parent: DirectoryHandle) throws {
-    if let children {
-      let directory = try parent.child(name)
-      for child in children.keys.sorted() {
-        try children[child]!.syncContents(child, from: directory)
-      }
-      try directory.sync()
-    } else if identity.kind == S_IFREG {
-      try parent.syncFile(name, includingParent: false)
-    }
-  }
-
 }

@@ -8,12 +8,12 @@ struct PreparationEvidenceTests {
   @Test func dataSealingRejectsAnUnexpectedExecutableMode() throws {
     let fixture = try PublicationFixture(.fileCreate)
     let transaction = FileTransaction(store: fixture.store) { point in
-      if point == "stage.0.constructed" {
+      if point == TransactionCheckpoint.stage(0, .constructed).name {
         let name = try #require(
           try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
             .first(where: { $0.hasPrefix(".agents-") }))
         let staged = fixture.root.appendingPathComponent(name).appendingPathComponent(
-          "entry.0.staged")
+          TransactionScratch.staged.name(0))
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: staged.path)
       }
     }
@@ -32,7 +32,7 @@ struct PreparationEvidenceTests {
     var original: FileSnapshot?
     var location: URL?
     let transaction = FileTransaction(store: fixture.store) { point in
-      if point == "container.0.created" {
+      if point == TransactionCheckpoint.containerCreated(0).name {
         let name = try #require(
           try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
             .first(where: { $0.hasPrefix(".agents-") }))
@@ -61,13 +61,13 @@ struct PreparationEvidenceTests {
   {
     let fixture = try PublicationFixture(operation)
     let transaction = FileTransaction(store: fixture.store) { point in
-      if point == "stage.0.constructed" {
+      if point == TransactionCheckpoint.stage(0, .constructed).name {
         let name = try #require(
           try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
             .first(where: { $0.hasPrefix(".agents-") }))
-        let slot = operation == .directoryDelete ? "staged" : "preimage"
+        let slot: TransactionScratch = operation == .directoryDelete ? .staged : .deleted
         try Data("private injection".utf8).write(
-          to: fixture.root.appendingPathComponent(name).appendingPathComponent("entry.0." + slot))
+          to: fixture.root.appendingPathComponent(name).appendingPathComponent(slot.name(0)))
       }
     }
     try transaction.replace(
@@ -82,12 +82,12 @@ struct PreparationEvidenceTests {
   @Test func equalDigestDoesNotTurnDataIntoASymbolicLink() throws {
     let fixture = try PublicationFixture(.fileCreate)
     let transaction = FileTransaction(store: fixture.store) { point in
-      if point == "stage.0.constructed" {
+      if point == TransactionCheckpoint.stage(0, .constructed).name {
         let name = try #require(
           try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
             .first(where: { $0.hasPrefix(".agents-") }))
         let staged = fixture.root.appendingPathComponent(name).appendingPathComponent(
-          "entry.0.staged")
+          TransactionScratch.staged.name(0))
         try FileManager.default.removeItem(at: staged)
         try FileManager.default.createSymbolicLink(
           atPath: staged.path, withDestinationPath: "postimage")
@@ -105,12 +105,12 @@ struct PreparationEvidenceTests {
   func constructionMustMatchTheRequestedCopyOrLink(_ link: Bool) throws {
     let fixture = try PublicationFixture(.fileCreate)
     let transaction = FileTransaction(store: fixture.store) { point in
-      if point == "stage.0.constructed" {
+      if point == TransactionCheckpoint.stage(0, .constructed).name {
         let name = try #require(
           try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
             .first(where: { $0.hasPrefix(".agents-") }))
         let staged = fixture.root.appendingPathComponent(name).appendingPathComponent(
-          "entry.0.staged")
+          TransactionScratch.staged.name(0))
         if link {
           try FileManager.default.removeItem(at: staged)
           try FileManager.default.createSymbolicLink(

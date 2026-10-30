@@ -148,20 +148,20 @@ baselines and seeds belong to the test corpus, not the runtime language.
   including the complete instruction section, prompt and physical-target models.
 - `StateStore` owns scope paths, validation, deterministic encoding and state
   persistence. `FileLock` serializes state access; `FileTransaction` durably
-  journals replacements across installations, state and cache. `FileSnapshot` and
-  `FileObjectIdentity` own content and physical-object evidence, including directory
-  descendants and permission bits. `DirectoryHandle` owns verified deletion,
+  journals replacements across installations, state and cache. `FileSnapshot`,
+  `FileObjectIdentity` and `DirectoryWriteLease` own content, physical-object
+  and temporary directory-write evidence, including directory descendants and
+  permission bits. Within the transaction protocol only `DirectoryHandle` calls
+  `CPlatform`; it owns verified deletion, durable synchronization,
   inode-checked directory permission updates and typed cross-directory rename
   results. Mutating state access recovers interrupted transactions before
-  proceeding, as described in
-  [State and cache](State.md).
+  proceeding, as described in [State and cache](State.md).
 - `SourceCache` owns bare Git mirrors, requirement resolution, exact snapshots,
-  digest-addressed downloads and pruning across skill, instruction and watch pins.
-  `SourceResolutionSession` shares disposable exact snapshots between domain
-  planners during one update. `StatePrecondition`, `TargetPrecondition` and
-  `PathIdentity` validate
-  the rendered generation before application. `TransactionOutcome` follows
-  its owning journal through commit and recovery.
+  digest-addressed downloads and pruning across skill, instruction and watch
+  pins. `SourceResolutionSession` shares disposable exact snapshots between
+  domain planners during one update. `StatePrecondition`, `TargetPrecondition`
+  and `PathIdentity` validate the rendered generation before application.
+  `TransactionOutcome` follows its owning journal through commit and recovery.
   `ProcessRunner` executes subprocesses.
 - `WatchOperations` owns source subscriptions, seen baselines, branch tracking
   and file comparisons. `WatchState` defines version 1 of `agents.watch`.

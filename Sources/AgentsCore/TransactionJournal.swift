@@ -18,7 +18,7 @@ struct TransactionJournal: Codable {
   enum Progress: String, Codable {
     /// Preimage and container name are durable; construction has no per-object ownership claims.
     case queued
-    /// Construction is verified; staged is sealed and other recovery slots are absent.
+    /// Construction is verified; staging is sealed and other recovery slots are absent.
     case ready
     /// Publication and temporary directory-write intent are durable, with original modes.
     case publishing
@@ -65,17 +65,39 @@ struct TransactionJournal: Codable {
     var cleanup: FileSnapshot?
   }
 
+  static func containerName(id: UUID, index: Int) -> String { ".agents-\(id.uuidString)-\(index)" }
+
   func containerName(_ index: Int) -> String { containers[index].name }
+
+  /// Without an identified container or sealed operation, the journal owns no object.
+  var isUnstarted: Bool {
+    phase == .preparing && containers.allSatisfy { $0.identity == nil }
+      && entries.allSatisfy { $0.progress == .queued }
+  }
 }
 
-enum TransactionScratch: String, CaseIterable {
-  case staged, preimage, removed, work
-  case probeA = "probe-a"
-  case probeB = "probe-b"
-  case probeC = "probe-c"
-  var name: String { rawValue }
+/// Container entry names. Each recovery slot holds either private staging or user data.
+enum TransactionScratch: String {
+  /// Private sealed staging for a creation; publication moves it out of the container.
+  case staged
+  /// Private sealed staging for an exchange until publication; afterwards the displaced user
+  /// preimage, and after undo the withdrawn published object.
+  case exchanged
+  /// The user object moved aside by a deletion.
+  case deleted
+  /// The published creation moved aside by undo; it is user data.
+  case withdrawn
+  /// Private extraction work for prepared content.
+  case work
+
   func name(_ index: Int) -> String { "entry.\(index).\(rawValue)" }
-  static let objectSlots: [Self] = [.staged, .preimage, .removed]
+  static let objectSlots: [Self] = [.staged, .exchanged, .deleted, .withdrawn]
+  static let probes = (first: "probe-a", second: "probe-b", moved: "probe-c")
+
+  /// The slot that holds an install's sealed staging.
+  static func staging(for entry: TransactionJournal.Entry) -> Self {
+    entry.preimage == nil ? .staged : .exchanged
+  }
 }
 
 /// The operation/progress table is the single authority for physical object distribution.
@@ -110,26 +132,26 @@ struct TransactionLayout {
   let objects: [TransactionScratch: FileSnapshot]
 
   static func expected(_ entry: TransactionJournal.Entry) -> [Self] {
-    if entry.progress == .queued { return [Self(kind: .construction, target: .any, objects: [:])] }
-    let prepared = Self(
-      kind: .prepared, target: .any,
-      objects: entry.staged.map { [.staged: $0] } ?? [:])
+    let prepared: Self
     let installed: Self
     let reverted: Self
-    switch (entry.action, entry.preimage) {
-    case (.install, .some(let original)):
-      installed = Self(
-        kind: .installed, target: .object(entry.staged!), objects: [.staged: original])
-      reverted = Self(kind: .reverted, target: .object(original), objects: [.staged: entry.staged!])
-    case (.install, .none):
-      installed = Self(kind: .installed, target: .object(entry.staged!), objects: [:])
+    // Validated records carry staged evidence exactly for installs past construction.
+    switch (entry.preimage, entry.staged) {
+    case (let original?, let staged?):
+      prepared = Self(kind: .prepared, target: .any, objects: [.exchanged: staged])
+      installed = Self(kind: .installed, target: .object(staged), objects: [.exchanged: original])
+      reverted = Self(kind: .reverted, target: .object(original), objects: [.exchanged: staged])
+    case (nil, let staged?):
+      prepared = Self(kind: .prepared, target: .any, objects: [.staged: staged])
+      installed = Self(kind: .installed, target: .object(staged), objects: [:])
       reverted = Self(
-        kind: .reverted, target: .externalTo(entry.staged!.identity),
-        objects: [.removed: entry.staged!])
-    case (.delete, .some(let original)):
-      installed = Self(kind: .installed, target: .absent, objects: [.preimage: original])
+        kind: .reverted, target: .externalTo(staged.identity), objects: [.withdrawn: staged])
+    case (let original?, nil):
+      prepared = Self(kind: .prepared, target: .any, objects: [:])
+      installed = Self(kind: .installed, target: .absent, objects: [.deleted: original])
       reverted = Self(kind: .reverted, target: .object(original), objects: [:])
-    case (.delete, .none):
+    case (nil, nil):
+      prepared = Self(kind: .prepared, target: .any, objects: [:])
       installed = Self(kind: .installed, target: .absent, objects: [:])
       reverted = Self(kind: .reverted, target: .any, objects: [:])
     }
@@ -146,93 +168,21 @@ struct TransactionLayout {
     case .restored: return [reverted]
     }
   }
-}
 
-enum TransactionCheckpoint {
-  enum Change {
-    case created, containers
-    case entry(Int, TransactionJournal.Progress)
-    case terminal, discard
-    case conflict(Int, TransactionJournal.Progress)
-    var name: String {
-      switch self {
-      case .created: "created"
-      case .containers: "containers"
-      case .entry(let index, let progress): "entry.\(index).\(progress.rawValue)"
-      case .terminal: "terminal"
-      case .discard: "discard"
-      case .conflict(let index, let progress): "entry.\(index).\(progress.rawValue).conflict"
-      }
+  /// Recorded objects and their locations in this distribution. A prepared operation still
+  /// has its preimage at the target, which the table does not constrain before publication.
+  func objectLocations(
+    _ entry: TransactionJournal.Entry
+  ) -> [(location: TransactionObjectLocation, object: FileSnapshot)] {
+    var locations: [(location: TransactionObjectLocation, object: FileSnapshot)] = []
+    if case .object(let expected) = target {
+      locations.append((.target, expected))
+    } else if kind == .prepared, let original = entry.preimage {
+      locations.append((.target, original))
     }
-  }
-  enum Stage: String { case preimageSynced, workCreated, workPrepared, writeCreated, constructed }
-  enum Publication: String { case validated, exchanged, created, quarantined, synced }
-  enum Restoration: String { case validated, exchanged, returned, creationQuarantined, synced }
-  enum PersistenceStep: String { case written, renamed }
-  case persisted(TransactionJournal.Phase, Change, PersistenceStep)
-  case phase(TransactionJournal.Phase)
-  case progress(Int, TransactionJournal.Progress)
-  case containerCreated(Int)
-  case containersIdentified
-  case probe(Int, DirectoryHandle.ProbeStep)
-  case stage(Int, Stage)
-  case copy(Int, DirectoryHandle.CopyPoint)
-  case publication(Int, Publication)
-  case restoration(Int, Restoration)
-  case permissions(
-    Int, TransactionPermissionPurpose, TransactionObjectLocation, DirectoryHandle.PermissionStep)
-  case preconditions, commitValidated, terminalSynced, discardIntent
-  case disposal(Int, DirectoryHandle.RemovalPoint)
-  case containerRemoved(Int)
-  case journalUnlinked
-  case journalRemoved
-
-  var name: String {
-    switch self {
-    case .persisted(let phase, let change, let step):
-      "journal.\(phase.rawValue).\(change.name).\(step.rawValue)"
-    case .phase(let phase): "journal.\(phase.rawValue)"
-    case .progress(let index, let progress): "entry.\(index).\(progress.rawValue)"
-    case .containerCreated(let index): "container.\(index).created"
-    case .containersIdentified: "containers.identified"
-    case .probe(let index, let point): "atomic.\(index).\(point.rawValue)"
-    case .stage(let index, let point): "stage.\(index).\(point.rawValue)"
-    case .copy(let index, let point): "stage.\(index).copy.\(point.path).\(point.step.rawValue)"
-    case .publication(let index, let point): "publish.\(index).\(point.rawValue)"
-    case .restoration(let index, let point): "restore.\(index).\(point.rawValue)"
-    case .permissions(let index, let purpose, let location, let point):
-      "permissions.\(index).\(purpose.rawValue).\(location.name).\(point.rawValue)"
-    case .preconditions: "publication.preconditions"
-    case .commitValidated: "publication.commitValidated"
-    case .terminalSynced: "journal.terminalSynced"
-    case .discardIntent: "cleanup.intent"
-    case .disposal(let index, let point):
-      "cleanup.\(index)."
-        + (["container"] + point.path.split(separator: "/").dropFirst().map(String.init)).joined(
-          separator: "/") + ".\(point.step.rawValue)"
-    case .containerRemoved(let index): "cleanup.\(index).removed"
-    case .journalUnlinked: "journal.unlinked"
-    case .journalRemoved: "journal.removed"
+    for slot in TransactionScratch.objectSlots {
+      if let expected = objects[slot] { locations.append((.scratch(slot), expected)) }
     }
-  }
-}
-
-extension TransactionSession {
-  /// Transitions and their durable evidence promises are changed together.
-  func advance(_ index: Int, to next: TransactionJournal.Progress) throws {
-    let previous = journal.entries[index].progress
-    let legal: [TransactionJournal.Progress: Set<TransactionJournal.Progress>] = [
-      .queued: [.ready], .ready: [.publishing, .cancelled],
-      .publishing: [.applied, .restoring, .cancelled], .applied: [.restoring],
-      .restoring: [.restored], .restored: [], .cancelled: [],
-    ]
-    guard legal[previous]?.contains(next) == true else {
-      throw conflict(index, "illegal progress transition: \(previous) -> \(next)")
-    }
-    if next == .publishing { journal.phase = .applying }
-    journal.entries[index].progress = next
-    journal.entries[index].conflict = nil
-    try persist(.entry(index, next))
-    try emit(.progress(index, next))
+    return locations
   }
 }

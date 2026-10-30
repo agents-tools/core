@@ -17,13 +17,13 @@ struct TransactionDoctorTests {
     #expect(throws: CoreError.invalidState("interrupt after removing preimage")) {
       try store.withLock {
         let transaction = FileTransaction(store: store) { point in
-          if point == "entry.0.applied" {
+          if point == TransactionCheckpoint.progress(0, .applied).name {
             let journal = try StateStore.decode(
               Data(contentsOf: store.directory.appendingPathComponent("transaction.json")),
               as: TransactionJournal.self)
             let backup = target.deletingLastPathComponent().appendingPathComponent(
               journal.containerName(0)
-            ).appendingPathComponent("entry.0.staged")
+            ).appendingPathComponent(TransactionScratch.exchanged.name(0))
             try FileManager.default.moveItem(at: backup, to: saved)
             throw CoreError.invalidState("interrupt after removing preimage")
           }

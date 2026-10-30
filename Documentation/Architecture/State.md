@@ -131,9 +131,11 @@ remains live. Domain plans also validate source content and executable flags.
 
 The scope writer lock covers recovery, preparation, retention and publication.
 Recovery runs first. Apply checks the prepared evidence before retention, after
-retention at commit entry, and after staging before publication. The journal
-receives the plan's captured preimages rather than taking a later state
-baseline. Transactions without a state plan, such as cache publication, do not
+retention at commit entry, and after staging before publication. The journal's
+expected preimages are the evidence the plan captured. Watch subscription,
+acknowledgment and removal capture declaration, lock and watch state before
+contacting Git; that evidence is also the baseline for the lock that pruning
+follows. Transactions without a state plan, such as cache publication, do not
 implicitly add declaration, lock or watch preconditions. Domain hooks check
 related inputs that the journal does not replace. State parsing consumes the
 captured raw bytes, so decoded inputs and journal evidence describe the same
@@ -179,8 +181,9 @@ Each operation records its path, install/delete action, expected preimage or
 absence, parent identity, private container, sealed staged object, progress and
 any conflict reason and retained locations. Object evidence contains device,
 inode, type, SHA-256 digest, permission bits and executable status. Directory
-evidence includes child identities and digests. Data replacements inherit the existing regular
-file's metadata. Undo restores the original object and its metadata.
+evidence includes child identities and digests. Data replacements inherit the
+existing regular file's metadata. Undo restores the original object and its
+metadata.
 
 Each used target parent has one private container with a UUID-derived name and
 mode 0700 on the same filesystem as its targets. The journal records the name
@@ -192,16 +195,20 @@ no ownership claim on content inserted into this private transaction storage. An
 unidentified container may only be removed with `rmdir` when empty; a nonempty
 one is an unresolved conflict.
 
-Construction is sealed once. Snapshot and content verification consume the same
-read bytes, and check the expected content hash and executable flags. `ready`
-and that snapshot become durable together. Changes after sealing are conflicts;
-recovery never refreshes a sealed snapshot to adopt changed content.
-Construction checkpoints do not rewrite the journal or rescan a growing copy.
+Construction is sealed once, and sealing is its only journal write. Snapshot and
+content verification consume the same read bytes, and check the expected content
+hash and executable flags. `ready` and that snapshot become durable together.
+Changes after sealing are conflicts; recovery never refreshes a sealed snapshot
+to adopt changed content.
 
 Preimages displaced by exchange, deletion quarantines and published objects are
 user data. Their identity and digest remain mandatory evidence even inside a
-private container. A container holding such recovery objects receives complete
-terminal disposal evidence after their expected distribution has been verified.
+private container. Container entries are named by operation index and what they
+hold: `staged` is a creation's private staging, `exchanged` holds an exchange's
+staging until publication and then the displaced preimage, `deleted` holds a
+deleted object and `withdrawn` holds a creation that undo moved aside. A
+container holding such recovery objects receives complete terminal disposal
+evidence after their expected distribution has been verified.
 
 | Progress | Durable evidence and possible distribution |
 | --- | --- |
@@ -229,10 +236,12 @@ also uses `F_FULLFSYNC` to request a storage flush.
 Atomic exchange and no-replace rename are checked before modifying any target,
 preimage or state file. Before this check the transaction can only create
 missing ancestry, its journal and its private containers. Probes run on
-container objects on the actual publication device. Successful capability
-results are cached by `st_dev` within the process. Unsupported primitives remove
-the journal and containers; empty missing ancestry may remain. There is no
-replacing-rename fallback, including for declaration, lock and watch creation.
+container objects on the actual publication device. A successful result is
+cached by `st_dev` only for the rest of that commit; every commit probes its
+devices again, because a device number can be reused after an unmount.
+Unsupported primitives remove the journal and containers; empty missing ancestry
+may remain. There is no replacing-rename fallback, including for declaration,
+lock and watch creation.
 
 Only `EINVAL`, `ENOSYS`, `ENOTSUP` and `EOPNOTSUPP` mean unsupported. `EEXIST`
 and `ENOTEMPTY` mean an existence conflict. Other failures retain their errno
@@ -244,16 +253,20 @@ and system reason. Probes and publication use the same classification.
 | Existing | Recheck the preimage, then exchange it with staging using Darwin `RENAME_SWAP` or Linux `RENAME_EXCHANGE`. The displaced object stays inside the container and is compared before confirmation. A mismatched preimage is retained as a conflict. |
 | Deletion | Move the entry without replacement into the container's quarantine, then verify its physical identity and digest. Destructive cleanup verifies that evidence again. |
 
-Publication intent is durable before rename. Both container and target parent
-are synced before `applied` becomes durable. Replacement always retains a
-directory entry at the installation path. The operation's complete target and
-recovery-object distribution must match before confirmation and again before the
-commit marker. The scope lock excludes cooperating writers; the atomic protocol
-also preserves objects changed by editors that ignore it.
+Each operation checks its preimage before and again after its publication intent
+becomes durable; a preparation already stale before the intent cancels from
+`ready` without leasing or moving any object. Publication intent is durable
+before rename. Both container and target parent are synced before `applied`
+becomes durable. Replacement always retains a directory entry at the
+installation path. The operation's complete target and recovery-object
+distribution must match before confirmation and again before the commit marker.
+The scope lock excludes cooperating writers; the atomic protocol also preserves
+objects changed by editors that ignore it.
 
-Read-only directory roots retain their final modes. Darwin requires write access
-to relocate a directory between parents. Before granting owner-write on a recorded
-inode, `publishing` or `restoring` intent and the original permission bits are
+Read-only directory targets retain their final modes. Darwin and Linux require
+write access to a directory to move it between parents, because the rename
+updates its `..` entry. Before granting owner-write on a recorded inode,
+`publishing` or `restoring` intent and the original permission bits are
 durable. The transaction syncs the temporary mode, performs the atomic rename,
 then restores and syncs the original mode before recording `applied`, `restored`
 or `cancelled`. Only the recorded mode or that mode plus owner-write is admitted
@@ -269,8 +282,11 @@ watch reconciliation can release any ref. Pending watch-reference recovery also
 reports `CoreError.transactionRecovered` when no journal remains. Retained refs
 remain available while a journal conflict is unresolved.
 
-An applying journal reverses verified publications in reverse order. A committed
-journal completes terminal cleanup. Physical identity and digest distinguish a
+Recovery treats any observed journal as possibly renamed without its directory
+barrier: before granting permissions, renaming objects or deleting any resource
+it syncs `transaction.json` and its parent, including on retry. An applying
+journal reverses verified publications in reverse order. A committed journal
+completes terminal cleanup. Physical identity and digest distinguish a
 transaction's publication even after rename but before `applied`. Another inode
 with identical bytes remains external. Missing or changed evidence causes an
 unresolved conflict; names and equal bytes never establish ownership. Other
@@ -287,19 +303,20 @@ barriers before recording restoration.
 Interrupted permission changes are restored by recorded inode, independently of
 payload rollback. Changed payload bytes remain available. Restoration repeats the
 mode barrier even when the original mode is already visible. A recorded directory
-inode missing from all known locations, or a mode outside the original/temporary
-pair, leaves an unresolved conflict with the original mode and intent retained.
+inode missing from every location the operation/progress table allows, or a mode
+outside the original/temporary pair, leaves an unresolved conflict with the
+original mode and intent retained.
 
 Before disposal the journal persists terminal `committed` or `rolledBack` state
-and the complete recovery-object evidence. A terminal marker observed on entry
-may have been renamed without its directory barrier: recovery syncs the marker
-and its parent before deleting any resource. A separate global discard intent
-then becomes durable. Only after that intent may missing objects or descendants
-mean interrupted cleanup. Changed identities, digests or unexpected descendants
-in sealed disposal evidence remain conflicts. Unpublished private construction
-is discarded by verified container identity. Links are never followed during
-deletion. Owner access may be granted to discarded directories without changing
-installed or restored metadata. Absent entries still receive a parent barrier.
+and the complete recovery-object evidence. A commit disposes immediately after
+sealing that evidence; recovery first revalidates every target and container
+against it. A separate global discard intent then becomes durable. Only after
+that intent may missing objects or descendants mean interrupted cleanup. Changed
+identities, digests or unexpected descendants in sealed disposal evidence remain
+conflicts. Unpublished private construction is discarded by verified container
+identity. Links are never followed during deletion. Owner access may be granted
+to discarded directories without changing installed or restored metadata. Absent
+entries still receive a parent barrier.
 
 Conflicts retain `transaction.json`, the available target objects and private
 containers holding displaced preimages or rollback quarantines. Each conflicting

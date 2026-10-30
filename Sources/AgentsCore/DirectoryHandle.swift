@@ -1,6 +1,5 @@
 import CPlatform
 import Foundation
-import Synchronization
 
 /// Pins directory ancestry. Child operations never traverse symbolic links.
 final class DirectoryHandle {
@@ -8,19 +7,38 @@ final class DirectoryHandle {
   let descriptor: Int32
   let url: URL
 
+  /// Depth counts levels above the opened directory; 0 is the directory itself.
+  enum AncestryStep {
+    case created(depth: Int)
+    /// The parent barrier that makes a created component durable.
+    case synced(depth: Int)
+
+    var name: String {
+      switch self {
+      case .created(let depth): "created.\(depth)"
+      case .synced(let depth): "synced.\(depth)"
+      }
+    }
+  }
+
+  /// With `create`, every component's parent is synced. Checkpoints mark only components
+  /// this call creates, so their names and number do not depend on the host path.
   init(
-    at url: URL, create: Bool = false, checkpoint: (String) throws -> Void = { _ in }
+    at url: URL, create: Bool = false, checkpoint: (AncestryStep) throws -> Void = { _ in }
   ) throws {
     self.url = url.standardizedFileURL
     var current = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
     guard current >= 0 else { throw CoreError.unsafePath("cannot open filesystem root") }
     defer { if current >= 0 { close(current) } }
-    for (index, component) in self.url.pathComponents.dropFirst().enumerated() {
+    let components = self.url.pathComponents.dropFirst()
+    for (index, component) in components.enumerated() {
       // macOS exposes these root-owned system directories through immutable aliases.
       // All task-controlled components, including every cache ancestor, use O_NOFOLLOW.
       let systemAlias = index == 0 && platform_system_alias(component)
       if create {
+        let depth = components.count - 1 - index
         var info = stat()
+        var created = false
         if fstatat(current, component, &info, AT_SYMLINK_NOFOLLOW) != 0 {
           guard errno == ENOENT, mkdirat(current, component, 0o700) == 0 else {
             throw FileSystem.posixError(
@@ -28,11 +46,12 @@ final class DirectoryHandle {
           }
           try FileSystem.requireAccess(
             R_OK | W_OK | X_OK, at: self.url, parent: current, name: component)
-          try checkpoint("directory.created.\(component)")
+          created = true
+          try checkpoint(.created(depth: depth))
         }
         // An existing entry may have been published by an interrupted creator.
         try Self.synchronize(current)
-        try checkpoint("directory.synced.\(component)")
+        if created { try checkpoint(.synced(depth: depth)) }
       }
       let next = openat(
         current, component, O_RDONLY | O_DIRECTORY | (systemAlias ? 0 : O_NOFOLLOW) | O_CLOEXEC)
@@ -65,6 +84,22 @@ final class DirectoryHandle {
     try DirectoryHandle(parent: self, name: name)
   }
 
+  /// Opens a child directory only if it is still the generation `expected` described.
+  func child(_ name: String, matching expected: stat) throws -> DirectoryHandle {
+    let directory = try child(name)
+    var opened = stat()
+    guard fstat(directory.descriptor, &opened) == 0, Self.sameGeneration(expected, opened) else {
+      throw CoreError.invalidState("directory changed before reading: \(name)")
+    }
+    return directory
+  }
+
+  static func sameGeneration(_ first: stat, _ second: stat) -> Bool {
+    var first = first
+    var second = second
+    return platform_same_generation(&first, &second)
+  }
+
   func info(_ name: String) throws -> stat? {
     var value = stat()
     if fstatat(descriptor, name, &value, AT_SYMLINK_NOFOLLOW) == 0 { return value }
@@ -92,6 +127,7 @@ final class DirectoryHandle {
 
   enum RemovalStep: String { case unlinked, synced }
   struct RemovalPoint {
+    /// Relative to the removed entry; empty for the entry itself.
     let path: String
     let step: RemovalStep
   }
@@ -104,11 +140,11 @@ final class DirectoryHandle {
     checkpoint: (RemovalPoint) throws -> Void = { _ in }
   ) throws {
     try removeContents(
-      name, expected: expected, identity: expectedIdentity, prefix: name,
+      name, expected: expected, identity: expectedIdentity, prefix: "",
       checkpoint: checkpoint)
     // An absent entry may be an interrupted unlink whose parent was not synced.
     try sync()
-    try checkpoint(RemovalPoint(path: name, step: .synced))
+    try checkpoint(RemovalPoint(path: "", step: .synced))
   }
 
   private func removeContents(
@@ -136,7 +172,7 @@ final class DirectoryHandle {
         }
         try directory.removeContents(
           child, expected: expected?.children?[child], identity: nil,
-          prefix: prefix + "/" + child, checkpoint: checkpoint)
+          prefix: prefix.isEmpty ? child : prefix + "/" + child, checkpoint: checkpoint)
       }
       try directory.sync()
     } else if let expected, try FileSnapshot.read(name, from: self) != expected {
@@ -196,9 +232,8 @@ final class DirectoryHandle {
     }
   }
 
-  // A nil override delegates to the platform primitive; injected errno takes the same classifier.
+  /// A non-nil injected errno replaces the platform result and takes the same classifier.
   @TaskLocal static var atomicRenameFailure: (@Sendable (RenameMode) -> Int32?)?
-  private static let capableDevices = Mutex<Set<UInt64>>([])
 
   var device: UInt64 { get throws { try objectIdentity.device } }
   var objectIdentity: FileObjectIdentity {
@@ -213,12 +248,12 @@ final class DirectoryHandle {
 
   enum PermissionStep: String { case changed, synced }
 
-  /// Only a recorded directory inode may receive the journal's temporary owner-write bit.
+  /// Only the lease's recorded directory inode may receive its temporary owner-write bit.
   func setPermissions(
-    _ mode: mode_t, expecting identity: FileObjectIdentity,
-    from original: mode_t, checkpoint: (PermissionStep) throws -> Void
+    _ lease: DirectoryWriteLease, granting: Bool, checkpoint: (PermissionStep) throws -> Void
   ) throws {
-    let current = try checkedPermissions(expecting: identity, from: original)
+    let mode = granting ? lease.grantedMode : lease.original
+    let current = try checkedPermissions(lease)
     if current != mode {
       guard fchmod(descriptor, mode) == 0 else {
         let code = errno
@@ -236,15 +271,13 @@ final class DirectoryHandle {
     try checkpoint(.synced)
   }
 
-  func checkedPermissions(expecting identity: FileObjectIdentity, from original: mode_t) throws
-    -> mode_t
-  {
+  func checkedPermissions(_ lease: DirectoryWriteLease) throws -> mode_t {
     var value = stat()
-    guard fstat(descriptor, &value) == 0, FileObjectIdentity(value) == identity else {
+    guard fstat(descriptor, &value) == 0, FileObjectIdentity(value) == lease.identity else {
       throw CoreError.invalidState("recorded directory identity changed")
     }
     let current = value.st_mode & 0o7777
-    guard current == original || current == original | 0o200 else {
+    guard lease.admits(current) else {
       throw CoreError.invalidState(
         "directory permissions changed beyond transaction intent: \(url.path)")
     }
@@ -274,51 +307,15 @@ final class DirectoryHandle {
     if self !== parent { try sync() }
   }
 
-  func rename(
-    _ name: String, to destination: String, swap: Bool = false,
-    afterRename: () throws -> Void = {}
-  ) throws {
-    if swap {
-      try move(name, to: self, named: destination, mode: .exchange, afterRename: afterRename)
-    } else {
-      guard renameat(descriptor, name, descriptor, destination) == 0 else {
-        throw CoreError.invalidState("cannot replace \(destination): \(errno)")
-      }
-      try afterRename()
-      try sync()
-    }
-  }
-
-  func renameExclusive(
-    _ name: String, to destination: String,
-    afterRename: () throws -> Void = {}
-  ) throws {
-    try move(name, to: self, named: destination, mode: .exclusive, afterRename: afterRename)
-  }
-
   enum ProbeStep: String {
     case firstCreated, secondCreated, exchanged, collisionChecked, moved, verified
   }
 
-  /// The descriptor is a journal-owned private container on the publication device.
-  func requireAtomicRenames(checkpoint: (ProbeStep) throws -> Void) throws {
-    if Self.atomicRenameFailure != nil {
-      try probeAtomicRenames(checkpoint: checkpoint)
-      return
-    }
-    let device = try device
-    // The lock spans probing so concurrent scopes check a device only once.
-    try Self.capableDevices.withLock { devices in
-      if devices.contains(device) { return }
-      try probeAtomicRenames(checkpoint: checkpoint)
-      devices.insert(device)
-    }
-  }
-
-  private func probeAtomicRenames(checkpoint: (ProbeStep) throws -> Void) throws {
-    let a = TransactionScratch.probeA.name
-    let b = TransactionScratch.probeB.name
-    let c = TransactionScratch.probeC.name
+  /// The descriptor is a private container on the publication device; the caller names
+  /// three absent probe entries inside it.
+  func requireAtomicRenames(
+    first a: String, second b: String, moved c: String, checkpoint: (ProbeStep) throws -> Void
+  ) throws {
     try write(
       a, data: Data("a".utf8), syncParent: false, afterCreate: { try checkpoint(.firstCreated) })
     try write(
@@ -447,7 +444,12 @@ final class DirectoryHandle {
     }
     try write("transaction.new", data: data, syncParent: false)
     try afterWrite()
-    try rename("transaction.new", to: "transaction.json", afterRename: afterRename)
+    // A replacing rename is reserved for the journal; publication exchanges or never replaces.
+    guard renameat(descriptor, "transaction.new", descriptor, "transaction.json") == 0 else {
+      throw CoreError.invalidState("cannot replace transaction.json: \(errno)")
+    }
+    try afterRename()
+    try sync()
   }
 
   func removeJournal(afterUnlink: () throws -> Void = {}) throws {
@@ -514,6 +516,28 @@ final class DirectoryHandle {
     defer { close(file) }
     try Self.synchronize(file)
     if includingParent { try sync() }
+  }
+
+  /// Syncs a verified object's file contents, then each directory level after its children,
+  /// then this parent.
+  func synchronize(_ name: String, as snapshot: FileSnapshot) throws {
+    guard try FileSnapshot.read(name, from: self) == snapshot else {
+      throw CoreError.invalidState("transaction preimage changed before synchronization: \(name)")
+    }
+    try synchronizeContents(name, as: snapshot)
+    try sync()
+  }
+
+  private func synchronizeContents(_ name: String, as snapshot: FileSnapshot) throws {
+    if let children = snapshot.children {
+      let directory = try child(name)
+      for (child, value) in children.sorted(by: { $0.key < $1.key }) {
+        try directory.synchronizeContents(child, as: value)
+      }
+      try directory.sync()
+    } else if snapshot.isRegular {
+      try syncFile(name, includingParent: false)
+    }
   }
 
   var identity: String {

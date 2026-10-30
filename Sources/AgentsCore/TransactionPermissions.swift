@@ -1,6 +1,6 @@
 import Foundation
 
-enum TransactionObjectLocation {
+enum TransactionObjectLocation: Equatable {
   case target
   case scratch(TransactionScratch)
 
@@ -12,80 +12,67 @@ enum TransactionObjectLocation {
   }
 }
 
-enum TransactionPermissionPurpose: String {
-  case publicationGrant = "publish.grant"
-  case publicationRestore = "publish.restore"
-  case undoGrant = "undo.grant"
-  case undoRestore = "undo.restore"
-  case cancelRestore = "cancel.restore"
-  case conflictRestore = "conflict.restore"
-}
-
 extension TransactionSession {
   /// Publishing/restoring intent binds a temporary owner-write bit to the recorded
   /// directory inode. It never grants access through an external replacement.
   func grantDirectoryPermissions(
-    _ index: Int, layout: TransactionLayout, purpose: TransactionPermissionPurpose
+    _ index: Int, layout: TransactionLayout, purpose: TransactionCheckpoint.Permission
   ) throws {
-    let entry = journal.entries[index]
-    var objects: [(TransactionObjectLocation, FileSnapshot)] = []
-    if case .object(let expected) = layout.target {
-      objects.append((.target, expected))
-    } else if layout.kind == .prepared, let original = entry.preimage {
-      objects.append((.target, original))
-    }
-    for slot in TransactionScratch.objectSlots {
-      if let expected = layout.objects[slot] { objects.append((.scratch(slot), expected)) }
-    }
-    for (location, expected) in objects where expected.needsDirectoryWriteLease {
+    for (location, object) in layout.objectLocations(journal.entries[index]) {
+      guard let lease = object.writeLease else { continue }
       try setDirectoryPermissions(
-        index, location: location, expected: expected, mode: expected.mode | 0o200, purpose: purpose
-      )
+        index, location: location, lease: lease, granting: true, purpose: purpose)
     }
   }
 
   /// Mode restoration uses physical identity independently of byte rollback. A
   /// changed payload is retained, while a known temporary permission can be undone.
   /// Missing inodes or modes outside the recorded pair require owner action.
-  func restoreDirectoryPermissions(_ index: Int, purpose: TransactionPermissionPurpose) throws {
-    try forEachDirectoryPermission(index) { location, expected in
+  func restoreDirectoryPermissions(_ index: Int, purpose: TransactionCheckpoint.Permission)
+    throws
+  {
+    try forEachDirectoryLease(index) { location, lease in
       try setDirectoryPermissions(
-        index, location: location, expected: expected, mode: expected.mode, purpose: purpose)
+        index, location: location, lease: lease, granting: false, purpose: purpose)
     }
   }
 
   func inspectDirectoryPermissions(_ index: Int) throws {
     guard journal.entries[index].progress.permitsDirectoryWrite else { return }
-    try forEachDirectoryPermission(index) { location, expected in
+    try forEachDirectoryLease(index) { location, lease in
       let (parent, name) = try permissionLocation(index, location)
-      _ = try parent.child(name).checkedPermissions(
-        expecting: expected.identity, from: expected.mode)
+      _ = try parent.child(name).checkedPermissions(lease)
     }
   }
 
-  private func forEachDirectoryPermission(
-    _ index: Int, body: (TransactionObjectLocation, FileSnapshot) throws -> Void
+  /// Candidate locations are those of the progress's expected distributions. Each leased
+  /// inode is acted on where it is found; one found in no candidate location is a conflict.
+  private func forEachDirectoryLease(
+    _ index: Int, body: (TransactionObjectLocation, DirectoryWriteLease) throws -> Void
   ) throws {
     let entry = journal.entries[index]
-    let expected = [entry.preimage, entry.staged].compactMap { $0 }
-      .filter(\.needsDirectoryWriteLease)
-    guard !expected.isEmpty else { return }
+    var candidates: [(location: TransactionObjectLocation, lease: DirectoryWriteLease)] = []
+    for layout in TransactionLayout.expected(entry) {
+      for (location, object) in layout.objectLocations(entry) {
+        guard let lease = object.writeLease,
+          !candidates.contains(where: { $0.location == location && $0.lease == lease })
+        else { continue }
+        candidates.append((location, lease))
+      }
+    }
     var found: [FileObjectIdentity] = []
     var errors: [String] = []
-    let locations: [TransactionObjectLocation] =
-      [.target]
-      + TransactionScratch.objectSlots.map { .scratch($0) }
-    for location in locations {
+    for (location, lease) in candidates {
       do {
         let (parent, name) = try permissionLocation(index, location)
-        guard let identity = try parent.info(name).map(FileObjectIdentity.init),
-          let object = expected.first(where: { $0.identity == identity })
-        else { continue }
-        found.append(identity)
-        try body(location, object)
+        guard try parent.info(name).map(FileObjectIdentity.init) == lease.identity else {
+          continue
+        }
+        found.append(lease.identity)
+        try body(location, lease)
       } catch { errors.append(String(describing: error)) }
     }
-    if expected.contains(where: { !found.contains($0.identity) }) {
+    if candidates.contains(where: { !found.contains($0.lease.identity) }) {
       errors.append("directory mode restoration is missing its recorded inode")
     }
     guard errors.isEmpty else { throw conflict(index, errors.joined(separator: "; ")) }
@@ -103,15 +90,14 @@ extension TransactionSession {
   }
 
   private func setDirectoryPermissions(
-    _ index: Int, location: TransactionObjectLocation, expected: FileSnapshot, mode: mode_t,
-    purpose: TransactionPermissionPurpose
+    _ index: Int, location: TransactionObjectLocation, lease: DirectoryWriteLease,
+    granting: Bool, purpose: TransactionCheckpoint.Permission
   ) throws {
     guard journal.entries[index].progress.permitsDirectoryWrite else {
       throw conflict(index, "directory permission change requires durable intent")
     }
     let (parent, name) = try permissionLocation(index, location)
-    let directory = try parent.child(name)
-    try directory.setPermissions(mode, expecting: expected.identity, from: expected.mode) {
+    try parent.child(name).setPermissions(lease, granting: granting) {
       try emit(.permissions(index, purpose, location, $0))
     }
   }

@@ -1,6 +1,7 @@
-import AgentsCore
 import Foundation
 import Testing
+
+@testable import AgentsCore
 
 @Suite("State inspection concurrency")
 struct StateInspectionTests {
@@ -87,8 +88,9 @@ struct StateInspectionTests {
       try fixture.store.withReadLock {
         reads += 1
         let child = try stateTestProcess(
-          root: fixture.root, arguments: ["watch-add", "publish.1.created"])
-        try fixture.kill(child, at: "publish.1.created")
+          root: fixture.root,
+          arguments: ["watch-add", TransactionCheckpoint.publication(1, .created).name])
+        try fixture.kill(child, at: TransactionCheckpoint.publication(1, .created).name)
         let declaration = try fixture.store.readDeclaration()
         let watch = try fixture.store.readWatch()
         try #require(declaration.watch == ["source"])

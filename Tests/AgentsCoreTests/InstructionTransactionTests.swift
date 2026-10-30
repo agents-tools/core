@@ -30,7 +30,7 @@ struct InstructionTransactionTests {
     struct Interrupted: Error {}
     try store.withLock {
       let transaction = FileTransaction(store: store) { checkpoint in
-        if checkpoint == "entry.1.applied" { throw Interrupted() }
+        if checkpoint == TransactionCheckpoint.progress(1, .applied).name { throw Interrupted() }
       }
       for file in files {
         try transaction.replace(

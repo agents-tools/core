@@ -1,10 +1,10 @@
-import AgentsCore
 import AgentsSkills
 import CPlatform
 import Foundation
 import StateTestSupport
 import Testing
 
+@testable import AgentsCore
 @testable import AgentsUpdates
 
 @Suite("Combined update transactions")
@@ -20,7 +20,7 @@ struct UpdateTransactionTests {
       _ = try UpdateOperations.withPreparedUpdate(
         environment: fixture.environment,
         checkpoint: { step in
-          if step == "entry.0.applied" {
+          if step == TransactionCheckpoint.progress(0, .applied).name {
             // Exchange a journal-bound root so every automatic recovery attempt must stop.
             try FileManager.default.moveItem(at: root, to: moved)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -51,9 +51,11 @@ struct UpdateTransactionTests {
   }
 
   @Test(arguments: [
-    "between-kinds", "journal.preparing", "journal.applying.entry.0.publishing.renamed",
-    "journal.committed.terminal.renamed", "journal.committed", "cleanup.0.removed",
-    "journal.removed",
+    "between-kinds", TransactionCheckpoint.phase(.preparing).name,
+    TransactionCheckpoint.persisted(.applying, .entry(0, .publishing), .renamed).name,
+    TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name,
+    TransactionCheckpoint.phase(.committed).name, TransactionCheckpoint.containerRemoved(0).name,
+    TransactionCheckpoint.journalRemoved.name,
   ])
   func failuresReportTheRecoveredGeneration(_ failure: String) throws {
     let fixture = try UpdateFixture()
@@ -70,11 +72,12 @@ struct UpdateTransactionTests {
       _ = try UpdateOperations.withPreparedUpdate(
         environment: fixture.environment,
         checkpoint: { step in
-          if step == "journal.preparing" {
+          if step == TransactionCheckpoint.phase(.preparing).name {
             lastSkill = try lastSkillIndex(fixture.store)
           }
           if step == failure
-            || (failure == "between-kinds" && step == lastSkill.map { "entry.\($0).applied" })
+            || (failure == "between-kinds"
+              && step == lastSkill.map { TransactionCheckpoint.progress($0, .applied).name })
           {
             failed = true
             throw CoreError.invalidState("injected update failure")
@@ -83,9 +86,7 @@ struct UpdateTransactionTests {
         { try $0.apply() })
       Issue.record("failure checkpoint was not reached")
     } catch let error as UpdateApplyError {
-      let committed =
-        failure.hasPrefix("journal.committed") || failure == "cleanup.0.removed"
-        || failure == "journal.removed"
+      let committed = committedPoints.contains(failure)
       #expect(error.disposition == (committed ? .committed : .unchanged))
       #expect(error.underlyingError as? CoreError == .invalidState("injected update failure"))
       if committed {
@@ -102,8 +103,10 @@ struct UpdateTransactionTests {
   }
 
   @Test(arguments: [
-    "between-kinds", "journal.preparing", "journal.applying.entry.0.publishing.renamed",
-    "journal.committed.terminal.renamed", "cleanup.0.removed",
+    "between-kinds", TransactionCheckpoint.phase(.preparing).name,
+    TransactionCheckpoint.persisted(.applying, .entry(0, .publishing), .renamed).name,
+    TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name,
+    TransactionCheckpoint.containerRemoved(0).name,
   ])
   func killedCombinedWriterRecoversThenPreparesTheWholeUpdate(_ checkpoint: String) throws {
     let fixture = try UpdateFixture()
@@ -120,7 +123,7 @@ struct UpdateTransactionTests {
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
       try fixture.apply()
     }
-    let committed = checkpoint.hasPrefix("journal.committed") || checkpoint == "cleanup.0.removed"
+    let committed = committedPoints.contains(checkpoint)
     if !committed { #expect(try fixture.snapshot() == before) }
     var displayed = 0
     _ = try UpdateOperations.withPreparedUpdate(environment: fixture.environment) { update in
@@ -150,11 +153,12 @@ struct UpdateTransactionTests {
     #expect(
       !FileManager.default.fileExists(
         atPath: fixture.root.appendingPathComponent("contender-finished").path))
+    try ProcessWait.stopped(prepared, root: fixture.root)
     kill(prepared.processIdentifier, SIGCONT)
-    prepared.waitUntilExit()
+    try ProcessWait.exit(prepared, root: fixture.root)
     #expect(prepared.terminationStatus == 0)
     try waitFor("contender-finished", fixture: fixture, child: contender)
-    contender.waitUntilExit()
+    try ProcessWait.exit(contender, root: fixture.root)
     #expect(contender.terminationStatus == 0)
   }
 
@@ -198,6 +202,12 @@ private func lastSkillIndex(_ store: StateStore) throws -> Int {
 
 private final class UpdateTestBundle: NSObject {}
 
+/// Interruptions at or after the terminal commit marker.
+private let committedPoints = [
+  TransactionCheckpoint.persisted(.committed, .terminal, .renamed), .phase(.committed),
+  .containerRemoved(0), .journalRemoved,
+].map(\.name)
+
 private func launch(_ fixture: UpdateFixture, command: String, argument: String) throws -> Process {
   var directory = Bundle(for: UpdateTestBundle.self).bundleURL
   while !FileManager.default.isExecutableFile(
@@ -218,9 +228,7 @@ private func waitFor(_ name: String, fixture: UpdateFixture, child: Process) thr
   try ProcessWait.marker(file, child: child, root: fixture.root)
 }
 
+/// A child that survives the termination deadline fails the test instead of blocking the run.
 private func terminate(_ process: Process) {
-  if process.isRunning {
-    kill(process.processIdentifier, SIGKILL)
-    process.waitUntilExit()
-  }
+  do { try ProcessWait.terminate(process) } catch { Issue.record(error) }
 }

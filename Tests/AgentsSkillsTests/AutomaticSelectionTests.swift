@@ -32,10 +32,7 @@ struct AutomaticSelectionTests {
     defer {
       // Release the Git wrapper even if fixture preparation fails.
       _ = "\n".withCString { write(descriptor, $0, 1) }
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
+      terminateProcess(child)
     }
     try wait(for: child) {
       FileManager.default.fileExists(atPath: root.appendingPathComponent("discovery-ready").path)

@@ -14,7 +14,7 @@ struct StateTransactionTests {
     let moved = fixture.root.appendingPathComponent("displaced-cache")
     try fixture.store.withLock {
       let transaction = FileTransaction(store: fixture.store) { step in
-        if step == "journal.committed.terminal.renamed" {
+        if step == TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name {
           try FileManager.default.moveItem(at: parent, to: moved)
           throw CoreError.invalidState("cache cleanup interrupted")
         }
@@ -42,17 +42,17 @@ struct StateTransactionTests {
     var checkpoints: [String] = []
     do {
       let fixture = try TransactionFixture()
-      try fixture.commit {
-        if !$0.contains(fixture.root.lastPathComponent) { checkpoints.append($0) }
-      }
+      try fixture.commit { checkpoints.append($0) }
     }
-    #expect(checkpoints.contains("journal.committed"))
+    #expect(checkpoints.contains(TransactionCheckpoint.phase(.committed).name))
     for failure in Set(checkpoints).sorted() {
       let fixture = try TransactionFixture()
       var committed = false
       #expect(throws: CoreError.invalidState("injected failure")) {
         try fixture.commit { step in
-          if step == "journal.committed.terminal.renamed" { committed = true }
+          if step == TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name {
+            committed = true
+          }
           if step == failure { throw CoreError.invalidState("injected failure") }
         }
       }
@@ -64,37 +64,42 @@ struct StateTransactionTests {
   }
 
   @Test(arguments: [
-    "journal.preparing", "journal.preparing.created.renamed", "entry.0.ready", "entry.4.ready",
-    "entry.0.publishing",
-    "entry.0.applied",
-    "entry.1.applied", "entry.2.applied",
-    "entry.3.applied", "entry.4.applied", "entry.5.applied", "publish.5.exchanged",
-    "publish.0.exchanged",
-    "journal.applying.entry.0.publishing.renamed",
-    "journal.committed.terminal.renamed", "journal.committed", "cleanup.0.removed",
+    TransactionCheckpoint.phase(.preparing).name,
+    TransactionCheckpoint.persisted(.preparing, .created, .renamed).name,
+    TransactionCheckpoint.progress(0, .ready).name, TransactionCheckpoint.progress(4, .ready).name,
+    TransactionCheckpoint.progress(0, .publishing).name,
+    TransactionCheckpoint.progress(0, .applied).name,
+    TransactionCheckpoint.progress(1, .applied).name,
+    TransactionCheckpoint.progress(2, .applied).name,
+    TransactionCheckpoint.progress(3, .applied).name,
+    TransactionCheckpoint.progress(4, .applied).name,
+    TransactionCheckpoint.progress(5, .applied).name,
+    TransactionCheckpoint.publication(5, .exchanged).name,
+    TransactionCheckpoint.publication(0, .exchanged).name,
+    TransactionCheckpoint.persisted(.applying, .entry(0, .publishing), .renamed).name,
+    TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name,
+    TransactionCheckpoint.phase(.committed).name, TransactionCheckpoint.containerRemoved(0).name,
   ])
   func killedWriterRecoversOnNextStateRead(_ step: String) throws {
     let fixture = try TransactionFixture()
     let child = try stateTestProcess(root: fixture.root, arguments: ["crash", step])
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     try ProcessWait.marker(
       fixture.root.appendingPathComponent("ready"), child: child, root: fixture.root)
     // At every interruption point the replaced installation still has a directory entry.
     #expect(
       FileManager.default.fileExists(
         atPath: fixture.root.appendingPathComponent(".agents/skills/target/SKILL.md").path))
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    terminateProcess(child)
     #expect(child.terminationReason == .uncaughtSignal)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
       _ = try fixture.store.loadResolved()
     }
-    try fixture.check(committed: step.hasPrefix("journal.committed") || step == "cleanup.0.removed")
+    let committed = [
+      TransactionCheckpoint.persisted(.committed, .terminal, .renamed),
+      .phase(.committed), .containerRemoved(0),
+    ].map(\.name)
+    try fixture.check(committed: committed.contains(step))
   }
 
   @Test func serializesSeparateWriterProcesses() throws {
@@ -103,7 +108,7 @@ struct StateTransactionTests {
       try stateTestProcess(root: fixture.root, arguments: ["writer", "writer-\($0)"])
     }
     for child in children {
-      child.waitUntilExit()
+      try ProcessWait.exit(child, root: fixture.root)
       #expect(child.terminationStatus == 0)
     }
     #expect(try fixture.store.loadDeclaration().sources.count == 20)
@@ -228,20 +233,15 @@ extension StateTransactionTests {
   }
 
   private func abandon(
-    _ fixture: TransactionFixture, at step: String = "entry.2.applied",
+    _ fixture: TransactionFixture,
+    at step: String = TransactionCheckpoint.progress(2, .applied).name,
     scope: InstallScope = .project
   ) throws {
     let child = try stateTestProcess(
       root: fixture.root, arguments: ["crash", step, "--scope", scope.rawValue])
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     try waitFor("ready", root: fixture.root, child: child)
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    terminateProcess(child)
   }
 
   @Test(arguments: [InstallScope.project, .user])
@@ -258,22 +258,19 @@ extension StateTransactionTests {
     let target = AgentRegistry.installSkillsDirectory(
       for: .claudeCode, scope: scope, environment: environment
     ).appendingPathComponent("created")
-    try abandon(fixture, at: "entry.4.applied", scope: scope)
+    try abandon(fixture, at: TransactionCheckpoint.progress(4, .applied).name, scope: scope)
     try #require(FileManager.default.fileExists(atPath: target.path))
 
     let recovery = try stateTestProcess(
       root: fixture.root,
-      arguments: ["recover", "restore.4.creationQuarantined", "--scope", scope.rawValue])
-    defer {
-      if recovery.isRunning {
-        kill(recovery.processIdentifier, SIGKILL)
-        recovery.waitUntilExit()
-      }
-    }
+      arguments: [
+        "recover", TransactionCheckpoint.restoration(4, .creationQuarantined).name, "--scope",
+        scope.rawValue,
+      ])
+    defer { terminateProcess(recovery) }
     try waitFor("recovery-ready", root: fixture.root, child: recovery)
     #expect(try DirectoryHandle(at: target.deletingLastPathComponent()).info("created") == nil)
-    kill(recovery.processIdentifier, SIGKILL)
-    recovery.waitUntilExit()
+    terminateProcess(recovery)
     #expect(recovery.terminationReason == .uncaughtSignal)
 
     var steps: [String] = []
@@ -281,10 +278,12 @@ extension StateTransactionTests {
       let recovered = try FileTransaction.recover(store: store) { steps.append($0) }
       #expect(recovered)
     }
-    #expect(!steps.contains("restore.4.creationQuarantined"))
-    let synced = try #require(steps.firstIndex(of: "restore.4.synced"))
-    let terminal = try #require(steps.firstIndex(of: "journal.rolledBack.terminal.renamed"))
-    let cleanup = try #require(steps.firstIndex(of: "cleanup.intent"))
+    #expect(!steps.contains(TransactionCheckpoint.restoration(4, .creationQuarantined).name))
+    let synced = try #require(
+      steps.firstIndex(of: TransactionCheckpoint.restoration(4, .synced).name))
+    let terminal = try #require(
+      steps.firstIndex(of: TransactionCheckpoint.persisted(.rolledBack, .terminal, .renamed).name))
+    let cleanup = try #require(steps.firstIndex(of: TransactionCheckpoint.discardIntent.name))
     #expect(synced < terminal && terminal < cleanup)
     #expect(try Data(contentsOf: store.declarationURL) == declaration)
     #expect(try Data(contentsOf: store.resolvedURL) == resolved)
@@ -300,60 +299,47 @@ extension StateTransactionTests {
   }
 
   @Test(arguments: [
-    "restore.2.exchanged", "entry.0.restored", "journal.rolledBack.terminal.renamed",
-    "journal.rolledBack",
-    "cleanup.0.removed",
+    TransactionCheckpoint.restoration(2, .exchanged).name,
+    TransactionCheckpoint.progress(0, .restored).name,
+    TransactionCheckpoint.persisted(.rolledBack, .terminal, .renamed).name,
+    TransactionCheckpoint.phase(.rolledBack).name,
+    TransactionCheckpoint.containerRemoved(0).name,
   ])
   func interruptedRecoverySerializesCompetingReader(_ point: String) throws {
     let fixture = try TransactionFixture()
     try abandon(fixture)
     let recovery = try stateTestProcess(root: fixture.root, arguments: ["recover", point])
-    defer {
-      if recovery.isRunning {
-        kill(recovery.processIdentifier, SIGKILL)
-        recovery.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(recovery) }
     try waitFor("recovery-ready", root: fixture.root, child: recovery)
     let reader = try stateTestProcess(root: fixture.root, arguments: ["read", ""])
-    defer {
-      if reader.isRunning {
-        kill(reader.processIdentifier, SIGKILL)
-        reader.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(reader) }
     try waitFor("reader-started", root: fixture.root, child: reader)
     Thread.sleep(forTimeInterval: 0.05)
     #expect(
       !FileManager.default.fileExists(
         atPath: fixture.root.appendingPathComponent("reader-finished").path))
-    kill(recovery.processIdentifier, SIGKILL)
-    recovery.waitUntilExit()
+    terminateProcess(recovery)
     try waitFor("reader-finished", root: fixture.root, child: reader)
-    reader.waitUntilExit()
+    try ProcessWait.exit(reader, root: fixture.root)
     #expect(reader.terminationStatus == 0)
     try fixture.check(committed: false)
   }
 
-  @Test(arguments: ["journal.terminalSynced", "cleanup.0.removed"])
+  @Test(arguments: [
+    TransactionCheckpoint.journalSynced.name, TransactionCheckpoint.containerRemoved(0).name,
+  ])
   func committedRecoverySyncsObservedMarkerBeforeCleanup(_ point: String) throws {
     let fixture = try TransactionFixture()
-    try abandon(fixture, at: "journal.committed.terminal.renamed")
+    try abandon(fixture, at: TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name)
     let recovery = try stateTestProcess(root: fixture.root, arguments: ["recover", point])
-    defer {
-      if recovery.isRunning {
-        kill(recovery.processIdentifier, SIGKILL)
-        recovery.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(recovery) }
     try waitFor("recovery-ready", root: fixture.root, child: recovery)
-    if point == "journal.terminalSynced" {
+    if point == TransactionCheckpoint.journalSynced.name {
       let names = try FileManager.default.contentsOfDirectory(
         atPath: fixture.root.appendingPathComponent(".agents/skills").path)
       #expect(names.contains { $0.hasPrefix(".agents-") })
     }
-    kill(recovery.processIdentifier, SIGKILL)
-    recovery.waitUntilExit()
+    terminateProcess(recovery)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
       try fixture.store.loadResolved()
     }
@@ -538,36 +524,56 @@ extension StateTransactionTests {
     defer { removeTemporaryDirectory(root) }
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
-    let child = try stateTestProcess(
-      root: root, arguments: ["create-scope", "directory.created..agent"])
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
+    func lockPoint(_ step: DirectoryHandle.AncestryStep) -> String {
+      "lock.ancestry." + step.name
     }
+    let child = try stateTestProcess(
+      root: root, arguments: ["create-scope", lockPoint(.created(depth: 0))])
+    defer { terminateProcess(child) }
     try waitFor("ready", root: root, child: child)
     #expect(
       !FileManager.default.fileExists(atPath: root.appendingPathComponent("lock-acquired").path))
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    terminateProcess(child)
+    // The interrupted creator's entry receives a parent barrier like every existing component.
+    let scope = root.appendingPathComponent(".agent")
+    let barriers = SynchronizationCount()
     var steps: [String] = []
-    try FileLock.withLock(
-      at: root.appendingPathComponent(".agent/.agents.lock"), checkpoint: { steps.append($0) },
-      {
-        #expect(steps.contains("directory.synced..agent"))
+    try DirectoryHandle.$synchronizationObserver.withValue(
+      { barriers.add() },
+      operation: {
+        try FileLock.withLock(
+          at: scope.appendingPathComponent(".agents.lock"), checkpoint: { steps.append($0) },
+          {
+            #expect(barriers.value == scope.resolvingSymlinksInPath().pathComponents.count - 1)
+          })
       })
+    #expect(steps.isEmpty)
     let new = root.appendingPathComponent("new/ancestry/.agents")
-    steps = []
     try FileLock.withLock(
       at: new.appendingPathComponent(".agents.lock"), checkpoint: { steps.append($0) },
       {
-        for name in ["new", "ancestry", ".agents"] {
-          let created = try #require(steps.firstIndex(of: "directory.created.\(name)"))
-          let synced = try #require(steps.firstIndex(of: "directory.synced.\(name)"))
+        for depth in 0...2 {
+          let created = try #require(steps.firstIndex(of: lockPoint(.created(depth: depth))))
+          let synced = try #require(steps.firstIndex(of: lockPoint(.synced(depth: depth))))
           #expect(created < synced)
         }
+        #expect(steps.count == 6)
       })
+  }
+}
+
+private final class SynchronizationCount: @unchecked Sendable {
+  private let lock = NSLock()
+  private var count = 0
+  var value: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return count
+  }
+  func add() {
+    lock.lock()
+    defer { lock.unlock() }
+    count += 1
   }
 }
 
@@ -592,7 +598,7 @@ extension StateTransactionTests {
     #expect(throws: CoreError.invalidState("interrupted user write")) {
       try store.withLock {
         let transaction = FileTransaction(store: store) { step in
-          if step == "publish.3.exchanged" {
+          if step == TransactionCheckpoint.publication(3, .exchanged).name {
             let journal = try String(
               contentsOf: store.directory.appendingPathComponent("transaction.json"),
               encoding: .utf8)

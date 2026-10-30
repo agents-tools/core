@@ -1,10 +1,11 @@
-import AgentsCore
 import AgentsInstructions
 import AgentsSkills
 import CPlatform
 import Foundation
 import StateTestSupport
 import Testing
+
+@testable import AgentsCore
 
 @Suite("Read-only skill inspection")
 struct ReadOnlyInspectionTests {
@@ -97,16 +98,10 @@ struct ReadOnlyInspectionTests {
       at: instructions.deletingLastPathComponent(), withIntermediateDirectories: true)
     try Data("Original instructions\n".utf8).write(to: instructions)
     let child = try interruptedTransaction(root: root, scope: scope)
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     let marker = root.appendingPathComponent("ready")
     try ProcessWait.marker(marker, child: child, root: root)
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    terminateProcess(child)
     #expect(!FileManager.default.fileExists(atPath: instructions.path))
     #expect(try Data(contentsOf: created) == Data("New instructions\n".utf8))
     #expect(try Data(contentsOf: target.appendingPathComponent("SKILL.md")) == Data("new".utf8))
@@ -422,7 +417,8 @@ struct ReadOnlyInspectionTests {
     let process = Process()
     process.executableURL = directory.appendingPathComponent("StateTestProcess")
     process.arguments = [
-      root.path, "inspection-transaction", "entry.4.applied", "--scope", scope.rawValue,
+      root.path, "inspection-transaction", TransactionCheckpoint.progress(4, .applied).name,
+      "--scope", scope.rawValue,
     ]
     try process.run()
     return process

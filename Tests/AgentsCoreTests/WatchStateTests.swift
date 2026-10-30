@@ -1,8 +1,9 @@
-import AgentsCore
 import CPlatform
 import Foundation
 import StateTestSupport
 import Testing
+
+@testable import AgentsCore
 
 @Suite("Watch state")
 struct WatchStateTests {
@@ -111,7 +112,9 @@ struct WatchStateTests {
   }
 
   @Test(arguments: [
-    "publish.0.exchanged", "publish.1.exchanged", "journal.committed", "cleanup.0.removed",
+    TransactionCheckpoint.publication(0, .exchanged).name,
+    TransactionCheckpoint.publication(1, .exchanged).name,
+    TransactionCheckpoint.phase(.committed).name, TransactionCheckpoint.containerRemoved(0).name,
   ])
   func interruptedWatchAndDeclarationRecoverTogether(_ checkpoint: String) throws {
     let root = try temporaryDirectory()
@@ -127,18 +130,14 @@ struct WatchStateTests {
     try store.save(declaration: declaration, resolved: ResolvedState(), watch: WatchState())
     let lockBytes = try Data(contentsOf: store.resolvedURL)
     let child = try stateTestProcess(root: root, arguments: ["watch-crash", checkpoint])
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     let marker = root.appendingPathComponent("ready")
     try ProcessWait.marker(marker, child: child, root: root)
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    terminateProcess(child)
     #expect(throws: CoreError.transactionRecovered(store.directory.path)) { try store.loadWatch() }
-    let committed = checkpoint == "journal.committed" || checkpoint == "cleanup.0.removed"
+    let committed =
+      checkpoint == TransactionCheckpoint.phase(.committed).name
+      || checkpoint == TransactionCheckpoint.containerRemoved(0).name
     #expect(try store.loadDeclaration().watch == (committed ? ["source"] : nil))
     #expect(try store.loadWatch().sources.isEmpty == !committed)
     #expect(try Data(contentsOf: store.resolvedURL) == lockBytes)

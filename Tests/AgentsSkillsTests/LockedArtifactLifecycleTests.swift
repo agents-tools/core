@@ -1,9 +1,9 @@
-import AgentsCore
 import CPlatform
 import Foundation
 import StateTestSupport
 import Testing
 
+@testable import AgentsCore
 @testable import AgentsSkills
 
 @Suite("Locked artifacts")
@@ -176,19 +176,13 @@ extension LockedArtifactLifecycleTests {
     try FileManager.default.removeItem(at: store.cacheDirectory)
     try FileManager.default.removeItem(at: fixture.target("demo"))
     let child = try artifactTestProcess(root: project)
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     let marker = project.appendingPathComponent("ready")
     try ProcessWait.marker(marker, child: child, root: fixture.root)
     let final = store.cacheDirectory.appendingPathComponent(
       "artifact-content/" + digest.dropFirst(7))
     #expect(!FileManager.default.fileExists(atPath: final.path))
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    terminateProcess(child)
     let restore = WellKnownProvider {
       guard $0.absoluteString == url else {
         throw CoreError.invalidState("restore consulted index")
@@ -218,7 +212,10 @@ extension LockedArtifactLifecycleTests {
     let process = Process()
     process.executableURL = directory.appendingPathComponent("StateTestProcess")
     process.arguments = [
-      root.path, "cache-content", "stage.0.copy.entry.0.staged/SKILL.md.entryCopied",
+      root.path, "cache-content",
+      TransactionCheckpoint.copy(
+        0, .init(path: TransactionScratch.staged.name(0) + "/SKILL.md", step: .entryCopied)
+      ).name,
     ]
     try process.run()
     return process

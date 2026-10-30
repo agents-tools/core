@@ -1,4 +1,3 @@
-import CPlatform
 import Foundation
 
 /// Captures existing ancestry and the final entry without following that entry's link.

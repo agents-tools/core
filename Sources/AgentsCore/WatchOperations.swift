@@ -32,9 +32,10 @@ public struct WatchOperations: Sendable {
   ) throws -> WatchSeen {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withLock(checkpoint: checkpoint) {
-      var declaration = try store.readDeclaration()
-      let lock = try store.readResolved()
-      var watch = try store.readWatch()
+      let baseline = try StatePrecondition(store: store)
+      var declaration = try store.readDeclaration(prepared: baseline)
+      let lock = try store.readResolved(prepared: baseline)
+      var watch = try store.readWatch(prepared: baseline)
       let argument = try SourceArgument(source)
       guard argument.name == nil else {
         throw CoreError.invalidSource("@skill: selects skills; watch subscribes to whole sources")
@@ -58,7 +59,8 @@ public struct WatchOperations: Sendable {
       try declaration.validate(environment: environment)
       let current = try acknowledge(declared, revision: nil, store: store)
       watch.sources[id] = WatchSourceState(seen: current)
-      try commit(declaration: declaration, watch: watch, lock: lock, store: store)
+      try commit(
+        declaration: declaration, watch: watch, lock: lock, store: store, baseline: baseline)
       return current
     }
   }
@@ -104,15 +106,16 @@ public struct WatchOperations: Sendable {
   ) throws -> WatchSeen {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withLock(checkpoint: checkpoint) {
-      let declaration = try store.readDeclaration()
-      let lock = try store.readResolved()
-      var watch = try store.readWatch()
+      let baseline = try StatePrecondition(store: store)
+      let declaration = try store.readDeclaration(prepared: baseline)
+      let lock = try store.readResolved(prepared: baseline)
+      var watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
       let declared = declaration.sources[alias]!
       let id = try declared.identity(environment: environment)
       let current = try acknowledge(declared, revision: revision, store: store)
       watch.sources[id] = WatchSourceState(seen: current)
-      try commit(declaration: nil, watch: watch, lock: lock, store: store)
+      try commit(declaration: nil, watch: watch, lock: lock, store: store, baseline: baseline)
       return current
     }
   }
@@ -124,14 +127,16 @@ public struct WatchOperations: Sendable {
   ) throws {
     let store = StateStore(scope: scope, environment: environment)
     try store.withLock(checkpoint: checkpoint) {
-      var declaration = try store.readDeclaration()
-      let lock = try store.readResolved()
-      var watch = try store.readWatch()
+      let baseline = try StatePrecondition(store: store)
+      var declaration = try store.readDeclaration(prepared: baseline)
+      let lock = try store.readResolved(prepared: baseline)
+      var watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
       let id = try declaration.sources[alias]!.identity(environment: environment)
       declaration.watch?.removeAll { $0 == alias }
       watch.sources.removeValue(forKey: id)
-      try commit(declaration: declaration, watch: watch, lock: lock, store: store)
+      try commit(
+        declaration: declaration, watch: watch, lock: lock, store: store, baseline: baseline)
     }
   }
 
@@ -164,15 +169,23 @@ public struct WatchOperations: Sendable {
     throw CoreError.notFound("source is not subscribed: \(input)")
   }
 
+  /// The prepared generation, captured before any network acknowledgment, is the journal's
+  /// preimage evidence and also guards the lock that pruning follows.
   private func commit(
-    declaration: Declaration?, watch: WatchState, lock: ResolvedState, store: StateStore
+    declaration: Declaration?, watch: WatchState, lock: ResolvedState, store: StateStore,
+    baseline: StatePrecondition
   ) throws {
     try watch.validate()
     let transaction = FileTransaction(store: store, checkpoint: checkpoint)
-    if let declaration {
-      try store.stageDeclaration(declaration, in: transaction)
+    transaction.validateBeforePublication = { [unowned transaction] in
+      try baseline.validate(excludingTargets: transaction.targetPaths)
     }
-    try transaction.replace(store.watchURL, content: nil, data: StateStore.encode(watch))
+    if let declaration {
+      try store.stageDeclaration(declaration, in: transaction, prepared: baseline)
+    }
+    try transaction.replace(
+      store.watchURL, content: nil, data: StateStore.encode(watch),
+      expecting: baseline.evidence(for: store.watchURL))
     try SourceCache(store: store).prune(referencedBy: lock, watch: watch, transaction: transaction)
     try transaction.commit()
   }

@@ -10,22 +10,27 @@ struct CachePublicationTests {
   @Test(
     arguments: ["cache-content", "cache-git"],
     [
-      "stage.0.copy.entry.0.staged.directoryCreated",
-      "stage.0.copy.entry.0.staged/SKILL.md.entryCopied", "entry.0.ready", "publish.0.created",
-      "journal.committed.terminal.renamed",
+      TransactionCheckpoint.copy(
+        0, .init(path: TransactionScratch.staged.name(0), step: .directoryCreated)
+      ).name,
+      TransactionCheckpoint.copy(
+        0, .init(path: TransactionScratch.staged.name(0) + "/SKILL.md", step: .entryCopied)
+      ).name, TransactionCheckpoint.progress(0, .ready).name,
+      TransactionCheckpoint.publication(0, .created).name,
+      TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name,
     ])
   func interruptedTreePublicationRecoversAndRetries(_ kind: String, _ point: String) throws {
     let fixture = try CacheFixture(git: kind == "cache-git")
     try interrupt(fixture, kind: kind, point: point)
-    if point.hasPrefix("stage.") || point.hasPrefix("entry.") {
-      #expect(try FileSnapshot.read(at: fixture.destination) == nil)
-    } else {
+    let committed = point == TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name
+    if committed || point == TransactionCheckpoint.publication(0, .created).name {
       #expect(try FileHash.folderHash(fixture.destination) == fixture.hash)
+    } else {
+      #expect(try FileSnapshot.read(at: fixture.destination) == nil)
     }
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
       try fixture.store.loadResolved()
     }
-    let committed = point.hasPrefix("journal.committed")
     #expect(FileManager.default.fileExists(atPath: fixture.destination.path) == committed)
     #expect(try Data(contentsOf: fixture.store.resolvedURL) == fixture.lockBytes)
     try fixture.publish()
@@ -39,8 +44,10 @@ struct CachePublicationTests {
   }
 
   @Test(arguments: [
-    "stage.0.constructed", "entry.0.ready", "publish.0.created",
-    "journal.committed.terminal.renamed",
+    TransactionCheckpoint.stage(0, .constructed).name,
+    TransactionCheckpoint.progress(0, .ready).name,
+    TransactionCheckpoint.publication(0, .created).name,
+    TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name,
   ])
   func interruptedArtifactBytesAreNeverPublishedPartially(_ point: String) throws {
     let fixture = try CacheFixture()
@@ -57,7 +64,10 @@ struct CachePublicationTests {
     #expect(try Data(contentsOf: fixture.store.resolvedURL) == fixture.lockBytes)
   }
 
-  @Test(arguments: ["stage.0.workCreated", "stage.0.workPrepared"])
+  @Test(arguments: [
+    TransactionCheckpoint.stage(0, .workCreated).name,
+    TransactionCheckpoint.stage(0, .workPrepared).name,
+  ])
   func interruptedExtractionCleansJournalOwnedScratch(_ point: String) throws {
     let fixture = try CacheFixture(git: true)
     try interrupt(fixture, kind: "cache-git", point: point)
@@ -78,13 +88,13 @@ struct CachePublicationTests {
     let fixture = try CacheFixture()
     let beforeState = try FileSnapshot.read(at: fixture.store.resolvedURL)
     let cache = SourceCache(store: fixture.store) { step in
-      if step == "stage.0.constructed" {
+      if step == TransactionCheckpoint.stage(0, .constructed).name {
         let parent = fixture.destination.deletingLastPathComponent()
         for name in try FileManager.default.contentsOfDirectory(atPath: parent.path)
         where name.hasPrefix(".agents-") {
           try Data("tampered".utf8).write(
             to: parent.appendingPathComponent(name).appendingPathComponent(
-              "entry.0.staged/injected"))
+              TransactionScratch.staged.name(0) + "/injected"))
         }
       }
     }
@@ -108,12 +118,13 @@ struct CachePublicationTests {
     let fixture = try CacheFixture()
     let beforeState = try FileSnapshot.read(at: fixture.store.resolvedURL)
     let cache = SourceCache(store: fixture.store) { step in
-      if step == "stage.0.constructed" {
+      if step == TransactionCheckpoint.stage(0, .constructed).name {
         let parent = fixture.store.cacheDirectory.appendingPathComponent("artifacts")
         for name in try FileManager.default.contentsOfDirectory(atPath: parent.path)
         where name.hasPrefix(".agents-") {
           try Data("tampered".utf8).write(
-            to: parent.appendingPathComponent(name).appendingPathComponent("entry.0.staged"))
+            to: parent.appendingPathComponent(name).appendingPathComponent(
+              TransactionScratch.staged.name(0)))
         }
       }
     }
@@ -139,7 +150,7 @@ struct CachePublicationTests {
     let final = try SourceCache(store: fixture.store).artifactURL(digest: fixture.digest)
     var external: FileSnapshot?
     let cache = SourceCache(store: fixture.store) { step in
-      if step == "publish.0.validated" {
+      if step == TransactionCheckpoint.publication(0, .validated).name {
         try (equalBytes ? payload : Data("external cache bytes".utf8)).write(to: final)
         external = try FileSnapshot.read(at: final)
       }
@@ -160,16 +171,10 @@ struct CachePublicationTests {
 
   private func interrupt(_ fixture: CacheFixture, kind: String, point: String) throws {
     let child = try stateTestProcess(root: fixture.root, arguments: [kind, point])
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     let marker = fixture.root.appendingPathComponent("ready")
     try ProcessWait.marker(marker, child: child, root: fixture.root)
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    terminateProcess(child)
   }
 }
 

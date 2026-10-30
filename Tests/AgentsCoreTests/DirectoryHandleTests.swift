@@ -73,7 +73,7 @@ struct DirectoryHandleTests {
       try Data(name.utf8).write(to: child.appendingPathComponent("content"))
     }
     let directory = try DirectoryHandle(at: root)
-    try directory.rename("first", to: "second", swap: true)
+    try directory.move("first", to: directory, named: "second", mode: .exchange)
     #expect(try directory.child("first").read("content") == Data("second".utf8))
     #expect(try directory.child("second").read("content") == Data("first".utf8))
   }
@@ -95,10 +95,12 @@ struct DirectoryHandleTests {
     }
     let staged = try FileSnapshot.read("staged", from: directory)
     let external = try FileSnapshot.read("external", from: directory)
-    #expect(throws: CoreError.self) { try directory.renameExclusive("staged", to: "external") }
+    #expect(throws: CoreError.self) {
+      try directory.move("staged", to: directory, named: "external", mode: .exclusive)
+    }
     #expect(try FileSnapshot.read("staged", from: directory) == staged)
     #expect(try FileSnapshot.read("external", from: directory) == external)
-    try directory.renameExclusive("staged", to: "published")
+    try directory.move("staged", to: directory, named: "published", mode: .exclusive)
     #expect(try FileSnapshot.read("published", from: directory) == staged)
     #expect(try directory.info("staged") == nil)
   }

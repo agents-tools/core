@@ -134,6 +134,7 @@ package struct SourceCache {
   }
 
   /// The marker precedes ref preparation or a state change that can release an existing pin.
+  /// An existing marker is synced again; only its creation is a checkpoint.
   func beginWatchReferenceUpdate() throws {
     guard let directory = try store.openDirectoryIfPresent(),
       try directory.info("cache") != nil,
@@ -141,13 +142,13 @@ package struct SourceCache {
     else { return }
     if try directory.info("watch-refs.pending") == nil {
       try directory.write("watch-refs.pending", data: Data())
+      try checkpoint("watch.references.pending")
     } else {
       guard try directory.read("watch-refs.pending").isEmpty else {
         throw CoreError.invalidState("invalid watch ref cleanup marker")
       }
       try directory.syncFile("watch-refs.pending")
     }
-    try checkpoint("watch.references.pending")
   }
 
   /// Run only after journal recovery or successful commit, while holding the scope lock.

@@ -7,7 +7,7 @@ import Testing
 
 @Suite("Journal publication and ownership")
 struct PublicationTests {
-  @Test(arguments: PublicationMatrix.publications)
+  @Test(.tags(.publicationMatrix), arguments: PublicationMatrix.publications)
   func killedPublicationAtEachStageRecoversPhysicalGeneration(_ fault: PublicationFault) throws {
     try fault.checkSetup()
     let fixture = try PublicationFixture(fault.operation)
@@ -20,22 +20,105 @@ struct PublicationTests {
     try fixture.expectClean()
   }
 
-  @Test(arguments: PublicationMatrix.recoveries)
+  @Test(.tags(.publicationMatrix), arguments: PublicationMatrix.recoveries)
   func recoveryCanBeKilledAtEachStageAndRepeated(_ fault: PublicationFault) throws {
     try fault.checkSetup()
     let fixture = try PublicationFixture(fault.operation)
     terminateProcess(try fixture.pause("publication", at: fault.seed!))
+    let journal = try fixture.lastJournal()
     terminateProcess(try fixture.pause("publication-recover", at: fault.point))
-    try fixture.recover(expected: .unchanged)
-    try fixture.check(committed: false, journal: nil)
+    try fixture.recover(expected: fault.committed ? .committed : .unchanged, afterRecovery: true)
+    try fixture.check(committed: fault.committed, journal: journal)
     #expect(try !FileTransaction.recover(store: fixture.store))
     try fixture.expectClean()
+  }
+
+  /// An observed `restoring` journal may still lack its directory barrier. Resumed undo syncs
+  /// it before it grants directory write access or reverses any rename.
+  @Test func resumedUndoSyncsTheObservedJournalFirst() throws {
+    let fixture = try PublicationFixture(.directoryReplace)
+    terminateProcess(
+      try fixture.pause("publication", at: TransactionCheckpoint.progress(1, .applied).name))
+    terminateProcess(
+      try fixture.pause(
+        "publication-recover",
+        at: TransactionCheckpoint.persisted(.applying, .entry(1, .restoring), .renamed).name))
+    #expect(try fixture.lastJournal()?.entries[1].progress == .restoring)
+    let recovery = try fixture.launch("publication-recover", at: "never")
+    defer { terminateProcess(recovery) }
+    try ProcessWait.exit(recovery, root: fixture.root)
+    let trace = try fixture.trace(recovery)
+    #expect(trace.first == TransactionCheckpoint.journalSynced.name)
+    let grant = try #require(
+      trace.firstIndex(
+        of: TransactionCheckpoint.permissions(1, .undoGrant, .target, .changed).name))
+    let undo = try #require(
+      trace.firstIndex(of: TransactionCheckpoint.restoration(1, .exchanged).name))
+    #expect(grant < undo)
+    #expect(try fixture.result("recovery-result") == "recovered")
+    try fixture.check(committed: false, journal: nil)
+    try fixture.expectClean()
+  }
+
+  /// A preparation that becomes stale before its entry publishes cancels from `ready`:
+  /// nothing is leased or moved, the journal is removed and the scope stays writable.
+  @Test(arguments: [PublicationOperation.directoryDelete, .directoryReplace])
+  func stalePreparationBeforePublicationCancelsWithoutConflict(_ operation: PublicationOperation)
+    throws
+  {
+    let fixture = try PublicationFixture(operation)
+    let child = try fixture.pause(
+      "publication", at: TransactionCheckpoint.progress(0, .applied).name)
+    defer { terminateProcess(child) }
+    let original = fixture.root.appendingPathComponent("moved-original")
+    if operation == .directoryDelete {
+      try Data("external edit".utf8).write(to: fixture.target.appendingPathComponent("file"))
+    } else {
+      try FileManager.default.moveItem(at: fixture.target, to: original)
+      try FileManager.default.createDirectory(
+        at: fixture.target, withIntermediateDirectories: false)
+      try Data("external replacement".utf8).write(
+        to: fixture.target.appendingPathComponent("file"))
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o555], ofItemAtPath: fixture.target.path)
+    }
+    let external = try FileSnapshot.read(at: fixture.target)
+    try fixture.resume(child)
+    let result = try fixture.result("publication-result")
+    #expect(result.hasPrefix("unchanged\n"))
+    #expect(result.contains("preparation is stale; prepare again"))
+    #expect(try FileSnapshot.read(at: fixture.target) == external)
+    if operation == .directoryReplace {
+      #expect(try FileSnapshot.read(at: original) == fixture.beforeTarget)
+    }
+    #expect(try FileSnapshot.read(at: fixture.auxiliary) == fixture.beforeAuxiliary)
+    try fixture.expectClean()
+    try fixture.store.withLock {}
+  }
+
+  @Test func disposalConflictNamesTheChangedContainer() throws {
+    let fixture = try PublicationFixture(.crossParentReplace)
+    let child = try fixture.pause("publication", at: TransactionCheckpoint.phase(.committed).name)
+    defer { terminateProcess(child) }
+    let journal = try #require(try fixture.lastJournal())
+    #expect(journal.containers.map(\.entry) == [0, 1])
+    let foreign = fixture.container(1, journal: journal).appendingPathComponent("foreign")
+    try Data("external".utf8).write(to: foreign)
+    terminateProcess(child)
+    try fixture.expectUnresolved(containing: "terminal disposal evidence changed")
+    let recorded = try #require(try fixture.lastJournal())
+    #expect(recorded.entries[0].conflict == nil)
+    let entry = recorded.entries[1]
+    let root = try #require(entry.path.split(separator: "/").first)
+    #expect(entry.conflict?.locations == [entry.path, root + "/" + recorded.containerName(1)])
+    #expect(try Data(contentsOf: foreign) == Data("external".utf8))
   }
 
   @Test(arguments: ["external", "postimage"])
   func concurrentCreatorKeepsItsBytesAndInode(_ bytes: String) throws {
     let fixture = try PublicationFixture(.fileCreate)
-    let child = try fixture.pause("publication", at: "publish.1.validated")
+    let child = try fixture.pause(
+      "publication", at: TransactionCheckpoint.publication(1, .validated).name)
     defer { terminateProcess(child) }
     try Data(bytes.utf8).write(to: fixture.target)
     let external = try FileSnapshot.read(at: fixture.target)
@@ -49,7 +132,8 @@ struct PublicationTests {
   @Test(arguments: [false, true])
   func exchangedUnexpectedPreimageIsNeverDiscarded(_ inPlace: Bool) throws {
     let fixture = try PublicationFixture(.fileReplace)
-    let child = try fixture.pause("publication", at: "publish.1.validated")
+    let child = try fixture.pause(
+      "publication", at: TransactionCheckpoint.publication(1, .validated).name)
     defer { terminateProcess(child) }
     if !inPlace {
       try FileManager.default.moveItem(
@@ -57,17 +141,19 @@ struct PublicationTests {
     }
     try Data("external preimage".utf8).write(to: fixture.target)
     let external = try FileSnapshot.read(at: fixture.target)
-    try fixture.restop(child, at: "publish.1.exchanged")
+    try fixture.restop(child, at: TransactionCheckpoint.publication(1, .exchanged).name)
     terminateProcess(child)
     let journal = try #require(try fixture.lastJournal())
     let postimage = try #require(journal.entries[1].staged)
     #expect(try FileSnapshot.read(at: fixture.target) == postimage)
     #expect(
-      try FileSnapshot.read(at: fixture.scratch(.staged, entry: 1, journal: journal)) == external)
+      try FileSnapshot.read(at: fixture.scratch(.exchanged, entry: 1, journal: journal)) == external
+    )
     try fixture.expectUnresolved()
     #expect(try FileSnapshot.read(at: fixture.target) == postimage)
     #expect(
-      try FileSnapshot.read(at: fixture.scratch(.staged, entry: 1, journal: journal)) == external)
+      try FileSnapshot.read(at: fixture.scratch(.exchanged, entry: 1, journal: journal)) == external
+    )
     if !inPlace {
       #expect(
         try FileSnapshot.read(at: fixture.root.appendingPathComponent("original"))
@@ -80,21 +166,22 @@ struct PublicationTests {
     throws
   {
     let fixture = try PublicationFixture(operation)
-    let child = try fixture.pause("publication", at: "entry.1.applied")
+    let child = try fixture.pause(
+      "publication", at: TransactionCheckpoint.progress(1, .applied).name)
     defer { terminateProcess(child) }
     let journal = try #require(try fixture.lastJournal())
-    let slot: TransactionScratch = operation == .directoryDelete ? .preimage : .staged
+    let slot: TransactionScratch = operation == .directoryDelete ? .deleted : .exchanged
     let original = fixture.scratch(slot, entry: 1, journal: journal)
     let saved = fixture.root.appendingPathComponent("saved-preimage")
-    let before = try #require(fixture.beforeTarget)
-    if before.needsDirectoryWriteLease {
+    let lease = try #require(fixture.beforeTarget).writeLease
+    if let lease {
       try FileManager.default.setAttributes(
-        [.posixPermissions: before.mode | 0o200], ofItemAtPath: original.path)
+        [.posixPermissions: lease.grantedMode], ofItemAtPath: original.path)
     }
     try FileManager.default.moveItem(at: original, to: saved)
-    if before.needsDirectoryWriteLease {
+    if let lease {
       try FileManager.default.setAttributes(
-        [.posixPermissions: before.mode], ofItemAtPath: saved.path)
+        [.posixPermissions: lease.original], ofItemAtPath: saved.path)
     }
     let published = try FileSnapshot.read(at: fixture.target)
     terminateProcess(child)
@@ -106,11 +193,13 @@ struct PublicationTests {
 
   @Test func missingRollbackQuarantineIsUnresolvedBeforeTerminalIntent() throws {
     let fixture = try PublicationFixture(.fileCreate)
-    terminateProcess(try fixture.pause("publication", at: "publish.1.created"))
-    let recovery = try fixture.pause("publication-recover", at: "entry.1.restored")
+    terminateProcess(
+      try fixture.pause("publication", at: TransactionCheckpoint.publication(1, .created).name))
+    let recovery = try fixture.pause(
+      "publication-recover", at: TransactionCheckpoint.progress(1, .restored).name)
     defer { terminateProcess(recovery) }
     let journal = try #require(try fixture.lastJournal())
-    let quarantined = fixture.scratch(.removed, entry: 1, journal: journal)
+    let quarantined = fixture.scratch(.withdrawn, entry: 1, journal: journal)
     let saved = fixture.root.appendingPathComponent("saved-postimage")
     try FileManager.default.moveItem(at: quarantined, to: saved)
     terminateProcess(recovery)
@@ -122,8 +211,10 @@ struct PublicationTests {
   @Test(arguments: [PublicationOperation.fileCreate, .fileReplace, .directoryDelete])
   func externalRecoveryDestinationPreservesBothVersions(_ operation: PublicationOperation) throws {
     let fixture = try PublicationFixture(operation)
-    terminateProcess(try fixture.pause("publication", at: "entry.1.applied"))
-    let recovery = try fixture.pause("publication-recover", at: "restore.1.validated")
+    terminateProcess(
+      try fixture.pause("publication", at: TransactionCheckpoint.progress(1, .applied).name))
+    let recovery = try fixture.pause(
+      "publication-recover", at: TransactionCheckpoint.restoration(1, .validated).name)
     defer { terminateProcess(recovery) }
     let journal = try #require(try fixture.lastJournal())
     if try FileSnapshot.read(at: fixture.target) != nil {
@@ -136,8 +227,8 @@ struct PublicationTests {
     #expect(try fixture.result("recovery-result").hasPrefix("unresolved:"))
     let location: URL
     switch operation {
-    case .fileCreate: location = fixture.scratch(.removed, entry: 1, journal: journal)
-    case .fileReplace: location = fixture.scratch(.staged, entry: 1, journal: journal)
+    case .fileCreate: location = fixture.scratch(.withdrawn, entry: 1, journal: journal)
+    case .fileReplace: location = fixture.scratch(.exchanged, entry: 1, journal: journal)
     default: location = fixture.target
     }
     #expect(try FileSnapshot.read(at: location) == external)
@@ -148,7 +239,7 @@ struct PublicationTests {
     #expect(try FileSnapshot.read(at: location) == external)
     if operation == .directoryDelete {
       #expect(
-        try FileSnapshot.read(at: fixture.scratch(.preimage, entry: 1, journal: journal))
+        try FileSnapshot.read(at: fixture.scratch(.deleted, entry: 1, journal: journal))
           == fixture.beforeTarget)
     } else {
       #expect(
@@ -159,7 +250,7 @@ struct PublicationTests {
 
   @Test func committedFailureRetainsUserDataAndRecordsConflict() throws {
     let fixture = try PublicationFixture(.fileReplace)
-    let child = try fixture.pause("publication", at: "journal.committed")
+    let child = try fixture.pause("publication", at: TransactionCheckpoint.phase(.committed).name)
     defer { terminateProcess(child) }
     let journal = try #require(try fixture.lastJournal())
     let saved = fixture.root.appendingPathComponent("saved-published")
@@ -171,17 +262,18 @@ struct PublicationTests {
     #expect(try FileSnapshot.read(at: fixture.target) == external)
     #expect(try FileSnapshot.read(at: saved) == journal.entries[1].staged)
     #expect(
-      try FileSnapshot.read(at: fixture.scratch(.staged, entry: 1, journal: journal))
+      try FileSnapshot.read(at: fixture.scratch(.exchanged, entry: 1, journal: journal))
         == fixture.beforeTarget)
   }
 
   @Test(arguments: [false, true])
   func plannedUnidentifiedContainerOnlyAdmitsEmptyRmdir(_ populate: Bool) throws {
     let fixture = try PublicationFixture(.fileCreate)
-    terminateProcess(try fixture.pause("publication", at: "container.0.created"))
+    terminateProcess(
+      try fixture.pause("publication", at: TransactionCheckpoint.containerCreated(0).name))
     let journal = try #require(try fixture.lastJournal())
     #expect(journal.containers[0].identity == nil)
-    let container = fixture.root.appendingPathComponent(journal.containerName(0))
+    let container = fixture.container(0, journal: journal)
     if populate {
       let file = container.appendingPathComponent("keep")
       try Data("unidentified bytes".utf8).write(to: file)
@@ -197,9 +289,10 @@ struct PublicationTests {
 
   @Test func sealedPrivateObjectChangesAreUnresolved() throws {
     let fixture = try PublicationFixture(.fileReplace)
-    terminateProcess(try fixture.pause("publication", at: "entry.1.ready"))
+    terminateProcess(
+      try fixture.pause("publication", at: TransactionCheckpoint.progress(1, .ready).name))
     let journal = try #require(try fixture.lastJournal())
-    let file = fixture.scratch(.staged, entry: 1, journal: journal)
+    let file = fixture.scratch(.exchanged, entry: 1, journal: journal)
     try Data("changed after sealing".utf8).write(to: file)
     let changed = try FileSnapshot.read(at: file)
     try fixture.expectUnresolved()
@@ -209,7 +302,9 @@ struct PublicationTests {
 
   @Test func directoryPermissionChangesOutsideIntentRemainExternal() throws {
     let fixture = try PublicationFixture(.directoryReplace)
-    let child = try fixture.pause("publication", at: "permissions.1.publish.grant.target.synced")
+    let child = try fixture.pause(
+      "publication",
+      at: TransactionCheckpoint.permissions(1, .publicationGrant, .target, .synced).name)
     defer { terminateProcess(child) }
     try FileManager.default.setAttributes(
       [.posixPermissions: 0o770], ofItemAtPath: fixture.target.path)
@@ -253,7 +348,8 @@ struct PublicationTests {
   @Test(arguments: ["staged", "parent", "container"])
   func missingJournalEvidenceReachesSemanticValidation(_ field: String) throws {
     let fixture = try PublicationFixture(.fileReplace)
-    terminateProcess(try fixture.pause("publication", at: "entry.1.ready"))
+    terminateProcess(
+      try fixture.pause("publication", at: TransactionCheckpoint.progress(1, .ready).name))
     var journal = try #require(try fixture.lastJournal())
     switch field {
     case "staged": journal.entries[1].staged = nil
@@ -321,7 +417,8 @@ struct PublicationTests {
   @Test(arguments: ["identity", "disposal"])
   func missingContainerEvidenceCannotAuthorizeTerminalDeletion(_ field: String) throws {
     let fixture = try PublicationFixture(.fileReplace)
-    terminateProcess(try fixture.pause("publication", at: "journal.committed"))
+    terminateProcess(
+      try fixture.pause("publication", at: TransactionCheckpoint.phase(.committed).name))
     var journal = try #require(try fixture.lastJournal())
     if field == "identity" {
       journal.containers[0].identity = nil
@@ -358,12 +455,34 @@ struct PublicationTests {
 
 enum PublicationOperation: String, CaseIterable, Sendable {
   case fileReplace, directoryReplace, directoryDelete, symlinkCreate, fileCreate
+  /// The target is in another parent than the auxiliary file, so two containers are used.
+  case crossParentReplace
+
   var renamePoint: String {
     switch self {
-    case .directoryDelete: "publish.1.quarantined"
-    case .fileReplace, .directoryReplace: "publish.1.exchanged"
-    default: "publish.1.created"
+    case .directoryDelete: TransactionCheckpoint.publication(1, .quarantined).name
+    case .fileReplace, .directoryReplace, .crossParentReplace:
+      TransactionCheckpoint.publication(1, .exchanged).name
+    case .symlinkCreate, .fileCreate: TransactionCheckpoint.publication(1, .created).name
     }
+  }
+
+  /// Recovery starts from construction, sealed staging, an interrupted rename or directory
+  /// grant, an applied entry, the committed marker and terminal cleanup.
+  var recoverySeeds: [(point: String, committed: Bool)] {
+    var seeds = [
+      (TransactionCheckpoint.stage(1, .constructed).name, false),
+      (TransactionCheckpoint.progress(1, .ready).name, false),
+      (renamePoint, false),
+      (TransactionCheckpoint.progress(1, .applied).name, false),
+      (TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name, true),
+      (TransactionCheckpoint.discardIntent.name, true),
+    ]
+    if self == .directoryReplace || self == .directoryDelete {
+      seeds.append(
+        (TransactionCheckpoint.permissions(1, .publicationGrant, .target, .changed).name, false))
+    }
+    return seeds
   }
 }
 
@@ -383,21 +502,61 @@ struct PublicationFault: Sendable, CustomTestStringConvertible {
   }
 }
 
+extension Tag {
+  /// Kill-point matrices recorded from real traces.
+  @Tag static var publicationMatrix: Self
+}
+
+/// By default each operation is killed at its representative points and recovery from every
+/// seed at its durable recovery steps. `AGENTS_PUBLICATION_MATRIX=full` kills at every
+/// recorded point.
 private enum PublicationMatrix {
+  static let complete = ProcessInfo.processInfo.environment["AGENTS_PUBLICATION_MATRIX"] == "full"
   static let publications = record(recovery: false)
   static let recoveries = record(recovery: true)
 
+  /// Every recovery seed, durable intent and the removal of the first container.
+  private static func representativePublication(_ operation: PublicationOperation) -> Set<String> {
+    Set(
+      operation.recoverySeeds.map(\.point) + [
+        TransactionCheckpoint.progress(1, .publishing).name,
+        TransactionCheckpoint.containerRemoved(0).name,
+      ])
+  }
+
+  /// The observed-journal barrier, each durable recovery write, each reverse rename or undo
+  /// grant, and disposal.
+  private static let representativeRecovery: Set<String> = {
+    var points: [TransactionCheckpoint] = [.journalSynced, .containerRemoved(0), .journalRemoved]
+    for phase in [TransactionJournal.Phase.applying, .committed, .rolledBack] {
+      points += [.persisted(phase, .terminal, .renamed), .persisted(phase, .discard, .renamed)]
+      for index in 0...1 {
+        for progress in [TransactionJournal.Progress.restoring, .restored, .cancelled] {
+          points.append(.persisted(phase, .entry(index, progress), .renamed))
+        }
+      }
+    }
+    for index in 0...1 {
+      points += [
+        .restoration(index, .exchanged), .restoration(index, .returned),
+        .restoration(index, .creationQuarantined),
+        .permissions(index, .undoGrant, .target, .changed),
+      ]
+    }
+    return Set(points.map(\.name))
+  }()
+
   private static func record(recovery: Bool) -> [PublicationFault] {
     var cases: [PublicationFault] = []
+    let commitMarker = TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name
     for operation in PublicationOperation.allCases {
-      var seeds: [String?] = recovery ? [operation.renamePoint, "entry.1.applied"] : [nil]
-      if recovery, operation == .directoryReplace || operation == .directoryDelete {
-        seeds.append("permissions.1.publish.grant.target.changed")
-      }
+      let selected = recovery ? representativeRecovery : representativePublication(operation)
+      let seeds: [(point: String, committed: Bool)?] =
+        recovery ? operation.recoverySeeds.map { $0 } : [nil]
       for seed in seeds {
         do {
           let fixture = try PublicationFixture(operation)
-          if let seed { terminateProcess(try fixture.pause("publication", at: seed)) }
+          if let seed { terminateProcess(try fixture.pause("publication", at: seed.point)) }
           let command = recovery ? "publication-recover" : "publication"
           let child = try fixture.launch(command, at: "never")
           defer { terminateProcess(child) }
@@ -405,25 +564,26 @@ private enum PublicationMatrix {
           guard child.terminationStatus == 0 else {
             throw CoreError.invalidState("checkpoint recorder exited \(child.terminationStatus)")
           }
-          let trace = try String(
-            contentsOf: fixture.root.appendingPathComponent(
-              "checkpoint-\(child.processIdentifier).log"), encoding: .utf8
-          )
-          .split(separator: "\n").map(String.init)
+          let trace = try fixture.trace(child)
           guard !trace.isEmpty, Set(trace).count == trace.count else {
             throw CoreError.invalidState("checkpoint names are empty or repeated")
           }
-          var committed = false
+          if !recovery, !selected.isSubset(of: trace) {
+            throw CoreError.invalidState(
+              "representative points were not recorded: \(selected.subtracting(trace).sorted())")
+          }
+          var committed = seed?.committed ?? false
           for point in trace {
-            if point == "journal.committed.terminal.renamed" { committed = true }
+            if point == commitMarker { committed = true }
+            guard complete || selected.contains(point) else { continue }
             cases.append(
-              PublicationFault(operation: operation, point: point, committed: committed, seed: seed)
-            )
+              PublicationFault(
+                operation: operation, point: point, committed: committed, seed: seed?.point))
           }
         } catch {
           cases.append(
             PublicationFault(
-              operation: operation, point: "recording", seed: seed,
+              operation: operation, point: "recording", seed: seed?.point,
               setupFailure: String(describing: error)))
         }
       }
@@ -450,7 +610,10 @@ final class PublicationFixture {
       environment: RuntimeEnvironment(
         projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:]
       ))
-    target = root.appendingPathComponent("AGENTS.md")
+    target =
+      operation == .crossParentReplace
+      ? root.appendingPathComponent(".agents/skills/target")
+      : root.appendingPathComponent("AGENTS.md")
     auxiliary = root.appendingPathComponent("GEMINI.md")
     do {
       try store.save(declaration: Declaration(), resolved: ResolvedState())
@@ -461,7 +624,13 @@ final class PublicationFixture {
       try Data("tree postimage".utf8).write(to: source.appendingPathComponent("nested/file"))
       try FileManager.default.createSymbolicLink(
         atPath: source.appendingPathComponent("link").path, withDestinationPath: "nested/file")
-      if operation == .fileReplace { try Data("preimage".utf8).write(to: target) }
+      if operation == .crossParentReplace {
+        try FileManager.default.createDirectory(
+          at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+      }
+      if operation == .fileReplace || operation == .crossParentReplace {
+        try Data("preimage".utf8).write(to: target)
+      }
       if operation == .directoryReplace || operation == .directoryDelete {
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try Data("tree preimage".utf8).write(to: target.appendingPathComponent("file"))
@@ -497,6 +666,7 @@ final class PublicationFixture {
     let child = try launch(command, at: point)
     do {
       try ProcessWait.marker(marker, child: child, root: root)
+      try ProcessWait.stopped(child, root: root)
       return child
     } catch {
       terminateProcess(child)
@@ -504,6 +674,7 @@ final class PublicationFixture {
     }
   }
 
+  /// The child was confirmed stopped by `pause` or `restop`, so SIGCONT cannot be lost.
   func resume(_ child: Process, marker: String = "ready") throws {
     try? FileManager.default.removeItem(at: root.appendingPathComponent(marker))
     kill(child.processIdentifier, SIGCONT)
@@ -517,6 +688,14 @@ final class PublicationFixture {
     try Data(point.utf8).write(to: root.appendingPathComponent("stop-at"))
     kill(child.processIdentifier, SIGCONT)
     try ProcessWait.marker(marker, child: child, root: root)
+    try ProcessWait.stopped(child, root: root)
+  }
+
+  func trace(_ child: Process) throws -> [String] {
+    try String(
+      contentsOf: root.appendingPathComponent("checkpoint-\(child.processIdentifier).log"),
+      encoding: .utf8
+    ).split(separator: "\n").map(String.init)
   }
 
   func result(_ name: String) throws -> String {
@@ -536,12 +715,18 @@ final class PublicationFixture {
     return nil
   }
 
+  func container(_ index: Int, journal: TransactionJournal) -> URL {
+    (journal.containers[index].entry == 0 ? auxiliary : target).deletingLastPathComponent()
+      .appendingPathComponent(journal.containerName(index))
+  }
+
   func scratch(_ slot: TransactionScratch, entry index: Int, journal: TransactionJournal) -> URL {
-    root.appendingPathComponent(journal.containerName(journal.entries[index].container))
+    container(journal.entries[index].container, journal: journal)
       .appendingPathComponent(slot.name(index))
   }
 
-  func recover(expected: TransactionOutcome.Disposition) throws {
+  /// After an interrupted recovery, a journal already removed has no outcome left to report.
+  func recover(expected: TransactionOutcome.Disposition, afterRecovery: Bool = false) throws {
     let outcome = TransactionOutcome()
     outcome.journalID = try lastJournal()?.id
     let directory = try #require(try store.openDirectoryIfPresent())
@@ -554,7 +739,9 @@ final class PublicationFixture {
       #expect(outcome.disposition == expected)
     } else {
       try store.withLock(outcome: outcome, {})
-      if expected == .committed { #expect(try result("stopped-outcome") == "committed") }
+      if expected == .committed, !afterRecovery {
+        #expect(try result("stopped-outcome") == "committed")
+      }
     }
   }
 
@@ -594,10 +781,12 @@ final class PublicationFixture {
   func expectClean() throws {
     #expect(try store.openDirectoryIfPresent()?.info("transaction.json") == nil)
     #expect(try store.openDirectoryIfPresent()?.info("transaction.new") == nil)
-    #expect(
-      try !FileManager.default.contentsOfDirectory(atPath: root.path).contains {
-        $0.hasPrefix(".agents-")
-      })
+    for parent in Set([auxiliary, target].map { $0.deletingLastPathComponent().path }) {
+      #expect(
+        try !FileManager.default.contentsOfDirectory(atPath: parent).contains {
+          $0.hasPrefix(".agents-")
+        })
+    }
   }
 }
 

@@ -15,6 +15,43 @@ package enum ProcessWait {
     child.waitUntilExit()
   }
 
+  /// A checkpoint writes its marker before raising SIGSTOP. Signals sent before the stop takes
+  /// effect can be lost, so a paused child is resumed or killed only after this returns.
+  package static func stopped(_ child: Process, root: URL, timeout: TimeInterval = 120) throws {
+    try until(child, root: root, timeout: timeout, description: "process stop") {
+      isStopped(child.processIdentifier)
+    }
+  }
+
+  /// `WNOWAIT` leaves the stop reportable; Foundation reaps only exits.
+  private static func isStopped(_ processIdentifier: Int32) -> Bool {
+    var info = siginfo_t()
+    guard waitid(P_PID, id_t(processIdentifier), &info, WSTOPPED | WNOHANG | WNOWAIT) == 0 else {
+      return false
+    }
+    return info.si_signo == SIGCHLD && info.si_code == Int32(CLD_STOPPED)
+  }
+
+  /// SIGKILL can be lost while a child is stopping itself, so it is resent until the exit is
+  /// observed. The deadline bounds the whole termination.
+  package static func terminate(
+    _ child: Process, timeout: TimeInterval = 30, retry: TimeInterval = 0.2,
+    send: (Int32) -> Void = { _ = kill($0, SIGKILL) }
+  ) throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while child.isRunning {
+      guard Date() < deadline else {
+        throw WaitFailure(
+          message:
+            "Process \(child.processIdentifier) survived SIGKILL for \(timeout) seconds")
+      }
+      send(child.processIdentifier)
+      let resend = min(deadline, Date().addingTimeInterval(retry))
+      while child.isRunning, Date() < resend { Thread.sleep(forTimeInterval: 0.005) }
+    }
+    child.waitUntilExit()
+  }
+
   package static func condition(_ child: Process, root: URL, description: String, ready: () -> Bool)
     throws
   {

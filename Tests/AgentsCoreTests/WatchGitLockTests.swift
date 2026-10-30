@@ -46,7 +46,7 @@ struct WatchGitLockTests {
           CPlatform.kill(pid, SIGKILL)
         }
       }
-      terminate(writer)
+      terminateProcess(writer)
     }
     try waitFor(ready, process: writer)
     var locks = [
@@ -56,20 +56,20 @@ struct WatchGitLockTests {
     if packed { locks.append(fixture.mirror.appendingPathComponent("packed-refs.new")) }
     for lock in locks { try #require(FileManager.default.fileExists(atPath: lock.path)) }
     let reader = try stateTestProcess(root: fixture.root, arguments: ["read", ""])
-    defer { terminate(reader) }
+    defer { terminateProcess(reader) }
     try waitFor(fixture.root.appendingPathComponent("reader-started"), process: reader)
     Thread.sleep(forTimeInterval: 0.05)
     #expect(
       !FileManager.default.fileExists(
         atPath: fixture.root.appendingPathComponent("reader-finished").path))
     for lock in locks { #expect(FileManager.default.fileExists(atPath: lock.path)) }
-    terminate(reader)
+    terminateProcess(reader)
     CPlatform.kill(writer.processIdentifier, SIGSTOP)
     let pids = try String(contentsOf: ready, encoding: .utf8)
       .split(whereSeparator: \.isWhitespace).compactMap { Int32($0) }
     try #require(pids.count == 2)
     for pid in pids { CPlatform.kill(pid, SIGKILL) }
-    terminate(writer)
+    terminateProcess(writer)
     try FileManager.default.removeItem(at: ready)
     try FileManager.default.removeItem(at: hook)
     for lock in locks { #expect(FileManager.default.fileExists(atPath: lock.path)) }
@@ -153,12 +153,5 @@ struct WatchGitLockTests {
 
   private func waitFor(_ marker: URL, process: Process) throws {
     try ProcessWait.marker(marker, child: process, root: marker.deletingLastPathComponent())
-  }
-
-  private func terminate(_ process: Process) {
-    if process.isRunning {
-      CPlatform.kill(process.processIdentifier, SIGKILL)
-      process.waitUntilExit()
-    }
   }
 }

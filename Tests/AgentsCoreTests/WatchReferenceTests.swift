@@ -1,6 +1,7 @@
-import AgentsCore
 import Foundation
 import Testing
+
+@testable import AgentsCore
 
 @Suite("Watch Git ref retention")
 struct WatchReferenceTests {
@@ -48,8 +49,9 @@ struct WatchReferenceTests {
     try fixture.rewrite("replacement")
     let replacement = try fixture.head()
     let writer = try stateTestProcess(
-      root: fixture.root, arguments: ["watch-seen", "publish.0.exchanged"])
-    try fixture.kill(writer, at: "publish.0.exchanged")
+      root: fixture.root,
+      arguments: ["watch-seen", TransactionCheckpoint.publication(0, .exchanged).name])
+    try fixture.kill(writer, at: TransactionCheckpoint.publication(0, .exchanged).name)
     #expect(try fixture.watchRefs() == [first, replacement])
     let recovery = try stateTestProcess(
       root: fixture.root, arguments: ["watch-recover", "watch.references.deleted"])

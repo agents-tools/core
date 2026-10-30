@@ -1,9 +1,9 @@
-import AgentsCore
 import AgentsInstructions
 import AgentsSkills
 import Foundation
 import Testing
 
+@testable import AgentsCore
 @testable import AgentsUpdates
 
 @Suite("Combined updates")
@@ -180,7 +180,9 @@ struct CombinedUpdateTests {
         environment: fixture.environment,
         checkpoint: { step in
           // Pruning is queued after both kinds and the merged state; rollback restores it too.
-          if step == "journal.committed.terminal.renamed" { return }
+          if step == TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name {
+            return
+          }
           if step.hasPrefix("entry."), step.hasSuffix(".applied"),
             !FileManager.default.fileExists(atPath: unused.path)
           {
@@ -335,7 +337,7 @@ struct CombinedUpdateTests {
       try UpdateOperations.withPreparedUpdate(
         environment: fixture.environment,
         checkpoint: { step in
-          if step == "stage.0.constructed" {
+          if step == TransactionCheckpoint.stage(0, .constructed).name {
             let file = cache.appendingPathComponent("skills/demo/run.sh")
             if dimension == "bytes" {
               try fixture.write("corrupt", to: file)
@@ -363,7 +365,7 @@ struct CombinedUpdateTests {
     var journals = 0
     let receipt = try UpdateOperations.withPreparedUpdate(
       scope: scope, environment: fixture.environment,
-      checkpoint: { if $0 == "journal.preparing" { journals += 1 } },
+      checkpoint: { if $0 == TransactionCheckpoint.phase(.preparing).name { journals += 1 } },
       { update in
         #expect(update.report == preview)
         #expect(try fixture.snapshot() == before)

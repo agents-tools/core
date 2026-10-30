@@ -7,7 +7,10 @@ import Testing
 
 @Suite("Transaction metadata")
 struct TransactionMetadataTests {
-  @Test(arguments: ["complete", "entry.0.publishing", "entry.1.applied", "journal.committed"])
+  @Test(arguments: [
+    "complete", TransactionCheckpoint.progress(0, .publishing).name,
+    TransactionCheckpoint.progress(1, .applied).name, TransactionCheckpoint.phase(.committed).name,
+  ])
   func dataReplacementPreservesPermissionsACLsAndExtendedAttributes(_ point: String) throws {
     let fixture = try TransactionFixture()
     let target = fixture.root.appendingPathComponent("AGENTS.md")
@@ -33,7 +36,7 @@ struct TransactionMetadataTests {
         #expect(throws: CoreError.invalidState("injected failure")) { try transaction.commit() }
       }
     }
-    let committed = point == "complete" || point == "journal.committed"
+    let committed = point == "complete" || point == TransactionCheckpoint.phase(.committed).name
     #expect(try files.map(metadata) == before)
     #expect(
       try files.map { try Data(contentsOf: $0) }
@@ -48,7 +51,10 @@ struct TransactionMetadataTests {
     try expectRecoveryMaterialRemoved(fixture)
   }
 
-  @Test(arguments: ["complete", "journal.committed", "cleanup.0.removed"])
+  @Test(arguments: [
+    "complete", TransactionCheckpoint.phase(.committed).name,
+    TransactionCheckpoint.containerRemoved(0).name,
+  ])
   func committedCleanupDiscardsReadOnlyDirectories(_ point: String) throws {
     let fixture = try TransactionFixture()
     defer { makeDirectoriesWritable(fixture.root) }
@@ -78,7 +84,9 @@ struct TransactionMetadataTests {
   }
 
   @Test(arguments: [
-    "restore.3.returned", "restore.0.exchanged", "journal.rolledBack.terminal.renamed",
+    TransactionCheckpoint.restoration(3, .returned).name,
+    TransactionCheckpoint.restoration(0, .exchanged).name,
+    TransactionCheckpoint.persisted(.rolledBack, .terminal, .renamed).name,
   ])
   func interruptedRollbackPreservesReadOnlyMetadata(_ point: String) throws {
     let fixture = try TransactionFixture()
@@ -92,7 +100,7 @@ struct TransactionMetadataTests {
     let declaration = try Data(contentsOf: fixture.store.declarationURL)
     let resolved = try Data(contentsOf: fixture.store.resolvedURL)
 
-    try interrupt(fixture, command: "crash", at: "entry.4.applied")
+    try interrupt(fixture, command: "crash", at: TransactionCheckpoint.progress(4, .applied).name)
     try interrupt(fixture, command: "recover", at: point)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
       try fixture.store.loadResolved()
@@ -106,7 +114,11 @@ struct TransactionMetadataTests {
     try expectRecoveryMaterialRemoved(fixture)
   }
 
-  @Test(arguments: ["entry.0.publishing", "entry.0.applied", "entry.2.applied"])
+  @Test(arguments: [
+    TransactionCheckpoint.progress(0, .publishing).name,
+    TransactionCheckpoint.progress(0, .applied).name,
+    TransactionCheckpoint.progress(2, .applied).name,
+  ])
   func rollbackPreservesPermissionsACLsAndExtendedAttributes(_ point: String) throws {
     let fixture = try TransactionFixture()
     let target = fixture.root.appendingPathComponent(".agents/skills/target")
@@ -148,17 +160,11 @@ struct TransactionMetadataTests {
 
   private func interrupt(_ fixture: TransactionFixture, command: String, at point: String) throws {
     let child = try stateTestProcess(root: fixture.root, arguments: [command, point])
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     let marker = fixture.root.appendingPathComponent(
       command == "recover" ? "recovery-ready" : "ready")
     try ProcessWait.marker(marker, child: child, root: fixture.root)
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    terminateProcess(child)
     #expect(child.terminationReason == .uncaughtSignal)
   }
 

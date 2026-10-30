@@ -306,6 +306,16 @@ swift format lint --strict --configuration .swift-format \
   --recursive Package.swift Sources Tests
 ```
 
+Publication kill-point tests, tagged `publicationMatrix`, kill each operation at
+representative points and recovery from every seed at its durable steps. When
+changing the transaction protocol, also run every recorded point:
+
+```bash
+env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME \
+  -u XDG_STATE_HOME -u XDG_CACHE_HOME AGENTS_PUBLICATION_MATRIX=full \
+  swift test --filter PublicationTests
+```
+
 The required checks are `policy / policy` and `validate / result`, provided by
 full-SHA-pinned reusable workflows from `agents-tools/github-workflows`.
 Source policy validates PR titles, new commit messages and added lines.

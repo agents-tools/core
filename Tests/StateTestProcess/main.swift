@@ -18,21 +18,19 @@ let store = StateStore(
     homeDirectory: root.appendingPathComponent("home"),
     environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path]))
 let checkpointState = Mutex(
-  (requested: arguments.count > 3 ? arguments[3] : "", counts: [String: Int]()))
+  (requested: arguments.count > 3 ? arguments[3] : "", seen: Set<String>()))
 let traceURL = root.appendingPathComponent(
   "checkpoint-\(ProcessInfo.processInfo.processIdentifier).log")
 FileManager.default.createFile(atPath: traceURL.path, contents: nil)
 let trace = try FileHandle(forWritingTo: traceURL)
-func stop(_ step: String, marker: String = "ready") throws {
-  let normalized = step.replacingOccurrences(of: root.lastPathComponent, with: "$ROOT")
-  let (point, shouldStop) = checkpointState.withLock { state in
-    state.counts[normalized, default: 0] += 1
-    let count = state.counts[normalized]!
-    let point = count == 1 ? normalized : normalized + "#\(count)"
-    return (point, point == state.requested)
+/// A repeated name would make a kill point ambiguous, so the recorder fails the run.
+func stop(_ point: String, marker: String = "ready") throws {
+  let (repeated, shouldStop) = checkpointState.withLock { state in
+    (!state.seen.insert(point).inserted, point == state.requested)
   }
   try trace.write(contentsOf: Data((point + "\n").utf8))
-  if step.hasPrefix("journal."), step.hasSuffix(".renamed"),
+  if repeated { fatalError("repeated checkpoint: \(point)") }
+  if point.hasPrefix("journal."), point.hasSuffix(".renamed"),
     let bytes = try? Data(contentsOf: store.directory.appendingPathComponent("transaction.json"))
   {
     try bytes.write(to: root.appendingPathComponent("last-journal"))
@@ -195,7 +193,10 @@ if arguments[2] == "git-environment" {
       try transaction.replace(
         root.appendingPathComponent("GEMINI.md"), content: nil,
         data: Data("auxiliary postimage".utf8))
-      let target = root.appendingPathComponent("AGENTS.md")
+      let target =
+        arguments[4] == "crossParentReplace"
+        ? root.appendingPathComponent(".agents/skills/target")
+        : root.appendingPathComponent("AGENTS.md")
       switch arguments[4] {
       case "directoryReplace":
         let source = root.appendingPathComponent("new")
@@ -259,6 +260,12 @@ if arguments[2] == "git-environment" {
   default: _ = try store.loadResolved()
   }
   try Data().write(to: root.appendingPathComponent("contender-finished"))
+} else if arguments[2] == "pause" {
+  try stop("paused")
+} else if arguments[2] == "unstopped-marker" {
+  // The marker exists but the process never stops, as when it is killed before its self-stop.
+  try Data().write(to: root.appendingPathComponent("ready"), options: .atomic)
+  while true { sleep(1) }
 } else if arguments[2] == "create-scope" {
   try FileLock.withLock(
     at: store.directory.appendingPathComponent(".agents.lock"), checkpoint: { try stop($0) },

@@ -50,9 +50,10 @@ struct TransactionPaths {
     throw CoreError.unsafePath("transaction destination is outside managed paths")
   }
 
-  func root(_ key: String, create: Bool = false, checkpoint: (String) throws -> Void = { _ in })
-    throws -> DirectoryHandle
-  {
+  func root(
+    _ key: String, create: Bool = false,
+    checkpoint: (DirectoryHandle.AncestryStep) throws -> Void = { _ in }
+  ) throws -> DirectoryHandle {
     try DirectoryHandle(at: rootURL(key), create: create, checkpoint: checkpoint)
   }
 
@@ -135,19 +136,22 @@ struct TransactionPaths {
     return (key, descendants)
   }
 
+  /// With `create`, each descendant's parent is synced; the checkpoint reports the level
+  /// below the root of each descendant this call creates.
   func parent(
     for path: String, roots: [String: DirectoryHandle], create: Bool = false,
-    checkpoint: (String) throws -> Void = { _ in }
+    checkpoint: (Int) throws -> Void = { _ in }
   ) throws -> DirectoryHandle {
     let components = try components(path)
     guard var directory = roots[components.root] else {
       throw CoreError.invalidState("missing transaction root")
     }
-    for name in components.descendants.dropLast() {
+    for (index, name) in components.descendants.dropLast().enumerated() {
       if create {
-        if try directory.info(name) == nil { try directory.makeDirectory(name) }
+        let created = try directory.info(name) == nil
+        if created { try directory.makeDirectory(name) }
         try directory.sync()
-        try checkpoint("directory.synced.\(name)")
+        if created { try checkpoint(index + 1) }
       }
       directory = try directory.child(name)
     }
