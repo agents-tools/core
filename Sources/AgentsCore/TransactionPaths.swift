@@ -136,22 +136,26 @@ struct TransactionPaths {
     return (key, descendants)
   }
 
-  /// With `create`, each descendant's parent is synced; the checkpoint reports the level
-  /// below the root of each descendant this call creates.
+  /// With `create`, each descendant's parent is synced. Checkpoints mark only descendants
+  /// this call creates; depth counts levels above the returned parent, as for roots.
   func parent(
     for path: String, roots: [String: DirectoryHandle], create: Bool = false,
-    checkpoint: (Int) throws -> Void = { _ in }
+    checkpoint: (DirectoryHandle.AncestryStep) throws -> Void = { _ in }
   ) throws -> DirectoryHandle {
     let components = try components(path)
     guard var directory = roots[components.root] else {
       throw CoreError.invalidState("missing transaction root")
     }
-    for (index, name) in components.descendants.dropLast().enumerated() {
+    let ancestry = components.descendants.dropLast()
+    for (index, name) in ancestry.enumerated() {
       if create {
+        let depth = ancestry.count - 1 - index
         let created = try directory.info(name) == nil
-        if created { try directory.makeDirectory(name) }
+        if created {
+          try directory.makeDirectory(name) { try checkpoint(.created(depth: depth)) }
+        }
         try directory.sync()
-        if created { try checkpoint(index + 1) }
+        if created { try checkpoint(.synced(depth: depth)) }
       }
       directory = try directory.child(name)
     }

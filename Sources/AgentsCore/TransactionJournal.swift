@@ -3,6 +3,9 @@ import Foundation
 /// The version is independent of declaration, resolved and watch formats.
 struct TransactionJournal: Codable {
   static let currentVersion = 1
+  static let fileName = "transaction.json"
+  /// The next journal generation before it replaces `fileName`.
+  static let incompleteFileName = "transaction.new"
   var version = currentVersion
   var id: UUID
   var scope: String
@@ -11,7 +14,7 @@ struct TransactionJournal: Codable {
   var entries: [Entry]
   var containers: [Container]
   /// Only this durable intent permits absent or partially removed disposal objects.
-  var discarding = false
+  var disposing = false
 
   enum Phase: String, Codable { case preparing, applying, committed, rolledBack }
   enum Action: String, Codable { case install, delete }
@@ -26,7 +29,7 @@ struct TransactionJournal: Codable {
     case applied
     /// Undo and directory-write intent are durable; installed or reverted objects may be present.
     case restoring
-    /// Undo parents and original modes are synced; reverted objects remain until discard intent.
+    /// Undo parents and original modes are synced; reverted objects remain until disposal intent.
     case restored
     /// Original modes are restored; publication did not consume private staging.
     case cancelled
@@ -60,14 +63,29 @@ struct TransactionJournal: Codable {
     var name: String
     /// Persisted before inserting any object. Without it only an empty rmdir is allowed.
     var identity: FileObjectIdentity?
-    /// Present only for terminal disposal containing user data. Missing entries are admitted
-    /// only after discarding is durable; private unfinished construction needs no tree evidence.
-    var cleanup: FileSnapshot?
+    /// Terminal disposal evidence, present only for a container holding user data. Missing
+    /// entries are admitted only after `disposing` is durable; private unfinished construction
+    /// needs no tree evidence.
+    var disposal: FileSnapshot?
   }
 
   static func containerName(id: UUID, index: Int) -> String { ".agents-\(id.uuidString)-\(index)" }
 
   func containerName(_ index: Int) -> String { containers[index].name }
+
+  /// The scope-relative location of an entry's container, or nil when the record does not name
+  /// this journal's container for that index.
+  func containerLocation(of entry: Entry) -> String? {
+    guard containers.indices.contains(entry.container),
+      containers[entry.container].name == Self.containerName(id: id, index: entry.container)
+    else { return nil }
+    return entry.path.split(separator: "/").dropLast().joined(separator: "/") + "/"
+      + containers[entry.container].name
+  }
+
+  static func isPresent(in directory: DirectoryHandle) throws -> Bool {
+    try directory.info(fileName) != nil || directory.info(incompleteFileName) != nil
+  }
 
   /// Without an identified container or sealed operation, the journal owns no object.
   var isUnstarted: Bool {
@@ -76,16 +94,17 @@ struct TransactionJournal: Codable {
   }
 }
 
-/// Container entry names. Each recovery slot holds either private staging or user data.
-enum TransactionScratch: String {
-  /// Private sealed staging for a creation; publication moves it out of the container.
+/// Entry names inside a private container. At each progress a recovery slot holds either
+/// private staging or user data, as each case states.
+enum TransactionSlot: String {
+  /// Private staging for a creation through `ready`; publication moves it out of the container.
   case staged
-  /// Private sealed staging for an exchange until publication; afterwards the displaced user
-  /// preimage, and after undo the withdrawn published object.
+  /// Private staging for an exchange through `ready`; user data from publication on: the
+  /// displaced preimage, and after undo the published object exchanged back out.
   case exchanged
-  /// The user object moved aside by a deletion.
+  /// User data: the object a deletion moved aside, from publication until undo or disposal.
   case deleted
-  /// The published creation moved aside by undo; it is user data.
+  /// User data: the published creation that undo moved aside.
   case withdrawn
   /// Private extraction work for prepared content.
   case work
@@ -97,6 +116,18 @@ enum TransactionScratch: String {
   /// The slot that holds an install's sealed staging.
   static func staging(for entry: TransactionJournal.Entry) -> Self {
     entry.preimage == nil ? .staged : .exchanged
+  }
+}
+
+enum TransactionObjectLocation: Equatable {
+  case target
+  case slot(TransactionSlot)
+
+  var name: String {
+    switch self {
+    case .target: "target"
+    case .slot(let slot): slot.rawValue
+    }
   }
 }
 
@@ -129,7 +160,7 @@ struct TransactionLayout {
   }
   let kind: Kind
   let target: Target
-  let objects: [TransactionScratch: FileSnapshot]
+  let objects: [TransactionSlot: FileSnapshot]
 
   static func expected(_ entry: TransactionJournal.Entry) -> [Self] {
     let prepared: Self
@@ -159,6 +190,8 @@ struct TransactionLayout {
     case .queued: return [Self(kind: .construction, target: .any, objects: [:])]
     case .ready, .cancelled: return [prepared]
     case .publishing:
+      // A deletion has no slot object before its rename, so only the target can tell a
+      // prepared deletion from an installed one.
       if entry.action == .delete, let original = entry.preimage {
         return [Self(kind: .prepared, target: .object(original), objects: [:]), installed]
       }
@@ -180,8 +213,8 @@ struct TransactionLayout {
     } else if kind == .prepared, let original = entry.preimage {
       locations.append((.target, original))
     }
-    for slot in TransactionScratch.objectSlots {
-      if let expected = objects[slot] { locations.append((.scratch(slot), expected)) }
+    for slot in TransactionSlot.objectSlots {
+      if let expected = objects[slot] { locations.append((.slot(slot), expected)) }
     }
     return locations
   }

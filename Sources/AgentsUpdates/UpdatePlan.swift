@@ -88,11 +88,7 @@ final class UpdatePlan {
       try instructions.retain()
       try checkpoint("apply.retained")
       let transaction = FileTransaction(store: store, outcome: outcome, checkpoint: checkpoint)
-      transaction.validateBeforePublication = { [unowned transaction] in
-        try self.baseline.validate(excludingTargets: transaction.targetPaths)
-        try self.skills.validate(excludingTargets: transaction.targetPaths)
-        try self.instructions.validate(excludingTargets: transaction.targetPaths)
-      }
+      transaction.requireUnchanged(since: baseline, skills, instructions)
       try skills.stage(retained: retained, transaction: transaction)
       try instructions.stage(transaction: transaction)
       try store.stageDeclaration(
@@ -101,7 +97,7 @@ final class UpdatePlan {
         comparedTo: baseline.bytes(for: store.resolvedURL))
       {
         try transaction.replace(
-          store.resolvedURL, content: nil, data: resolvedBytes,
+          store.resolvedURL, with: .data(resolvedBytes),
           expecting: baseline.evidence(for: store.resolvedURL))
       }
       try SourceCache(store: store).prune(

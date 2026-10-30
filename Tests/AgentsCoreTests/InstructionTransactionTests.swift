@@ -33,11 +33,10 @@ struct InstructionTransactionTests {
         if checkpoint == TransactionCheckpoint.progress(1, .applied).name { throw Interrupted() }
       }
       for file in files {
-        try transaction.replace(
-          file.resolvingSymlinksInPath(), content: nil, data: Data("new".utf8))
+        try transaction.replace(file.resolvingSymlinksInPath(), with: .data(Data("new".utf8)))
       }
       try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.codex])))
+        store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.codex]))))
       #expect(throws: Interrupted.self) { try transaction.commit() }
     }
     for file in files { #expect(try Data(contentsOf: file) == Data("original".utf8)) }
@@ -97,7 +96,7 @@ struct InstructionTransactionTests {
     try store.withLock {
       let transaction = FileTransaction(store: store)
       try transaction.replace(
-        root.appendingPathComponent(".claude/CLAUDE.md"), content: nil, data: Data("new".utf8))
+        root.appendingPathComponent(".claude/CLAUDE.md"), with: .data(Data("new".utf8)))
       #expect {
         try transaction.commit()
       } throws: { error in

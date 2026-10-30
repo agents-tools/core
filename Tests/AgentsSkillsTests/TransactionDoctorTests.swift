@@ -23,12 +23,12 @@ struct TransactionDoctorTests {
               as: TransactionJournal.self)
             let backup = target.deletingLastPathComponent().appendingPathComponent(
               journal.containerName(0)
-            ).appendingPathComponent(TransactionScratch.exchanged.name(0))
+            ).appendingPathComponent(TransactionSlot.exchanged.name(0))
             try FileManager.default.moveItem(at: backup, to: saved)
             throw CoreError.invalidState("interrupt after removing preimage")
           }
         }
-        try transaction.replace(target, content: nil, data: Data("published".utf8))
+        try transaction.replace(target, with: .data(Data("published".utf8)))
         try transaction.commit()
       }
     }
@@ -39,7 +39,7 @@ struct TransactionDoctorTests {
     #expect(instructions.diagnostics.map(\.kind) == [.unresolvedTransaction])
     for message in skills.checks.map(\.message) + instructions.diagnostics.map(\.message) {
       #expect(message.contains("owner action is required"))
-      #expect(message.contains("preimage"))
+      #expect(message.contains("expected slots: " + TransactionSlot.exchanged.name(0)))
       #expect(message.contains("instructions-project/AGENTS.md"))
       #expect(message.contains(".agents-"))
     }

@@ -28,7 +28,7 @@ struct WatchInspectionTests {
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
   }
 
-  @Test(arguments: [TransactionCheckpoint.journalRemoved.name, "watch.references.deleted"])
+  @Test(arguments: [TransactionCheckpoint.journalRemoved.name, "watch.references.0.0.deleted"])
   func pendingRefCleanupLeavesStateUnchanged(_ step: String) throws {
     let fixture = try WatchGitFixture()
     let first = try fixture.head()

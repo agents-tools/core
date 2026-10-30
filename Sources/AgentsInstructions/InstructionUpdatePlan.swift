@@ -2,7 +2,7 @@ import AgentsCore
 import Foundation
 
 /// Assembly and retention inputs for one scope generation; the caller owns commit and pruning.
-package final class InstructionUpdatePlan {
+package final class InstructionUpdatePlan: PreparedEvidence {
   package let next: ResolvedState
   package let report: InstructionUpdateReport
   private let sources: InstructionSources
@@ -61,7 +61,11 @@ package final class InstructionUpdatePlan {
       else {
         throw CoreError.invalidState("instruction target has no prepared preimage")
       }
-      try transaction.replace(change.url, content: nil, data: change.after, expecting: evidence)
+      if let after = change.after {
+        try transaction.replace(change.url, with: .data(after), expecting: evidence)
+      } else {
+        try transaction.delete(change.url, expecting: evidence)
+      }
     }
   }
 }

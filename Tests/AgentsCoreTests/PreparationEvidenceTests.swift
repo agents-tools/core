@@ -13,11 +13,11 @@ struct PreparationEvidenceTests {
           try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
             .first(where: { $0.hasPrefix(".agents-") }))
         let staged = fixture.root.appendingPathComponent(name).appendingPathComponent(
-          TransactionScratch.staged.name(0))
+          TransactionSlot.staged.name(0))
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: staged.path)
       }
     }
-    try transaction.replace(fixture.target, content: nil, data: Data("postimage".utf8))
+    try transaction.replace(fixture.target, with: .data(Data("postimage".utf8)))
     #expect(throws: CoreError.invalidState("staged content permissions mismatch")) {
       try transaction.commit()
     }
@@ -45,7 +45,7 @@ struct PreparationEvidenceTests {
         location = container
       }
     }
-    try transaction.replace(fixture.target, content: nil, data: Data("postimage".utf8))
+    try transaction.replace(fixture.target, with: .data(Data("postimage".utf8)))
     #expect { try transaction.commit() } throws: { error in
       guard case CoreError.invalidState(let reason) = error else { return false }
       return reason.contains("private container changed before its identity was durable")
@@ -57,21 +57,23 @@ struct PreparationEvidenceTests {
   }
 
   @Test(arguments: [PublicationOperation.fileCreate, .directoryDelete])
-  func reservedScratchIsRejectedBeforeSealingAndDiscarded(_ operation: PublicationOperation) throws
-  {
+  func reservedSlotIsRejectedBeforeSealingAndDiscarded(_ operation: PublicationOperation) throws {
     let fixture = try PublicationFixture(operation)
     let transaction = FileTransaction(store: fixture.store) { point in
       if point == TransactionCheckpoint.stage(0, .constructed).name {
         let name = try #require(
           try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
             .first(where: { $0.hasPrefix(".agents-") }))
-        let slot: TransactionScratch = operation == .directoryDelete ? .staged : .deleted
+        let slot: TransactionSlot = operation == .directoryDelete ? .staged : .deleted
         try Data("private injection".utf8).write(
           to: fixture.root.appendingPathComponent(name).appendingPathComponent(slot.name(0)))
       }
     }
-    try transaction.replace(
-      fixture.target, content: nil, data: operation == .fileCreate ? Data("postimage".utf8) : nil)
+    if operation == .fileCreate {
+      try transaction.replace(fixture.target, with: .data(Data("postimage".utf8)))
+    } else {
+      try transaction.delete(fixture.target)
+    }
     #expect(throws: CoreError.invalidState("unexpected private recovery slot before sealing")) {
       try transaction.commit()
     }
@@ -87,13 +89,13 @@ struct PreparationEvidenceTests {
           try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
             .first(where: { $0.hasPrefix(".agents-") }))
         let staged = fixture.root.appendingPathComponent(name).appendingPathComponent(
-          TransactionScratch.staged.name(0))
+          TransactionSlot.staged.name(0))
         try FileManager.default.removeItem(at: staged)
         try FileManager.default.createSymbolicLink(
           atPath: staged.path, withDestinationPath: "postimage")
       }
     }
-    try transaction.replace(fixture.target, content: nil, data: Data("postimage".utf8))
+    try transaction.replace(fixture.target, with: .data(Data("postimage".utf8)))
     #expect(throws: CoreError.invalidState("staged content type mismatch")) {
       try transaction.commit()
     }
@@ -110,7 +112,7 @@ struct PreparationEvidenceTests {
           try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
             .first(where: { $0.hasPrefix(".agents-") }))
         let staged = fixture.root.appendingPathComponent(name).appendingPathComponent(
-          TransactionScratch.staged.name(0))
+          TransactionSlot.staged.name(0))
         if link {
           try FileManager.default.removeItem(at: staged)
           try FileManager.default.createSymbolicLink(
@@ -121,7 +123,10 @@ struct PreparationEvidenceTests {
       }
     }
     try transaction.replace(
-      fixture.target, content: fixture.root.appendingPathComponent("new"), link: link)
+      fixture.target,
+      with: link
+        ? .link(fixture.root.appendingPathComponent("new"))
+        : .copy(fixture.root.appendingPathComponent("new")))
     #expect(
       throws: CoreError.invalidState(
         link ? "staged symbolic link destination mismatch" : "staged content digest mismatch")
@@ -134,7 +139,7 @@ struct PreparationEvidenceTests {
     let fixture = try PublicationFixture(.fileCreate)
     let source = fixture.root.appendingPathComponent("new/nested/file")
     let transaction = FileTransaction(store: fixture.store)
-    try transaction.replace(fixture.target, content: source)
+    try transaction.replace(fixture.target, with: .copy(source))
     try transaction.commit()
     #expect(try Data(contentsOf: fixture.target) == Data(contentsOf: source))
     #expect(
@@ -161,7 +166,7 @@ struct PreparationEvidenceTests {
       #expect(try prepared.bytes(for: store.declarationURL) == original)
       let transaction = FileTransaction(store: store)
       try transaction.replace(
-        store.declarationURL, content: nil, data: original,
+        store.declarationURL, with: .data(original),
         expecting: prepared.evidence(for: store.declarationURL))
       #expect {
         try transaction.commit()

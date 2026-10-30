@@ -44,8 +44,14 @@ package struct PathIdentity {
   }
 }
 
+/// Prepared evidence checked again before publication, except for targets that the
+/// transaction journal verifies itself.
+package protocol PreparedEvidence {
+  func validate(excludingTargets targets: Set<String>) throws
+}
+
 /// State bytes and presence belong to the same generation as the rendered targets.
-package struct StatePrecondition {
+package struct StatePrecondition: PreparedEvidence {
   private let files: [(url: URL, evidence: TargetPrecondition, bytes: Data?)]
 
   package init(store: StateStore) throws {

@@ -157,10 +157,7 @@ public enum SkillOperations {
         try plan.validate()
         let retained = try plan.retain()
         let transaction = FileTransaction(store: store)
-        transaction.validateBeforePublication = { [unowned transaction] in
-          try baseline.validate(excludingTargets: transaction.targetPaths)
-          try plan.validate(excludingTargets: transaction.targetPaths)
-        }
+        transaction.requireUnchanged(since: baseline, plan)
         try plan.stage(retained: retained, transaction: transaction)
         try store.stageDeclaration(
           declaration, in: transaction, prepared: baseline)
@@ -168,7 +165,7 @@ public enum SkillOperations {
           comparedTo: baseline.bytes(for: store.resolvedURL))
         {
           try transaction.replace(
-            store.resolvedURL, content: nil, data: data,
+            store.resolvedURL, with: .data(data),
             expecting: baseline.evidence(for: store.resolvedURL))
         }
         try SourceCache(store: store).prune(

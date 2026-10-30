@@ -66,7 +66,8 @@ CryptoKit on Apple platforms and supplies its own implementation on Linux.
 `StateTestSupport` supplies the shared process-handshake deadline and diagnostics
 for transaction, watch and update tests. `StateTestProcess` records actual
 checkpoints and supports interruption and resumed recovery through the production
-journal protocol.
+journal protocol. Its recorder fails on a repeated name, so repeated work numbers
+its checkpoints and nested transactions prefix theirs.
 
 ## AgentsDescription and AgentsManifest
 

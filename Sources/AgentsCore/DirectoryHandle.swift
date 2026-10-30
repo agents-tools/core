@@ -132,7 +132,7 @@ final class DirectoryHandle {
     let step: RemovalStep
   }
 
-  /// Missing descendants are accepted only by callers with a durable discard intent.
+  /// Missing descendants are accepted only by callers with a durable disposal intent.
   /// Private trees and verified user objects share the same descriptor-relative deleter.
   func remove(
     _ name: String, expecting expected: FileSnapshot? = nil,
@@ -154,21 +154,21 @@ final class DirectoryHandle {
     guard let info = try info(name) else { return }
     let observed = FileObjectIdentity(info)
     if let identity, observed != identity {
-      throw CoreError.invalidState("transaction cleanup identity changed: \(name)")
+      throw CoreError.invalidState("removal identity changed: \(name)")
     }
     if let expected, observed != expected.identity {
-      throw CoreError.invalidState("transaction cleanup ownership changed: \(name)")
+      throw CoreError.invalidState("removal ownership changed: \(name)")
     }
     if info.st_mode & S_IFMT == S_IFDIR {
       let directory = try child(name)
       if info.st_mode & S_IRWXU != S_IRWXU {
         guard fchmod(directory.descriptor, (info.st_mode & 0o7777) | S_IRWXU) == 0 else {
-          throw CoreError.unsafePath("cannot make discarded directory writable: \(name)")
+          throw CoreError.unsafePath("cannot make removed directory writable: \(name)")
         }
       }
       for child in try directory.names() {
         if let expected, expected.children?[child] == nil {
-          throw CoreError.invalidState("unexpected transaction descendant: \(child)")
+          throw CoreError.invalidState("unexpected descendant during removal: \(child)")
         }
         try directory.removeContents(
           child, expected: expected?.children?[child], identity: nil,
@@ -176,22 +176,24 @@ final class DirectoryHandle {
       }
       try directory.sync()
     } else if let expected, try FileSnapshot.read(name, from: self) != expected {
-      throw CoreError.invalidState("transaction cleanup content changed: \(name)")
+      throw CoreError.invalidState("removal content changed: \(name)")
     }
     guard try self.info(name).map(FileObjectIdentity.init) == observed else {
-      throw CoreError.invalidState("transaction cleanup identity changed: \(name)")
+      throw CoreError.invalidState("removal identity changed: \(name)")
     }
     guard unlinkat(descriptor, name, info.st_mode & S_IFMT == S_IFDIR ? AT_REMOVEDIR : 0) == 0
     else {
-      throw CoreError.invalidState("cannot discard filesystem entry: \(name): \(errno)")
+      throw CoreError.invalidState("cannot remove filesystem entry: \(name): \(errno)")
     }
     try checkpoint(RemovalPoint(path: prefix, step: .unlinked))
   }
 
-  /// Only an empty unidentified container may be removed; rmdir never erases contents.
+  /// rmdir never erases contents; an absent entry still receives the parent barrier.
   func removeEmptyDirectory(_ name: String) throws {
     guard unlinkat(descriptor, name, AT_REMOVEDIR) == 0 || errno == ENOENT else {
-      throw CoreError.invalidState("unidentified transaction container is not empty: \(name)")
+      let code = errno
+      throw CoreError.invalidState(
+        "cannot remove directory: \(name): \(code) (\(String(cString: strerror(code))))")
     }
     try sync()
   }
@@ -249,10 +251,17 @@ final class DirectoryHandle {
   enum PermissionStep: String { case changed, synced }
 
   /// Only the lease's recorded directory inode may receive its temporary owner-write bit.
-  func setPermissions(
-    _ lease: DirectoryWriteLease, granting: Bool, checkpoint: (PermissionStep) throws -> Void
+  func grant(_ lease: DirectoryWriteLease, checkpoint: (PermissionStep) throws -> Void) throws {
+    try setPermissions(lease.grantedMode, lease: lease, checkpoint: checkpoint)
+  }
+
+  func restore(_ lease: DirectoryWriteLease, checkpoint: (PermissionStep) throws -> Void) throws {
+    try setPermissions(lease.originalMode, lease: lease, checkpoint: checkpoint)
+  }
+
+  private func setPermissions(
+    _ mode: mode_t, lease: DirectoryWriteLease, checkpoint: (PermissionStep) throws -> Void
   ) throws {
-    let mode = granting ? lease.grantedMode : lease.original
     let current = try checkedPermissions(lease)
     if current != mode {
       guard fchmod(descriptor, mode) == 0 else {
@@ -356,7 +365,9 @@ final class DirectoryHandle {
   }
 
   @discardableResult
-  func makeDirectory(_ name: String, syncParent: Bool = true) throws -> DirectoryHandle {
+  func makeDirectory(
+    _ name: String, syncParent: Bool = true, afterCreate: () throws -> Void = {}
+  ) throws -> DirectoryHandle {
     if try info(name) != nil {
       try FileSystem.requireAccess(
         R_OK | W_OK | X_OK, at: url.appendingPathComponent(name), parent: descriptor)
@@ -368,6 +379,7 @@ final class DirectoryHandle {
     }
     try FileSystem.requireAccess(
       R_OK | W_OK | X_OK, at: url.appendingPathComponent(name), parent: descriptor)
+    try afterCreate()
     let directory = try child(name)
     guard fchmod(directory.descriptor, 0o700) == 0 else {
       throw CoreError.invalidState("cannot set directory permissions")
@@ -433,33 +445,36 @@ final class DirectoryHandle {
     if syncParent { try sync() }
   }
 
-  func writeJournal(_ data: Data, afterWrite: () throws -> Void, afterRename: () throws -> Void)
-    throws
-  {
-    if try info("transaction.new") != nil {
-      _ = try read("transaction.new")
-      guard unlinkat(descriptor, "transaction.new", 0) == 0 else {
-        throw CoreError.invalidState("cannot remove incomplete journal: \(errno)")
+  /// Writes and syncs `staging`, then replaces `name` with an ordinary rename and syncs this
+  /// directory. Only the journal is replaced this way; publication exchanges or never replaces.
+  func replaceFile(
+    _ name: String, through staging: String, with data: Data, afterWrite: () throws -> Void,
+    afterRename: () throws -> Void
+  ) throws {
+    if try info(staging) != nil {
+      _ = try read(staging)
+      guard unlinkat(descriptor, staging, 0) == 0 else {
+        throw CoreError.invalidState("cannot remove \(staging): \(errno)")
       }
     }
-    try write("transaction.new", data: data, syncParent: false)
+    try write(staging, data: data, syncParent: false)
     try afterWrite()
-    // A replacing rename is reserved for the journal; publication exchanges or never replaces.
-    guard renameat(descriptor, "transaction.new", descriptor, "transaction.json") == 0 else {
-      throw CoreError.invalidState("cannot replace transaction.json: \(errno)")
+    guard renameat(descriptor, staging, descriptor, name) == 0 else {
+      throw CoreError.invalidState("cannot replace \(name): \(errno)")
     }
     try afterRename()
     try sync()
   }
 
-  func removeJournal(afterUnlink: () throws -> Void = {}) throws {
-    for name in ["transaction.new", "transaction.json"] {
+  /// Unlinks each present regular file in order, then syncs this directory once.
+  func removeFiles(_ names: [String], afterUnlink: (String) throws -> Void = { _ in }) throws {
+    for name in names {
       if try info(name) != nil {
         _ = try read(name)
         guard unlinkat(descriptor, name, 0) == 0 else {
-          throw CoreError.invalidState("cannot remove journal: \(errno)")
+          throw CoreError.invalidState("cannot remove \(name): \(errno)")
         }
-        if name == "transaction.json" { try afterUnlink() }
+        try afterUnlink(name)
       }
     }
     try sync()

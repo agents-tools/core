@@ -62,17 +62,14 @@ public struct StateStore: Sendable {
       _ = try readDeclaration(prepared: baseline)
       _ = try readResolved(prepared: baseline)
       let transaction = FileTransaction(store: self)
-      transaction.validateBeforePublication = { [unowned transaction] in
-        try baseline.validate(excludingTargets: transaction.targetPaths)
-      }
+      transaction.requireUnchanged(since: baseline)
       try stageDeclaration(declaration, in: transaction, prepared: baseline)
       try transaction.replace(
-        resolvedURL, content: nil, data: Self.encodeState(resolved.normalized),
+        resolvedURL, with: .data(Self.encodeState(resolved.normalized)),
         expecting: baseline.evidence(for: resolvedURL))
       if let watch {
         try transaction.replace(
-          watchURL, content: nil, data: Self.encode(watch),
-          expecting: baseline.evidence(for: watchURL))
+          watchURL, with: .data(Self.encode(watch)), expecting: baseline.evidence(for: watchURL))
       }
       try transaction.commit()
     }
@@ -92,7 +89,7 @@ public struct StateStore: Sendable {
       input = try TargetPrecondition.readingFile(declarationURL)
     }
     guard input.bytes != data else { return }
-    try transaction.replace(declarationURL, content: nil, data: data, expecting: input.evidence)
+    try transaction.replace(declarationURL, with: .data(data), expecting: input.evidence)
   }
 
   package func withLock<T>(
@@ -106,7 +103,7 @@ public struct StateStore: Sendable {
     if !FileManager.default.fileExists(
       atPath: directory.appendingPathComponent(".agents.lock").path),
       !FileManager.default.fileExists(
-        atPath: directory.appendingPathComponent("transaction.json").path)
+        atPath: directory.appendingPathComponent(TransactionJournal.fileName).path)
     {
       _ = try readDeclaration()
       _ = try readResolved()

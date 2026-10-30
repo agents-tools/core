@@ -134,7 +134,7 @@ struct UpdateReportingTests {
                 includingPropertiesForKeys: nil
               ).first { $0.lastPathComponent.hasPrefix(".agents-") }
             )
-            .appendingPathComponent(TransactionScratch.exchanged.name(0))
+            .appendingPathComponent(TransactionSlot.exchanged.name(0))
             try FileManager.default.setAttributes(
               [.posixPermissions: 0o755],
               ofItemAtPath: staged.appendingPathComponent("SKILL.md").path)

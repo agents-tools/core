@@ -18,21 +18,21 @@ struct FileObjectIdentity: Codable, Equatable, Sendable {
 /// `restoring` intent is durable it admits the original mode or that mode plus owner-write.
 struct DirectoryWriteLease: Equatable {
   let identity: FileObjectIdentity
-  let original: mode_t
+  let originalMode: mode_t
 
   init?(_ snapshot: FileSnapshot) {
     guard snapshot.identity.isDirectory, snapshot.mode & 0o200 == 0 else { return nil }
     identity = snapshot.identity
-    original = snapshot.mode
+    originalMode = snapshot.mode
   }
 
-  var grantedMode: mode_t { original | 0o200 }
+  var grantedMode: mode_t { originalMode | 0o200 }
 
-  func admits(_ mode: mode_t) -> Bool { mode == original || mode == grantedMode }
+  func admits(_ mode: mode_t) -> Bool { mode == originalMode || mode == grantedMode }
 }
 
 /// Content and physical ownership are separate evidence. Descendant identities let
-/// terminal cleanup resume after partial deletion without adopting new entries.
+/// terminal disposal resume after partial deletion without adopting new entries.
 struct FileSnapshot: Codable, Equatable, Sendable {
   let identity: FileObjectIdentity
   let digest: String

@@ -306,9 +306,9 @@ swift format lint --strict --configuration .swift-format \
   --recursive Package.swift Sources Tests
 ```
 
-Publication kill-point tests, tagged `publicationMatrix`, kill each operation at
-representative points and recovery from every seed at its durable steps. When
-changing the transaction protocol, also run every recorded point:
+By default, publication tests kill each operation at representative points, and
+kill recovery at durable steps from each seeded interruption. When changing the
+transaction protocol, also kill at every recorded point:
 
 ```bash
 env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME \
@@ -321,11 +321,13 @@ full-SHA-pinned reusable workflows from `agents-tools/github-workflows`.
 Source policy validates PR titles, new commit messages and added lines.
 [Package validation configuration](.github/swift-package.json) selects Xcode
 26.6 on `macos-26` and a digest-pinned official Swift Linux container. macOS and
-Linux validation run the full Debug and Release test suites. macOS also runs a
-release build and strict formatting with `.swift-format` over `Package.swift`,
-`Sources` and `Tests`. The test suites include subprocess recovery tests. The
-configuration owns the Linux compiler version and image digest. Tests also
-require Perl, which is included by the Linux image's Git dependencies.
+Linux validation run the Debug and Release test suites with the default
+publication matrix; the full publication matrix is not part of CI. macOS also
+runs a release build and strict formatting with `.swift-format` over
+`Package.swift`, `Sources` and `Tests`. The test suites include subprocess
+recovery tests. The configuration owns the Linux compiler version and image
+digest. Tests also require Perl, which is included by the Linux image's Git
+dependencies.
 
 Render and check the committed
 [social preview](.github/assets/social-preview/social-preview.png) locally with

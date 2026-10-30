@@ -6,6 +6,7 @@ package struct TransactionRecoveryDiagnostic {
 
   static let pendingMessage =
     "Transaction recovery is pending; the next command that changes this scope will recover it."
+  static let conflictMessage = "Unresolved transaction conflict; owner action is required"
 }
 
 extension FileTransaction {
@@ -14,31 +15,34 @@ extension FileTransaction {
     checkpoint: @escaping (String) throws -> Void = { _ in }
   ) throws -> Bool {
     guard let directory = try store.openDirectoryIfPresent() else { return false }
-    guard try directory.info("transaction.json") != nil else {
-      guard try directory.info("transaction.new") != nil else { return false }
+    let primary = TransactionJournal.fileName
+    let incomplete = TransactionJournal.incompleteFileName
+    guard try directory.info(primary) != nil else {
+      guard try directory.info(incomplete) != nil else { return false }
+      // An unstarted journal owns no object, so it is discarded without a journal barrier.
       try requireUnstartedIncompleteJournal(in: directory)
-      try directory.remove("transaction.new")
+      try directory.remove(incomplete)
       return true
     }
     var recoveredID: UUID?
     do {
-      let journal = try readJournal(directory.read("transaction.json"))
+      let journal = try readJournal(directory.read(primary))
       recoveredID = journal.id
       let session = try recoverySession(
         journal, store: store, directory: directory, checkpoint: checkpoint)
-      // Validate the journal's scratch file before any recovery mutation.
-      if try directory.info("transaction.new") != nil { _ = try directory.read("transaction.new") }
+      // Validate the incomplete next generation before any recovery mutation.
+      if try directory.info(incomplete) != nil { _ = try directory.read(incomplete) }
       // Any observed journal may have been renamed without its directory barrier. Persist it
       // before granting permissions, renaming objects or deleting any resource, including on retry.
-      try directory.syncFile("transaction.json")
+      try directory.syncFile(primary)
       try session.emit(.journalSynced)
       if journal.phase == .applying { try session.rollback() }
       if session.journal.phase == .applying || session.journal.phase == .preparing {
-        try session.prepareCleanup()
+        try session.sealDisposal()
         try session.finish(.rolledBack)
         try session.emit(.phase(.rolledBack))
       }
-      try session.cleanup()
+      try session.revalidateDisposal()
       if outcome?.journalID == journal.id {
         outcome?.disposition = session.journal.phase == .committed ? .committed : .unchanged
       }
@@ -53,27 +57,20 @@ extension FileTransaction {
   }
 
   package static func recoveryDiagnostic(store: StateStore) -> TransactionRecoveryDiagnostic {
-    var retained = [store.directory.appendingPathComponent("transaction.json").path]
+    let journalURL = store.directory.appendingPathComponent(TransactionJournal.fileName)
+    var retained = [journalURL.path]
     do {
       guard let directory = try store.openDirectoryIfPresent() else {
         return .init(requiresOwner: false, message: TransactionRecoveryDiagnostic.pendingMessage)
       }
-      if try directory.info("transaction.json") == nil {
-        if try directory.info("transaction.new") != nil {
+      if try directory.info(TransactionJournal.fileName) == nil {
+        if try directory.info(TransactionJournal.incompleteFileName) != nil {
           try requireUnstartedIncompleteJournal(in: directory)
         }
         return .init(requiresOwner: false, message: TransactionRecoveryDiagnostic.pendingMessage)
       }
-      let journal = try readJournal(directory.read("transaction.json"))
-      retained += journal.entries.compactMap { entry in
-        guard journal.containers.indices.contains(entry.container) else { return nil }
-        let container = journal.containers[entry.container]
-        guard
-          container.name == TransactionJournal.containerName(id: journal.id, index: entry.container)
-        else { return nil }
-        return entry.path.split(separator: "/").dropLast().joined(separator: "/")
-          + "/" + container.name
-      }
+      let journal = try readJournal(directory.read(TransactionJournal.fileName))
+      retained += journal.entries.compactMap(journal.containerLocation(of:))
       let session = try recoverySession(
         journal, store: store, directory: directory, checkpoint: { _ in })
       let conflicts = journal.entries.compactMap(\.conflict)
@@ -83,9 +80,8 @@ extension FileTransaction {
         }
         return .init(
           requiresOwner: true,
-          message: "Unresolved transaction conflict; owner action is required. "
-            + details.joined(separator: "; ")
-            + "; journal: " + directory.url.appendingPathComponent("transaction.json").path)
+          message: TransactionRecoveryDiagnostic.conflictMessage + ". "
+            + details.joined(separator: "; ") + "; journal: " + journalURL.path)
       }
       try session.inspectRecoveryObjects()
       return .init(requiresOwner: false, message: TransactionRecoveryDiagnostic.pendingMessage)
@@ -93,14 +89,14 @@ extension FileTransaction {
       return .init(
         requiresOwner: true,
         message:
-          "Unresolved transaction conflict; owner action is required: \(error). Retained locations: \(Set(retained).sorted().joined(separator: ", "))."
+          "\(TransactionRecoveryDiagnostic.conflictMessage): \(error). Retained locations: \(Set(retained).sorted().joined(separator: ", "))."
       )
     }
   }
 
-  /// A lone `transaction.new` may be discarded only while it is unparseable or unstarted.
+  /// A lone incomplete journal may be discarded only while it is unparseable or unstarted.
   private static func requireUnstartedIncompleteJournal(in directory: DirectoryHandle) throws {
-    let bytes = try directory.read("transaction.new")
+    let bytes = try directory.read(TransactionJournal.incompleteFileName)
     guard (try? JSONSerialization.jsonObject(with: bytes)) != nil else { return }
     guard try readJournal(bytes).isUnstarted else {
       throw CoreError.invalidState(
@@ -146,7 +142,7 @@ extension TransactionSession {
   /// Read-only diagnosis of the distribution recovery would act on.
   func inspectRecoveryObjects() throws {
     for index in journal.entries.indices {
-      if journal.discarding {
+      if journal.disposing {
         try verifyTarget(index)
       } else {
         _ = try distribution(index, permittingDirectoryWrite: true)
@@ -211,28 +207,28 @@ extension TransactionSession {
   private func undo(_ index: Int) throws {
     let entry = journal.entries[index]
     let parent = parents[index]
-    let scratch = try container(entry.container)
+    let container = try self.container(entry.container)
     try emit(.restoration(index, .validated))
     if entry.preimage != nil {
       if entry.action == .install {
-        try scratch.move(
-          TransactionScratch.exchanged.name(index), to: parent, named: entry.name,
+        try container.move(
+          TransactionSlot.exchanged.name(index), to: parent, named: entry.name,
           mode: .exchange
         ) {
           try emit(.restoration(index, .exchanged))
         }
       } else {
-        try scratch.move(
-          TransactionScratch.deleted.name(index), to: parent, named: entry.name, mode: .exclusive
+        try container.move(
+          TransactionSlot.deleted.name(index), to: parent, named: entry.name, mode: .exclusive
         ) {
           try emit(.restoration(index, .returned))
         }
       }
     } else if entry.action == .install {
       try parent.move(
-        entry.name, to: scratch, named: TransactionScratch.withdrawn.name(index), mode: .exclusive
+        entry.name, to: container, named: TransactionSlot.withdrawn.name(index), mode: .exclusive
       ) {
-        try emit(.restoration(index, .creationQuarantined))
+        try emit(.restoration(index, .withdrawn))
       }
     }
   }

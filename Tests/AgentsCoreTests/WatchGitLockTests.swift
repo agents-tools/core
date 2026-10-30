@@ -88,8 +88,8 @@ struct WatchGitLockTests {
     }
     for lock in additional { try Data("abandoned".utf8).write(to: lock) }
     let recovery = try stateTestProcess(
-      root: fixture.root, arguments: ["watch-recover", "watch.git-lock.unlinked"])
-    try fixture.kill(recovery, at: "watch.git-lock.unlinked")
+      root: fixture.root, arguments: ["watch-recover", "watch.git-lock.0.0.unlinked"])
+    try fixture.kill(recovery, at: "watch.git-lock.0.0.unlinked")
     #expect(
       try fixture.recoveredWatch().sources[fixture.id]?.seen
         == (removing ? nil : .revision(replacement)))

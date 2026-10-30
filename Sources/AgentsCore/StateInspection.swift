@@ -43,7 +43,8 @@ extension StateStore {
   }
 
   private func hasPendingRecovery(in directory: DirectoryHandle?) throws -> Bool {
-    try directory?.info("transaction.json") != nil || directory?.info("transaction.new") != nil
-      || directory?.info("watch-refs.pending") != nil
+    guard let directory else { return false }
+    return try TransactionJournal.isPresent(in: directory)
+      || directory.info("watch-refs.pending") != nil
   }
 }

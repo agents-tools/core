@@ -7,7 +7,7 @@ import Testing
 struct WatchReferenceTests {
   @Test(
     arguments: [false, true],
-    ["watch.references.deleted", "watch.references.synced", "watch.references.cleared"])
+    ["watch.references.0.0.deleted", "watch.references.0.synced", "watch.references.cleared"])
   func interruptedCleanupUsesCommittedBaselines(_ removing: Bool, _ step: String) throws {
     let fixture = try WatchGitFixture()
     let first = try fixture.head()
@@ -54,8 +54,8 @@ struct WatchReferenceTests {
     try fixture.kill(writer, at: TransactionCheckpoint.publication(0, .exchanged).name)
     #expect(try fixture.watchRefs() == [first, replacement])
     let recovery = try stateTestProcess(
-      root: fixture.root, arguments: ["watch-recover", "watch.references.deleted"])
-    try fixture.kill(recovery, at: "watch.references.deleted")
+      root: fixture.root, arguments: ["watch-recover", "watch.references.0.0.deleted"])
+    try fixture.kill(recovery, at: "watch.references.0.0.deleted")
     #expect(try fixture.recoveredWatch().sources[fixture.id]?.seen == .revision(first))
     #expect(try fixture.stateBytes() == before)
     #expect(try fixture.watchRefs() == [first])

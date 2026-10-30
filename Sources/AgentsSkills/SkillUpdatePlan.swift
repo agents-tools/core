@@ -2,7 +2,7 @@ import AgentsCore
 import Foundation
 
 /// A domain plan borrows the scope lock and never commits or prunes independently.
-package final class SkillUpdatePlan {
+package final class SkillUpdatePlan: PreparedEvidence {
   package let next: ResolvedState
   package let results: [UpdateResult]
   package let targetPaths: [URL]

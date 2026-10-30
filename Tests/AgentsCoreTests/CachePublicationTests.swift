@@ -11,10 +11,10 @@ struct CachePublicationTests {
     arguments: ["cache-content", "cache-git"],
     [
       TransactionCheckpoint.copy(
-        0, .init(path: TransactionScratch.staged.name(0), step: .directoryCreated)
+        0, .init(path: TransactionSlot.staged.name(0), step: .directoryCreated)
       ).name,
       TransactionCheckpoint.copy(
-        0, .init(path: TransactionScratch.staged.name(0) + "/SKILL.md", step: .entryCopied)
+        0, .init(path: TransactionSlot.staged.name(0) + "/SKILL.md", step: .entryCopied)
       ).name, TransactionCheckpoint.progress(0, .ready).name,
       TransactionCheckpoint.publication(0, .created).name,
       TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name,
@@ -68,7 +68,7 @@ struct CachePublicationTests {
     TransactionCheckpoint.stage(0, .workCreated).name,
     TransactionCheckpoint.stage(0, .workPrepared).name,
   ])
-  func interruptedExtractionCleansJournalOwnedScratch(_ point: String) throws {
+  func interruptedExtractionCleansJournalOwnedWork(_ point: String) throws {
     let fixture = try CacheFixture(git: true)
     try interrupt(fixture, kind: "cache-git", point: point)
     #expect(try FileSnapshot.read(at: fixture.destination) == nil)
@@ -94,7 +94,7 @@ struct CachePublicationTests {
         where name.hasPrefix(".agents-") {
           try Data("tampered".utf8).write(
             to: parent.appendingPathComponent(name).appendingPathComponent(
-              TransactionScratch.staged.name(0) + "/injected"))
+              TransactionSlot.staged.name(0) + "/injected"))
         }
       }
     }
@@ -124,7 +124,7 @@ struct CachePublicationTests {
         where name.hasPrefix(".agents-") {
           try Data("tampered".utf8).write(
             to: parent.appendingPathComponent(name).appendingPathComponent(
-              TransactionScratch.staged.name(0)))
+              TransactionSlot.staged.name(0)))
         }
       }
     }

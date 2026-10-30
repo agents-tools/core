@@ -28,7 +28,7 @@ struct TransactionMetadataTests {
         if step == point { throw CoreError.invalidState("injected failure") }
       }
       for file in files + [created] {
-        try transaction.replace(file, content: nil, data: replacement)
+        try transaction.replace(file, with: .data(replacement))
       }
       if point == "complete" {
         try transaction.commit()

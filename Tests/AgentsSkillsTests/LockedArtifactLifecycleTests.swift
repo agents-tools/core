@@ -214,7 +214,7 @@ extension LockedArtifactLifecycleTests {
     process.arguments = [
       root.path, "cache-content",
       TransactionCheckpoint.copy(
-        0, .init(path: TransactionScratch.staged.name(0) + "/SKILL.md", step: .entryCopied)
+        0, .init(path: TransactionSlot.staged.name(0) + "/SKILL.md", step: .entryCopied)
       ).name,
     ]
     try process.run()

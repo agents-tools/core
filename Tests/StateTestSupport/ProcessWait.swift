@@ -1,6 +1,7 @@
 import Foundation
 
-/// One deadline and one diagnostic format for filesystem handshakes and process completion.
+/// Every wait on a test child is bounded. Marker, stop and exit waits share one deadline and a
+/// diagnostic naming the child's last checkpoint; termination has its own shorter deadline.
 package enum ProcessWait {
   package static func marker(_ file: URL, child: Process, root: URL, timeout: TimeInterval = 120)
     throws

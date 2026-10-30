@@ -21,7 +21,7 @@ struct StateTransactionTests {
       }
       try transaction.replace(
         parent.appendingPathComponent("pruned"),
-        content: fixture.root.appendingPathComponent("new"))
+        with: .copy(fixture.root.appendingPathComponent("new")))
       #expect(throws: CoreError.invalidState("cache cleanup interrupted")) {
         try transaction.commit()
       }
@@ -146,21 +146,19 @@ final class TransactionFixture {
       let transaction = FileTransaction(store: store, checkpoint: checkpoint)
       try transaction.replace(
         root.appendingPathComponent(".agents/skills/target"),
-        content: root.appendingPathComponent("new"))
+        with: .copy(root.appendingPathComponent("new")))
       try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.codex])))
+        store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.codex]))))
       try transaction.replace(
-        store.resolvedURL, content: nil,
-        data: StateStore.encode(ResolvedState(sources: ["local:/new": LockedSource(kind: .local)])))
-      try transaction.replace(
-        root.appendingPathComponent(".agent/cache/artifact-content/pruned"), content: nil)
+        store.resolvedURL,
+        with: .data(
+          StateStore.encode(ResolvedState(sources: ["local:/new": LockedSource(kind: .local)]))))
+      try transaction.delete(root.appendingPathComponent(".agent/cache/artifact-content/pruned"))
       try transaction.replace(
         root.appendingPathComponent(".claude/skills/created"),
-        content: root.appendingPathComponent("new"),
-        link: true)
+        with: .link(root.appendingPathComponent("new")))
       try transaction.replace(
-        root.appendingPathComponent("AGENTS.md"), content: nil,
-        data: Data("new instructions".utf8))
+        root.appendingPathComponent("AGENTS.md"), with: .data(Data("new instructions".utf8)))
       try transaction.commit()
     }
   }
@@ -264,7 +262,7 @@ extension StateTransactionTests {
     let recovery = try stateTestProcess(
       root: fixture.root,
       arguments: [
-        "recover", TransactionCheckpoint.restoration(4, .creationQuarantined).name, "--scope",
+        "recover", TransactionCheckpoint.restoration(4, .withdrawn).name, "--scope",
         scope.rawValue,
       ])
     defer { terminateProcess(recovery) }
@@ -278,13 +276,13 @@ extension StateTransactionTests {
       let recovered = try FileTransaction.recover(store: store) { steps.append($0) }
       #expect(recovered)
     }
-    #expect(!steps.contains(TransactionCheckpoint.restoration(4, .creationQuarantined).name))
+    #expect(!steps.contains(TransactionCheckpoint.restoration(4, .withdrawn).name))
     let synced = try #require(
       steps.firstIndex(of: TransactionCheckpoint.restoration(4, .synced).name))
     let terminal = try #require(
       steps.firstIndex(of: TransactionCheckpoint.persisted(.rolledBack, .terminal, .renamed).name))
-    let cleanup = try #require(steps.firstIndex(of: TransactionCheckpoint.discardIntent.name))
-    #expect(synced < terminal && terminal < cleanup)
+    let disposal = try #require(steps.firstIndex(of: TransactionCheckpoint.disposalIntent.name))
+    #expect(synced < terminal && terminal < disposal)
     #expect(try Data(contentsOf: store.declarationURL) == declaration)
     #expect(try Data(contentsOf: store.resolvedURL) == resolved)
     #expect(try Data(contentsOf: fixture.store.resolvedURL) == projectState)
@@ -451,14 +449,14 @@ extension StateTransactionTests {
     #expect(try FileSnapshot.read(at: copy) == copyHash)
   }
 
-  @Test(arguments: ["journal", "scratch", "cache", "agent"])
+  @Test(arguments: ["journal", "incompleteJournal", "cache", "agent"])
   func rejectsSymlinkedRecoveryPaths(_ component: String) throws {
     let fixture = try TransactionFixture()
     try abandon(fixture)
     let original: URL
     switch component {
     case "journal": original = fixture.store.directory.appendingPathComponent("transaction.json")
-    case "scratch":
+    case "incompleteJournal":
       original = fixture.store.directory.appendingPathComponent("transaction.new")
       try Data("incomplete".utf8).write(to: original)
     case "cache": original = fixture.store.cacheDirectory.appendingPathComponent("artifact-content")
@@ -474,7 +472,8 @@ extension StateTransactionTests {
       }
       guard case CoreError.unsafePath(let reason) = error else { return false }
       return reason.contains(
-        component == "journal" || component == "scratch" ? "cannot open file" : "unsafe directory")
+        component == "journal" || component == "incompleteJournal"
+          ? "cannot open file" : "unsafe directory")
     }
     #expect(try FileSnapshot.read(at: fixture.root) == snapshot)
   }
@@ -524,11 +523,8 @@ extension StateTransactionTests {
     defer { removeTemporaryDirectory(root) }
     try FileManager.default.createDirectory(
       at: root.appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
-    func lockPoint(_ step: DirectoryHandle.AncestryStep) -> String {
-      "lock.ancestry." + step.name
-    }
     let child = try stateTestProcess(
-      root: root, arguments: ["create-scope", lockPoint(.created(depth: 0))])
+      root: root, arguments: ["create-scope", FileLock.ancestryCheckpoint(.created(depth: 0))])
     defer { terminateProcess(child) }
     try waitFor("ready", root: root, child: child)
     #expect(
@@ -553,8 +549,10 @@ extension StateTransactionTests {
       at: new.appendingPathComponent(".agents.lock"), checkpoint: { steps.append($0) },
       {
         for depth in 0...2 {
-          let created = try #require(steps.firstIndex(of: lockPoint(.created(depth: depth))))
-          let synced = try #require(steps.firstIndex(of: lockPoint(.synced(depth: depth))))
+          let created = try #require(
+            steps.firstIndex(of: FileLock.ancestryCheckpoint(.created(depth: depth))))
+          let synced = try #require(
+            steps.firstIndex(of: FileLock.ancestryCheckpoint(.synced(depth: depth))))
           #expect(created < synced)
         }
         #expect(steps.count == 6)
@@ -607,15 +605,15 @@ extension StateTransactionTests {
           }
         }
         for target in targets {
-          try transaction.replace(target, content: fixture.root.appendingPathComponent("new"))
+          try transaction.replace(target, with: .copy(fixture.root.appendingPathComponent("new")))
         }
         try transaction.replace(
-          store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.codex]))
-        )
+          store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.codex]))))
         try transaction.replace(
-          store.resolvedURL, content: nil,
-          data: StateStore.encode(
-            ResolvedState(sources: ["local:/new": LockedSource(kind: .local)])))
+          store.resolvedURL,
+          with: .data(
+            StateStore.encode(
+              ResolvedState(sources: ["local:/new": LockedSource(kind: .local)]))))
         try transaction.commit()
       }
     }

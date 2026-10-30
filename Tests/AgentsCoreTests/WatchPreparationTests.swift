@@ -31,13 +31,19 @@ struct WatchPreparationTests {
     #expect(try FileSnapshot.read(at: fixture.store.watchURL) == watchBefore)
   }
 
+  /// Control for the lock edit below: the unchanged lock lets the same seen prune the entry.
+  @Test func unchangedLockPrunesUnreferencedCache() throws {
+    let fixture = try WatchGitFixture()
+    try fixture.watch.add("source", environment: fixture.environment)
+    let unreferenced = try fixture.unreferencedCacheEntry()
+    try fixture.watch.seen("source", environment: fixture.environment)
+    #expect(try FileSnapshot.read(at: unreferenced) == nil)
+  }
+
   @Test func lockEditedDuringAcknowledgmentPreventsPruning() throws {
     let fixture = try WatchGitFixture()
     try fixture.watch.add("source", environment: fixture.environment)
-    let unreferenced = fixture.store.cacheDirectory.appendingPathComponent(
-      "artifact-content/" + String(repeating: "a", count: 64))
-    try FileManager.default.createDirectory(at: unreferenced, withIntermediateDirectories: true)
-    try Data("unreferenced".utf8).write(to: unreferenced.appendingPathComponent("SKILL.md"))
+    let unreferenced = try fixture.unreferencedCacheEntry()
     let cached = try FileSnapshot.read(at: unreferenced)
     let declaration = try FileSnapshot.read(at: fixture.store.declarationURL)
     let watchBefore = try FileSnapshot.read(at: fixture.store.watchURL)
@@ -81,7 +87,7 @@ private final class ExternalEdit: @unchecked Sendable {
 }
 
 extension WatchGitFixture {
-  /// Runs `edit` once, after the Git fetch and before the scope journal is written.
+  /// Runs `edit` after each Git fetch of an acknowledgment, before the scope journal is written.
   fileprivate func operations(edit: @escaping @Sendable () throws -> Void) -> WatchOperations {
     WatchOperations(
       discoverSkills: { _ in [] },
@@ -89,5 +95,14 @@ extension WatchGitFixture {
       checkpoint: { step in
         if step == "watch.mirror.fetched" { try edit() }
       })
+  }
+
+  /// An artifact tree that neither the lock nor watch state references.
+  fileprivate func unreferencedCacheEntry() throws -> URL {
+    let entry = store.cacheDirectory.appendingPathComponent(
+      "artifact-content/" + String(repeating: "a", count: 64))
+    try FileManager.default.createDirectory(at: entry, withIntermediateDirectories: true)
+    try Data("unreferenced".utf8).write(to: entry.appendingPathComponent("SKILL.md"))
+    return entry
   }
 }

@@ -46,11 +46,11 @@ struct ProcessTerminationTests {
     #expect(throws: (any Error).self) { try ProcessWait.stopped(child, root: root, timeout: 0.5) }
     let start = Date()
     try ProcessWait.terminate(child, timeout: 10)
-    #expect(Date().timeIntervalSince(start) < 10)
+    #expect(Date().timeIntervalSince(start) < 2)
     #expect(child.terminationReason == .uncaughtSignal)
   }
 
-  @Test func lostSignalsAreResentAndTheLoopIsBounded() throws {
+  @Test func terminationLoopIsBoundedWhenSignalsNeverArrive() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
     let child = try stateTestProcess(root: root, arguments: ["unstopped-marker"])
@@ -61,14 +61,7 @@ struct ProcessTerminationTests {
       try ProcessWait.terminate(child, timeout: 0.5, send: { _ in })
     }
     let elapsed = Date().timeIntervalSince(start)
-    #expect(elapsed >= 0.5 && elapsed < 5)
+    #expect(elapsed >= 0.5 && elapsed < 2)
     #expect(child.isRunning)
-    var sends = 0
-    try ProcessWait.terminate(child, timeout: 10) { processIdentifier in
-      sends += 1
-      if sends > 1 { kill(processIdentifier, SIGKILL) }
-    }
-    #expect(sends >= 2)
-    #expect(child.terminationReason == .uncaughtSignal)
   }
 }

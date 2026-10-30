@@ -4,11 +4,11 @@ import Foundation
 /// sealed publication evidence and terminal disposal. The scope writer lock spans
 /// preparation, commit and recovery; external writers are identified by inode and digest.
 package final class FileTransaction {
-  enum Source {
+  package enum Source {
     case data(Data)
     case copy(URL)
-    /// The destination is interpreted after publication, relative to the target parent.
-    case link(URL, destination: String)
+    /// A symbolic link to the URL, relative to the target parent when the URL is in the scope.
+    case link(URL)
     /// A producer may construct arbitrary intermediate objects only inside its private container.
     case prepared((URL) throws -> URL)
   }
@@ -18,6 +18,8 @@ package final class FileTransaction {
     var executableFlags: [String: Bool]?
     var kind: mode_t?
     var mode: mode_t?
+    /// The destination a staged symbolic link must contain.
+    var linkDestination: String?
   }
   private struct Request {
     let path: String
@@ -30,8 +32,8 @@ package final class FileTransaction {
   private let checkpoint: (String) throws -> Void
   private let outcome: TransactionOutcome
   private var requests: [Request] = []
-  package var validateBeforePublication: () throws -> Void = {}
-  package var targetPaths: Set<String> { Set(requests.map { $0.evidence.url.path }) }
+  private var unchanged: [any PreparedEvidence] = []
+  private var targetPaths: Set<String> { Set(requests.map { $0.evidence.url.path }) }
 
   package init(
     store: StateStore, outcome: TransactionOutcome = TransactionOutcome(),
@@ -42,51 +44,44 @@ package final class FileTransaction {
     self.checkpoint = checkpoint
   }
 
+  /// `expectedHash` and `executableFlags` describe the content's tree hash and execute bits.
   package func replace(
-    _ destination: URL, content: URL?, link: Bool = false, data: Data? = nil,
-    expectedHash: String? = nil, executableFlags: [String: Bool]? = nil,
-    expecting: TargetPrecondition? = nil
+    _ destination: URL, with source: Source, expectedHash: String? = nil,
+    executableFlags: [String: Bool]? = nil, expecting: TargetPrecondition? = nil
   ) throws {
-    if let expectedHash {
-      try StateValidation.digest(expectedHash)
-      guard content != nil || data != nil else {
-        throw CoreError.invalidState("verification requires content")
-      }
+    if let expectedHash { try StateValidation.digest(expectedHash) }
+    let (path, evidence) = try request(destination, expecting: expecting)
+    var expectation = Expectation(hash: expectedHash, executableFlags: executableFlags)
+    switch source {
+    case .copy(let url):
+      expectation = try Self.copyExpectation(url, hash: expectedHash, flags: executableFlags)
+    case .link(let url):
+      expectation.linkDestination = Self.linkDestination(
+        url, parent: destination.deletingLastPathComponent(), store: store)
+    case .data, .prepared: break
     }
-    let source: Source?
-    if let data {
-      source = .data(data)
-    } else if let content {
-      source =
-        link
-        ? .link(
-          content,
-          destination: Self.linkDestination(
-            content, parent: destination.deletingLastPathComponent(), store: store))
-        : .copy(content)
-    } else {
-      source = nil
-    }
-    try append(destination, source: source, expecting: expecting) {
-      guard case .copy(let url) = source else {
-        return Expectation(hash: expectedHash, executableFlags: executableFlags)
-      }
-      return try Self.copyExpectation(url, hash: expectedHash, flags: executableFlags)
-    }
+    requests.append(
+      Request(path: path, evidence: evidence, source: source, expectation: expectation))
   }
 
-  func prepare(_ destination: URL, content: @escaping (URL) throws -> URL) throws {
-    try append(destination, source: .prepared(content), expecting: nil) { Expectation() }
+  package func delete(_ destination: URL, expecting: TargetPrecondition? = nil) throws {
+    let (path, evidence) = try request(destination, expecting: expecting)
+    requests.append(Request(path: path, evidence: evidence, source: nil, expectation: .init()))
   }
 
-  func remove(_ name: String, from parent: DirectoryHandle) throws {
-    try replace(parent.url.appendingPathComponent(name), content: nil)
+  /// Prepared inputs that this journal does not replace must still match at commit entry,
+  /// after staging and after publication; the journal verifies its own targets itself.
+  package func requireUnchanged(since evidence: any PreparedEvidence...) {
+    unchanged += evidence
   }
 
-  private func append(
-    _ destination: URL, source: Source?, expecting: TargetPrecondition?,
-    expectation: () throws -> Expectation
-  ) throws {
+  private func validateUnchanged() throws {
+    for evidence in unchanged { try evidence.validate(excludingTargets: targetPaths) }
+  }
+
+  private func request(_ destination: URL, expecting: TargetPrecondition?) throws -> (
+    path: String, evidence: TargetPrecondition
+  ) {
     let path = try TransactionPaths(store: store).path(for: destination)
     guard !requests.contains(where: { $0.path == path }) else {
       throw CoreError.invalidState("duplicate transaction destination")
@@ -95,11 +90,10 @@ package final class FileTransaction {
     guard evidence.url.path == destination.standardizedFileURL.path else {
       throw CoreError.invalidState("precondition belongs to another target")
     }
-    requests.append(
-      Request(path: path, evidence: evidence, source: source, expectation: try expectation()))
+    return (path, evidence)
   }
 
-  fileprivate static func copyExpectation(
+  static func copyExpectation(
     _ source: URL, hash: String?, flags: [String: Bool]?
   ) throws -> Expectation {
     let physical = source.resolvingSymlinksInPath()
@@ -121,11 +115,11 @@ package final class FileTransaction {
   package func commit() throws {
     guard !requests.isEmpty else { return }
     guard let directory = try store.openDirectoryIfPresent(),
-      try directory.info("transaction.json") == nil, try directory.info("transaction.new") == nil
+      try !TransactionJournal.isPresent(in: directory)
     else {
       throw CoreError.invalidState("transaction recovery is required")
     }
-    try validateBeforePublication()
+    try validateUnchanged()
     for request in requests { try request.evidence.validate() }
     try validateOverlap()
     let session = try makeSession(directory)
@@ -145,19 +139,24 @@ package final class FileTransaction {
         try session.stage(index, source: request.source, expectation: request.expectation)
       }
       try session.emit(.preconditions)
-      try validateBeforePublication()
+      try validateUnchanged()
       try session.validatePreimages()
       outcome.disposition = .recoveryRequired
       for index in session.journal.entries.indices { try session.publish(index) }
-      try validateBeforePublication()
-      try session.prepareCleanup()
+      try validateUnchanged()
+      try session.sealDisposal()
       try session.emit(.commitValidated)
       try session.finish(.committed)
       outcome.disposition = .committed
       try session.emit(.phase(.committed))
       try session.dispose()
     } catch {
-      do { _ = try Self.recover(store: store, outcome: outcome) } catch {
+      // Recovery names its checkpoints under `recovery.`, apart from the failed commit's.
+      do {
+        _ = try Self.recover(store: store, outcome: outcome) {
+          try self.checkpoint("recovery." + $0)
+        }
+      } catch {
         outcome.disposition = .recoveryRequired
       }
       throw error
@@ -191,8 +190,8 @@ package final class FileTransaction {
       }
     }
     let parents = try requests.enumerated().map { index, request in
-      try paths.parent(for: request.path, roots: roots, create: true) { level in
-        try checkpoint(TransactionCheckpoint.parentCreated(entry: index, level: level).name)
+      try paths.parent(for: request.path, roots: roots, create: true) { step in
+        try checkpoint(TransactionCheckpoint.parentAncestry(entry: index, step).name)
       }
     }
     for request in requests { try request.evidence.validateIdentity() }
@@ -238,228 +237,5 @@ package final class FileTransaction {
         separator: "/")
     }
     return source.path
-  }
-}
-
-extension TransactionSession {
-  func createContainers() throws {
-    for index in journal.containers.indices {
-      let parent = parents[journal.containers[index].entry]
-      let created = try parent.makeDirectory(journal.containerName(index))
-      let identity = try created.objectIdentity
-      try emit(.containerCreated(index))
-      guard try parent.info(journal.containerName(index)).map(FileObjectIdentity.init) == identity
-      else {
-        throw conflict(
-          journal.containers[index].entry,
-          "private container changed before its identity was durable")
-      }
-      journal.containers[index].identity = identity
-    }
-    // No object enters any container until all newly created identities are durable.
-    try persist(.containers)
-    try emit(.containersIdentified)
-  }
-
-  func checkCapabilities() throws {
-    for index in journal.containers.indices {
-      let container = try container(index)
-      let device = try container.device
-      guard !capableDevices.contains(device) else { continue }
-      let names = TransactionScratch.probes
-      try container.requireAtomicRenames(
-        first: names.first, second: names.second, moved: names.moved
-      ) { try emit(.probe(index, $0)) }
-      capableDevices.insert(device)
-    }
-  }
-
-  func stage(
-    _ index: Int, source: FileTransaction.Source?, expectation: FileTransaction.Expectation
-  ) throws {
-    let entry = journal.entries[index]
-    let parent = parents[index]
-    let scratch = try container(entry.container)
-    if let preimage = entry.preimage { try parent.synchronize(entry.name, as: preimage) }
-    try emit(.stage(index, .preimageSynced))
-    let staging = TransactionScratch.staging(for: entry)
-    var staged: FileSnapshot?
-    if let source {
-      let sealed = try construct(
-        source, expectation: expectation, named: staging.name(index), index: index,
-        scratch: scratch, parent: parent)
-      try emit(.stage(index, .constructed))
-      let capture = try FileSnapshot.capture(staging.name(index), from: scratch)
-      try verify(source, sealed, capture: capture)
-      guard let snapshot = capture.snapshot else {
-        throw conflict(index, "missing constructed object")
-      }
-      staged = snapshot
-    } else {
-      try emit(.stage(index, .constructed))
-    }
-    for slot in TransactionScratch.objectSlots where source == nil || slot != staging {
-      guard try scratch.info(slot.name(index)) == nil else {
-        throw CoreError.invalidState("unexpected private recovery slot before sealing")
-      }
-    }
-    try scratch.sync()
-    journal.entries[index].staged = staged
-    try advance(index, to: .ready)
-  }
-
-  /// Returns the expectation the sealed staging must meet.
-  private func construct(
-    _ source: FileTransaction.Source, expectation: FileTransaction.Expectation,
-    named name: String, index: Int, scratch: DirectoryHandle, parent: DirectoryHandle
-  ) throws -> FileTransaction.Expectation {
-    let entry = journal.entries[index]
-    var expectation = expectation
-    switch source {
-    case .data(let data):
-      let original = entry.preimage?.isRegular == true ? entry.preimage : nil
-      expectation.mode = original?.mode ?? 0o600
-      try scratch.write(
-        name, data: data, preservingMetadataOf: original == nil ? nil : entry.name,
-        originalParent: parent, syncParent: false,
-        afterCreate: { try emit(.stage(index, .writeCreated)) })
-    case .link(_, let destination):
-      try scratch.link(name, destination: destination, syncParent: false)
-    case .copy(let url):
-      try copy(url, named: name, index: index, scratch: scratch)
-    case .prepared(let produce):
-      let work = TransactionScratch.work.name(index)
-      try scratch.makeDirectory(work, syncParent: false)
-      try emit(.stage(index, .workCreated))
-      let root = scratch.url.appendingPathComponent(work)
-      let url = try produce(root)
-      guard PathSafety.isContained(url.resolvingSymlinksInPath(), in: root) else {
-        throw CoreError.unsafePath("prepared content escapes transaction staging")
-      }
-      expectation = try FileTransaction.copyExpectation(url, hash: nil, flags: nil)
-      try emit(.stage(index, .workPrepared))
-      try copy(url, named: name, index: index, scratch: scratch)
-    }
-    return expectation
-  }
-
-  private func copy(_ source: URL, named name: String, index: Int, scratch: DirectoryHandle)
-    throws
-  {
-    try Self.validateCopy(source)
-    let origin = source.resolvingSymlinksInPath()
-    try scratch.copy(
-      name, from: DirectoryHandle(at: origin.deletingLastPathComponent()),
-      named: origin.lastPathComponent, syncParent: false
-    ) { try emit(.copy(index, $0)) }
-  }
-
-  private func verify(
-    _ source: FileTransaction.Source, _ expectation: FileTransaction.Expectation,
-    capture: FileSnapshot.Capture
-  ) throws {
-    let snapshot = capture.snapshot
-    if let kind = expectation.kind, snapshot?.identity.kind != kind {
-      throw CoreError.invalidState("staged content type mismatch")
-    }
-    if case .data = source, snapshot?.isRegular != true {
-      throw CoreError.invalidState("staged content type mismatch")
-    }
-    if let mode = expectation.mode, snapshot?.mode != mode {
-      throw CoreError.invalidState("staged content permissions mismatch")
-    }
-    var linked: URL?
-    switch source {
-    case .data(let data):
-      guard snapshot?.digest == FileHash.sha256Hex(data: data) else {
-        throw CoreError.invalidState("staged content bytes mismatch")
-      }
-    case .link(let url, let destination):
-      guard snapshot?.isSymbolicLink == true,
-        snapshot?.digest == FileHash.sha256Hex(data: Data(destination.utf8))
-      else { throw CoreError.invalidState("staged symbolic link destination mismatch") }
-      linked = url
-    case .copy, .prepared: break
-    }
-    if let expected = expectation.hash {
-      let actual = try linked.map(FileHash.folderHash) ?? capture.contentHash
-      guard "sha256:" + actual == expected else {
-        throw CoreError.invalidState("staged content digest mismatch")
-      }
-    }
-    if let flags = expectation.executableFlags {
-      let actual = try linked.map(FileHash.executableFlags) ?? capture.executableFlags
-      guard actual == flags else {
-        throw CoreError.invalidState("staged content executable mode mismatch")
-      }
-    }
-  }
-
-  func validatePreimages() throws {
-    for index in journal.entries.indices { try requirePreimage(index) }
-  }
-
-  func publish(_ index: Int) throws {
-    let entry = journal.entries[index]
-    let parent = parents[index]
-    let scratch = try container(entry.container)
-    let layout = try distribution(index)
-    guard layout.kind == .prepared else {
-      throw conflict(index, "operation is not prepared")
-    }
-    // A stale preparation cancels from ready; rechecking after the intent narrows the race.
-    try requirePreimage(index)
-    try advance(index, to: .publishing)
-    try requirePreimage(index)
-    try emit(.publication(index, .validated))
-    try grantDirectoryPermissions(index, layout: layout, purpose: .publicationGrant)
-    if entry.action == .install {
-      let exchange = entry.preimage != nil
-      try scratch.move(
-        TransactionScratch.staging(for: entry).name(index), to: parent, named: entry.name,
-        mode: exchange ? .exchange : .exclusive
-      ) {
-        try emit(.publication(index, exchange ? .exchanged : .created))
-      }
-    } else if entry.preimage != nil {
-      try parent.move(
-        entry.name, to: scratch, named: TransactionScratch.deleted.name(index), mode: .exclusive
-      ) {
-        try emit(.publication(index, .quarantined))
-      }
-    }
-    try emit(.publication(index, .synced))
-    try restoreDirectoryPermissions(index, purpose: .publicationRestore)
-    guard try distribution(index).kind == .installed else {
-      throw conflict(index, "publication did not retain its preimage")
-    }
-    try advance(index, to: .applied)
-  }
-
-  func requirePreimage(_ index: Int) throws {
-    try requireParent(index)
-    guard
-      try FileSnapshot.read(journal.entries[index].name, from: parents[index])
-        == journal.entries[index].preimage
-    else {
-      throw conflict(index, "preparation is stale; prepare again")
-    }
-  }
-
-  /// A copied subtree keeps relative links that stay inside it, dangling ones included.
-  private static func validateCopy(_ source: URL) throws {
-    guard let root = PathSafety.realPath(source.path),
-      let entries = FileManager.default.enumerator(
-        at: URL(fileURLWithPath: root), includingPropertiesForKeys: [.isSymbolicLinkKey])
-    else { return }
-    for case let entry as URL in entries {
-      if try entry.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
-        entries.skipDescendants()
-        let destination = try FileManager.default.destinationOfSymbolicLink(atPath: entry.path)
-        guard !destination.hasPrefix("/"), try PathSafety.linkStaysInside(entry, root: root) else {
-          throw CoreError.unsafePath("copy symlink escapes installed subtree: \(entry.path)")
-        }
-      }
-    }
   }
 }

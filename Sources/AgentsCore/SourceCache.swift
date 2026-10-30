@@ -155,9 +155,9 @@ package struct SourceCache {
   /// The marker survives interruptions until every deletion and its parent are durable.
   func recoverWatchReferences() throws -> Bool {
     guard let directory = try store.openDirectoryIfPresent() else { return false }
-    guard try directory.info("transaction.json") == nil,
-      try directory.info("transaction.new") == nil
-    else { throw CoreError.invalidState("transaction recovery must precede watch ref cleanup") }
+    guard try !TransactionJournal.isPresent(in: directory) else {
+      throw CoreError.invalidState("transaction recovery must precede watch ref cleanup")
+    }
     if try directory.info("watch-refs.pending") != nil,
       try !directory.read("watch-refs.pending").isEmpty
     {
@@ -201,7 +201,8 @@ package struct SourceCache {
       let cache = try directory.child("cache")
       if try cache.info("mirrors") != nil {
         let mirrors = try cache.child("mirrors")
-        for name in try mirrors.names() where name.hasSuffix(".git") {
+        // Checkpoints are numbered by mirror and by deletion within this reconciliation.
+        for (ordinal, name) in try mirrors.names().filter({ $0.hasSuffix(".git") }).enumerated() {
           try withMirrorLock(at: mirrors.url.appendingPathComponent(name)) { descriptor in
             let mirror = try mirrors.child(name)
             let source = try sourceLocations[name] ?? mirrorSource(mirror.url, lock: descriptor)
@@ -212,6 +213,7 @@ package struct SourceCache {
               mirror.url,
               ["for-each-ref", "--format=%(refname) %(objectname)", "refs/agents-watch/"],
               operation: .listReferences, source: source, lock: descriptor)
+            var deleted = 0
             for line in references.split(separator: "\n") {
               let parts = line.split(separator: " ").map(String.init)
               guard parts.count == 2, parts[0] == "refs/agents-watch/" + parts[1],
@@ -224,7 +226,8 @@ package struct SourceCache {
                 mirror.url, ["update-ref", "--no-deref", "-d", parts[0], parts[1]],
                 operation: .deleteReference, source: source, lock: descriptor
               )
-              try checkpoint("watch.references.deleted")
+              try checkpoint("watch.references.\(ordinal).\(deleted).deleted")
+              deleted += 1
             }
             // A previous attempt may have unlinked the final loose ref or rewritten packed-refs.
             // Flush their parents even when enumeration now finds no obsolete refs.
@@ -232,7 +235,7 @@ package struct SourceCache {
             if try refs.info("agents-watch") != nil { try refs.child("agents-watch").sync() }
             try refs.sync()
             try mirror.sync()
-            try checkpoint("watch.references.synced")
+            try checkpoint("watch.references.\(ordinal).synced")
           }
         }
       }
@@ -249,15 +252,17 @@ package struct SourceCache {
     let cache = try directory.child("cache")
     guard try cache.info("mirrors") != nil else { return }
     let mirrors = try cache.child("mirrors")
-    for name in try mirrors.names() where name.hasSuffix(".git") {
+    for (ordinal, name) in try mirrors.names().filter({ $0.hasSuffix(".git") }).enumerated() {
       try withMirrorLock(at: mirrors.url.appendingPathComponent(name)) { _ in
-        try recoverGitLocks(in: mirrors.child(name), scope: directory)
+        try recoverGitLocks(in: mirrors.child(name), ordinal: ordinal, scope: directory)
       }
     }
   }
 
-  private func recoverGitLocks(in mirror: DirectoryHandle, scope directory: DirectoryHandle) throws
-  {
+  /// Checkpoints are numbered by the mirror's ordinal and the lock's position in traversal.
+  private func recoverGitLocks(
+    in mirror: DirectoryHandle, ordinal: Int, scope directory: DirectoryHandle
+  ) throws {
     var locks: [(DirectoryHandle, String)] = []
     func inspect(_ parent: DirectoryHandle, isMirrorRoot: Bool = false) throws {
       for name in try parent.names() {
@@ -276,8 +281,10 @@ package struct SourceCache {
     try inspect(mirror, isMirrorRoot: true)
     if !locks.isEmpty { try beginWatchReferenceUpdate() }
     guard try directory.info("watch-refs.pending") != nil else { return }
-    for (parent, name) in locks {
-      try parent.remove(name) { try checkpoint("watch.git-lock.\($0.step.rawValue)") }
+    for (index, (parent, name)) in locks.enumerated() {
+      try parent.remove(name) {
+        try checkpoint("watch.git-lock.\(ordinal).\(index).\($0.step.rawValue)")
+      }
     }
     // A killed cleanup may have unlinked the last lock before syncing its parent.
     // The pending marker requires these barriers even if no lock remains visible.
@@ -306,11 +313,13 @@ package struct SourceCache {
       if FileManager.default.fileExists(atPath: destination.path) { return destination }
       let mirror = try pinnedMirror(sourceID: sourceID, source: source, revision: revision)
       let transaction = FileTransaction(store: store, checkpoint: checkpoint)
-      try transaction.prepare(destination) { work in
-        try extract(
-          revision: revision, mirror: mirror,
-          source: declaration(sourceID: sourceID, source: source).location, root: work)
-      }
+      try transaction.replace(
+        destination,
+        with: .prepared { work in
+          try extract(
+            revision: revision, mirror: mirror,
+            source: declaration(sourceID: sourceID, source: source).location, root: work)
+        })
       try transaction.commit()
       return destination
     }
@@ -441,7 +450,7 @@ package struct SourceCache {
       }
     } else {
       let transaction = FileTransaction(store: store, checkpoint: checkpoint)
-      try transaction.replace(url, content: nil, data: data, expectedHash: digest)
+      try transaction.replace(url, with: .data(data), expectedHash: digest)
       try transaction.commit()
     }
     return url
@@ -460,7 +469,7 @@ package struct SourceCache {
       }
     } else {
       let transaction = FileTransaction(store: store, checkpoint: checkpoint)
-      try transaction.replace(destination, content: directory, expectedHash: hash)
+      try transaction.replace(destination, with: .copy(directory), expectedHash: hash)
       try transaction.commit()
     }
     return destination
@@ -523,9 +532,9 @@ package struct SourceCache {
           if !paths.contains(tree.url.path) && !edited(tree.url) { unused.append(pin) }
         }
         if unused.count == pins.count {
-          try transactionToUse.remove(name, from: materialized)
+          try transactionToUse.delete(materialized.url.appendingPathComponent(name))
         } else {
-          for pin in unused { try transactionToUse.remove(pin, from: source) }
+          for pin in unused { try transactionToUse.delete(source.url.appendingPathComponent(pin)) }
         }
       }
     }
@@ -539,7 +548,7 @@ package struct SourceCache {
           throw CoreError.unsafePath("unexpected artifact cache entry")
         }
         if !digests.contains(name) && !edited(url) {
-          try transactionToUse.remove(name, from: directory)
+          try transactionToUse.delete(url)
         }
       }
     }

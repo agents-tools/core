@@ -24,8 +24,9 @@ final class TransactionSession {
 
   func persist(_ change: TransactionCheckpoint.Change) throws {
     try requireScope()
-    try directory.writeJournal(
-      StateStore.encode(journal),
+    try directory.replaceFile(
+      TransactionJournal.fileName, through: TransactionJournal.incompleteFileName,
+      with: StateStore.encode(journal),
       afterWrite: {
         try emit(.persisted(journal.phase, change, .written))
       },
@@ -93,11 +94,8 @@ final class TransactionSession {
 
   func containerLocation(_ index: Int) -> String {
     let entry = journal.entries[index]
-    guard journal.containers.indices.contains(entry.container) else {
-      return "<invalid container reference \(entry.container)>"
-    }
-    return entry.path.split(separator: "/").dropLast().joined(separator: "/") + "/"
-      + journal.containerName(entry.container)
+    return journal.containerLocation(of: entry)
+      ?? "<invalid container reference \(entry.container)>"
   }
 
   func recordConflict(_ index: Int, _ error: Error) throws {
@@ -173,9 +171,9 @@ final class TransactionSession {
         throw CoreError.invalidState("sealed operation is missing private container identity")
       }
     }
-    try record.cleanup?.validate()
-    if let cleanup = record.cleanup {
-      guard cleanup.identity == record.identity else {
+    try record.disposal?.validate()
+    if let disposal = record.disposal {
+      guard disposal.identity == record.identity else {
         throw CoreError.invalidState("terminal container evidence has another identity")
       }
     }
@@ -184,7 +182,7 @@ final class TransactionSession {
         [.applied, .restored].contains(entry.progress)
           && TransactionLayout.expected(entry).contains { !$0.objects.isEmpty }
       }
-      guard !containsUserData || record.cleanup != nil else {
+      guard !containsUserData || record.disposal != nil else {
         throw CoreError.invalidState("terminal container is missing user-object disposal evidence")
       }
     }
@@ -202,7 +200,7 @@ final class TransactionSession {
     let requiresStaging = entry.action == .install && entry.progress != .queued
     guard allowed.contains(entry.progress),
       (entry.staged != nil) == requiresStaging,
-      !journal.discarding || journal.phase == .committed || journal.phase == .rolledBack
+      !journal.disposing || journal.phase == .committed || journal.phase == .rolledBack
     else {
       throw conflict(index, "operation progress contradicts its evidence or journal phase")
     }
@@ -217,10 +215,10 @@ final class TransactionSession {
     try requireParent(index)
     let layouts = TransactionLayout.expected(entry)
     if entry.progress == .queued { return layouts[0] }
-    let scratch = try container(entry.container)
-    var objects: [TransactionScratch: FileSnapshot] = [:]
-    for slot in TransactionScratch.objectSlots {
-      if let value = try FileSnapshot.read(slot.name(index), from: scratch) {
+    let container = try self.container(entry.container)
+    var objects: [TransactionSlot: FileSnapshot] = [:]
+    for slot in TransactionSlot.objectSlots {
+      if let value = try FileSnapshot.read(slot.name(index), from: container) {
         objects[slot] = value
       }
     }
@@ -238,6 +236,10 @@ final class TransactionSession {
         return layout
       }
     }
-    throw conflict(index, "missing or changed expected target, preimage or rollback quarantine")
+    let expected = Set(layouts.flatMap(\.objects.keys)).map { $0.name(index) }.sorted()
+    throw conflict(
+      index,
+      "missing or changed expected target or recovery slot object; expected slots: "
+        + (expected.isEmpty ? "none" : expected.joined(separator: ", ")))
   }
 }

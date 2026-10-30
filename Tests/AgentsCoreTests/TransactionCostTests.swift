@@ -21,19 +21,16 @@ struct TransactionCostTests {
       let count = TransactionIOCount()
       try store.withLock {
         let transaction = FileTransaction(store: store) { step in
-          if step.hasPrefix("journal."), step.hasSuffix(".renamed") { count.persist() }
+          if TransactionCheckpoint.isJournalPublished(step) { count.persist() }
           if step == TransactionCheckpoint.probe(0, .verified).name { count.probe() }
         }
         for target in targets {
-          try transaction.replace(target, content: nil, data: Data("after".utf8))
+          try transaction.replace(target, with: .data(Data("after".utf8)))
         }
         try DirectoryHandle.$synchronizationObserver.withValue({ count.sync() }) {
           try transaction.commit()
         }
       }
-      print(
-        "TWO_SMALL_FILES persists=\(count.persists) barriers=\(count.barriers) ancestry=\(ancestry)"
-      )
       #expect(count.persists == 10)
       #expect(count.probes == 1)
       #expect(count.barriers - ancestry == 38)
@@ -53,9 +50,9 @@ struct TransactionCostTests {
     try store.withLock {
       let transaction = FileTransaction(store: store) { steps.append($0) }
       try transaction.replace(
-        root.appendingPathComponent("AGENTS.md"), content: nil, data: Data("after".utf8))
+        root.appendingPathComponent("AGENTS.md"), with: .data(Data("after".utf8)))
       try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.codex])))
+        store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.codex]))))
       try transaction.commit()
     }
     #expect(steps.contains(TransactionCheckpoint.containerCreated(1).name))

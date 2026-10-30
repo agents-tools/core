@@ -227,10 +227,7 @@ final class SkillLifecycle {
     try plan.validate()
     let retained = try plan.retain()
     let transaction = FileTransaction(store: store)
-    transaction.validateBeforePublication = { [unowned transaction] in
-      try baseline.validate(excludingTargets: transaction.targetPaths)
-      try plan.validate(excludingTargets: transaction.targetPaths)
-    }
+    transaction.requireUnchanged(since: baseline, plan)
     try plan.stage(retained: retained, transaction: transaction)
     if writeState {
       try store.stageDeclaration(declaration, in: transaction, prepared: baseline)
@@ -238,8 +235,8 @@ final class SkillLifecycle {
         comparedTo: baseline.bytes(for: store.resolvedURL))
       {
         try transaction.replace(
-          store.resolvedURL, content: nil, data: data,
-          expecting: baseline.evidence(for: store.resolvedURL))
+          store.resolvedURL, with: .data(data), expecting: baseline.evidence(for: store.resolvedURL)
+        )
       }
     }
     try cache.prune(
@@ -326,16 +323,14 @@ final class SkillLifecycle {
             content.resolvingSymlinksInPath(), in: URL(fileURLWithPath: path).standardizedFileURL)
         else { throw CoreError.unsafePath("installation would replace its own source") }
         try transaction.replace(
-          URL(fileURLWithPath: path), content: content, link: target.mode != .copy,
-          expectedHash: item.lock.hash,
-          executableFlags: item.executableFlags, expecting: evidence)
+          URL(fileURLWithPath: path), with: target.mode == .copy ? .copy(content) : .link(content),
+          expectedHash: item.lock.hash, executableFlags: item.executableFlags, expecting: evidence)
       } else if let target = oldTargets[path], names.contains(target.name), newTargets[path] == nil
       {
         guard let evidence = expectations[path] else {
           throw CoreError.invalidState("skill target has no prepared preimage")
         }
-        try transaction.replace(
-          URL(fileURLWithPath: path), content: nil, expecting: evidence)
+        try transaction.delete(URL(fileURLWithPath: path), expecting: evidence)
       }
     }
   }

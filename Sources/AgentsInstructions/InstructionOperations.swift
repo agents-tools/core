@@ -165,10 +165,7 @@ public enum InstructionOperations {
         try plan.validate()
         try plan.retain()
         let transaction = FileTransaction(store: store)
-        transaction.validateBeforePublication = { [unowned transaction] in
-          try baseline.validate(excludingTargets: transaction.targetPaths)
-          try plan.validate(excludingTargets: transaction.targetPaths)
-        }
+        transaction.requireUnchanged(since: baseline, plan)
         try plan.stage(transaction: transaction)
         try store.stageDeclaration(
           declaration, in: transaction, prepared: baseline)
@@ -176,7 +173,7 @@ public enum InstructionOperations {
           comparedTo: baseline.bytes(for: store.resolvedURL))
         {
           try transaction.replace(
-            store.resolvedURL, content: nil, data: data,
+            store.resolvedURL, with: .data(data),
             expecting: baseline.evidence(for: store.resolvedURL))
         }
         try SourceCache(store: store).prune(
@@ -330,7 +327,7 @@ public enum InstructionOperations {
           .utf8)
       _ = try Instructions.validateSource(bytes, id: name)
       let transaction = FileTransaction(store: store)
-      try transaction.replace(file, content: nil, data: bytes)
+      try transaction.replace(file, with: .data(bytes))
       try transaction.commit()
       return file
     }
@@ -438,16 +435,13 @@ public enum InstructionOperations {
     do {
       try plan.retain()
       let transaction = FileTransaction(store: store)
-      transaction.validateBeforePublication = { [unowned transaction] in
-        try baseline.validate(excludingTargets: transaction.targetPaths)
-        try plan.validate(excludingTargets: transaction.targetPaths)
-      }
+      transaction.requireUnchanged(since: baseline, plan)
       try plan.stage(transaction: transaction)
       if writeState {
         try store.stageDeclaration(declaration, in: transaction, prepared: baseline)
         if let data = try next.replacementData(comparedTo: baseline.bytes(for: store.resolvedURL)) {
           try transaction.replace(
-            store.resolvedURL, content: nil, data: data,
+            store.resolvedURL, with: .data(data),
             expecting: baseline.evidence(for: store.resolvedURL))
         }
       }

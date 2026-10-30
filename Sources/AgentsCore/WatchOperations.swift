@@ -177,14 +177,12 @@ public struct WatchOperations: Sendable {
   ) throws {
     try watch.validate()
     let transaction = FileTransaction(store: store, checkpoint: checkpoint)
-    transaction.validateBeforePublication = { [unowned transaction] in
-      try baseline.validate(excludingTargets: transaction.targetPaths)
-    }
+    transaction.requireUnchanged(since: baseline)
     if let declaration {
       try store.stageDeclaration(declaration, in: transaction, prepared: baseline)
     }
     try transaction.replace(
-      store.watchURL, content: nil, data: StateStore.encode(watch),
+      store.watchURL, with: .data(StateStore.encode(watch)),
       expecting: baseline.evidence(for: store.watchURL))
     try SourceCache(store: store).prune(referencedBy: lock, watch: watch, transaction: transaction)
     try transaction.commit()
@@ -209,7 +207,12 @@ public struct WatchOperations: Sendable {
       "agents-watch-" + UUID().uuidString)
     try FileSystem.createDirectory(at: root)
     defer { try? FileManager.default.removeItem(at: root) }
-    for artifact in artifacts {
+    // Each nested cache transaction names its checkpoints within its artifact and role, so
+    // they stay distinct from one another and from the watch commit.
+    func artifactCache(_ scope: String) -> SourceCache {
+      SourceCache(store: store) { try checkpoint("watch.artifact." + scope + "." + $0) }
+    }
+    for (index, artifact) in artifacts.enumerated() {
       let directory = root.appendingPathComponent(artifact.name)
       try FileSystem.createDirectory(at: directory)
       for (path, data) in artifact.files {
@@ -217,8 +220,12 @@ public struct WatchOperations: Sendable {
         try FileSystem.createDirectory(at: destination.deletingLastPathComponent())
         try FileSystem.write(data, to: destination)
       }
-      for (digest, data) in artifact.payloads { _ = try cache.storeArtifact(data, digest: digest) }
-      _ = try cache.materializeArtifact(
+      for (payload, (digest, data)) in artifact.payloads.sorted(by: { $0.key < $1.key })
+        .enumerated()
+      {
+        _ = try artifactCache("\(index).payload.\(payload)").storeArtifact(data, digest: digest)
+      }
+      _ = try artifactCache("\(index).content").materializeArtifact(
         directory, digest: artifact.artifact.digest,
         hash: "sha256:" + FileHash.folderHash(directory))
     }

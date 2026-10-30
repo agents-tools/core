@@ -1,17 +1,5 @@
 import Foundation
 
-enum TransactionObjectLocation: Equatable {
-  case target
-  case scratch(TransactionScratch)
-
-  var name: String {
-    switch self {
-    case .target: "target"
-    case .scratch(let slot): slot.rawValue
-    }
-  }
-}
-
 extension TransactionSession {
   /// Publishing/restoring intent binds a temporary owner-write bit to the recorded
   /// directory inode. It never grants access through an external replacement.
@@ -20,8 +8,9 @@ extension TransactionSession {
   ) throws {
     for (location, object) in layout.objectLocations(journal.entries[index]) {
       guard let lease = object.writeLease else { continue }
-      try setDirectoryPermissions(
-        index, location: location, lease: lease, granting: true, purpose: purpose)
+      try leasedDirectory(index, location).grant(lease) {
+        try emit(.permissions(index, purpose, location, $0))
+      }
     }
   }
 
@@ -32,8 +21,9 @@ extension TransactionSession {
     throws
   {
     try forEachDirectoryLease(index) { location, lease in
-      try setDirectoryPermissions(
-        index, location: location, lease: lease, granting: false, purpose: purpose)
+      try leasedDirectory(index, location).restore(lease) {
+        try emit(.permissions(index, purpose, location, $0))
+      }
     }
   }
 
@@ -84,21 +74,19 @@ extension TransactionSession {
     try requireParent(index)
     switch location {
     case .target: return (parents[index], journal.entries[index].name)
-    case .scratch(let slot):
+    case .slot(let slot):
       return (try container(journal.entries[index].container), slot.name(index))
     }
   }
 
-  private func setDirectoryPermissions(
-    _ index: Int, location: TransactionObjectLocation, lease: DirectoryWriteLease,
-    granting: Bool, purpose: TransactionCheckpoint.Permission
-  ) throws {
+  /// Mode changes require durable publishing or restoring intent.
+  private func leasedDirectory(_ index: Int, _ location: TransactionObjectLocation) throws
+    -> DirectoryHandle
+  {
     guard journal.entries[index].progress.permitsDirectoryWrite else {
       throw conflict(index, "directory permission change requires durable intent")
     }
     let (parent, name) = try permissionLocation(index, location)
-    try parent.child(name).setPermissions(lease, granting: granting) {
-      try emit(.permissions(index, purpose, location, $0))
-    }
+    return try parent.child(name)
   }
 }

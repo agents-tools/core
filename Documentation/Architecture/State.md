@@ -164,7 +164,7 @@ the denial. Existing user content and metadata are preserved.
 
 Journal format version 1 is independent of declaration, lock and watch versions.
 The root records its version, transaction UUID, scope identity, registered root
-identities, transaction phase, operations, private containers and discard
+identities, transaction phase, operations, private containers and disposal
 intent. A journal without this version, or with another version, is retained
 unchanged. Recovery reports that it was written by another version and must be
 recovered with the version that wrote it; it does not guess a compatible replay.
@@ -190,7 +190,7 @@ mode 0700 on the same filesystem as its targets. The journal records the name
 before `mkdir`, then records the container's physical identity before inserting
 anything. Probes, extraction work and staging stay inside it. An identified
 container owns all construction before publication: incomplete objects can be
-discarded as a whole without individual ownership evidence. Another writer has
+disposed of as a whole without individual ownership evidence. Another writer has
 no ownership claim on content inserted into this private transaction storage. An
 unidentified container may only be removed with `rmdir` when empty; a nonempty
 one is an unresolved conflict.
@@ -201,14 +201,15 @@ hash and executable flags. `ready` and that snapshot become durable together.
 Changes after sealing are conflicts; recovery never refreshes a sealed snapshot
 to adopt changed content.
 
-Preimages displaced by exchange, deletion quarantines and published objects are
+Container entries are named by operation index and slot. `staged` holds a
+creation's private staging. `exchanged` holds an exchange's private staging
+until publication, then the displaced preimage, and after undo the published
+object exchanged back out. `deleted` holds the object a deletion moved aside,
+and `withdrawn` holds a published creation that undo moved aside. Displaced
+preimages, the contents of `deleted` and `withdrawn`, and published objects are
 user data. Their identity and digest remain mandatory evidence even inside a
-private container. Container entries are named by operation index and what they
-hold: `staged` is a creation's private staging, `exchanged` holds an exchange's
-staging until publication and then the displaced preimage, `deleted` holds a
-deleted object and `withdrawn` holds a creation that undo moved aside. A
-container holding such recovery objects receives complete terminal disposal
-evidence after their expected distribution has been verified.
+private container. A container holding such slot objects receives complete
+terminal disposal evidence after their expected distribution has been verified.
 
 | Progress | Durable evidence and possible distribution |
 | --- | --- |
@@ -217,13 +218,13 @@ evidence after their expected distribution has been verified.
 | `publishing` | Publication and temporary directory-write intent; objects can be prepared or installed. |
 | `applied` | Rename parents and original directory modes synced; postimage and preimage verified. |
 | `restoring` | Undo and temporary directory-write intent; installed or reverted objects can be present. |
-| `restored` | Undo parents and original modes synced; restored target and rollback quarantine verified. |
+| `restored` | Undo parents and original modes synced; restored target and remaining slot objects verified. |
 | `cancelled` | Original modes restored; publication did not consume private staging. |
 
 One operation-type/progress table defines every expected target and recovery
 slot. Publication validation, rollback classification and disposal preparation
-use that table. Before durable discard intent, an expected preimage or rollback
-quarantine must exist and match; absence cannot be treated as completed cleanup.
+use that table. Before durable disposal intent, every expected slot object must
+exist and match; absence cannot be treated as completed disposal.
 
 Journal publication orders the new journal file barrier before rename, then the
 parent directory barrier. Ordinary preimage files are synced once with their
@@ -251,7 +252,7 @@ and system reason. Probes and publication use the same classification.
 | --- | --- |
 | Absent | Persist the sealed inode and digest, then move it from the container with Darwin `renameatx_np(RENAME_EXCL)` or Linux `renameat2(RENAME_NOREPLACE)`. A concurrent creator keeps its bytes and inode. |
 | Existing | Recheck the preimage, then exchange it with staging using Darwin `RENAME_SWAP` or Linux `RENAME_EXCHANGE`. The displaced object stays inside the container and is compared before confirmation. A mismatched preimage is retained as a conflict. |
-| Deletion | Move the entry without replacement into the container's quarantine, then verify its physical identity and digest. Destructive cleanup verifies that evidence again. |
+| Deletion | Move the entry without replacement into the container's `deleted` slot, then verify its physical identity and digest. Disposal verifies that evidence again. |
 
 Each operation checks its preimage before and again after its publication intent
 becomes durable; a preparation already stale before the intent cancels from
@@ -282,21 +283,22 @@ watch reconciliation can release any ref. Pending watch-reference recovery also
 reports `CoreError.transactionRecovered` when no journal remains. Retained refs
 remain available while a journal conflict is unresolved.
 
-Recovery treats any observed journal as possibly renamed without its directory
-barrier: before granting permissions, renaming objects or deleting any resource
-it syncs `transaction.json` and its parent, including on retry. An applying
-journal reverses verified publications in reverse order. A committed journal
-completes terminal cleanup. Physical identity and digest distinguish a
-transaction's publication even after rename but before `applied`. Another inode
-with identical bytes remains external. Missing or changed evidence causes an
-unresolved conflict; names and equal bytes never establish ownership. Other
-verified operations can roll back while conflicted objects remain available.
+Recovery treats any observed `transaction.json` as possibly renamed without its
+directory barrier: before granting permissions, renaming objects or deleting any
+resource it syncs that file and its parent, including on retry. A lone unstarted
+`transaction.new` owns no object and is discarded directly. An applying journal
+reverses verified publications in reverse order. A committed journal completes
+terminal disposal. Physical identity and digest distinguish a transaction's
+publication even after rename but before `applied`. Another inode with identical
+bytes remains external. Missing or changed evidence causes an unresolved
+conflict; names and equal bytes never establish ownership. Other verified
+operations can roll back while conflicted objects remain available.
 
 Replacement undo exchanges a retained preimage only with the verified published
 object and verifies the displaced object. An external replacement before or
 during undo leaves both available versions and stops recovery. Deleted entries
 return with no-replace rename, preserving an occupied original name. Creation
-undo moves only a verified published object into rollback quarantine and checks
+undo moves only a verified published object into its `withdrawn` slot and checks
 it there. A retry recognizing an interrupted reverse rename repeats both parent
 barriers before recording restoration.
 
@@ -310,19 +312,19 @@ original mode and intent retained.
 Before disposal the journal persists terminal `committed` or `rolledBack` state
 and the complete recovery-object evidence. A commit disposes immediately after
 sealing that evidence; recovery first revalidates every target and container
-against it. A separate global discard intent then becomes durable. Only after
-that intent may missing objects or descendants mean interrupted cleanup. Changed
-identities, digests or unexpected descendants in sealed disposal evidence remain
-conflicts. Unpublished private construction is discarded by verified container
-identity. Links are never followed during deletion. Owner access may be granted
-to discarded directories without changing installed or restored metadata. Absent
-entries still receive a parent barrier.
+against it. A separate global disposal intent then becomes durable. Only after
+that intent may missing objects or descendants mean interrupted disposal.
+Changed identities, digests or unexpected descendants in sealed disposal
+evidence remain conflicts. Unpublished private construction is disposed of by
+verified container identity. Links are never followed during deletion. Owner
+access may be granted to directories being disposed of without changing
+installed or restored metadata. Absent entries still receive a parent barrier.
 
 Conflicts retain `transaction.json`, the available target objects and private
-containers holding displaced preimages or rollback quarantines. Each conflicting
-entry records the reason and scope-relative recovery locations. Doctor lists
-those reasons and locations and asks for owner action; it does not promise that
-another write will resolve them or provide a conflict-resolution command.
+containers holding user data in their slots. Each conflicting entry records the
+reason and scope-relative recovery locations. Doctor lists those reasons and
+locations and asks for owner action; it does not promise that another write will
+resolve them or provide a conflict-resolution command.
 
 Recovery can itself be interrupted and repeated. Successful recovery reports
 `CoreError.transactionRecovered` and callers retry the whole preparation.
@@ -418,7 +420,7 @@ private journal-owned staging. Exact Git commits are extracted there; expanded
 artifacts are checked against their locked tree hash. Copied trees are hashed
 through pinned directory descriptors and verified before publication. Files,
 metadata and directory entries are synced before atomic publication of the final
-cache name. Git extraction scratch also belongs to the journal, so recovery
+cache name. Git extraction work also belongs to the journal, so recovery
 cleans an incomplete copy or extraction without retaining a partial final
 directory just because the lock references its pin. Cache publication completes
 before the installation transaction references that content.
@@ -495,7 +497,7 @@ sections or prompt sections remain cached, as do artifact contents referenced by
 watch state and trees containing live edit sources. Pruning opens directory
 ancestry without following symlinks and uses directory-relative enumeration,
 rename and deletion. It rejects symlinked cache containers and never recursively
-follows a link during cleanup. Mirrors remain available for source history and
+follows a link during deletion. Mirrors remain available for source history and
 future resolution. Watch-owned Git refs retain only revisions still referenced
 by watch state or installed pins; obsolete histories can be collected by Git
 after those refs are released.
