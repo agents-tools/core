@@ -1,6 +1,7 @@
 import AgentsCore
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Automatic add selection")
@@ -31,10 +32,7 @@ struct AutomaticSelectionTests {
     defer {
       // Release the Git wrapper even if fixture preparation fails.
       _ = "\n".withCString { write(descriptor, $0, 1) }
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
+      terminateProcess(child)
     }
     try wait(for: child) {
       FileManager.default.fileExists(atPath: root.appendingPathComponent("discovery-ready").path)
@@ -147,9 +145,9 @@ struct AutomaticSelectionTests {
   }
 
   private func wait(for process: Process, until ready: () -> Bool) throws {
-    let deadline = Date().addingTimeInterval(20)
-    while !ready(), process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
-    try #require(ready())
+    try ProcessWait.condition(
+      process, root: URL(fileURLWithPath: process.arguments![0]),
+      description: "automatic selection handshake", ready: ready)
   }
 }
 

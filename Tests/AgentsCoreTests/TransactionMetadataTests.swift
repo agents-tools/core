@@ -1,12 +1,16 @@
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
 
 @Suite("Transaction metadata")
 struct TransactionMetadataTests {
-  @Test(arguments: ["complete", "journal.applying", "replace.1", "journal.committed"])
+  @Test(arguments: [
+    "complete", TransactionCheckpoint.progress(0, .publishing).name,
+    TransactionCheckpoint.progress(1, .applied).name, TransactionCheckpoint.phase(.committed).name,
+  ])
   func dataReplacementPreservesPermissionsACLsAndExtendedAttributes(_ point: String) throws {
     let fixture = try TransactionFixture()
     let target = fixture.root.appendingPathComponent("AGENTS.md")
@@ -24,15 +28,15 @@ struct TransactionMetadataTests {
         if step == point { throw CoreError.invalidState("injected failure") }
       }
       for file in files + [created] {
-        try transaction.replace(file, content: nil, data: replacement)
+        try transaction.replace(file, with: .data(replacement))
       }
       if point == "complete" {
         try transaction.commit()
       } else {
-        #expect(throws: CoreError.self) { try transaction.commit() }
+        #expect(throws: CoreError.invalidState("injected failure")) { try transaction.commit() }
       }
     }
-    let committed = point == "complete" || point == "journal.committed"
+    let committed = point == "complete" || point == TransactionCheckpoint.phase(.committed).name
     #expect(try files.map(metadata) == before)
     #expect(
       try files.map { try Data(contentsOf: $0) }
@@ -47,10 +51,13 @@ struct TransactionMetadataTests {
     try expectRecoveryMaterialRemoved(fixture)
   }
 
-  @Test(arguments: ["complete", "journal.committed", "cleanup.0"])
+  @Test(arguments: [
+    "complete", TransactionCheckpoint.phase(.committed).name,
+    TransactionCheckpoint.containerRemoved(0).name,
+  ])
   func committedCleanupDiscardsReadOnlyDirectories(_ point: String) throws {
     let fixture = try TransactionFixture()
-    defer { makeWritableForTeardown(fixture.root) }
+    defer { makeDirectoriesWritable(fixture.root) }
     let target = fixture.root.appendingPathComponent(".agents/skills/target")
     let source = fixture.root.appendingPathComponent("new")
     let targets = try makeReadOnlyTree(target)
@@ -76,10 +83,14 @@ struct TransactionMetadataTests {
     try expectRecoveryMaterialRemoved(fixture)
   }
 
-  @Test(arguments: ["restore.3.renamed", "restore.0.renamed", "journal.rolledBack.renamed"])
+  @Test(arguments: [
+    TransactionCheckpoint.restoration(3, .returned).name,
+    TransactionCheckpoint.restoration(0, .exchanged).name,
+    TransactionCheckpoint.persisted(.rolledBack, .terminal, .renamed).name,
+  ])
   func interruptedRollbackPreservesReadOnlyMetadata(_ point: String) throws {
     let fixture = try TransactionFixture()
-    defer { makeWritableForTeardown(fixture.root) }
+    defer { makeDirectoriesWritable(fixture.root) }
     let target = fixture.root.appendingPathComponent(".agents/skills/target")
     let pruned = fixture.store.cacheDirectory.appendingPathComponent("artifact-content/pruned")
     let originals = try makeReadOnlyTree(target) + makeReadOnlyTree(pruned)
@@ -89,7 +100,7 @@ struct TransactionMetadataTests {
     let declaration = try Data(contentsOf: fixture.store.declarationURL)
     let resolved = try Data(contentsOf: fixture.store.resolvedURL)
 
-    try interrupt(fixture, command: "crash", at: "replace.4")
+    try interrupt(fixture, command: "crash", at: TransactionCheckpoint.progress(4, .applied).name)
     try interrupt(fixture, command: "recover", at: point)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
       try fixture.store.loadResolved()
@@ -103,7 +114,11 @@ struct TransactionMetadataTests {
     try expectRecoveryMaterialRemoved(fixture)
   }
 
-  @Test(arguments: ["journal.applying", "replace.0", "replace.2"])
+  @Test(arguments: [
+    TransactionCheckpoint.progress(0, .publishing).name,
+    TransactionCheckpoint.progress(0, .applied).name,
+    TransactionCheckpoint.progress(2, .applied).name,
+  ])
   func rollbackPreservesPermissionsACLsAndExtendedAttributes(_ point: String) throws {
     let fixture = try TransactionFixture()
     let target = fixture.root.appendingPathComponent(".agents/skills/target")
@@ -119,7 +134,7 @@ struct TransactionMetadataTests {
     }
     let before = try urls.map(metadata)
     let bytes = try FileHash.folderHash(target)
-    #expect(throws: CoreError.self) {
+    #expect(throws: CoreError.invalidState("injected failure")) {
       try fixture.commit { step in
         if step == point { throw CoreError.invalidState("injected failure") }
       }
@@ -145,21 +160,11 @@ struct TransactionMetadataTests {
 
   private func interrupt(_ fixture: TransactionFixture, command: String, at point: String) throws {
     let child = try stateTestProcess(root: fixture.root, arguments: [command, point])
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     let marker = fixture.root.appendingPathComponent(
       command == "recover" ? "recovery-ready" : "ready")
-    let deadline = Date().addingTimeInterval(10)
-    while !FileManager.default.fileExists(atPath: marker.path), Date() < deadline, child.isRunning {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    try ProcessWait.marker(marker, child: child, root: fixture.root)
+    terminateProcess(child)
     #expect(child.terminationReason == .uncaughtSignal)
   }
 
@@ -173,19 +178,6 @@ struct TransactionMetadataTests {
         guard let path = entry as? String else { return false }
         return URL(fileURLWithPath: path).lastPathComponent.hasPrefix(".agents-")
       })
-  }
-
-  private func makeWritableForTeardown(_ root: URL) {
-    guard let entries = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
-    else {
-      return
-    }
-    for case let entry as URL in entries {
-      var info = stat()
-      if lstat(entry.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR {
-        _ = chmod(entry.path, (info.st_mode & 0o7777) | S_IRWXU)
-      }
-    }
   }
 
   private func metadata(_ url: URL) throws -> FixtureMetadata {

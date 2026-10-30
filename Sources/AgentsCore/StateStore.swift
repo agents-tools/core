@@ -24,8 +24,8 @@ public struct StateStore: Sendable {
     try withLock(createIfMissing: false) { try readDeclaration() }
   }
 
-  package func readDeclaration() throws -> Declaration {
-    let declaration: Declaration = try load(declarationURL) ?? Declaration()
+  package func readDeclaration(prepared: StatePrecondition? = nil) throws -> Declaration {
+    let declaration: Declaration = try load(declarationURL, prepared: prepared) ?? Declaration()
     try declaration.validate(environment: environment)
     return declaration
   }
@@ -34,8 +34,8 @@ public struct StateStore: Sendable {
     try withLock(createIfMissing: false) { try readResolved() }
   }
 
-  package func readResolved() throws -> ResolvedState {
-    let lock: ResolvedState = try load(resolvedURL) ?? ResolvedState()
+  package func readResolved(prepared: StatePrecondition? = nil) throws -> ResolvedState {
+    let lock: ResolvedState = try load(resolvedURL, prepared: prepared) ?? ResolvedState()
     try lock.validate()
     return lock
   }
@@ -44,8 +44,8 @@ public struct StateStore: Sendable {
     try withLock(createIfMissing: false) { try readWatch() }
   }
 
-  package func readWatch() throws -> WatchState {
-    let watch: WatchState = try load(watchURL) ?? WatchState()
+  package func readWatch(prepared: StatePrecondition? = nil) throws -> WatchState {
+    let watch: WatchState = try load(watchURL, prepared: prepared) ?? WatchState()
     try watch.validate()
     return watch
   }
@@ -58,14 +58,18 @@ public struct StateStore: Sendable {
       try declaration.validate(environment: environment)
       try resolved.validate()
       try watch?.validate()
-      _ = try readDeclaration()
-      _ = try readResolved()
+      let baseline = try StatePrecondition(store: self)
+      _ = try readDeclaration(prepared: baseline)
+      _ = try readResolved(prepared: baseline)
       let transaction = FileTransaction(store: self)
-      try stageDeclaration(declaration, in: transaction)
+      transaction.requireUnchanged(since: baseline)
+      try stageDeclaration(declaration, in: transaction, prepared: baseline)
       try transaction.replace(
-        resolvedURL, content: nil, data: Self.encodeState(resolved.normalized))
+        resolvedURL, with: .data(Self.encodeState(resolved.normalized)),
+        expecting: baseline.evidence(for: resolvedURL))
       if let watch {
-        try transaction.replace(watchURL, content: nil, data: Self.encode(watch))
+        try transaction.replace(
+          watchURL, with: .data(Self.encode(watch)), expecting: baseline.evidence(for: watchURL))
       }
       try transaction.commit()
     }
@@ -73,11 +77,19 @@ public struct StateStore: Sendable {
 
   /// Stages the declaration when the file's bytes differ from its standard layout, so a file
   /// written by hand or by an earlier version is rewritten even when its content is unchanged.
-  package func stageDeclaration(_ declaration: Declaration, in transaction: FileTransaction) throws
-  {
+  package func stageDeclaration(
+    _ declaration: Declaration, in transaction: FileTransaction,
+    prepared: StatePrecondition? = nil
+  ) throws {
     let data = try Self.encodeState(declaration.normalized)
-    guard try existingData(declarationURL) != data else { return }
-    try transaction.replace(declarationURL, content: nil, data: data)
+    let input: (bytes: Data?, evidence: TargetPrecondition)
+    if let prepared {
+      input = try (prepared.bytes(for: declarationURL), prepared.evidence(for: declarationURL))
+    } else {
+      input = try TargetPrecondition.readingFile(declarationURL)
+    }
+    guard input.bytes != data else { return }
+    try transaction.replace(declarationURL, with: .data(data), expecting: input.evidence)
   }
 
   package func withLock<T>(
@@ -91,7 +103,7 @@ public struct StateStore: Sendable {
     if !FileManager.default.fileExists(
       atPath: directory.appendingPathComponent(".agents.lock").path),
       !FileManager.default.fileExists(
-        atPath: directory.appendingPathComponent("transaction.json").path)
+        atPath: directory.appendingPathComponent(TransactionJournal.fileName).path)
     {
       _ = try readDeclaration()
       _ = try readResolved()
@@ -101,7 +113,8 @@ public struct StateStore: Sendable {
     let physicalDirectory = base.resolvingSymlinksInPath().appendingPathComponent(
       directory.lastPathComponent)
     return try FileLock.withLock(at: physicalDirectory.appendingPathComponent(".agents.lock")) {
-      let recovered = try FileTransaction.recover(store: self, checkpoint: checkpoint)
+      let recovered = try FileTransaction.recover(
+        store: self, outcome: outcome, checkpoint: checkpoint)
       _ = try readWatch()
       let cache = SourceCache(store: self, checkpoint: checkpoint)
       let referencesRecovered = try cache.recoverWatchReferences()
@@ -154,8 +167,14 @@ public struct StateStore: Sendable {
     return data
   }
 
-  private func load<T: Codable>(_ url: URL) throws -> T? {
-    guard let data = try existingData(url) else { return nil }
+  private func load<T: Codable>(_ url: URL, prepared: StatePrecondition?) throws -> T? {
+    let bytes: Data?
+    if let prepared {
+      bytes = try prepared.bytes(for: url)
+    } else {
+      bytes = try existingData(url)
+    }
+    guard let data = bytes else { return nil }
     do {
       return try Self.decode(data, as: T.self)
     } catch {

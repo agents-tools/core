@@ -21,9 +21,9 @@ final class UpdatePlan {
     self.store = store
     self.checkpoint = checkpoint
     baseline = try StatePrecondition(store: store)
-    declaration = try store.readDeclaration()
-    previous = try store.readResolved()
-    watch = try store.readWatch()
+    declaration = try store.readDeclaration(prepared: baseline)
+    previous = try store.readResolved(prepared: baseline)
+    watch = try store.readWatch(prepared: baseline)
     resolutions = try SourceResolutionSession(store: store)
     skills = try SkillOperations.prepareUpdate(
       store: store, declaration: declaration, previous: previous, resolutions: resolutions)
@@ -40,7 +40,7 @@ final class UpdatePlan {
     try declaration.validate(environment: store.environment)
     try next.validate()
     self.next = next
-    let lockMissing = try store.existingData(store.resolvedURL) == nil
+    let lockMissing = try baseline.bytes(for: store.resolvedURL) == nil
     report = CombinedUpdateReport(
       scope: store.scope, skills: skills.results, instructions: instructions.report,
       lockMissing: lockMissing,
@@ -87,15 +87,18 @@ final class UpdatePlan {
       let retained = try skills.retain()
       try instructions.retain()
       try checkpoint("apply.retained")
-      try validate()
       let transaction = FileTransaction(store: store, outcome: outcome, checkpoint: checkpoint)
+      transaction.requireUnchanged(since: baseline, skills, instructions)
       try skills.stage(retained: retained, transaction: transaction)
       try instructions.stage(transaction: transaction)
-      try store.stageDeclaration(declaration, in: transaction)
+      try store.stageDeclaration(
+        declaration, in: transaction, prepared: baseline)
       if let resolvedBytes = try next.replacementData(
-        comparedTo: store.existingData(store.resolvedURL))
+        comparedTo: baseline.bytes(for: store.resolvedURL))
       {
-        try transaction.replace(store.resolvedURL, content: nil, data: resolvedBytes)
+        try transaction.replace(
+          store.resolvedURL, with: .data(resolvedBytes),
+          expecting: baseline.evidence(for: store.resolvedURL))
       }
       try SourceCache(store: store).prune(
         referencedBy: next, watch: watch, transaction: transaction)

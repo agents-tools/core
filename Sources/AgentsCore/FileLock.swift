@@ -1,7 +1,26 @@
 import CPlatform
 import Foundation
+import Synchronization
 
 package enum FileLock {
+  /// Contended acquisitions are numbered within the process, so every wait has its own
+  /// checkpoint name. The ordinal only names checkpoints; it never changes locking.
+  private static let contentions = Atomic<Int>(0)
+
+  static func ancestryCheckpoint(_ step: DirectoryHandle.AncestryStep) -> String {
+    "lock.ancestry." + step.name
+  }
+
+  private static func contentionCheckpoint(_ ordinal: Int) -> String {
+    "lock.\(ordinal).contended"
+  }
+
+  package static func isContentionCheckpoint(_ name: String) -> Bool {
+    let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+    return parts.count >= 3 && parts[parts.count - 3] == "lock" && parts.last == "contended"
+      && Int(parts[parts.count - 2]) != nil
+  }
+
   package static func withLock<T>(
     at url: URL, checkpoint: (String) throws -> Void = { _ in }, _ body: () throws -> T
   ) throws -> T {
@@ -13,8 +32,9 @@ package enum FileLock {
   package static func withDescriptor<T>(
     at url: URL, checkpoint: (String) throws -> Void = { _ in }, _ body: (Int32) throws -> T
   ) throws -> T {
-    let parent = try DirectoryHandle(
-      at: url.deletingLastPathComponent(), create: true, checkpoint: checkpoint)
+    let parent = try DirectoryHandle(at: url.deletingLastPathComponent(), create: true) {
+      try checkpoint(ancestryCheckpoint($0))
+    }
     let descriptor = openat(
       parent.descriptor, url.lastPathComponent, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
       S_IRUSR | S_IWUSR)
@@ -62,7 +82,8 @@ package enum FileLock {
       guard errno == EWOULDBLOCK else {
         throw CoreError.invalidState("cannot acquire writer lock: \(url.path)")
       }
-      try checkpoint("lock.contended")
+      try checkpoint(
+        contentionCheckpoint(contentions.wrappingAdd(1, ordering: .relaxed).oldValue))
       while platform_flock(descriptor, LOCK_EX) != 0 {
         if errno != EINTR {
           throw CoreError.invalidState("cannot acquire writer lock: \(url.path)")

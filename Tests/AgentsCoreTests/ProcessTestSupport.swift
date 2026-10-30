@@ -1,26 +1,22 @@
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
-func finishProcesses(_ processes: [Process], resuming pause: GitTransactionPause? = nil) throws {
+func finishProcesses(
+  _ processes: [Process], root: URL, resuming pause: GitTransactionPause? = nil
+) throws {
   try pause?.resume()
   for process in processes {
-    let exited = DispatchSemaphore(value: 0)
-    process.terminationHandler = { _ in exited.signal() }
-    if process.isRunning {
-      try #require(exited.wait(timeout: .now() + 60) == .success)
-    }
-    process.waitUntilExit()
+    try ProcessWait.exit(process, root: root)
     #expect(process.terminationStatus == 0)
   }
   pause?.completed()
 }
 
+/// A child that survives the termination deadline fails the test instead of blocking the run.
 func terminateProcess(_ process: Process) {
-  if process.isRunning {
-    CPlatform.kill(process.processIdentifier, SIGKILL)
-    process.waitUntilExit()
-  }
+  do { try ProcessWait.terminate(process) } catch { Issue.record(error) }
 }
 
 /// FIFO messages establish ordering; the timeout only bounds a failed handshake.

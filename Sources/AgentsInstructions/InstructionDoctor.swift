@@ -12,10 +12,10 @@ extension InstructionOperations {
     let store = StateStore(scope: scope, environment: environment)
     let other = StateStore(scope: scope == .project ? .user : .project, environment: environment)
     func pendingRecovery(_ store: StateStore) -> InstructionDiagnostic {
-      InstructionDiagnostic(
-        kind: .pendingRecovery,
-        message:
-          "Transaction recovery is pending; the next command that changes this scope will recover it.",
+      let recovery = FileTransaction.recoveryDiagnostic(store: store)
+      return InstructionDiagnostic(
+        kind: recovery.requiresOwner ? .unresolvedTransaction : .pendingRecovery,
+        message: recovery.message,
         path: store.directory)
     }
     let otherSections: [LockedSection]? = try other.withReadLock(

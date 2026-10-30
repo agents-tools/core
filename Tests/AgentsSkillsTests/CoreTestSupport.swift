@@ -1,4 +1,5 @@
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -18,6 +19,11 @@ func removeTemporaryDirectory(_ directory: URL) {
   } catch {
     Issue.record(error)
   }
+}
+
+/// A child that survives the termination deadline fails the test instead of blocking the run.
+func terminateProcess(_ process: Process) {
+  do { try ProcessWait.terminate(process) } catch { Issue.record(error) }
 }
 
 func initGitRepo(_ repo: URL) throws {

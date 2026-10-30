@@ -4,20 +4,44 @@ import AgentsSkills
 import AgentsUpdates
 import CPlatform
 import Foundation
+import Synchronization
 
 let arguments = CommandLine.arguments
 let root = URL(fileURLWithPath: arguments[1])
-let scope: InstallScope = arguments.count > 4 && arguments[4] == "user" ? .user : .project
+let scopeIndex = arguments.firstIndex(of: "--scope")
+let scope: InstallScope =
+  scopeIndex.flatMap { InstallScope(rawValue: arguments[$0 + 1]) } ?? .project
 let store = StateStore(
   scope: scope,
   environment: RuntimeEnvironment(
     projectDirectory: root,
     homeDirectory: root.appendingPathComponent("home"),
     environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path]))
-func stop(_ step: String, marker: String = "ready") throws {
-  if step == arguments[3] {
-    try Data(step.utf8).write(to: root.appendingPathComponent(marker), options: .atomic)
+let checkpointState = Mutex(
+  (requested: arguments.count > 3 ? arguments[3] : "", seen: Set<String>()))
+let traceURL = root.appendingPathComponent(
+  "checkpoint-\(ProcessInfo.processInfo.processIdentifier).log")
+FileManager.default.createFile(atPath: traceURL.path, contents: nil)
+let trace = try FileHandle(forWritingTo: traceURL)
+/// Names must be unique across the whole recorded process: a repeated name would make a kill
+/// point ambiguous, so the recorder fails the run. Each command runs one recorded operation.
+func stop(_ point: String, marker: String = "ready") throws {
+  let (repeated, shouldStop) = checkpointState.withLock { state in
+    (!state.seen.insert(point).inserted, point == state.requested)
+  }
+  try trace.write(contentsOf: Data((point + "\n").utf8))
+  if repeated { fatalError("repeated checkpoint: \(point)") }
+  // The last visible journal survives its own removal for the parent's assertions.
+  if let bytes = try? Data(contentsOf: store.directory.appendingPathComponent("transaction.json")) {
+    try bytes.write(to: root.appendingPathComponent("last-journal"))
+  }
+  if shouldStop {
+    try Data(point.utf8).write(to: root.appendingPathComponent(marker), options: .atomic)
     raise(SIGSTOP)
+    // A resumed handshake may select the next stop once, rather than reading on every checkpoint.
+    let next =
+      (try? String(contentsOf: root.appendingPathComponent("stop-at"), encoding: .utf8)) ?? ""
+    checkpointState.withLock { $0.requested = next }
   }
 }
 func signalContention() throws {
@@ -71,7 +95,7 @@ if arguments[2] == "git-environment" {
 } else if arguments[2] == "lock-contender" {
   try FileLock.withLock(
     at: root.appendingPathComponent(arguments[3]),
-    checkpoint: { if $0 == "lock.contended" { try signalContention() } },
+    checkpoint: { if FileLock.isContentionCheckpoint($0) { try signalContention() } },
     { try Data().write(to: root.appendingPathComponent("lock-acquired")) })
 } else if arguments[2] == "closed-streams" {
   let mask = Int(arguments[3])!
@@ -117,7 +141,7 @@ if arguments[2] == "git-environment" {
     discoverSkills: { _ in [] },
     fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
     checkpoint: { step in
-      if step == "mirror.lock.contended" {
+      if step.hasPrefix("mirror."), FileLock.isContentionCheckpoint(step) {
         try signalContention()
       }
     })
@@ -144,8 +168,62 @@ if arguments[2] == "git-environment" {
   } else {
     try watch.remove("source", environment: store.environment)
   }
+} else if arguments[2] == "watch-add-artifact" {
+  let bytes = Data("---\nname: demo\ndescription: Fixture skill.\n---\nBody\n".utf8)
+  let digest = "sha256:" + FileHash.sha256Hex(data: bytes)
+  let artifact = WatchArtifact(
+    name: "demo",
+    artifact: LockedArtifact(
+      type: .skillMD, url: "https://watch.example.test/demo/SKILL.md", digest: digest),
+    files: ["SKILL.md": bytes], payloads: [digest: bytes])
+  let watch = WatchOperations(
+    discoverSkills: { _ in [] }, fetchArtifacts: { _ in [artifact] },
+    checkpoint: { try stop($0) })
+  try watch.add("https://watch.example.test", alias: "site", environment: store.environment)
 } else if arguments[2] == "watch-recover" {
-  try store.withLock(checkpoint: { try stop($0) }, {})
+  do { try store.withLock(checkpoint: { try stop($0) }, {}) } catch CoreError.transactionRecovered {
+  }
+} else if arguments[2] == "publication-recover" {
+  let outcome = TransactionOutcome()
+  let result: String
+  do {
+    try store.withLock(checkpoint: { try stop($0, marker: "recovery-ready") }, outcome: outcome, {})
+    result = "clean"
+  } catch CoreError.transactionRecovered { result = "recovered" } catch {
+    result = "unresolved: \(error)"
+  }
+  try Data(result.utf8).write(to: root.appendingPathComponent("recovery-result"))
+} else if arguments[2] == "publication" {
+  let outcome = TransactionOutcome()
+  var failure = ""
+  do {
+    try store.withLock(outcome: outcome) {
+      let transaction = FileTransaction(store: store, outcome: outcome) {
+        try Data(String(describing: outcome.disposition).utf8).write(
+          to: root.appendingPathComponent("stopped-outcome"))
+        try stop($0)
+      }
+      try transaction.replace(
+        root.appendingPathComponent("GEMINI.md"), with: .data(Data("auxiliary postimage".utf8)))
+      let target =
+        arguments[4] == "crossParentReplace"
+        ? root.appendingPathComponent(".agents/skills/target")
+        : root.appendingPathComponent("AGENTS.md")
+      switch arguments[4] {
+      case "directoryReplace":
+        let source = root.appendingPathComponent("new")
+        try transaction.replace(
+          target, with: .copy(source), expectedHash: "sha256:" + FileHash.folderHash(source))
+      case "directoryDelete": try transaction.delete(target)
+      case "symlinkCreate":
+        try transaction.replace(target, with: .link(root.appendingPathComponent("new")))
+      default: try transaction.replace(target, with: .data(Data("postimage".utf8)))
+      }
+      try transaction.commit()
+    }
+  } catch { failure = String(describing: error) }
+  try Data((String(describing: outcome.disposition) + "\n" + failure).utf8).write(
+    to: root.appendingPathComponent("publication-result"))
 } else if arguments[2] == "recover" {
   try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
     _ = try FileTransaction.recover(store: store) { try stop($0, marker: "recovery-ready") }
@@ -160,7 +238,7 @@ if arguments[2] == "git-environment" {
   _ = try UpdateOperations.withPreparedUpdate(
     scope: scope, environment: store.environment,
     checkpoint: { step in
-      if arguments[3] == "between-kinds", step.hasPrefix("replace.") {
+      if arguments[3] == "between-kinds", step.hasPrefix("entry.") && step.hasSuffix(".applied") {
         let journal =
           try JSONSerialization.jsonObject(
             with: Data(contentsOf: store.directory.appendingPathComponent("transaction.json")))
@@ -169,7 +247,7 @@ if arguments[2] == "git-environment" {
         let firstInstruction = entries.firstIndex {
           ($0["path"] as! String).hasPrefix("instructions-")
         }!
-        if step == "replace.\(firstInstruction - 1)" { try stop("between-kinds") }
+        if step == "entry.\(firstInstruction - 1).applied" { try stop("between-kinds") }
       } else {
         try stop(step)
       }
@@ -194,6 +272,12 @@ if arguments[2] == "git-environment" {
   default: _ = try store.loadResolved()
   }
   try Data().write(to: root.appendingPathComponent("contender-finished"))
+} else if arguments[2] == "pause" {
+  try stop("paused")
+} else if arguments[2] == "unstopped-marker" {
+  // The marker exists but the process never stops, as when it is killed before its self-stop.
+  try Data().write(to: root.appendingPathComponent("ready"), options: .atomic)
+  while true { sleep(1) }
 } else if arguments[2] == "create-scope" {
   try FileLock.withLock(
     at: store.directory.appendingPathComponent(".agents.lock"), checkpoint: { try stop($0) },
@@ -226,17 +310,15 @@ if arguments[2] == "git-environment" {
       try transaction.replace(
         AgentRegistry.installSkillsDirectory(
           for: .codex, scope: scope, environment: store.environment
-        ).appendingPathComponent("target"), content: root.appendingPathComponent("new"))
-      try transaction.replace(
-        InstructionLocations.file(for: .codex, scope: scope, environment: store.environment)!,
-        content: nil)
+        ).appendingPathComponent("target"), with: .copy(root.appendingPathComponent("new")))
+      try transaction.delete(
+        InstructionLocations.file(for: .codex, scope: scope, environment: store.environment)!)
       try transaction.replace(
         InstructionLocations.file(for: .geminiCLI, scope: scope, environment: store.environment)!,
-        content: nil, data: Data("New instructions\n".utf8))
+        with: .data(Data("New instructions\n".utf8)))
       try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.cursor])))
-      try transaction.replace(
-        store.resolvedURL, content: nil, data: StateStore.encode(ResolvedState()))
+        store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.cursor]))))
+      try transaction.replace(store.resolvedURL, with: .data(StateStore.encode(ResolvedState())))
       try transaction.commit()
     } else if arguments[2] == "watch-crash" {
       var declaration = try store.readDeclaration()
@@ -245,9 +327,8 @@ if arguments[2] == "git-environment" {
         "local:/source": WatchSourceState(seen: .revision(String(repeating: "b", count: 40)))
       ])
       let transaction = FileTransaction(store: store) { try stop($0) }
-      try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(declaration))
-      try transaction.replace(store.watchURL, content: nil, data: StateStore.encode(watch))
+      try transaction.replace(store.declarationURL, with: .data(StateStore.encode(declaration)))
+      try transaction.replace(store.watchURL, with: .data(StateStore.encode(watch)))
       try transaction.commit()
     } else if arguments[2] == "writer" {
       for index in 0..<5 {
@@ -256,8 +337,7 @@ if arguments[2] == "git-environment" {
           kind: .local, location: root.appendingPathComponent("\(arguments[3])-\(index)").path)
         usleep(10_000)
         let transaction = FileTransaction(store: store)
-        try transaction.replace(
-          store.declarationURL, content: nil, data: StateStore.encode(declaration))
+        try transaction.replace(store.declarationURL, with: .data(StateStore.encode(declaration)))
         try transaction.commit()
       }
     } else {
@@ -268,24 +348,21 @@ if arguments[2] == "git-environment" {
         AgentRegistry.installSkillsDirectory(
           for: .codex, scope: scope, environment: store.environment
         )
-        .appendingPathComponent("target"),
-        content: root.appendingPathComponent("new"))
+        .appendingPathComponent("target"), with: .copy(root.appendingPathComponent("new")))
       try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.codex])))
+        store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.codex]))))
       try transaction.replace(
-        store.resolvedURL, content: nil,
-        data: StateStore.encode(ResolvedState(sources: ["local:/new": LockedSource(kind: .local)])))
-      try transaction.replace(
-        store.cacheDirectory.appendingPathComponent("artifact-content/pruned"), content: nil)
+        store.resolvedURL,
+        with: .data(
+          StateStore.encode(ResolvedState(sources: ["local:/new": LockedSource(kind: .local)]))))
+      try transaction.delete(store.cacheDirectory.appendingPathComponent("artifact-content/pruned"))
       try transaction.replace(
         AgentRegistry.installSkillsDirectory(
           for: .claudeCode, scope: scope, environment: store.environment
-        ).appendingPathComponent("created"),
-        content: root.appendingPathComponent("new"),
-        link: true)
+        ).appendingPathComponent("created"), with: .link(root.appendingPathComponent("new")))
       try transaction.replace(
         InstructionLocations.file(for: .codex, scope: scope, environment: store.environment)!,
-        content: nil, data: Data("new instructions".utf8))
+        with: .data(Data("new instructions".utf8)))
       try transaction.commit()
     }
   }

@@ -214,25 +214,33 @@ final class SkillLifecycle {
 
   func apply(
     declaration: Declaration, previous: ResolvedState, next: ResolvedState,
-    prepared: [String: PreparedSkill], names: Set<String>, writeState: Bool = true
+    prepared: [String: PreparedSkill], names: Set<String>, baseline: StatePrecondition,
+    writeState: Bool = true
   ) throws -> [InstallResult] {
     try declaration.validate(environment: store.environment)
     try next.validate()
-    try validateOwnership(previous: previous, next: next, names: names)
-    let retained = try retain(prepared: prepared, next: next)
+    let plan = try SkillUpdatePlan(
+      lifecycle: self, previous: previous, next: next, prepared: prepared, names: names, results: []
+    )
+    try plan.validateOwnership()
+    try baseline.validate()
+    try plan.validate()
+    let retained = try plan.retain()
     let transaction = FileTransaction(store: store)
-    try stage(
-      previous: previous, next: next, prepared: prepared, retained: retained,
-      names: names, transaction: transaction)
+    transaction.requireUnchanged(since: baseline, plan)
+    try plan.stage(retained: retained, transaction: transaction)
     if writeState {
-      try store.stageDeclaration(declaration, in: transaction)
+      try store.stageDeclaration(declaration, in: transaction, prepared: baseline)
       if let data = try next.replacementData(
-        comparedTo: store.existingData(store.resolvedURL))
+        comparedTo: baseline.bytes(for: store.resolvedURL))
       {
-        try transaction.replace(store.resolvedURL, content: nil, data: data)
+        try transaction.replace(
+          store.resolvedURL, with: .data(data), expecting: baseline.evidence(for: store.resolvedURL)
+        )
       }
     }
-    try cache.prune(referencedBy: next, transaction: transaction)
+    try cache.prune(
+      referencedBy: next, watch: store.readWatch(prepared: baseline), transaction: transaction)
     try transaction.commit()
     return receipts(next: next, names: names)
   }
@@ -298,7 +306,8 @@ final class SkillLifecycle {
 
   func stage(
     previous: ResolvedState, next: ResolvedState, prepared: [String: PreparedSkill],
-    retained: [String: URL], names: Set<String>, transaction: FileTransaction
+    retained: [String: URL], names: Set<String>, transaction: FileTransaction,
+    expectations: [String: TargetPrecondition]
   ) throws {
     let oldTargets = try targets(previous)
     let newTargets = try targets(next)
@@ -306,17 +315,22 @@ final class SkillLifecycle {
       if let target = newTargets[path], names.contains(target.name),
         let content = retained[target.name], let item = prepared[target.name]
       {
+        guard let evidence = expectations[path] else {
+          throw CoreError.invalidState("skill target has no prepared preimage")
+        }
         guard
           !PathSafety.isContained(
             content.resolvingSymlinksInPath(), in: URL(fileURLWithPath: path).standardizedFileURL)
         else { throw CoreError.unsafePath("installation would replace its own source") }
         try transaction.replace(
-          URL(fileURLWithPath: path), content: content, link: target.mode != .copy,
-          expectedHash: item.lock.hash,
-          executableFlags: item.executableFlags)
+          URL(fileURLWithPath: path), with: target.mode == .copy ? .copy(content) : .link(content),
+          expectedHash: item.lock.hash, executableFlags: item.executableFlags, expecting: evidence)
       } else if let target = oldTargets[path], names.contains(target.name), newTargets[path] == nil
       {
-        try transaction.replace(URL(fileURLWithPath: path), content: nil)
+        guard let evidence = expectations[path] else {
+          throw CoreError.invalidState("skill target has no prepared preimage")
+        }
+        try transaction.delete(URL(fileURLWithPath: path), expecting: evidence)
       }
     }
   }

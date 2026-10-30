@@ -42,7 +42,7 @@ struct WatchMirrorConcurrencyTests {
     #expect(currentLocks == locks)
 
     // Recovery and re-acknowledgment must follow the surviving Git child's completion.
-    try finishProcesses([acknowledger], resuming: pause)
+    try finishProcesses([acknowledger], root: fixture.root, resuming: pause)
     #expect(try fixture.store.loadWatch().sources[fixture.id]?.seen == .revision(first))
     #expect(try fixture.watchRefs() == [first])
     #expect(try gitLocks(fixture).isEmpty)
@@ -60,7 +60,7 @@ struct WatchMirrorConcurrencyTests {
     if existingMirror {
       let listing = try stateTestProcess(root: fixture.root, arguments: ["instruction-list", ""])
       defer { terminateProcess(listing) }
-      try finishProcesses([listing])
+      try finishProcesses([listing], root: fixture.root)
       try #require(exists(fixture.mirror))
       try #require(!exists(scopeLock))
       try FileManager.default.removeItem(
@@ -93,7 +93,7 @@ struct WatchMirrorConcurrencyTests {
     #expect(!exists(fixture.store.watchURL))
     #expect(!exists(fixture.root.appendingPathComponent("writer-finished")))
 
-    try finishProcesses([listing, writer], resuming: pause)
+    try finishProcesses([listing, writer], root: fixture.root, resuming: pause)
     #expect(
       try String(
         contentsOf: fixture.root.appendingPathComponent("listing-finished"), encoding: .utf8)

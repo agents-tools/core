@@ -1,6 +1,7 @@
 import AgentsCore
 import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Watch Git lock recovery")
@@ -45,7 +46,7 @@ struct WatchGitLockTests {
           CPlatform.kill(pid, SIGKILL)
         }
       }
-      terminate(writer)
+      terminateProcess(writer)
     }
     try waitFor(ready, process: writer)
     var locks = [
@@ -55,20 +56,20 @@ struct WatchGitLockTests {
     if packed { locks.append(fixture.mirror.appendingPathComponent("packed-refs.new")) }
     for lock in locks { try #require(FileManager.default.fileExists(atPath: lock.path)) }
     let reader = try stateTestProcess(root: fixture.root, arguments: ["read", ""])
-    defer { terminate(reader) }
+    defer { terminateProcess(reader) }
     try waitFor(fixture.root.appendingPathComponent("reader-started"), process: reader)
     Thread.sleep(forTimeInterval: 0.05)
     #expect(
       !FileManager.default.fileExists(
         atPath: fixture.root.appendingPathComponent("reader-finished").path))
     for lock in locks { #expect(FileManager.default.fileExists(atPath: lock.path)) }
-    terminate(reader)
+    terminateProcess(reader)
     CPlatform.kill(writer.processIdentifier, SIGSTOP)
     let pids = try String(contentsOf: ready, encoding: .utf8)
       .split(whereSeparator: \.isWhitespace).compactMap { Int32($0) }
     try #require(pids.count == 2)
     for pid in pids { CPlatform.kill(pid, SIGKILL) }
-    terminate(writer)
+    terminateProcess(writer)
     try FileManager.default.removeItem(at: ready)
     try FileManager.default.removeItem(at: hook)
     for lock in locks { #expect(FileManager.default.fileExists(atPath: lock.path)) }
@@ -87,8 +88,8 @@ struct WatchGitLockTests {
     }
     for lock in additional { try Data("abandoned".utf8).write(to: lock) }
     let recovery = try stateTestProcess(
-      root: fixture.root, arguments: ["watch-recover", "watch.git-lock.unlinked"])
-    try fixture.kill(recovery, at: "watch.git-lock.unlinked")
+      root: fixture.root, arguments: ["watch-recover", "watch.git-lock.0.0.unlinked"])
+    try fixture.kill(recovery, at: "watch.git-lock.0.0.unlinked")
     #expect(
       try fixture.recoveredWatch().sources[fixture.id]?.seen
         == (removing ? nil : .revision(replacement)))
@@ -151,18 +152,6 @@ struct WatchGitLockTests {
   }
 
   private func waitFor(_ marker: URL, process: Process) throws {
-    let deadline = Date().addingTimeInterval(30)
-    while !FileManager.default.fileExists(atPath: marker.path), process.isRunning, Date() < deadline
-    {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
-  }
-
-  private func terminate(_ process: Process) {
-    if process.isRunning {
-      CPlatform.kill(process.processIdentifier, SIGKILL)
-      process.waitUntilExit()
-    }
+    try ProcessWait.marker(marker, child: process, root: marker.deletingLastPathComponent())
   }
 }

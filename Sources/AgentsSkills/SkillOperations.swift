@@ -28,7 +28,7 @@ public enum SkillOperations {
     automaticSelection: (sourceID: String, name: String)? = nil
   ) throws -> AddOutcome {
     let store = StateStore(scope: options.scope, environment: options.environment)
-    return try operate(store, apply: apply) { declaration, lock in
+    return try operate(store, apply: apply) { declaration, lock, baseline in
       let lifecycle = try SkillLifecycle(store: store, provider: provider)
       var declaration = declaration
       let selectionChanged = CoreError.invalidState(
@@ -119,7 +119,8 @@ public enum SkillOperations {
       }
       try next.validate()
       let installed = try lifecycle.apply(
-        declaration: declaration, previous: lock, next: next, prepared: prepared, names: Set(names))
+        declaration: declaration, previous: lock, next: next, prepared: prepared, names: Set(names),
+        baseline: baseline)
       return AddOutcome(
         source: source, sourceID: id, availableSkills: selected, installed: installed)
     }
@@ -141,13 +142,13 @@ public enum SkillOperations {
     beforeApply: (([UpdateResult]) throws -> Void)? = nil, provider: WellKnownProvider
   ) throws -> [UpdateResult] {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: apply) { declaration, previous in
-      let baseline = try StatePrecondition(store: store)
+    return try operate(store, apply: apply) { declaration, previous, baseline in
       let resolutions = try SourceResolutionSession(store: store)
       let plan = try prepareUpdate(
         store: store, declaration: declaration, previous: previous, resolutions: resolutions,
         skillNames: skillNames, provider: provider)
       try plan.next.validate()
+      try baseline.validate()
       var results = plan.results
       if apply {
         try plan.validateOwnership()
@@ -155,17 +156,21 @@ public enum SkillOperations {
         try baseline.validate()
         try plan.validate()
         let retained = try plan.retain()
-        try baseline.validate()
-        try plan.validate()
         let transaction = FileTransaction(store: store)
+        transaction.requireUnchanged(since: baseline, plan)
         try plan.stage(retained: retained, transaction: transaction)
-        try store.stageDeclaration(declaration, in: transaction)
+        try store.stageDeclaration(
+          declaration, in: transaction, prepared: baseline)
         if let data = try plan.next.replacementData(
-          comparedTo: store.existingData(store.resolvedURL))
+          comparedTo: baseline.bytes(for: store.resolvedURL))
         {
-          try transaction.replace(store.resolvedURL, content: nil, data: data)
+          try transaction.replace(
+            store.resolvedURL, with: .data(data),
+            expecting: baseline.evidence(for: store.resolvedURL))
         }
-        try SourceCache(store: store).prune(referencedBy: plan.next, transaction: transaction)
+        try SourceCache(store: store).prune(
+          referencedBy: plan.next, watch: store.readWatch(prepared: baseline),
+          transaction: transaction)
         try transaction.commit()
         let installed = plan.receipts
         for index in results.indices {
@@ -299,7 +304,7 @@ public enum SkillOperations {
     scope: InstallScope, environment: RuntimeEnvironment, provider: WellKnownProvider
   ) throws -> ResolvedInstallReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: true) { declaration, lock in
+    return try operate(store, apply: true) { declaration, lock, baseline in
       let lifecycle = try SkillLifecycle(store: store, provider: provider)
       var prepared: [String: PreparedSkill] = [:]
       for (name, skill) in lock.skills {
@@ -308,7 +313,7 @@ public enum SkillOperations {
       return ResolvedInstallReport(
         installed: try lifecycle.apply(
           declaration: declaration, previous: lock, next: lock, prepared: prepared,
-          names: Set(lock.skills.keys), writeState: false))
+          names: Set(lock.skills.keys), baseline: baseline, writeState: false))
     }
   }
 
@@ -318,7 +323,7 @@ public enum SkillOperations {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> [String] {
     let store = StateStore(scope: scope, environment: environment)
-    return try operate(store, apply: true) { declaration, lock in
+    return try operate(store, apply: true) { declaration, lock, baseline in
       var declaration = declaration
       var next = lock
       let names = Set(skillNames.map(PathSafety.sanitizeName))
@@ -356,7 +361,8 @@ public enum SkillOperations {
       }
       let lifecycle = try SkillLifecycle(store: store, provider: WellKnownProvider())
       _ = try lifecycle.apply(
-        declaration: declaration, previous: lock, next: next, prepared: [:], names: names)
+        declaration: declaration, previous: lock, next: next, prepared: [:], names: names,
+        baseline: baseline)
       return names.sorted()
     }
   }
@@ -464,11 +470,12 @@ public enum SkillOperations {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock(
       onPendingRecovery: {
-        DoctorReport(checks: [
+        let recovery = FileTransaction.recoveryDiagnostic(store: store)
+        return DoctorReport(checks: [
           DoctorCheck(
-            id: "pending-recovery", status: .warning,
-            message:
-              "Transaction recovery is pending; the next command that changes this scope will recover it.",
+            id: recovery.requiresOwner ? "unresolved-transaction" : "pending-recovery",
+            status: .warning,
+            message: recovery.message,
             path: store.directory.path)
         ])
       },
@@ -553,6 +560,13 @@ public enum SkillOperations {
     }
   }
 
+  private static func operate<T>(_ store: StateStore, apply: Bool, _ body: () throws -> T) throws
+    -> T
+  {
+    if apply { return try store.withLock(body) }
+    return try store.withReadLock(body)
+  }
+
   private static func operate<T>(
     _ store: StateStore, apply: Bool, _ body: (Declaration, ResolvedState) throws -> T
   ) throws -> T {
@@ -560,6 +574,17 @@ public enum SkillOperations {
       return try store.withLock { try body(store.readDeclaration(), store.readResolved()) }
     }
     return try store.withReadLock { try body(store.readDeclaration(), store.readResolved()) }
+  }
+
+  private static func operate<T>(
+    _ store: StateStore, apply: Bool,
+    _ body: (Declaration, ResolvedState, StatePrecondition) throws -> T
+  ) throws -> T {
+    try operate(store, apply: apply) {
+      let baseline = try StatePrecondition(store: store)
+      return try body(
+        store.readDeclaration(prepared: baseline), store.readResolved(prepared: baseline), baseline)
+    }
   }
 
   private static func sourceDeclaration(_ options: AddOptions, declaration: Declaration) throws

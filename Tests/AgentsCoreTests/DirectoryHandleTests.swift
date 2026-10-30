@@ -6,6 +6,19 @@ import Testing
 
 @Suite("Portable filesystem contracts")
 struct DirectoryHandleTests {
+  @Test func linkEvidenceHashesRawDestinationBytes() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let link = root.appendingPathComponent("link")
+    let bytes = [CChar(bitPattern: 0xff), 0]
+    try #require(bytes.withUnsafeBufferPointer { symlink($0.baseAddress!, link.path) } == 0)
+    let directory = try DirectoryHandle(at: root)
+    #expect(try directory.readLinkData("link") == Data([0xff]))
+    let snapshot = try #require(try FileSnapshot.read(at: link))
+    #expect(snapshot.digest == FileHash.sha256Hex(data: Data([0xff])))
+    #expect(snapshot.digest != FileHash.sha256Hex(data: Data("\u{fffd}".utf8)))
+  }
+
   @Test func enumeratesHiddenUnicodeAndLongNamesAcrossRepeatedReads() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
@@ -60,9 +73,36 @@ struct DirectoryHandleTests {
       try Data(name.utf8).write(to: child.appendingPathComponent("content"))
     }
     let directory = try DirectoryHandle(at: root)
-    try directory.rename("first", to: "second", swap: true)
+    try directory.move("first", to: directory, named: "second", mode: .exchange)
     #expect(try directory.child("first").read("content") == Data("second".utf8))
     #expect(try directory.child("second").read("content") == Data("first".utf8))
+  }
+
+  @Test(arguments: ["file", "directory", "link"])
+  func exclusiveRenamePreservesConcurrentObjects(_ kind: String) throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let directory = try DirectoryHandle(at: root)
+    for name in ["staged", "external"] {
+      if kind == "directory" {
+        try directory.makeDirectory(name)
+        try directory.child(name).write("content", data: Data(name.utf8))
+      } else if kind == "link" {
+        try directory.link(name, destination: name + "-destination")
+      } else {
+        try directory.write(name, data: Data(name.utf8))
+      }
+    }
+    let staged = try FileSnapshot.read("staged", from: directory)
+    let external = try FileSnapshot.read("external", from: directory)
+    #expect(throws: CoreError.self) {
+      try directory.move("staged", to: directory, named: "external", mode: .exclusive)
+    }
+    #expect(try FileSnapshot.read("staged", from: directory) == staged)
+    #expect(try FileSnapshot.read("external", from: directory) == external)
+    try directory.move("staged", to: directory, named: "published", mode: .exclusive)
+    #expect(try FileSnapshot.read("published", from: directory) == staged)
+    #expect(try directory.info("staged") == nil)
   }
 
   @Test func directoryAndRegularFileReadsRejectLinks() throws {

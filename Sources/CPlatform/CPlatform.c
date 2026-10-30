@@ -32,13 +32,37 @@ bool platform_system_alias(const char *name) {
 #endif
 }
 
-int platform_exchange(int directory, const char *name, const char *destination) {
+int platform_exchange(int sourceDirectory, const char *name, int destinationDirectory, const char *destination) {
 #if defined(__APPLE__)
-  return renameatx_np(directory, name, directory, destination, RENAME_SWAP);
+  return renameatx_np(sourceDirectory, name, destinationDirectory, destination, RENAME_SWAP);
 #else
   // Call the kernel primitive without relying on the libc Swift overlay.
-  return (int)syscall(SYS_renameat2, directory, name, directory, destination, 2 /* RENAME_EXCHANGE */);
+  return (int)syscall(SYS_renameat2, sourceDirectory, name, destinationDirectory, destination, 2 /* RENAME_EXCHANGE */);
 #endif
+}
+
+int platform_rename_exclusive(int sourceDirectory, const char *name, int destinationDirectory, const char *destination) {
+#if defined(__APPLE__)
+  return renameatx_np(sourceDirectory, name, destinationDirectory, destination, RENAME_EXCL);
+#else
+  return (int)syscall(SYS_renameat2, sourceDirectory, name, destinationDirectory, destination, 1 /* RENAME_NOREPLACE */);
+#endif
+}
+
+bool platform_same_generation(const struct stat *first, const struct stat *second) {
+#if defined(__APPLE__)
+#define MTIME st_mtimespec
+#define CTIME st_ctimespec
+#else
+#define MTIME st_mtim
+#define CTIME st_ctim
+#endif
+  return first->st_dev == second->st_dev && first->st_ino == second->st_ino &&
+    first->st_mode == second->st_mode && first->st_size == second->st_size &&
+    first->MTIME.tv_sec == second->MTIME.tv_sec && first->MTIME.tv_nsec == second->MTIME.tv_nsec &&
+    first->CTIME.tv_sec == second->CTIME.tv_sec && first->CTIME.tv_nsec == second->CTIME.tv_nsec;
+#undef MTIME
+#undef CTIME
 }
 
 int platform_sync(int descriptor) {
