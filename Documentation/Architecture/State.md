@@ -4,8 +4,8 @@
 
 | Scope | Declaration | Lock | Watch state | Cache |
 | --- | --- | --- | --- | --- |
-| Project | `.agent/agents.json` | `.agent/agents.resolved` | `.agent/agents.watch` | `.agent/cache/` |
-| User | `~/.agents/agents.json` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | `~/.agents/cache/` |
+| Project | `.agent/Agents.swift` | `.agent/agents.resolved` | `.agent/agents.watch` | `.agent/cache/` |
+| User | `~/.agents/Agents.swift` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | `~/.agents/cache/` |
 
 User paths are relative to `RuntimeEnvironment.homeDirectory`. State files
 belong to their scope. A project may commit its declaration and lock; the cache,
@@ -15,67 +15,202 @@ operations.
 
 ## Declaration
 
-`agents.json` records user intent. `agents` defaults to `codex` and
-`claude-code`. Source aliases name exactly one `git`, `local` or `well-known`
-location, an optional requirement, and an optional search `path`. A source added
-by location keeps the alias already declaring it, or receives its location's
-last path component; while another source holds that name, preceding components
-are prefixed (`anthropics-skills`), then a number is appended. `sources` may be
-omitted.
+`Agents.swift` records user intent in the [manifest
+language](../Reference/Manifest.md). The document is the declaration's only
+truth. `AgentsManifest` parses and evaluates its bytes and projects them onto
+`AgentsCore.Declaration`, a typed in-memory view of the deployable subset with
+no serialized form. `AgentsCore` holds the declaration's bytes and evidence, the
+absent-declaration rule and publication, and knows no syntax; `AgentsManifest`
+extends `StateStore` with declaration reading, planning and loading. Parse, edit
+and subset failures are `ManifestFailure` diagnostics located in the declaration
+file.
 
-`agents.json` and `agents.resolved` are written with sorted keys in Prettier's
-default JSON layout: two-space indentation, `"key": value`, every non-empty
-object expanded, empty containers as `{}` and `[]`, and an array without objects
-on one line when it fits in 80 columns. A repository whose Prettier
-configuration uses another print width may lay out an array between the two
-widths differently. An operation that writes state rewrites either file when its
-bytes differ from that layout, even when its content is unchanged. Empty lock
-sections such as `"skills": {}` remain, because earlier readers require them.
-Journals, `agents.watch` and content hashes keep the encoder's fixed layout.
+```swift
+// agents-tools-version: 1.0
+import AgentsDescription
 
-```json
-{
-  "agents": ["codex", "claude-code"],
-  "sources": {
-    "team": { "git": "github.com/example/skills", "from": "1.0.0" },
-    "drafts": { "local": "~/Developer/skills" }
-  },
-  "skills": {
-    "team": { "select": "all", "exclude": ["retired"] },
-    "drafts": {
-      "select": ["release-notes"],
-      "mode": "edit",
-      "overrides": { "release-notes": { "agents": ["codex"] } }
-    }
-  }
-}
+let agents = Agents(
+  sources: [
+    .source(name: "drafts", path: "~/Developer/skills"),
+    .source(
+      name: "team", url: "https://github.com/example/skills", from: "1.0.0"
+    ),
+  ],
+  components: [
+    .skills(
+      source: "drafts", select: ["release-notes"], mode: .edit,
+      overrides: [.skill(name: "release-notes", agents: [.codex])]
+    ),
+    .skills(source: "team", exclude: ["retired"]),
+  ]
+)
 ```
 
-A skill selection is `"all"` or a name array, with optional exclusions,
-recipients, mode and per-skill overrides. `all` follows discovery membership on
-an unnamed update. Removing a member adds an exclusion. Explicitly named updates
-resolve only those members and fail if a requested member is missing. Skill
-filesystem identities are unique within a scope across sources.
+### Deployable subset
 
-Requirements encode as `branch`, `revision`, `exact`, `from`, `upToNextMinor`,
-or `from` plus `to`. Ranges include their lower bound and exclude their upper
-bound. A prerelease requires a prerelease bound with the same major, minor and
-patch. With no requirement, resolution chooses the latest semantic-version tag,
-then the source's default branch when no version tag exists.
+The state layer deploys root `defaultAgents`, `sources` and `watch`, and root
+`components` of kinds `.skills` and `.instructions`: at most one skills component
+per source alias and one instructions component, with no `condition` on a
+component, section or prompt and an empty `native`. Groups and exports may be
+declared; unused groups are inert. Every other active structure fails with
+`manifest.unsupported` at its location, and nothing is dropped: root `uses`, a
+condition, native configuration, another component kind, a second skills
+component for one alias, a second instructions component, or
+`.skills(source: ".")`. After projection, `Declaration.validate(environment:)`
+performs the checks that depend on the runtime environment, such as duplicate
+identities after local-path expansion.
+
+`defaultAgents` defaults to `codex` and `claude-code`. Explicit recipients,
+including an empty array, replace the default; the projection keeps omitted and
+empty recipients distinct. A source added by location keeps the alias already
+declaring it, or receives its location's last path component; while another
+source holds that name, preceding components are prefixed (`anthropics-skills`),
+then a number is appended.
+
+A skill selection is all members, when `select` is omitted or `.all`, or an
+explicit name array, with optional exclusions, recipients, mode and per-skill
+overrides. An all-member selection follows discovery membership on an unnamed
+update. Removing a member adds an exclusion. Explicitly named updates resolve
+only those members and fail if a requested member is missing. Skill filesystem
+identities are unique within a scope across sources.
+
+Requirements are `branch:`, `revision:`, `exact:`, `from:` (up to the next
+major version), `.upToNextMinor(from:)` or a half-open range. Ranges include
+their lower bound and exclude their upper bound. A prerelease requires a
+prerelease bound with the same major, minor and patch. With no requirement,
+resolution chooses the latest semantic-version tag, then the source's default
+branch when no version tag exists.
 
 Source IDs are Git `host[:port]/path` with a lowercase host and without user,
 scheme or `.git`; `local:` plus an absolute path; or a well-known URL retaining
 its scheme. Declaring two aliases for one normalized ID is an error.
 
-`instructions` holds recipients, ordered section references (`alias:name`, or a
-bare name for the project's own instructions), and named `chatgpt` prompts with
-ordered sections and optional relative `append` paths. `watch` is a unique alias
-array. Skill operations preserve both fields and existing watch-state bytes.
+The `.instructions` component holds recipients, ordered section references (a
+bare string for the project's own instructions, `.section(name:source:)` for a
+declared source), and named `chatGPT` prompts with ordered sections and optional
+relative `append` paths. `watch` is a unique alias array. Skill operations
+preserve both and existing watch-state bytes.
+
+### Absent declaration
+
+| Declaration | Lock or watch state | Behavior |
+| --- | --- | --- |
+| Absent | Absent | An empty declaration. Reads return empty results; the first write that declares something creates `Agents.swift` with no-replace publication. A write whose declaration and resulting lock are both empty creates neither file. |
+| Present | Any | Normal. An absent lock is an empty resolved state: `update` creates it and `install` has nothing to restore. |
+| Absent | Present | Every read and write path, including the `load*` accessors, listings, previews, doctor, install, initialization and export, throws `CoreError.missingDeclaration` with the declaration path. Nothing is written, and no `.agents.lock` is created. |
+
+Read paths apply the rule after their pending-recovery check, and writers after
+transaction recovery. Before taking the writer lock, a writer in a scope without
+`.agents.lock`, journal or pending watch-reference marker validates the lock and
+watch state and checks only the declaration's presence. An interrupted first
+write of the declaration and lock therefore recovers on the next write instead
+of reporting a missing declaration. Watch state counts because its baselines
+derive from the declaration; treating a missing declaration as empty would let
+the next update remove what was deployed.
+
+### Declaration writes
+
+Every declaration write passes through two entries.
+`planDeclaration(_:replacing:prepared:)` in `AgentsManifest` compares the next
+declaration with the previous one the operation read from the same prepared
+baseline. It returns no change when they are semantically equal, and otherwise
+bytes that passed the complete front end and the projection check.
+`stageDeclaration(_:in:prepared:)` in `AgentsCore` publishes those bytes in the
+operation's transaction, expecting the baseline's evidence for the declaration.
+Skill, instruction, watch and update writes use only these entries; adding or
+changing a source is a difference in the declaration's sources. Combined and
+skill updates leave the declaration unchanged; the transaction still checks its
+prepared evidence through `FileTransaction.requireUnchanged(since:)` before
+publication.
+
+Planning completes before `beforeApply`, cache retention, a watch's Git fetch
+and any staging, so an edit that cannot be addressed exactly fails without side
+effects. When the previous declaration differs from the projection of the
+baseline bytes, planning reports a stale preparation,
+`CoreError.invalidState("declaration changed during preparation: <path>")`,
+rather than overwriting an external change. Under the scope writer lock, a
+later writer reads its own baseline and plans again, so concurrent writers lose
+no update.
+
+Semantic equality decides whether anything changes:
+
+- sources are equal when identity, requirement and normalized subpath are
+  equal, so URL spelling, relative or absolute local paths and range spelling
+  never cause a rewrite;
+- recipient arrays compare as sets, with omitted and empty distinct;
+- omitted and empty exclusions, overrides, prompts, watch lists and skills
+  components are equal;
+- sections compare in order.
+
+Planning makes minimal document edits and never reorders existing text. A new
+source is appended, a changed source is replaced in place, and a removed source
+goes after the components that reference it in the same batch. A new skills
+component is inserted before the instructions component, or last; a new
+instructions component is last. Selections, exclusions, recipients, mode,
+overrides, sections, prompts, watch aliases and default recipients change at
+argument or element granularity: existing arrays gain and lose elements in
+place, an ordered array gains them in order, and sections use a
+longest-common-subsequence edit that keeps repetitions. Edits replace only their
+target ranges; bytes outside them, comments included, stay unchanged. Constructs
+the editor cannot address exactly, such as shared constants, concatenations and
+ambiguous comments, fail with `manifest.edit.readOnly`. A batch holds at most
+100 requests, and the document is rebuilt from the new bytes before the
+remaining difference is planned. The projection of the final document must equal
+the intended declaration, or planning fails with `manifest.edit.mismatch`.
+
+Without declaration bytes, planning prints the complete declaration with the
+[canonical printer](../Reference/Manifest.md#canonical-printing): sources, skills
+components, overrides, prompts, selected names and watch aliases sorted by UTF-8
+bytes, recipients deduplicated in agent-ID order, and skills before instructions.
+The printed bytes pass the same front end and projection check and are published
+with no-replace. A semantically empty declaration creates no file.
+
+One transaction covers the declaration, lock, affected watch state, installation
+targets, cache retention and pruning; a declaration-only change uses the same
+journal and evidence. The declaration is published only as planned source bytes,
+while the lock and watch state keep their own encoders. Preparation records
+presence, physical identity and byte digest for the declaration, lock, watch
+state and related targets. A changed comment, or another inode with equal bytes,
+therefore invalidates a prepared preview, and a declaration created externally
+after preparation is an existence conflict that keeps the external file.
+
+### Requirement comparison
+
+Semantic comparison expands range requirements to their bounds; raw case or
+encoded-field equality is insufficient. Branch and revision compare their
+strings, exact versions compare normalized full versions, and absence keeps its
+distinct latest-tag/default-branch policy. Canonical spelling applies to new IR
+and newly serialized requirement fields.
+
+| Site | Rule |
+| --- | --- |
+| Declaration IR and dump | Canonical requirement kinds and normalized version strings; a factory and a literal range with equal bounds compare equal. |
+| Declaration writes and `upsertSource` | Semantic values are compared; an equal edit keeps the original source bytes. New or changed nodes print canonically; untouched spelling is retained. |
+| `LockedSource.requirement` in the lock | Newly written records use canonical requirements. Existing records keep their bytes and are compared through a semantic view. A requirement-spelling difference alone never changes pins, reports an update or stages a write. |
+| Skill and instruction lock producers, combined update conflicts and change detection | Source identity, discovery root and semantic requirement values are compared; equal ranges merge without a conflict. A semantically unchanged lock keeps its original bytes even when another state file changes; a necessary rewrite emits canonical requirements. |
+| Resolution-session reuse and cache descriptors | Requirements are keyed by semantic value. Cache identity and materialization keys use source identity and exact revision or artifact digest; restoration uses the stored pins without re-resolving requirements. |
+| `agents.watch` | Stores source identities and seen baselines, with no requirement. Re-evaluating an equivalent declaration preserves the subscription and baseline; watch-created lock descriptors follow the lock rule. |
+
+State transactions compare semantic state before choosing any serialization and
+never rewrite records on read.
 
 ## Lock
 
 `agents.resolved` version 1 has identity-keyed `sources` and `skills`, and an
 `instructions` object containing `sections`, `chatgpt` and `targets`.
+
+The lock is written with sorted keys in Prettier's default JSON layout:
+two-space indentation, `"key": value`, every non-empty object expanded, empty
+containers as `{}` and `[]`, and an array without objects on one line when it
+fits in 80 columns. A repository whose Prettier configuration uses another print
+width may lay out an array between the two widths differently. A semantically
+unchanged lock keeps its original bytes; a changed lock is written in that
+layout. When the prepared generation has neither a lock nor a declaration and
+the resulting lock is empty, no lock is created, because lock state without a
+declaration would stop every later access to the scope. A scope with a
+declaration receives a lock even when it is empty. Empty lock sections such as
+`"skills": {}` remain, because earlier readers require them. Journals,
+`agents.watch` and content hashes keep the encoder's fixed layout.
 
 A locked source records its kind, Git URL where applicable, requirement and
 search path. A skill records its source ID, its own revision and optional
@@ -110,15 +245,16 @@ payloads, including empty directories and symbolic link destinations.
 Tree hashes intentionally exclude permissions. Skill update snapshots compare
 the any-execute-bit Boolean separately for regular files. Preparation, retention
 and transaction staging verify that dimension without changing stored hashes,
-pins or the version 1 declaration, lock and watch schemas.
+pins, the declaration or the version 1 lock and watch schemas.
 
 ## State Transaction and Recovery
 
 The scope's `transaction.json` is the sole persistent transaction owner for
 installation targets, declaration, lock, watch state, cache publication and
 pruning. Its protocol accepts regular files, directories and symbolic links
-independently of the declaration format. Declaration and lock keep their state
-encoders; watch state keeps its fixed encoder.
+independently of the declaration format. The declaration is published as the
+source bytes its plan produced; the lock keeps its state encoder and watch state
+its fixed encoder.
 
 ### Preparation and preconditions
 
@@ -141,10 +277,10 @@ related inputs that the journal does not replace. State parsing consumes the
 captured raw bytes, so decoded inputs and journal evidence describe the same
 generation.
 
-Changed bytes, including declaration whitespace or target comments, invalidate
-preparation. Another inode with equal bytes also invalidates a captured target
-entry or directory descendant. Apply requires a newly prepared plan and never
-rebases an old edit onto changed inputs.
+Changed bytes, including declaration comments or whitespace and target comments,
+invalidate preparation. Another inode with equal bytes also invalidates a
+captured target entry or directory descendant. Apply requires a newly prepared
+plan and never rebases an old edit onto changed inputs.
 
 Readers and writers serialize through `.agents.lock`. Missing scope and target
 ancestry is created with descriptor-relative operations. Parent directories are
@@ -162,7 +298,8 @@ the denial. Existing user content and metadata are preserved.
 
 ### Journal records
 
-Journal format version 1 is independent of declaration, lock and watch versions.
+Journal format version 1 is independent of the manifest language, lock and watch
+versions.
 The root records its version, transaction UUID, scope identity, registered root
 identities, transaction phase, operations, private containers and disposal
 intent. A journal without this version, or with another version, is retained
@@ -278,8 +415,11 @@ ownership denials are reported rather than bypassed.
 
 Every mutating state operation first checks for an abandoned journal under the
 scope lock, validates watch state and finishes pending reference cleanup before
-proceeding. Journal recovery selects and syncs a consistent generation before
-watch reconciliation can release any ref. Pending watch-reference recovery also
+proceeding. Recovery never reads the declaration: journal and watch-reference
+recovery complete even when `Agents.swift` does not parse, and orphaned mirror
+locations come from watch state and the lock, then from the mirror's origin.
+Journal recovery selects and syncs a consistent generation before watch
+reconciliation can release any ref. Pending watch-reference recovery also
 reports `CoreError.transactionRecovered` when no journal remains. Retained refs
 remain available while a journal conflict is unresolved.
 
@@ -333,8 +473,12 @@ their journal UUID: recovering a cache publication cannot mark a later combined
 update committed. Failure after a commit marker can still be unresolved if
 recovery material changed. A committed failure is never described as rollback.
 
-The public `StateStore.loadDeclaration`, `loadResolved` and `loadWatch`
-accessors retain their writer-lock and recovering-loader semantics.
+The public `StateStore.loadResolved()` and `loadWatch()` in `AgentsCore` and
+`loadDeclaration()` and `loadManifest()` in `AgentsManifest` are read-only, as
+described below; the latter two require `import AgentsManifest`.
+`loadDeclaration()` returns the deployable projection; `loadManifest()` returns
+the complete `DeclarationDocument` without subset projection, or `nil` for a
+scope without state. Both can also throw the declaration's `ManifestFailure`.
 
 ### Read-only access
 
@@ -343,12 +487,19 @@ and watch diff take an existing shared lock, report pending recovery and never
 replay it or create state files. With no lock, inspection rechecks for a new
 lock or recovery marker before returning either its result or its error. A
 writer causes that attempt to be discarded and retried under the shared lock.
-Writers create the scope lock before mutation and never remove it.
+Writers create the scope lock before mutation and never remove it. The scope
+lock exists before the declaration is parsed, so a first writer that meets an
+invalid `Agents.swift` reports its `ManifestFailure` after creating
+`.agents.lock`; invalid lock or watch state stops the writer before the lock
+exists.
 
+The `load*` accessors follow the same rules and never create `.agents.lock`.
 Pending journals and watch-reference markers stop inspection with
-`CoreError.invalidState`. Doctor distinguishes pending automatic recovery from
-an unresolved conflict requiring owner action, and skips checks needing a
-consistent generation. Skill doctor uses `pending-recovery` or
+`CoreError.recoveryPending`, whose description is the recovery diagnostic text
+itself; a mutating operation on the scope performs the recovery. The
+absent-declaration rule applies after this check. Doctor distinguishes pending
+automatic recovery from an unresolved conflict requiring owner action, and skips
+checks needing a consistent generation. Skill doctor uses `pending-recovery` or
 `unresolved-transaction`; instruction doctor uses `pendingRecovery` or
 `unresolvedTransaction`. Explicit multi-root instruction audits never write.
 Corrupt or foreign-version journals remain available rather than being replayed.

@@ -6,9 +6,8 @@ Accepted
 
 ## Context
 
-A scope's declaration is `agents.json`, standard JSON that the state store
-rewrites in full on every save. People cannot annotate it, and every write
-normalizes it.
+A scope's declaration is standard JSON that the state store rewrites in full on
+every save. People cannot annotate it, and every write normalizes it.
 
 The declaration is about to describe every agent configuration component, not
 only skills and instructions, and two front ends will edit it: the `agents`
@@ -51,9 +50,10 @@ uneditable for tools once it contains logic.
   lock, not in the manifest.
 - `agents manifest dump --json` prints the evaluated declaration for tools in
   other languages.
-- `agents migrate` converts `agents.json` to `Agents.swift` once and gives the
-  same result when repeated. Commands report an unmigrated `agents.json`
-  instead of converting it implicitly.
+- The product reads and writes only `Agents.swift`. Existing repository and user
+  scopes are converted once outside the product at release; the product does not
+  read the earlier JSON declaration. A scope with a lock or watch state but no
+  `Agents.swift` is an error.
 
 ## Consequences
 
@@ -67,8 +67,8 @@ uneditable for tools once it contains logic.
 - Parsing untrusted manifests needs explicit limits on file size, nesting and
   evaluation work, and fuzzing before release.
 - Editors offer completion only where `AgentsDescription` is available to them.
-- Every repository that commits `agents.json`, and every user scope, migrates
-  once.
+- Every repository that commits a JSON declaration, and every user scope, is
+  converted once at release, outside the product.
 
 ## Alternatives Considered
 
@@ -85,6 +85,7 @@ uneditable for tools once it contains logic.
 
 - Accepted by the repository owner (showxu) on 2026-10-28.
 - Current declaration, lock and state layout: [State](../Architecture/State.md)
+- Language specification: [Agents Manifest Language](../Reference/Manifest.md)
 - Component model the manifest describes: [Agent Components and Adapters](AgentComponents.md)
 - Approval of executable components: [Executable Component Approval](ExecutableApproval.md)
 - Product scope and front ends: [agents-tools/cli decisions](https://github.com/agents-tools/cli/tree/master/Documentation/Decisions)
