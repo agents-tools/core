@@ -7,7 +7,7 @@ import Testing
 @Suite("Evaluated manifest dump")
 struct DumpTests {
   @Test(arguments: [
-    "MigrationEmpty", "MigrationFields", "DumpSymbolic", "ConsumerExample", "LiteralCoverage",
+    "PrintedEmpty", "PrintedFields", "DumpSymbolic", "ConsumerExample", "LiteralCoverage",
   ])
   func completeGoldenObjectsAndLocationsAreByteExact(_ name: String) throws {
     let bytes = try manifestFixture(name + ".swift.txt")

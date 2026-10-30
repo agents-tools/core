@@ -110,4 +110,8 @@ public struct DeclarationDocument: Sendable {
   public func preparing(_ edits: [ManifestEdit]) throws -> DocumentChange {
     try DocumentEditor(document: self).prepare(edits)
   }
+
+  package func preparing(operations: [DocumentOperation]) throws -> DocumentChange {
+    try DocumentEditor(document: self).prepare(operations: operations)
+  }
 }

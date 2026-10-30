@@ -1,5 +1,4 @@
 import AgentsCore
-import Foundation
 
 /// JSON data for the evaluated manifest schema. Decimal configuration payloads remain strings.
 public indirect enum ManifestJSONValue: Sendable, Equatable {
@@ -9,16 +8,6 @@ public indirect enum ManifestJSONValue: Sendable, Equatable {
   case null
   case array([ManifestJSONValue])
   case object([String: ManifestJSONValue])
-
-  static func json(_ input: Any) throws -> Self {
-    switch input {
-    case let string as String: return .string(string)
-    case is NSNull: return .null
-    case let array as [Any]: return .array(try array.map(json))
-    case let fields as [String: Any]: return .object(try fields.mapValues(json))
-    default: throw CoreError.invalidState("unexpected migration diagnostic value")
-    }
-  }
 
   func encodedCount(limit: Int, budget: String = "encoded JSON output bytes") throws -> Int {
     var count = 0

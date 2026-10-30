@@ -74,12 +74,16 @@ final class DocumentEditor {
   }
 
   func prepare(_ edits: [ManifestEdit]) throws -> DocumentChange {
-    if edits.count > ManifestLimits.Editing.requests {
+    try prepare(operations: edits.map(DocumentOperation.edit))
+  }
+
+  func prepare(operations: [DocumentOperation]) throws -> DocumentChange {
+    if operations.count > ManifestLimits.Editing.requests {
       throw fail("manifest.limit", "edit batch has more than 100 requests")
     }
-    for edit in edits {
+    for operation in operations {
       let before = history.count
-      try apply(edit)
+      try apply(operation)
       if before != history.count {
         current = try DeclarationDocument(
           bytes: table.bytes, identity: original.source.identity, validateDomain: false)
@@ -196,11 +200,11 @@ final class DocumentEditor {
     }
     return range
   }
+  /// Member values such as `.copy` are direct; bare names are references and have referents.
   func direct(_ pointer: String) throws -> EvaluatedValue {
     guard let value = current.values[pointer], !value.defaulted, value.referent == nil,
       !current.hasAssembledAncestor(pointer),
-      current.admission.nodes[value.syntax].kind != .sequence,
-      current.admission.nodes[value.syntax].kind != .name
+      current.admission.nodes[value.syntax].kind != .sequence
     else {
       throw fail(
         "manifest.edit.readOnly",

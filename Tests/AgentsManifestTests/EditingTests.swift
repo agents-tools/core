@@ -167,6 +167,28 @@ struct EditingTests {
     #expect(source.contains("// file\r\n"))
   }
 
+  @Test func equivalentRangeSourceUpsertKeepsOriginalBytes() throws {
+    let doc = try document(
+      "let agents = Agents(sources: [.source(name: \"b\", path: \"./b\", from: \"1.2.0\")])")
+    let change = try doc.preparing([
+      .upsertSource(.source(name: "b", path: "./b", "1.2.0"..<"2.0.0"))
+    ])
+    #expect(change.bytes == doc.bytes && change.patches.isEmpty)
+  }
+
+  @Test func printedWidthCountsLabelsCommasAndUTF8Bytes() {
+    let printer = CanonicalPrinter()
+    let atBoundary = Source.source(name: String(repeating: "a", count: 47), path: "p")
+      .constructionValue
+    let overBoundary = Source.source(name: String(repeating: "a", count: 48), path: "p")
+      .constructionValue
+    #expect(!printer.render(atBoundary, indentation: "    ").contains("\n"))
+    #expect(printer.render(overBoundary, indentation: "    ").contains("\n"))
+    let unicode = Source.source(name: String(repeating: "é", count: 24), path: "p")
+      .constructionValue
+    #expect(printer.render(unicode, indentation: "    ").contains("\n"))
+  }
+
   @Test func noOpsKeepOriginalBytesAndUnsafeEditsPublishNothing() throws {
     let doc = try document(
       "let agents = Agents(defaultAgents: nil, sources: [.source(name: \"s\", url: \"https://example.org/s.git\", \"1.2.0\" ..< \"2.0.0\")], components: [/*container*/])"

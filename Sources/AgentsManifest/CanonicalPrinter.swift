@@ -89,9 +89,21 @@ struct CanonicalPrinter {
       Printed(prefix), layout(value, indentation: "", column: 13, trailing: 0), Printed("\n"),
     ])
     guard result.count <= ManifestLimits.Input.bytes else {
-      throw MigrationFailure.limit("generated source bytes")
+      throw ManifestFailure(
+        ManifestDiagnostic(
+          code: "manifest.limit", message: "generated source bytes",
+          span: SourceSpan(
+            document: DocumentIdentity("manifest"), start: 0, end: 0, line: 1, column: 1)))
     }
     return Array(result.string.utf8)
+  }
+
+  /// The parenthesized argument list of a call whose opening parenthesis is at `column`.
+  func argumentList(
+    _ arguments: [(String, ConstructionValue)], indentation: String, column: Int, trailing: Int
+  ) -> String {
+    call("", arguments: arguments, indentation: indentation, column: column, trailing: trailing)
+      .string
   }
 
   private func layout(
