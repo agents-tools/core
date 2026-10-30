@@ -89,6 +89,18 @@ public enum ManifestEdit: Sendable {
   case replaceConstant(NodeID, with: StaticValue, acceptingUses: [NodeID])
 }
 
+/// Edits below component granularity. Argument and element handles address direct
+/// constructions and array literals, including explicit skill selections; comments follow the
+/// ownership rules of the other edits.
+package enum DocumentOperation: Sendable {
+  case edit(ManifestEdit)
+  /// Replaces a present argument, writing an explicit default rather than removing it, or
+  /// inserts a missing one in signature order. A missing argument set to its default is a no-op.
+  case setArgument(NodeID, field: String, value: ConstructionValue)
+  case insertElement(ConstructionValue, into: NodeID, at: InsertionPosition)
+  case removeElement(NodeID)
+}
+
 public struct SemanticDelta: Sendable, Equatable {
   public let changedPointers: [String]
 }

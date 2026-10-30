@@ -21,16 +21,12 @@ func compiledFixtures() -> [CompiledManifestFixture] {
     compiledExportedGroup(),
     compiledInstructionRecipients(),
     compiledLiteralCoverage(),
-    compiledMigrationAliasGap(),
-    compiledMigrationAliases(),
-    compiledMigrationDuplicateRecipients(),
-    compiledMigrationEdgeExample(),
-    compiledMigrationEmpty(),
-    compiledMigrationEscapes(),
-    compiledMigrationExplicitEmpty(),
-    compiledMigrationFields(),
-    compiledMigrationRanges(),
-    compiledMigrationWidth(),
+    compiledPrintedEmpty(),
+    compiledPrintedEscapes(),
+    compiledPrintedExplicitEmpty(),
+    compiledPrintedFields(),
+    compiledPrintedRanges(),
+    compiledPrintedWidth(),
     compiledProducerExample(),
     compiledRecipientConditions(),
     compiledRequirementValues(),
@@ -352,200 +348,18 @@ private func compiledLiteralCoverage() -> CompiledManifestFixture {
     ])
 }
 
-private func compiledMigrationAliasGap() -> CompiledManifestFixture {
-  // agents-tools-version: 1.0
-
-  let agents = Agents(
-    sources: [
-      .source(name: "source", path: "live"),
-      .source(name: "source-2", path: "other"),
-    ],
-    components: [
-      .skills(
-        source: "source",
-        overrides: [
-          .skill(name: "future")
-        ]
-      )
-    ]
-  )
-  return CompiledManifestFixture(
-    name: "MigrationAliasGap.swift.txt", agents: agents,
-    constants: [
-      "agents": agents.constructionValue
-    ])
-}
-
-private func compiledMigrationAliases() -> CompiledManifestFixture {
-  // agents-tools-version: 1.0
-
-  let agents = Agents(
-    sources: [
-      .source(name: "source", path: "./s"),
-      .source(name: "source-2", path: "./s2"),
-      .source(name: "source-3", url: "git@Intranet:team/rules.git"),
-    ],
-    components: [
-      .skills(
-        source: "source-3",
-        select: ["a"],
-        exclude: ["a"],
-        overrides: [
-          .skill(name: "a", mode: .copy)
-        ]
-      ),
-      .instructions(
-        sections: [
-          "guide",
-          .section(name: "rule", source: "source-3"),
-          .section(name: "rule", source: "source-3"),
-        ],
-        chatGPT: [
-          .prompt(
-            name: "",
-            sections: [
-              .section(name: "rule", source: "source-3"),
-              "guide",
-            ]
-          )
-        ]
-      ),
-    ],
-    watch: ["source", "source-3"]
-  )
-  return CompiledManifestFixture(
-    name: "MigrationAliases.swift.txt", agents: agents,
-    constants: [
-      "agents": agents.constructionValue
-    ])
-}
-
-private func compiledMigrationDuplicateRecipients() -> CompiledManifestFixture {
-  // agents-tools-version: 1.0
-
-  let agents = Agents(
-    defaultAgents: [.claudeCode, .codex],
-    sources: [
-      .source(name: "a~/b", path: "./other"),
-      .source(name: "source", path: "./inherited"),
-      .source(name: "source-2", path: "./rules"),
-    ],
-    components: [
-      .skills(
-        source: "a~/b",
-        overrides: [
-          .skill(
-            name: "future",
-            agents: [.openCode]
-          )
-        ],
-        agents: []
-      ),
-      .skills(source: "source"),
-      .skills(
-        source: "source-2",
-        select: ["empty", "inherited", "review"],
-        exclude: ["review"],
-        overrides: [
-          .skill(
-            name: "empty",
-            agents: []
-          ),
-          .skill(name: "inherited", mode: .copy),
-          .skill(
-            name: "review",
-            agents: [.codex, .cursor]
-          ),
-        ],
-        agents: [.claudeCode, .openCode]
-      ),
-      .instructions(
-        sections: [
-          "guide",
-          .section(name: "rule", source: "source-2"),
-        ],
-        agents: [.codex, .geminiCLI]
-      ),
-    ],
-    watch: ["source-2"]
-  )
-  return CompiledManifestFixture(
-    name: "MigrationDuplicateRecipients.swift.txt", agents: agents,
-    constants: [
-      "agents": agents.constructionValue
-    ])
-}
-
-private func compiledMigrationEdgeExample() -> CompiledManifestFixture {
-  // agents-tools-version: 1.0
-
-  let agents = Agents(
-    sources: [
-      .source(name: "source", path: "./drafts", from: "1.2.0"),
-      .source(
-        name: "source-2",
-        path: "./more",
-        .upToNextMinor(from: "1.2.0")
-      ),
-      .source(name: "source-3", url: "https://example.org/rules.git"),
-    ],
-    components: [
-      .skills(
-        source: "source",
-        overrides: [
-          .skill(
-            name: "future",
-            agents: [.openCode]
-          )
-        ]
-      ),
-      .skills(
-        source: "source-3",
-        select: ["a"],
-        overrides: [
-          .skill(
-            name: "a",
-            mode: .copy,
-            agents: [.codex]
-          )
-        ]
-      ),
-      .instructions(
-        sections: [
-          "guide",
-          .section(name: "rule", source: "source-3"),
-        ],
-        chatGPT: [
-          .prompt(
-            name: "",
-            sections: [
-              .section(name: "rule", source: "source-3")
-            ]
-          )
-        ]
-      ),
-    ],
-    watch: ["source-3"]
-  )
-  return CompiledManifestFixture(
-    name: "MigrationEdgeExample.swift.txt", agents: agents,
-    constants: [
-      "agents": agents.constructionValue
-    ])
-}
-
-private func compiledMigrationEmpty() -> CompiledManifestFixture {
+private func compiledPrintedEmpty() -> CompiledManifestFixture {
   // agents-tools-version: 1.0
 
   let agents = Agents()
   return CompiledManifestFixture(
-    name: "MigrationEmpty.swift.txt", agents: agents,
+    name: "PrintedEmpty.swift.txt", agents: agents,
     constants: [
       "agents": agents.constructionValue
     ])
 }
 
-private func compiledMigrationEscapes() -> CompiledManifestFixture {
+private func compiledPrintedEscapes() -> CompiledManifestFixture {
   // agents-tools-version: 1.0
 
   let agents = Agents(
@@ -573,13 +387,13 @@ private func compiledMigrationEscapes() -> CompiledManifestFixture {
     ]
   )
   return CompiledManifestFixture(
-    name: "MigrationEscapes.swift.txt", agents: agents,
+    name: "PrintedEscapes.swift.txt", agents: agents,
     constants: [
       "agents": agents.constructionValue
     ])
 }
 
-private func compiledMigrationExplicitEmpty() -> CompiledManifestFixture {
+private func compiledPrintedExplicitEmpty() -> CompiledManifestFixture {
   // agents-tools-version: 1.0
 
   let agents = Agents(
@@ -591,13 +405,13 @@ private func compiledMigrationExplicitEmpty() -> CompiledManifestFixture {
     ]
   )
   return CompiledManifestFixture(
-    name: "MigrationExplicitEmpty.swift.txt", agents: agents,
+    name: "PrintedExplicitEmpty.swift.txt", agents: agents,
     constants: [
       "agents": agents.constructionValue
     ])
 }
 
-private func compiledMigrationFields() -> CompiledManifestFixture {
+private func compiledPrintedFields() -> CompiledManifestFixture {
   // agents-tools-version: 1.0
 
   let agents = Agents(
@@ -674,13 +488,13 @@ private func compiledMigrationFields() -> CompiledManifestFixture {
     watch: ["git", "index", "local"]
   )
   return CompiledManifestFixture(
-    name: "MigrationFields.swift.txt", agents: agents,
+    name: "PrintedFields.swift.txt", agents: agents,
     constants: [
       "agents": agents.constructionValue
     ])
 }
 
-private func compiledMigrationRanges() -> CompiledManifestFixture {
+private func compiledPrintedRanges() -> CompiledManifestFixture {
   // agents-tools-version: 1.0
 
   let agents = Agents(
@@ -725,13 +539,13 @@ private func compiledMigrationRanges() -> CompiledManifestFixture {
     ]
   )
   return CompiledManifestFixture(
-    name: "MigrationRanges.swift.txt", agents: agents,
+    name: "PrintedRanges.swift.txt", agents: agents,
     constants: [
       "agents": agents.constructionValue
     ])
 }
 
-private func compiledMigrationWidth() -> CompiledManifestFixture {
+private func compiledPrintedWidth() -> CompiledManifestFixture {
   // agents-tools-version: 1.0
 
   let agents = Agents(
@@ -756,7 +570,7 @@ private func compiledMigrationWidth() -> CompiledManifestFixture {
     ]
   )
   return CompiledManifestFixture(
-    name: "MigrationWidth.swift.txt", agents: agents,
+    name: "PrintedWidth.swift.txt", agents: agents,
     constants: [
       "agents": agents.constructionValue
     ])

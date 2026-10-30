@@ -36,61 +36,37 @@
       "syntaxReservation": 2932,
       "tokens": 729
     },
-    "MigrationAliasGap.swift.txt": {
-      "syntaxDepth": 26,
-      "syntaxNodes": 152,
-      "syntaxReservation": 264,
-      "tokens": 62
-    },
-    "MigrationAliases.swift.txt": {
-      "syntaxDepth": 32,
-      "syntaxNodes": 403,
-      "syntaxReservation": 680,
-      "tokens": 166
-    },
-    "MigrationDuplicateRecipients.swift.txt": {
-      "syntaxDepth": 28,
-      "syntaxNodes": 520,
-      "syntaxReservation": 920,
-      "tokens": 226
-    },
-    "MigrationEdgeExample.swift.txt": {
-      "syntaxDepth": 32,
-      "syntaxNodes": 446,
-      "syntaxReservation": 780,
-      "tokens": 191
-    },
-    "MigrationEmpty.swift.txt": {
+    "PrintedEmpty.swift.txt": {
       "syntaxDepth": 10,
       "syntaxNodes": 29,
       "syntaxReservation": 48,
       "tokens": 8
     },
-    "MigrationEscapes.swift.txt": {
+    "PrintedEscapes.swift.txt": {
       "syntaxDepth": 29,
       "syntaxNodes": 192,
       "syntaxReservation": 424,
       "tokens": 75
     },
-    "MigrationExplicitEmpty.swift.txt": {
+    "PrintedExplicitEmpty.swift.txt": {
       "syntaxDepth": 18,
       "syntaxNodes": 62,
       "syntaxReservation": 120,
       "tokens": 26
     },
-    "MigrationFields.swift.txt": {
+    "PrintedFields.swift.txt": {
       "syntaxDepth": 32,
       "syntaxNodes": 748,
       "syntaxReservation": 1304,
       "tokens": 322
     },
-    "MigrationRanges.swift.txt": {
+    "PrintedRanges.swift.txt": {
       "syntaxDepth": 23,
       "syntaxNodes": 474,
       "syntaxReservation": 752,
       "tokens": 184
     },
-    "MigrationWidth.swift.txt": {
+    "PrintedWidth.swift.txt": {
       "syntaxDepth": 23,
       "syntaxNodes": 209,
       "syntaxReservation": 348,

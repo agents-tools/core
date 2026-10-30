@@ -12,6 +12,10 @@ func document(_ body: String) throws -> DeclarationDocument {
     bytes: Array((manifestHeader + body).utf8), identity: DocumentIdentity("manifest"))
 }
 
+func manifestFixture(_ name: String) throws -> [UInt8] {
+  Array(try Data(contentsOf: Bundle.module.resourceURL!.appendingPathComponent("Fixtures/" + name)))
+}
+
 @Suite("Manifest front end")
 struct FrontEndTests {
   @Test func completeExamplesCompileAndAgreeUnderValueEquality() throws {

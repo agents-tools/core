@@ -3,6 +3,16 @@ import AgentsDescription
 import Foundation
 
 extension DocumentEditor {
+  func apply(_ operation: DocumentOperation) throws {
+    switch operation {
+    case .edit(let edit): try apply(edit)
+    case .setArgument(let handle, let field, let value): try setField(resolve(handle), field, value)
+    case .insertElement(let value, let handle, let position):
+      try insert(value, into: resolve(handle), at: position)
+    case .removeElement(let handle): try remove(resolve(handle))
+    }
+  }
+
   func apply(_ edit: ManifestEdit) throws {
     switch edit {
     case .setDefaultAgents(let agents): try setField("", "defaultAgents", agents.constructionValue)
@@ -110,11 +120,15 @@ extension DocumentEditor {
       return index > position
     }
     let (style, indentation) = try style(at: node.range)
-    let content =
-      field + ": "
-      + (spelling
-        ?? CanonicalPrinter(style: style).render(value, indentation: indentation + style.indent))
     let multiline = hasNewline(node.range)
+    let label = field + ": "
+    let content =
+      label
+      + (spelling
+        ?? CanonicalPrinter(style: style).render(
+          value, indentation: indentation + style.indent,
+          column: (indentation + style.indent + label).utf8.count,
+          trailing: multiline && next == nil ? 0 : 1))
     if let next {
       let start =
         next.labelRange?.lowerBound ?? current.admission.nodes[next.value].range.lowerBound
@@ -131,7 +145,9 @@ extension DocumentEditor {
     } else {
       let close = node.range.upperBound - 1
       if node.arguments.isEmpty {
-        try patch(close..<close, content)
+        try firstArgument(
+          field, value, spelling: spelling, call: node.range, style: style,
+          indentation: indentation)
       } else if multiline {
         let last = node.arguments.last!
         let end = current.admission.nodes[last.value].range.upperBound
@@ -144,6 +160,41 @@ extension DocumentEditor {
       }
     }
     try mutate(pointer + "/" + pointerEscape(field), value)
+  }
+
+  /// The first argument of an empty call takes the canonical call layout, so collections and
+  /// nested constructions open a multiline argument list.
+  func firstArgument(
+    _ field: String, _ value: ConstructionValue, spelling: String?, call range: Range<Int>,
+    style: PrintStyle, indentation: String
+  ) throws {
+    let close = range.upperBound - 1
+    guard
+      let open = current.admission.tokens.last(where: {
+        $0.text == "(" && $0.range.lowerBound >= range.lowerBound && $0.range.upperBound <= close
+      })
+    else { throw fail("manifest.edit.readOnly", "call has no argument list", range: range) }
+    let interior = open.range.upperBound..<close
+    if internalComments(interior) {
+      throw fail(
+        "manifest.edit.readOnly", "comment-only argument list insertion is ambiguous",
+        range: interior)
+    }
+    let text: String
+    if let spelling {
+      text =
+        "(" + style.newline + indentation + style.indent + field + ": " + spelling + style.newline
+        + indentation + ")"
+    } else {
+      let lineEnd =
+        current.bytes[range.upperBound...].firstIndex(where: { $0 == 10 || $0 == 13 })
+        ?? current.bytes.count
+      text = CanonicalPrinter(style: style).argumentList(
+        [(field, value)], indentation: indentation,
+        column: open.range.lowerBound - lineStart(open.range.lowerBound),
+        trailing: lineEnd - range.upperBound)
+    }
+    try patch(open.range.lowerBound..<range.upperBound, text)
   }
 
   func upsert(_ value: ConstructionValue, collection: String, key: String) throws {
@@ -185,7 +236,8 @@ extension DocumentEditor {
     _ value: ConstructionValue, into pointer: String, at position: InsertionPosition,
     carried: CarriedElement? = nil
   ) throws {
-    guard let collection = current.values[pointer], case .array(let previous) = collection.value
+    guard let collection = current.values[pointer],
+      let previous = arrayElements(collection.value)
     else { throw fail("manifest.edit.readOnly", "target is not an array") }
     let incoming = try valueCost(value)
     guard previous.count < ManifestLimits.Values.entries else {
@@ -286,7 +338,7 @@ extension DocumentEditor {
           (commas.isEmpty ? ", " : " ") + rendered + (carried == nil && !commas.isEmpty ? "," : ""))
       }
     }
-    try mutate(pointer, .array(expectedValues))
+    try mutate(pointer, replacingElements(collection.value, with: expectedValues))
   }
 
   func remove(_ pointer: String) throws {
@@ -295,13 +347,22 @@ extension DocumentEditor {
     let collection = try direct(collectionPointer)
     let node = current.admission.nodes[collection.syntax]
     guard node.kind == .array, let index = Int(key(pointer)),
-      case .array(var values) = collection.value
+      var values = arrayElements(collection.value)
     else { throw fail("manifest.edit.readOnly", "removal requires a direct array element") }
-    let range = try ownedRange(value, container: node, index: index)
+    var range = try ownedRange(value, container: node, index: index)
     let hasComma = current.admission.tokens.contains {
       $0.text == ","
         && $0.range.lowerBound >= current.admission.nodes[value.syntax].range.upperBound
         && $0.range.upperBound <= range.upperBound
+    }
+    // An inline element also takes the spacing that separates it from its neighbor.
+    let inline = !hasNewline(range)
+    let following =
+      index + 1 < node.children.count
+      ? current.admission.nodes[node.children[index + 1]].range.lowerBound
+      : node.range.upperBound - 1
+    while inline && hasComma && range.upperBound < following && blank(range.upperBound) {
+      range = range.lowerBound..<(range.upperBound + 1)
     }
     var patches = [SourcePatch(range: range, replacement: [])]
     if !hasComma && index > 0 {
@@ -309,7 +370,11 @@ extension DocumentEditor {
       if let comma = current.admission.tokens.last(where: {
         $0.text == "," && $0.range.lowerBound >= previous && $0.range.upperBound <= range.lowerBound
       }) {
-        patches.append(SourcePatch(range: comma.range, replacement: []))
+        if inline && (comma.range.upperBound..<range.lowerBound).allSatisfy(blank) {
+          patches = [SourcePatch(range: comma.range.lowerBound..<range.upperBound, replacement: [])]
+        } else {
+          patches.append(SourcePatch(range: comma.range, replacement: []))
+        }
       } else {
         throw fail("manifest.edit.readOnly", "ambiguous separator ownership", range: range)
       }
@@ -318,7 +383,25 @@ extension DocumentEditor {
     for patch in patches.sorted(by: { $0.range.lowerBound > $1.range.lowerBound }) {
       try self.patch(patch.range, bytes: patch.replacement)
     }
-    try mutate(collectionPointer, .array(values))
+    try mutate(collectionPointer, replacingElements(collection.value, with: values))
+  }
+
+  func blank(_ offset: Int) -> Bool {
+    current.bytes[offset] == UInt8(ascii: " ") || current.bytes[offset] == UInt8(ascii: "\t")
+  }
+
+  /// Array literals evaluate to arrays, except explicit skill selections, whose names they hold.
+  func arrayElements(_ value: ConstructionValue) -> [ConstructionValue]? {
+    if case .node("SkillSelection", "names", let fields) = value { return fields["names"]?.array }
+    return value.array
+  }
+  func replacingElements(_ value: ConstructionValue, with elements: [ConstructionValue])
+    -> ConstructionValue
+  {
+    if case .node("SkillSelection", "names", _) = value {
+      return .node(type: "SkillSelection", member: "names", fields: ["names": .array(elements)])
+    }
+    return .array(elements)
   }
 
   func move(_ pointer: String, into collection: String, at position: InsertionPosition)

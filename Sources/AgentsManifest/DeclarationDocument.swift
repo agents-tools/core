@@ -72,6 +72,10 @@ public struct DeclarationDocument: Sendable {
     }
   }
 
+  /// Agrees with the editor: elements and entries of a direct collection literal and signature
+  /// arguments of a direct construction, including omitted ones, are direct, as are member values
+  /// such as `.copy`. References, concatenations, normalized fields such as source requirements
+  /// and component kinds, and everything inside a read-only value are read-only.
   public func editability(of node: NodeID) -> Editability {
     guard node.digest == digest, values[node.pointer]?.syntax == node.syntax else {
       return .readOnly(reason: "stale snapshot handle")
@@ -80,18 +84,47 @@ public struct DeclarationDocument: Sendable {
       let name = pointerUnescape(String(node.pointer.dropFirst("/constants/".count)))
       return .sharedConstant(uses: uses(ofConstant: name))
     }
-    guard let value = values[node.pointer], !value.defaulted, value.type != .untyped else {
-      return .readOnly(reason: "default field has no source range")
+    return editability(at: node.pointer)
+  }
+
+  private func editability(at pointer: String) -> Editability {
+    guard let value = values[pointer] else {
+      return .readOnly(reason: "stale snapshot handle")
     }
-    if value.referent != nil || hasAssembledAncestor(node.pointer) {
+    // Containing values are checked by the recursion below, so each entry costs its depth.
+    if value.referent != nil {
       return .readOnly(
         reason: "shared constant or assembled value; replace its definition explicitly")
     }
-    let kind = admission.nodes[node.syntax].kind
-    if kind == .sequence || kind == .name {
-      return .readOnly(reason: "expanded value has no independent source range")
+    if admission.nodes[value.syntax].kind == .sequence {
+      return .readOnly(reason: "concatenated value has no independent source range")
     }
-    return .direct
+    guard let slash = pointer.lastIndex(of: "/") else { return .direct }
+    let parent = String(pointer[..<slash])
+    let field = pointerUnescape(String(pointer[pointer.index(after: slash)...]))
+    let containing = editability(at: parent)
+    guard containing == .direct, let owner = values[parent] else { return containing }
+    let syntax = admission.nodes[owner.syntax]
+    let editable: Bool
+    switch syntax.kind {
+    case .array, .dictionary:
+      // A literal configuration collection holds its elements or entries in `value`.
+      editable =
+        (syntax.kind == .array ? Int(field) != nil : syntax.keys.contains { $0.decoded == field })
+        || field == "value" && owner.type.unwrapped == .named("ConfigurationValue")
+    case .call:
+      guard case .named(let type) = owner.type.unwrapped else {
+        editable = false
+        break
+      }
+      editable = Vocabulary.signatures.contains { signature in
+        signature.type == type && signature.member == owner.value.member
+          && signature.parameters.contains { $0.name == field }
+      }
+    default: editable = false
+    }
+    return editable
+      ? .direct : .readOnly(reason: "normalized field; replace its containing construction")
   }
 
   func hasAssembledAncestor(_ pointer: String) -> Bool {
@@ -109,5 +142,9 @@ public struct DeclarationDocument: Sendable {
 
   public func preparing(_ edits: [ManifestEdit]) throws -> DocumentChange {
     try DocumentEditor(document: self).prepare(edits)
+  }
+
+  package func preparing(operations: [DocumentOperation]) throws -> DocumentChange {
+    try DocumentEditor(document: self).prepare(operations: operations)
   }
 }
