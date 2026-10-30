@@ -64,7 +64,7 @@ physical locations; Codex, Cursor, Gemini CLI and OpenCode read the same
   adapters for every component; adding an agent or component means adding
   registry entries, adapters and client probes.
 - The lock grows from pins and hashes into a deployment ledger, a lock format
-  change that `agents migrate` covers.
+  change with its own lock conversion.
 - Input adapters are versioned against the upstream formats they read and need
   fixtures from those formats.
 - Shared settings files require structured, format-preserving edits for JSON,

@@ -20,10 +20,11 @@ struct InventoryTests {
         with: Data(contentsOf: root.appendingPathComponent("Scripts/ManifestVocabulary.json")))
         as? [String: Any])
     let aliases = try #require(inventory["aliases"] as? [String: String])
-    let contract = try String(
-      contentsOf: root.appendingPathComponent("Documentation/Proposals/AgentsManifest.md"),
+    let reference = try String(
+      contentsOf: root.appendingPathComponent("Documentation/Reference/Manifest.md"),
       encoding: .utf8)
-    let vocabulary = String(contract.prefix(upTo: contract.range(of: "### Targeting")!.lowerBound))
+    let vocabulary = String(
+      reference.prefix(upTo: reference.range(of: "## Document Editing")!.lowerBound))
     let blocks = vocabulary.components(separatedBy: "```swift\n").dropFirst().compactMap {
       $0.components(separatedBy: "```").first
     }.filter { $0.hasPrefix("public ") }
@@ -177,10 +178,11 @@ struct InventoryTests {
     }
   }
 
-  @Test func allContractSwiftBlocksPassTheRealParser() throws {
-    let contract = try String(
-      contentsOf: root.appendingPathComponent("Documentation/Proposals/AgentsManifest.md"),
-      encoding: .utf8)
+  @Test(arguments: [
+    "Documentation/Reference/Manifest.md", "Documentation/Proposals/AgentsManifest.md",
+  ])
+  func everySwiftBlockPassesTheRealParser(_ document: String) throws {
+    let contract = try String(contentsOf: root.appendingPathComponent(document), encoding: .utf8)
     let directory = try temporaryManifestDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     for (index, tail) in contract.components(separatedBy: "```swift\n").dropFirst().enumerated() {

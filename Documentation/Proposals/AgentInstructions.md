@@ -160,8 +160,8 @@ Two declared sources that normalize to the same ID are an error.
 
 | Scope | Declaration | Lock | Watch state | Targets |
 | --- | --- | --- | --- | --- |
-| Project | `.agent/agents.json` | `.agent/agents.resolved` | `.agent/agents.watch` | Project skills; `AGENTS.md` and `GEMINI.md` at the project root and in directories named by `paths`; Claude forwarding; ChatGPT prompts |
-| User | `~/.agents/agents.json` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | User skills; each agent's user instructions file; ChatGPT prompts |
+| Project | `.agent/Agents.swift` | `.agent/agents.resolved` | `.agent/agents.watch` | Project skills; `AGENTS.md` and `GEMINI.md` at the project root and in directories named by `paths`; Claude forwarding; ChatGPT prompts |
+| User | `~/.agents/Agents.swift` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | User skills; each agent's user instructions file; ChatGPT prompts |
 
 A project commits its declaration and lock, with its instructions files and
 generated targets, as it would a package manifest and its lock: every checkout,
@@ -173,64 +173,83 @@ always lives under `~/.agents`.
 
 ### Declaration
 
-Commands edit the declaration; editing it by hand is possible.
+Commands edit the declaration in place and keep its comments; editing it by hand
+is possible.
 
-```json
-{
-  "agents": ["codex", "claude-code"],
-  "sources": {
-    "rules": { "local": "~/Developer/rules", "branch": "main" },
-    "swift-skills": { "git": "github.com/swift-library/skills", "from": "1.0.0" },
-    "my-skills": { "local": "~/Developer/my-skills", "path": "skills" },
-    "anthropic": { "git": "github.com/anthropics/skills" }
-  },
-  "skills": {
-    "swift-skills": { "select": "all", "exclude": ["legacy-docx"] },
-    "my-skills": {
-      "select": ["pdf-forms", "release-notes"],
-      "mode": "edit",
-      "overrides": { "release-notes": { "agents": ["codex"] } }
-    }
-  },
-  "instructions": {
-    "agents": ["codex", "claude-code", "cursor", "opencode"],
-    "sections": ["guide", "rules:canonical-artifacts", "code-review-rules"],
-    "chatgpt": {
-      "training": {
-        "sections": ["rules:canonical-artifacts", "rules:training-logging"],
-        "append": ".agent/chatgpt-training.md"
-      },
-      "weekly-export": { "sections": ["rules:weekly-nutrition-export"] }
-    }
-  },
-  "watch": ["anthropic"]
-}
+```swift
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  sources: [
+    .source(name: "anthropic", url: "https://github.com/anthropics/skills"),
+    .source(name: "my-skills", path: "~/Developer/my-skills", subpath: "skills"),
+    .source(name: "rules", path: "~/Developer/rules", branch: "main"),
+    .source(
+      name: "swift-skills", url: "https://github.com/swift-library/skills",
+      from: "1.0.0"
+    ),
+  ],
+  components: [
+    .skills(
+      source: "my-skills", select: ["pdf-forms", "release-notes"], mode: .edit,
+      overrides: [.skill(name: "release-notes", agents: [.codex])]
+    ),
+    .skills(source: "swift-skills", exclude: ["legacy-docx"]),
+    .instructions(
+      sections: [
+        "guide",
+        .section(name: "canonical-artifacts", source: "rules"),
+        "code-review-rules",
+      ],
+      chatGPT: [
+        .prompt(
+          name: "training",
+          sections: [
+            .section(name: "canonical-artifacts", source: "rules"),
+            .section(name: "training-logging", source: "rules"),
+          ],
+          append: ".agent/chatgpt-training.md"
+        ),
+        .prompt(
+          name: "weekly-export",
+          sections: [.section(name: "weekly-nutrition-export", source: "rules")]
+        ),
+      ],
+      agents: [.codex, .claudeCode, .cursor, .openCode]
+    ),
+  ],
+  watch: ["anthropic"]
+)
 ```
 
-- A source names its kind by key (`git`, `local`, `well-known`), plus an
-  optional requirement and search `path`. Requirements are `branch`,
-  `revision`, `exact` (one version), `from` (up to the next major version),
-  `upToNextMinor`, or `from` with `to` (a half-open range). Without one, the
-  latest version tag is used, or the default branch when there are no version
-  tags.
-- `agents` is the default agent list. Without it the default is `codex` and
-  `claude-code`.
-- `select` is `"all"` or a list of names. `"all"` follows the source's current
-  membership on `update`; `exclude` names skills it skips. Removing one skill
-  of an `"all"` selection adds it to `exclude`.
-- `agents` and `mode` on a selection apply to its skills; `overrides` sets
-  them for single skills. `mode` is `link` (default), `copy` or `edit`.
-  `edit` links the live directory of a local source, takes no requirement and
-  is never pinned.
-- `instructions` holds one ordered section list per scope, written to the
-  instruction file of every listed agent. Every change to the list or its pins
-  is applied to all listed targets together; `--agent` on instruction
-  commands sets the list of recipients.
-- A section reference is `alias:name` for a declared source, or a bare name for
-  the project's own instructions.
-- `chatgpt` names prompts for ChatGPT project instructions and scheduled
-  tasks. Each prompt has its own ordered section list and an optional
-  custom-content file, relative to the scope root, that `render` appends.
+- A source is `.source(name:url:)` for Git, `.source(name:path:)` for a local
+  directory or `.source(name:index:)` for a well-known index, with an optional
+  requirement and `subpath`. Requirements are `branch:`, `revision:`, `exact:`
+  (one version), `from:` (up to the next major version),
+  `.upToNextMinor(from:)`, or a half-open range such as `"1.0.0"..<"1.4.0"`.
+  Without one, the latest version tag is used, or the default branch when there
+  are no version tags.
+- `defaultAgents` is the default agent list. Without it the default is `codex`
+  and `claude-code`.
+- A `.skills` component without `select` selects all members; `select:` lists
+  names. An all-member selection follows the source's current membership on
+  `update`; `exclude` names skills it skips. Removing one skill of an
+  all-member selection adds it to `exclude`.
+- `agents` and `mode` on a selection apply to its skills;
+  `overrides: [.skill(name:mode:agents:)]` sets them for single skills. `mode`
+  is `.link` (default), `.copy` or `.edit`. `.edit` links the live directory of
+  a local source, takes no requirement and is never pinned.
+- The `.instructions` component holds one ordered section list per scope,
+  written to the instruction file of every listed agent. Every change to the list
+  or its pins is applied to all listed targets together; `--agent` on
+  instruction commands sets the list of recipients.
+- A section reference is a bare string for the project's own instructions, or
+  `.section(name:source:)` for a declared source.
+- `chatGPT: [.prompt(name:sections:append:)]` names prompts for ChatGPT project
+  instructions and scheduled tasks. Each prompt has its own ordered section list
+  and an optional custom-content file, relative to the scope root, that `render`
+  appends.
 - `watch` lists the aliases of subscribed sources. A source can be subscribed
   without selecting anything from it.
 
@@ -355,9 +374,9 @@ Commands edit the declaration; editing it by hand is possible.
   each pin. A pin that cannot be fetched, content whose digest does not match,
   or an own instructions file whose hash changed since the lock is an error,
   never a substitution.
-- Output is sorted, except section order, and has no timestamps. The declaration
-  and lock use Prettier's default JSON layout. Writes take a file lock and
-  replace the file atomically.
+- Output is sorted, except section order, and has no timestamps. The lock uses
+  Prettier's default JSON layout; the declaration keeps its own source layout.
+  Writes take a file lock and replace the file atomically.
 
 ### Watch State
 
@@ -425,7 +444,7 @@ For skills, omitting `--agent` makes `remove` act on all recipients and `list` s
 | Command | Behavior |
 | --- | --- |
 | `add` | Update the declaration, resolve, write, update the lock. Any stop leaves the declaration, lock and files unchanged |
-| `update` | Re-resolve the declaration and show what would change against the files on disk. `--apply` writes the resolved content and the new lock together, showing the difference before it replaces drifted content. Without names it reconciles `"all"` selections with the source's membership; with names it touches only those skills, and a named skill missing upstream is an error. `--apply` lists the ChatGPT prompts whose content changed, since ChatGPT has to be updated by pasting the new render |
+| `update` | Re-resolve the declaration and show what would change against the files on disk. `--apply` writes the resolved content and the new lock together, showing the difference before it replaces drifted content. Without names it reconciles all-member selections with the source's membership; with names it touches only those skills, and a named skill missing upstream is an error. `--apply` lists the ChatGPT prompts whose content changed, since ChatGPT has to be updated by pasting the new render |
 | `install` | Restore skills and instruction targets exactly as the lock records them, without resolving. It takes no `--agent` or `--mode` |
 | `list` | Installed skills, or managed sections and targets; with a source, what it provides |
 | `remove` | Remove from the declaration, files and lock |

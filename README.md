@@ -53,19 +53,22 @@ command parsing, terminal output and executable distribution.
 
 - **AgentsDescription**: standard-library-only types for authoring the Swift
   manifest construction vocabulary.
-- **AgentsManifest**: parses and statically evaluates manifest snapshots into
-  declaration IR and source maps, and prepares byte-preserving edits.
+- **AgentsManifest**: parses and statically evaluates `Agents.swift` snapshots
+  into declaration IR and source maps, prepares byte-preserving edits, and
+  connects the scope declaration to state: read-only `loadDeclaration()` and
+  `loadManifest()`, and the declaration writes of the domain modules.
 - **AgentsCore**: source parsing and identity, Git requirements, declaration and
   resolved-state models, atomic state storage, bare mirrors and immutable source
   materializations, watch subscriptions, hashing, path safety, process execution
   and agent locations.
 - **AgentsSkills**: `SKILL.md` discovery and frontmatter, well-known artifacts,
   installation, updates, removal, listing, initialization and diagnostics. It
-  depends on `AgentsCore` and Yams.
+  depends on `AgentsCore`, `AgentsManifest` and Yams.
 - **AgentsInstructions**: instruction discovery, lifecycle operations, audits,
   managed Markdown blocks, Claude forwarding and named ChatGPT prompts. It uses
-  `AgentsCore` for sources, state and transactions, and `swift-markdown` for
-  CommonMark structure. Pure text APIs remain available separately.
+  `AgentsCore` for sources, state and transactions, `AgentsManifest` for the
+  declaration, and `swift-markdown` for CommonMark structure. Pure text APIs
+  remain available separately.
 - **AgentsUpdates**: shared preparation, reporting and one recoverable apply
   for all declared skills and instructions in a scope.
 
@@ -121,19 +124,20 @@ requirement. Pin a reviewed revision when reproducibility is required. Use
 
 ### State and lifecycle
 
-Project state lives in `.agent/agents.json`, `.agent/agents.resolved` and
+Project state lives in `.agent/Agents.swift`, `.agent/agents.resolved` and
 `.agent/agents.watch`. User state uses the same filenames under `~/.agents/`.
 The respective `cache/` directory holds source mirrors and exact content. A
-project commits its `agents.json` declaration and `agents.resolved` lock; keep
+project commits its `Agents.swift` declaration and `agents.resolved` lock; keep
 `agents.watch`, `cache/`, `.agents.lock` and `transaction.json` out of version
 control.
 
 The declaration records source aliases, requirements, skill selections and
-recipients. The version 1 lock records each skill's independent revision or
-artifact digest, content hash and agent-to-mode mapping. `link` uses shared
-cached content, `copy` writes a directory, and `edit` links a live local source
-with no requirement or pin. Local Git installs in `link` and `copy` use
-committed content.
+recipients in the [manifest language](Documentation/Reference/Manifest.md).
+Tool writes edit only the changed source ranges and keep comments. The version 1
+lock records each skill's independent revision or artifact digest, content hash
+and agent-to-mode mapping. `link` uses shared cached content, `copy` writes a
+directory, and `edit` links a live local source with no requirement or pin.
+Local Git installs in `link` and `copy` use committed content.
 
 `AgentsCore` defines the instruction declaration and lock models. Skill
 operations preserve the instruction and watch declarations and the locked
@@ -143,6 +147,10 @@ Mutating state operations recover interrupted transactions before proceeding and
 report `CoreError.transactionRecovered` when the command should be retried. The
 durable scope journal covers installations, declaration, lock, watch state and
 cache pruning. Corrupt watch state stops scope mutations before any replacement.
+Read-only access, including `loadDeclaration()`, `loadManifest()`,
+`loadResolved()` and `loadWatch()`, never recovers and reports a pending
+transaction with `CoreError.recoveryPending`. A scope with a lock or watch state
+but no `Agents.swift` reports `CoreError.missingDeclaration`.
 
 ### Skills
 
@@ -153,7 +161,7 @@ cache pruning. Corrupt watch state stops scope mutations before any replacement.
   choice. `listOnly` and `fullDepth` support source inspection.
 - `updateInstalled(...)` previews declared changes. With `apply: true`, its
   `beforeApply` callback receives differences before targets and state change.
-  Unnamed updates reconcile `select: "all"`; named updates affect only the
+  Unnamed updates reconcile all-member selections; named updates affect only the
   requested members.
 - `installResolvedReport(...)` restores the lock's pins, agents and modes.
   Missing pins and digest mismatches fail the operation.
@@ -221,7 +229,7 @@ by bare name. `InstructionOperations` generates whole target files from them:
   deletes a target that no longer receives sections while it still equals its
   locked rendering.
 - `renderChatGPT(prompt:...)` renders locked sections plus a custom append file.
-  Prompts live in `instructions.chatgpt`.
+  Prompts are declared with `.instructions(chatGPT:)`.
 - `doctor(...)` checks missing, drifted and unowned locked targets, changed own
   files, links, scope duplication, Claude forwarding, Codex overrides and the
   project size budget, newer matching source revisions and uncommitted sources.
