@@ -301,8 +301,8 @@ final class StateOperationFixture {
       #expect(lock.skills["demo"]?.installs == ["codex": .edit])
       #expect(lock.sources[id] == LockedSource(kind: .local))
       #expect(
-        target.resolvingSymlinksInPath()
-          == source.appendingPathComponent("skills/demo").resolvingSymlinksInPath())
+        target.resolvingSymlinksInPath().path
+          == source.appendingPathComponent("skills/demo").resolvingSymlinksInPath().path)
       #expect(!present(store.watchURL))
     case .watchAdd:
       #expect(declaration.skills == nil)
