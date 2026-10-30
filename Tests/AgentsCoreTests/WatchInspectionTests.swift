@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -20,11 +21,12 @@ struct WatchInspectionTests {
       FileManager.default.fileExists(
         atPath: fixture.store.directory.appendingPathComponent("transaction.json").path))
     let before = try FileHash.folderHash(fixture.store.directory)
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
 
-    #expect(throws: pending) { try fixture.watch.status(environment: fixture.environment) }
+    #expect(throws: pendingRecovery) { try fixture.watch.status(environment: fixture.environment) }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
-    #expect(throws: pending) { try fixture.watch.diff("source", environment: fixture.environment) }
+    #expect(throws: pendingRecovery) {
+      try fixture.watch.diff("source", environment: fixture.environment)
+    }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
   }
 
@@ -49,11 +51,12 @@ struct WatchInspectionTests {
     try #require(try fixture.watchRefs() == refs)
     try fixture.rewrite("later")
     let before = try FileHash.folderHash(fixture.store.directory)
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
 
-    #expect(throws: pending) { try fixture.watch.status(environment: fixture.environment) }
+    #expect(throws: pendingRecovery) { try fixture.watch.status(environment: fixture.environment) }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
-    #expect(throws: pending) { try fixture.watch.diff("source", environment: fixture.environment) }
+    #expect(throws: pendingRecovery) {
+      try fixture.watch.diff("source", environment: fixture.environment)
+    }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
     #expect(try fixture.watchRefs() == refs)
   }

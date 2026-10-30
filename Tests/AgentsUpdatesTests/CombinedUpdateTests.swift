@@ -1,4 +1,5 @@
 import AgentsInstructions
+import AgentsManifest
 import AgentsSkills
 import Foundation
 import Testing
@@ -490,7 +491,12 @@ struct CombinedUpdateTests {
         try FileManager.default.createSymbolicLink(
           at: fixture.target(),
           withDestinationURL: fixture.repo.appendingPathComponent("skills/demo"))
-      case "declaration": try fixture.write("{}\n", to: fixture.store.declarationURL)
+      case "declaration":
+        // A comment changes no declared intent but still invalidates the preparation.
+        let declaration = try fixture.bytes(fixture.store.declarationURL)
+        try fixture.write(
+          String(decoding: declaration, as: UTF8.self) + "// Edited.\n",
+          to: fixture.store.declarationURL)
       case "resolved": try fixture.write("{}\n", to: fixture.store.resolvedURL)
       default: try fixture.write("{}\n", to: fixture.store.watchURL)
       }

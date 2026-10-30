@@ -1,4 +1,6 @@
+import AgentsManifest
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -52,7 +54,7 @@ struct TransactionCostTests {
       try transaction.replace(
         root.appendingPathComponent("AGENTS.md"), with: .data(Data("after".utf8)))
       try transaction.replace(
-        store.declarationURL, with: .data(StateStore.encode(Declaration(agents: [.codex]))))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [.codex]")))
       try transaction.commit()
     }
     #expect(steps.contains(TransactionCheckpoint.containerCreated(1).name))

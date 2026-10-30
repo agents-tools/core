@@ -38,23 +38,31 @@ let package = Package(
     ),
     .target(
       name: "AgentsInstructions",
-      dependencies: ["AgentsCore", .product(name: "Markdown", package: "swift-markdown")]
+      dependencies: [
+        "AgentsCore", "AgentsManifest", .product(name: "Markdown", package: "swift-markdown"),
+      ]
     ),
-    .target(name: "AgentsSkills", dependencies: ["AgentsCore", "Yams"]),
+    .target(name: "AgentsSkills", dependencies: ["AgentsCore", "AgentsManifest", "Yams"]),
     .target(
       name: "AgentsUpdates",
-      dependencies: ["AgentsCore", "AgentsSkills", "AgentsInstructions", "CPlatform"]),
+      dependencies: [
+        "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "CPlatform",
+      ]),
     .target(name: "StateTestSupport", path: "Tests/StateTestSupport"),
     .executableTarget(
       name: "StateTestProcess",
       dependencies: [
-        "AgentsCore", "AgentsInstructions", "AgentsSkills", "AgentsUpdates", "CPlatform",
+        "AgentsCore", "AgentsManifest", "AgentsInstructions", "AgentsSkills", "AgentsUpdates",
+        "CPlatform", "StateTestSupport",
       ],
       path: "Tests/StateTestProcess"),
     .testTarget(
       name: "AgentsCoreTests",
-      dependencies: ["AgentsCore", "StateTestProcess", "StateTestSupport", "CPlatform"]),
-    .testTarget(name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions"]),
+      dependencies: [
+        "AgentsCore", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
+      ]),
+    .testTarget(
+      name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions", "AgentsManifest"]),
     .target(
       name: "ManifestTestSupport", dependencies: ["AgentsManifest"],
       path: "Tests/ManifestTestSupport"),
@@ -73,12 +81,14 @@ let package = Package(
       resources: [.copy("Fixtures")]),
     .testTarget(
       name: "AgentsUpdatesTests",
-      dependencies: ["AgentsUpdates", "StateTestProcess", "StateTestSupport", "CPlatform"]),
+      dependencies: [
+        "AgentsUpdates", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
+      ]),
     .testTarget(
       name: "AgentsSkillsTests",
       dependencies: [
-        "AgentsSkills", "AgentsCore", "AgentsInstructions", "Yams", "StateTestProcess",
-        "StateTestSupport", "CPlatform",
+        "AgentsSkills", "AgentsCore", "AgentsManifest", "AgentsInstructions", "Yams",
+        "StateTestProcess", "StateTestSupport", "CPlatform",
       ]),
   ],
   swiftLanguageModes: [.v6]

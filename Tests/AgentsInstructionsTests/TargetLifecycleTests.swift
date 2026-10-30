@@ -1,5 +1,6 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -58,22 +59,41 @@ struct TargetLifecycleTests {
       })
   }
 
-  @Test func updateApplyFormatsDeclarationAndPreservesUnchangedLedger() throws {
+  @Test func updateApplyKeepsAnUnchangedDeclarationAndLedgerAsWritten() throws {
     let fixture = try InstructionFixture()
     try fixture.own("guide")
     try fixture.addOwn(names: ["guide"], agents: [.codex])
     let declarationFile = fixture.store().declarationURL
     let lockFile = fixture.store().resolvedURL
-    let declaration = try Data(contentsOf: declarationFile)
-    let lock = try Data(contentsOf: lockFile)
     #expect(
-      String(decoding: declaration, as: UTF8.self)
-        == "{\n  \"instructions\": {\n    \"agents\": [\"codex\"],\n    \"sections\": [\"guide\"]\n  },\n  \"sources\": {}\n}\n"
-    )
-    let lockText = String(decoding: lock, as: UTF8.self)
+      String(decoding: try Data(contentsOf: declarationFile), as: UTF8.self) == """
+        // agents-tools-version: 1.0
+        import AgentsDescription
+
+        let agents = Agents(
+          components: [
+            .instructions(
+              sections: ["guide"],
+              agents: [.codex]
+            ),
+          ]
+        )
+
+        """)
+    let lockText = String(decoding: try Data(contentsOf: lockFile), as: UTF8.self)
     #expect(lockText.contains("\"chatgpt\": {}") && lockText.contains("\"skills\": {}"))
     #expect(!lockText.contains(" : "))
-    try StateStore.encode(fixture.store().loadDeclaration()).write(to: declarationFile)
+    // The same intent in another layout, with a comment, is not rewritten.
+    let declaration = Data(
+      """
+      // agents-tools-version: 1.0
+      import AgentsDescription
+
+      // Project instructions.
+      let agents = Agents(components: [.instructions(sections: ["guide"], agents: [.codex])])
+
+      """.utf8)
+    try declaration.write(to: declarationFile)
     let existingLockBytes = try StateStore.encode(fixture.store().loadResolved())
     try existingLockBytes.write(to: lockFile)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)

@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 
 /// One scope's locked instruction mapping. It describes the lock, not the files on disk.

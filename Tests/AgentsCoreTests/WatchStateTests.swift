@@ -1,3 +1,4 @@
+import AgentsManifest
 import CPlatform
 import Foundation
 import StateTestSupport
@@ -134,7 +135,7 @@ struct WatchStateTests {
     let marker = root.appendingPathComponent("ready")
     try ProcessWait.marker(marker, child: child, root: root)
     terminateProcess(child)
-    #expect(throws: CoreError.transactionRecovered(store.directory.path)) { try store.loadWatch() }
+    #expect(throws: CoreError.transactionRecovered(store.directory.path)) { try store.withLock {} }
     let committed =
       checkpoint == TransactionCheckpoint.phase(.committed).name
       || checkpoint == TransactionCheckpoint.containerRemoved(0).name

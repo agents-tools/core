@@ -1,3 +1,4 @@
+import AgentsManifest
 import CPlatform
 import Foundation
 import StateTestSupport
@@ -113,7 +114,7 @@ struct WatchDurabilityTests {
     let before = try fixture.stateBytes()
     let watch = WatchOperations(
       discoverSkills: { _ in [] },
-      fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+      fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") }, declarations: .manifest,
       checkpoint: { step in
         if step == "watch.ref.updated" {
           throw CoreError.invalidState("injected durability failure")
@@ -215,10 +216,10 @@ final class WatchGitFixture {
     }
   }
 
+  /// Recovers as the next mutating command would, then reads the watch state.
   func recoveredWatch() throws -> WatchState {
-    do { return try store.loadWatch() } catch CoreError.transactionRecovered {
-      return try store.loadWatch()
-    }
+    do { try store.withLock {} } catch CoreError.transactionRecovered {}
+    return try store.loadWatch()
   }
 
   func cachedInstruction(_ revision: String) throws -> String {

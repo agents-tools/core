@@ -1,5 +1,6 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import AgentsSkills
 import Foundation
 
@@ -91,11 +92,7 @@ final class UpdatePlan {
       transaction.requireUnchanged(since: baseline, skills, instructions)
       try skills.stage(retained: retained, transaction: transaction)
       try instructions.stage(transaction: transaction)
-      try store.stageDeclaration(
-        declaration, in: transaction, prepared: baseline)
-      if let resolvedBytes = try next.replacementData(
-        comparedTo: baseline.bytes(for: store.resolvedURL))
-      {
+      if let resolvedBytes = try next.replacementData(in: store, prepared: baseline) {
         try transaction.replace(
           store.resolvedURL, with: .data(resolvedBytes),
           expecting: baseline.evidence(for: store.resolvedURL))

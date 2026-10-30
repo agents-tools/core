@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import CPlatform
 import Foundation
 import StateTestSupport
@@ -16,11 +17,10 @@ struct AutomaticSelectionTests {
       to: instructions.appendingPathComponent("demo.md"))
     try fixture.commit()
     let store = fixture.store()
-    try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
     var declaration = Declaration(sources: [
       "source": SourceDeclaration(kind: .local, location: fixture.repo.path)
     ])
-    try StateStore.encode(declaration).write(to: store.declarationURL)
+    try store.writeDeclaration(declaration)
 
     let root = fixture.environment.projectDirectory
     let resume = root.appendingPathComponent("resume-discovery")

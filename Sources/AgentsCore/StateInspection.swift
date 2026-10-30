@@ -3,12 +3,11 @@ import Foundation
 
 extension StateStore {
   /// Takes an existing scope lock without creating files or replaying recovery.
-  /// Pending recovery runs the diagnostic callback instead of inspecting inconsistent state.
+  /// Pending recovery runs the diagnostic callback instead of inspecting inconsistent state;
+  /// by default it throws `CoreError.recoveryPending`.
   /// The body may be retried when a first writer creates the scope lock.
   package func withReadLock<T>(
-    onPendingRecovery: () throws -> T = {
-      throw CoreError.invalidState("transaction recovery is required before inspection")
-    },
+    onPendingRecovery: (() throws -> T)? = nil,
     _ body: () throws -> T
   ) throws -> T {
     while true {
@@ -30,7 +29,14 @@ extension StateStore {
       }
       defer { if descriptor >= 0 { platform_flock(descriptor, LOCK_UN) } }
       let pending = try hasPendingRecovery(in: directory)
-      let result = Result { try pending ? onPendingRecovery() : body() }
+      let result = Result {
+        guard pending else { return try body() }
+        guard let onPendingRecovery else {
+          throw CoreError.recoveryPending(
+            FileTransaction.recoveryDiagnostic(store: self).message)
+        }
+        return try onPendingRecovery()
+      }
       // Writers create the lock before mutation and never remove it. A failed
       // unlocked read also needs revalidation before its error can be trusted.
       if descriptor < 0, let current = try openDirectoryIfPresent(),

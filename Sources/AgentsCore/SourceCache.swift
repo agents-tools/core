@@ -175,10 +175,6 @@ package struct SourceCache {
     for (id, source) in resolved.sources where source.kind != .wellKnown {
       sourceLocations[key(id) + ".git"] = try declaration(sourceID: id, source: source).location
     }
-    for source in try store.readDeclaration().sources.values where source.kind != .wellKnown {
-      let id = try source.identity(environment: store.environment)
-      sourceLocations[key(id) + ".git"] = source.location
-    }
     var retained: [String: Set<String>] = [:]
     func retain(_ source: String, _ revision: String?) {
       if let revision { retained[key(source) + ".git", default: []].insert(revision) }
@@ -693,7 +689,8 @@ package struct SourceCache {
   }
 
   private func mirrorSource(_ mirror: URL, lock: Int32) throws -> String {
-    // Orphaned mirrors outlive their declarations; the clone's origin retains the source location.
+    // Recovery never reads the declaration. A mirror that neither watch state nor the lock
+    // names, including an orphan, is identified by its clone's origin.
     let source: String
     do {
       source = try git(

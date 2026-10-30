@@ -103,9 +103,7 @@ struct TransactionPaths {
     else { throw CoreError.invalidState("invalid scope-relative transaction path") }
     let descendants = Array(parts.dropFirst())
     if key == "state" {
-      let stateFile =
-        descendants.count == 1
-        && ["agents.json", "agents.resolved", "agents.watch"].contains(descendants[0])
+      let stateFile = descendants.count == 1 && StateStore.stateFileNames.contains(descendants[0])
       let cache =
         descendants.first == "cache" && descendants.count >= 3
         && ((descendants[1] == "materialized" && (3...4).contains(descendants.count))

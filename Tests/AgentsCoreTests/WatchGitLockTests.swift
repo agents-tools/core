@@ -76,10 +76,11 @@ struct WatchGitLockTests {
     // Pruning the disappeared upstream branch would need the abandoned packed-refs lock.
     try fixture.rewrite("later")
     let before = try FileHash.folderHash(fixture.store.directory)
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
-    #expect(throws: pending) { try fixture.watch.status(environment: fixture.environment) }
+    #expect(throws: pendingRecovery) { try fixture.watch.status(environment: fixture.environment) }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
-    #expect(throws: pending) { try fixture.watch.diff("source", environment: fixture.environment) }
+    #expect(throws: pendingRecovery) {
+      try fixture.watch.diff("source", environment: fixture.environment)
+    }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
     let committed = try fixture.stateBytes()
 
@@ -125,7 +126,7 @@ struct WatchGitLockTests {
       try #require(mkfifo(unsafe.path, 0o600) == 0)
     }
     let before = try fixture.stateBytes()
-    #expect(throws: CoreError.self) { try fixture.store.loadWatch() }
+    #expect(throws: CoreError.self) { try fixture.store.withLock {} }
     #expect(try fixture.stateBytes() == before)
     #expect(try Data(contentsOf: safe) == original)
     #expect(try Data(contentsOf: external) == original)

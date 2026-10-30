@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import AgentsSkills
 import Foundation
 import Testing
@@ -15,9 +16,11 @@ struct WatchSubscriptionTests {
     let initial = try fixture.head()
     try fixture.store().save(declaration: Declaration(), resolved: ResolvedState())
     let watch = SkillOperations.watchOperations()
-    #expect(
-      try watch.add(fixture.repo.path, alias: "upstream", environment: fixture.environment)
-        == .revision(initial))
+    let id = try SourceDeclaration(kind: .local, location: fixture.repo.path).identity(
+      environment: fixture.environment)
+    let added = try watch.add(
+      fixture.repo.path, alias: "upstream", environment: fixture.environment)
+    #expect(added.alias == "upstream" && added.sourceID == id && added.seen == .revision(initial))
     #expect(try fixture.store().loadDeclaration().skills == nil)
     #expect(try fixture.store().loadResolved().skills.isEmpty)
     #expect(!FileManager.default.fileExists(atPath: fixture.target("changed").path))
@@ -57,7 +60,10 @@ struct WatchSubscriptionTests {
     #expect(try stateBytes(fixture) == bytes)
     #expect(try fixture.head() == current)
 
-    try watch.seen("upstream", environment: fixture.environment)
+    let acknowledged = try watch.seen("upstream", environment: fixture.environment)
+    #expect(
+      acknowledged.alias == "upstream" && acknowledged.sourceID == id
+        && acknowledged.seen == .revision(current))
     #expect(try watch.status(environment: fixture.environment).first?.changes.isEmpty == true)
     try fixture.skill("later", body: "later")
     try fixture.commit()
@@ -85,10 +91,12 @@ struct WatchSubscriptionTests {
     let store = fixture.store(scope)
     let lock = try Data(contentsOf: store.resolvedURL)
     let installed = try fixture.body(fixture.target("demo", scope: scope))
-    try watch.add("fixture", scope: scope, environment: fixture.environment)
-    try watch.remove(fixture.repo.path, scope: scope, environment: fixture.environment)
+    let added = try watch.add("fixture", scope: scope, environment: fixture.environment)
+    let removed = try watch.remove(
+      fixture.repo.path, scope: scope, environment: fixture.environment)
+    #expect(removed.alias == "fixture" && removed.sourceID == added.sourceID && removed.seen == nil)
     #expect(try store.loadWatch().sources.isEmpty)
-    #expect(try store.loadDeclaration().watch == [])
+    #expect(try store.loadDeclaration().watch == nil)
     #expect(try store.loadDeclaration().skills?["fixture"] != nil)
     #expect(try Data(contentsOf: store.resolvedURL) == lock)
     #expect(try fixture.body(fixture.target("demo", scope: scope)) == installed)
@@ -109,7 +117,8 @@ struct WatchSubscriptionTests {
     try fixture.skill("demo", body: "head")
     try fixture.commit()
     let watch = SkillOperations.watchOperations()
-    #expect(try watch.add("source", environment: fixture.environment) == .revision(fixture.head()))
+    #expect(
+      try watch.add("source", environment: fixture.environment).seen == .revision(fixture.head()))
     try fixture.skill("demo", body: "uncommitted")
     #expect(try watch.status(environment: fixture.environment).first?.changes.isEmpty == true)
     try git(fixture, ["checkout", "-b", "next-default"])

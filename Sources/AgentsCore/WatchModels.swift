@@ -71,3 +71,10 @@ public struct WatchStatus: Equatable, Sendable {
   public let commitCount: Int?
   public var changes: [WatchItemChange]
 }
+
+/// A subscription after a watch change. `seen` is the acknowledged baseline, or nil after removal.
+public struct WatchChange: Equatable, Sendable {
+  public let alias: String
+  public let sourceID: String
+  public let seen: WatchSeen?
+}
