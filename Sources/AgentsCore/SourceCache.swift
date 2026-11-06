@@ -211,27 +211,15 @@ package struct SourceCache {
     try recoverMirrorLocks(in: directory)
     guard try directory.info("watch-refs.pending") != nil else { return false }
     let watch = try store.readWatch()
-    let resolved = try store.readResolved()
-    var sourceLocations: [String: String] = [:]
-    for id in watch.sources.keys {
-      sourceLocations[key(id) + ".git"] =
-        id.hasPrefix("local:") ? String(id.dropFirst("local:".count)) : id
-    }
-    for (id, source) in resolved.sources where source.kind != .wellKnown {
-      sourceLocations[key(id) + ".git"] = try declaration(sourceID: id, source: source).location
-    }
+    var references = try store.retentionReferences()
+    try references.include(watch: watch)
+    let sourceLocations = Dictionary(
+      uniqueKeysWithValues: references.sourceLocations.map {
+        (key($0.key) + ".git", $0.value)
+      })
     var retained: [String: Set<String>] = [:]
-    func retain(_ source: String, _ revision: String?) {
-      if let revision { retained[key(source) + ".git", default: []].insert(revision) }
-    }
-    for (source, state) in watch.sources {
-      if case .revision(let revision) = state.seen { retain(source, revision) }
-    }
-    for skill in resolved.skills.values { retain(skill.source, skill.revision) }
-    for section in resolved.instructions.sections
-      + resolved.instructions.chatgpt.values.flatMap(\.sections)
-    {
-      retain(section.source, section.revision)
+    for pin in references.git {
+      retained[key(pin.source) + ".git", default: []].insert(pin.revision)
     }
     // Even a manually supplied generation must reach storage before its obsolete pins go away.
     for file in ["agents.watch", "agents.resolved"] where try directory.info(file) != nil {
@@ -407,6 +395,15 @@ package struct SourceCache {
       let cache = SourceCache(store: StateStore(scope: .project, environment: environment))
       return try cache.withResolvedSnapshot(source, body)
     }
+    if case .revision(let object) = source.requirement, Self.isObjectID(object) {
+      let locked = LockedSource(
+        kind: source.kind, url: source.kind == .git ? source.gitURL : nil,
+        requirement: .revision(object), path: source.path)
+      return try withSnapshot(
+        sourceID: source.identity(environment: store.environment), source: locked,
+        revision: object
+      ) { try body(SourceRevision(revision: object), $0) }
+    }
     let pin = try resolve(source)
     let locked = LockedSource(
       kind: source.kind, url: source.kind == .git ? source.gitURL : nil,
@@ -516,49 +513,60 @@ package struct SourceCache {
     return destination
   }
 
+  /// Makes exact Git objects durable before the caller's journal can reference the new ledger.
+  /// A failed preparation leaves a cleanup marker; reconciliation keeps the committed closure.
+  package func retain(references: RetentionReferences) throws {
+    for (ordinal, pin) in references.git.sorted(by: {
+      ($0.source, $0.revision) < ($1.source, $1.revision)
+    }).enumerated() {
+      guard let location = references.sourceLocations[pin.source], Self.isObjectID(pin.revision)
+      else {
+        throw CoreError.invalidState("missing exact retention coordinates")
+      }
+      let kind: SourceKind = pin.source.hasPrefix("local:") ? .local : .git
+      let source = LockedSource(
+        kind: kind, url: kind == .git ? location : nil,
+        requirement: .revision(pin.revision))
+      _ = try pinnedMirror(sourceID: pin.source, source: source, revision: pin.revision)
+      let retained = SourceCache(
+        store: store,
+        checkpoint: { point in
+          try checkpoint("retention.\(ordinal)." + point)
+        })
+      try retained.retainWatchRevision(
+        sourceID: pin.source, source: location, revision: pin.revision)
+    }
+  }
+
   /// Retains pins and any cache tree containing a live edit source.
   /// The caller holds the scope lock, including during failure cleanup.
   package func prune(
     referencedBy lock: ResolvedState, watch: WatchState? = nil,
     transaction: FileTransaction? = nil
   ) throws {
-    let watch = try watch ?? store.readWatch()
+    var references = try RetentionReferences(resolved: lock, cache: self)
+    try references.include(watch: watch ?? store.readWatch())
+    let transactionToUse = transaction ?? FileTransaction(store: store)
+    try prune(references: references, transaction: transactionToUse)
+    if transaction == nil { try transactionToUse.commit() }
+  }
+
+  /// The caller stages pruning with its state generation and commits only after validation.
+  package func prune(references: RetentionReferences, transaction: FileTransaction) throws {
     guard let scope = try store.openDirectoryIfPresent(), try scope.info("cache") != nil else {
       return
     }
+    guard try !TransactionJournal.isPresent(in: scope) else {
+      throw CoreError.invalidState("transaction recovery must precede pruning")
+    }
     let cache = try scope.child("cache")
-    let transactionToUse = transaction ?? FileTransaction(store: store)
-    var paths = Set<String>()
-    var digests = Set<String>()
-    for state in watch.sources.values {
-      if case .artifacts(let artifacts) = state.seen {
-        digests.formUnion(artifacts.values.map { String($0.dropFirst(7)) })
-      }
-    }
-    var edits: [URL] = []
-    func retain(source: String, revision: String?, artifact: LockedArtifact?) {
-      if let revision {
-        paths.insert(materializedURL(sourceID: source, revision: revision).standardizedFileURL.path)
-      }
-      if let artifact {
-        digests.insert(String(artifact.digest.dropFirst(7)))
-        for file in artifact.files ?? [] { digests.insert(String(file.digest.dropFirst(7))) }
-      }
-    }
-    for skill in lock.skills.values {
-      retain(source: skill.source, revision: skill.revision, artifact: skill.artifact)
-      if skill.installs.values.contains(.edit), let source = lock.sources[skill.source] {
-        let local = try declaration(sourceID: skill.source, source: source).localURL(
-          environment: store.environment)
-        edits.append(
-          try PathSafety.resolvedChild(base: local, subpath: skill.path ?? ".")
-            .resolvingSymlinksInPath())
-      }
-    }
-    for section in lock.instructions.sections + lock.instructions.chatgpt.values.flatMap(\.sections)
-    {
-      retain(source: section.source, revision: section.revision, artifact: section.artifact)
-    }
+    let transactionToUse = transaction
+    let paths = Set(
+      references.git.map {
+        materializedURL(sourceID: $0.source, revision: $0.revision).standardizedFileURL.path
+      })
+    let digests = Set(references.artifacts.map { String($0.dropFirst(7)) })
+    let edits = references.live
     func edited(_ url: URL) -> Bool {
       edits.contains { PathSafety.isContained($0, in: url) }
     }
@@ -593,7 +601,6 @@ package struct SourceCache {
         }
       }
     }
-    if transaction == nil { try transactionToUse.commit() }
   }
 
   package func validatePath(_ url: URL, directory: Bool = true) throws {

@@ -697,3 +697,45 @@ It also reports missing installs, changed content and broken links, newer
 matching Git resolutions and uncommitted changes in selected local source paths.
 `install` restores all recorded recipients and modes without changing lock
 bytes. The consuming CLI controls presentation and user interaction.
+
+## Version 2 ledger package interfaces
+
+`ResolvedLedger` is the package-internal version 2 representation of the same
+`agents.resolved` file. `ResolvedLedgerCodec` accepts version 2 only. It preserves
+unchanged bytes and rejects unknown fields, duplicate keys, invalid references,
+corrupt embedded objects and unsupported versions. `LedgerAdmission` bounds
+encoded bytes, structural depth and nodes, embedded decoded bytes and tree
+entries before decoding. Scope reads also bound file bytes while reading.
+
+The ledger stores source uses and independent pins, complete symbolic component
+payloads, ordered occurrences and group child closures, producer manifest
+hashes, resource trees, deployment ownership and format-pinned lowerings.
+Content objects embed deduplicated non-secret bytes for local and artifact
+resources. Trees preserve directories, symlinks and executable files. Actual
+local edit skills retain explicit live locations. Registered-root-relative
+locations relocate with their registered root; explicit absolute locations keep
+their authored meaning. Runtime secret values are not binding inputs to this
+codec or the pure renderers.
+
+`Components.LedgerFreeze` consumes borrowed B graph resources inside the source
+session. Its caller supplies explicit authoring coordinates and lowering/layout
+choices. `LedgerReplay.prepareLowerings` seals symbolic output identities;
+`withReplay` reconstructs exact resources, selects only the locked renderer
+format and verifies outputs before returning borrowed artifacts and owned-value
+intentions. Exact Git acquisition uses the recorded commit. Embedded resources
+require no authoring tree or cache. Compatibility formats cover existing skill,
+instruction, ChatGPT and Claude import rendering. Production native format
+registration and document editing are owned by the native adapters.
+
+`RetentionReferences` validates and derives the complete source/resource closure,
+including container ancestry and empty groups, then unions watch references.
+Cache pruning stages deletions in the caller's `FileTransaction`. Ref cleanup
+runs only after physical journal recovery or commit; unfinished journals prevent
+independent pruning. Recovery interprets physical evidence and does not invoke
+renderers or source providers.
+
+The existing public lifecycle methods continue to use their version 1 model and
+reject version 2 input. Public lifecycle composition owns their eventual version
+2 integration. Conversion tooling is external to the package and requires old
+locks, original authoring inputs and explicit target layouts; it does not adopt
+current deployed bytes.

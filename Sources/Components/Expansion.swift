@@ -136,7 +136,8 @@ final class Expansion {
         LinkedReference(
           occurrence: occurrence, parent: parent,
           group: group.name, snapshot: target.view.snapshot, root: target.view.discoveryPath,
-          constraint: constraint, referenceChain: chain))
+          constraint: constraint, referenceChain: chain,
+          manifestHash: target.document.digest))
     }
     try expand(
       group.components,
@@ -531,7 +532,8 @@ final class Expansion {
       recipients: recipients, dependencies: dependencies, consumerEditable: !context.producer)
     components.append(
       LinkedComponent(
-        key: key, snapshot: snapshot, pin: pin, payload: payload,
+        key: key, declaringSnapshot: context.view.snapshot, snapshot: snapshot, pin: pin,
+        payload: payload,
         conditions: [condition], recipients: recipients, chatGPT: chatGPT, resources: resources,
         origins: [origin]))
   }
@@ -582,6 +584,8 @@ final class Expansion {
       components: result, references: references,
       constraints: constraints.keys.sorted().flatMap { constraints[$0]! },
       selections: choices.filter { constraints[$0.key] != nil },
-      sourceSnapshots: linking.session.sourceEvidence(for: snapshots))
+      sourceSnapshots: linking.session.sourceEvidence(for: snapshots),
+      sourceUses: linking.sourceUses,
+      declaringSnapshots: linking.session.sourceEvidence(for: Set(result.map(\.declaringSnapshot))))
   }
 }

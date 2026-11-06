@@ -51,7 +51,9 @@ func signalContention() throws {
   defer { try? signal.close() }
   try signal.write(contentsOf: Data("contended\n".utf8))
 }
-if arguments[2] == "git-environment" {
+if arguments[2].hasPrefix("ledger-") {
+  try ledgerProbe(arguments[2], store: store)
+} else if arguments[2] == "git-environment" {
   let before = ProcessInfo.processInfo.environment
   let cache = SourceCache(store: store)
   let source = SourceDeclaration(kind: .local, location: root.appendingPathComponent("source").path)

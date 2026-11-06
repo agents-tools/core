@@ -71,7 +71,7 @@ extension SourceCache {
     throw CoreError.notFound("source reference cannot be resolved without fetching: \(ref.name)")
   }
 
-  static func isObjectID(_ value: String) -> Bool {
+  package static func isObjectID(_ value: String) -> Bool {
     value.range(of: #"^[0-9a-f]{40}([0-9a-f]{24})?$"#, options: .regularExpression) != nil
   }
 }

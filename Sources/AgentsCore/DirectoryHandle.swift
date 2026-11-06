@@ -491,7 +491,8 @@ final class DirectoryHandle {
     try sync()
   }
 
-  func read(_ name: String, matching expected: stat? = nil) throws -> Data {
+  func read(_ name: String, matching expected: stat? = nil, maximumBytes: Int? = nil) throws -> Data
+  {
     let file = try regularFile(name)
     defer { close(file) }
     var before = stat()
@@ -500,6 +501,9 @@ final class DirectoryHandle {
     }
     if var expected, !platform_same_generation(&expected, &before) {
       throw CoreError.invalidState("file changed before reading: \(name)")
+    }
+    if let maximumBytes, before.st_size > maximumBytes {
+      throw CoreError.invalidState("file byte budget: \(name)")
     }
     var data = Data()
     var buffer = [UInt8](repeating: 0, count: 65536)
@@ -517,6 +521,9 @@ final class DirectoryHandle {
           throw CoreError.invalidState("file changed while reading: \(name)")
         }
         return data
+      }
+      if let maximumBytes, count > maximumBytes - data.count {
+        throw CoreError.invalidState("file byte budget: \(name)")
       }
       data.append(contentsOf: buffer.prefix(count))
     }

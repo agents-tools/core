@@ -33,12 +33,12 @@ ManifestTestProcess ──> AgentsManifest, AgentsCore, AgentsDescription, Manif
 AgentsManifestTests ──> AgentsManifest, AgentsDescription, AgentsCore, ManifestTestProcess, ManifestTestSupport, SwiftParser, SwiftSyntax
 
 StateTestSupport (Foundation only)
-StateTestProcess ──> AgentsCore, AgentsManifest, AgentsInstructions, AgentsSkills, AgentsUpdates, CPlatform, StateTestSupport
+StateTestProcess ──> AgentsCore, AgentsManifest, AgentsInstructions, AgentsSkills, AgentsUpdates, Components, CPlatform, StateTestSupport
 AgentsCoreTests ──> AgentsCore, AgentsManifest, StateTestProcess, StateTestSupport, CPlatform
 AgentsSkillsTests ──> AgentsSkills, AgentsCore, AgentsManifest, AgentsInstructions, Yams, StateTestProcess, StateTestSupport, CPlatform
 AgentsInstructionsTests ──> AgentsInstructions, AgentsManifest
 AgentsUpdatesTests ──> AgentsUpdates, AgentsManifest, StateTestProcess, StateTestSupport, CPlatform
-ComponentsTests ──> Components, AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions
+ComponentsTests ──> Components, AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, StateTestProcess, StateTestSupport
 ```
 
 `AgentsDescription`, `AgentsManifest`, `AgentsCore`, `AgentsSkills`,
@@ -415,7 +415,11 @@ reference and contribution occurrences, provenance and exact dependency pins.
 Its protected projection compares other domains' payloads, resource hashes,
 recipients and pins; source sharing alone does not imply a changed projection.
 Producer-owned children report `notEditableHere` with producer and reference
-coordinates. These package seams do not publish state or lower native artifacts.
+coordinates. The ledger freeze seam captures complete durable inputs within the source session.
+Versioned replay produces verified artifacts and owned-region intentions; its
+compatibility renderer table contains only existing formats. Test process formats
+are supplied explicitly and are absent from production registration. These
+package seams do not publish state.
 The existing public lifecycle operations still enforce their deployment subset.
 
 Root package resources use the project directory in project scope and the

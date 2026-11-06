@@ -58,6 +58,7 @@ final class Linking {
   var nonGit = Set<String>()
   var git = Set<String>()
   var addresses: [String: SourceAddress] = [:]
+  var sourceUses: [LinkedSourceUse] = []
   private var componentMaps: [GroupIdentity: [String: [SourceMapEntry]]] = [:]
   private var positions: [GroupIdentity: [String: SourceMapEntry]] = [:]
 
@@ -181,6 +182,7 @@ final class Linking {
         choices[next] = candidate
         continue
       }
+      sourceUses.removeAll()
       let final = Expansion(linking: self, choices: choices, emit: true)
       do { try final.expandRoot(root) } catch let error as RequirementSearch {
         lastFailure = error.constraints
@@ -232,6 +234,8 @@ final class Linking {
     let root = try PathSafety.sanitizeSubpath(source.path ?? ".")
     let result = SourceAddress(id: id, source: source, contained: nil, root: root)
     addresses[id] = result
+    let use = LinkedSourceUse(source: id, root: root, requirement: source.requirement)
+    if !sourceUses.contains(use) { sourceUses.append(use) }
     return result
   }
 

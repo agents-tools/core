@@ -60,6 +60,7 @@ package struct ContributionOrigin: Equatable, Sendable {
 
 package struct LinkedComponent: Equatable, Sendable {
   package let key: ComponentKey
+  package let declaringSnapshot: SourceSnapshotID
   package let snapshot: SourceSnapshotID
   package let pin: SourceRevision?
   package let payload: LinkedPayload
@@ -86,6 +87,13 @@ package struct LinkedReference: Equatable, Sendable {
   package let root: String
   package let constraint: SourceConstraint?
   package let referenceChain: [SourceSpan]
+  package let manifestHash: String
+}
+
+package struct LinkedSourceUse: Equatable, Sendable {
+  package let source: String
+  package let root: String
+  package let requirement: SourceRequirement?
 }
 
 package struct LinkedComponents: Equatable, Sendable {
@@ -94,6 +102,8 @@ package struct LinkedComponents: Equatable, Sendable {
   package let constraints: [SourceConstraint]
   package let selections: [String: SourceRevision]
   package let sourceSnapshots: [SourceSnapshotEvidence]
+  package var sourceUses: [LinkedSourceUse] = []
+  package var declaringSnapshots: [SourceSnapshotEvidence] = []
 
   /// A semantic projection protects pins, payloads, resource evidence and effective targets.
   /// Instructions retain order within each recipient or named prompt. Reference counts and
