@@ -543,7 +543,7 @@ extension StateTransactionTests {
     let barriers = SynchronizationCount()
     var steps: [String] = []
     try DirectoryHandle.$synchronizationObserver.withValue(
-      { barriers.add() },
+      DirectoryHandle.SynchronizationObserver(didSynchronize: { barriers.add() }),
       operation: {
         try FileLock.withLock(
           at: scope.appendingPathComponent(".agents.lock"), checkpoint: { steps.append($0) },

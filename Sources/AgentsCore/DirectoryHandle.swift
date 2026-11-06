@@ -3,7 +3,11 @@ import Foundation
 
 /// Pins directory ancestry. Child operations never traverse symbolic links.
 final class DirectoryHandle {
-  @TaskLocal static var synchronizationObserver: (@Sendable () -> Void)?
+  struct SynchronizationObserver: Sendable {
+    let didSynchronize: @Sendable () -> Void
+  }
+
+  @TaskLocal static var synchronizationObserver: SynchronizationObserver?
   let descriptor: Int32
   let url: URL
 
@@ -591,7 +595,7 @@ final class DirectoryHandle {
     guard platform_sync(file) == 0 else {
       throw CoreError.invalidState("cannot sync filesystem entry: \(errno)")
     }
-    synchronizationObserver?()
+    synchronizationObserver?.didSynchronize()
   }
 
   enum CopyStep: String { case directoryCreated, fileCreated, linkCreated, entryCopied }
@@ -667,6 +671,6 @@ final class DirectoryHandle {
     guard platform_copy_metadata(origin, destination, mode) == 0 else {
       throw CoreError.invalidState("cannot preserve filesystem metadata: \(errno)")
     }
-    synchronizationObserver?()
+    synchronizationObserver?.didSynchronize()
   }
 }

@@ -15,7 +15,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / ".build/release-crash-diagnostics"
 FLAGS = ["-c", "release", "--disable-index-store", "--build-system", "native"]
-FILTER = "PublicationTests.primitiveFailuresCleanPrivateResourcesBeforeChangingUserData"
+FILTERED_PROBES = [
+    ("primitive-failures", "PublicationTests.primitiveFailuresCleanPrivateResourcesBeforeChangingUserData"),
+    ("scope-creation", "StateTransactionTests.scopeCreationSyncsParentBeforeAllowingTargets"),
+    ("transaction-cost", "TransactionCostTests.twoSmallFiles"),
+]
 
 
 def main():
@@ -68,7 +72,7 @@ def main():
                    str(bundle), "-c", "release", "--disable-index-store", str(bundle),
                    "--testing-library", "swift-testing"]
         results = []
-        probes = [("filtered", ["--filter", FILTER])]
+        probes = [(name, ["--filter", pattern]) for name, pattern in FILTERED_PROBES]
         if not args.filter_only:
             probes.append(("full", []))
         for name, extra in probes:

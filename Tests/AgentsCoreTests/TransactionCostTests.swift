@@ -29,7 +29,9 @@ struct TransactionCostTests {
         for target in targets {
           try transaction.replace(target, with: .data(Data("after".utf8)))
         }
-        try DirectoryHandle.$synchronizationObserver.withValue({ count.sync() }) {
+        try DirectoryHandle.$synchronizationObserver.withValue(
+          DirectoryHandle.SynchronizationObserver(didSynchronize: { count.sync() })
+        ) {
           try transaction.commit()
         }
       }
