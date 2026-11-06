@@ -56,10 +56,15 @@ package enum DeclarationEditPlan {
     // an occurrence edit. Replanning must also strictly reduce the remaining operation count.
     var operationBudget = 2 * (document.evaluation.root.cost.nodes + targetCost.nodes)
     var remaining = Int.max
+    // Keep operation counts comparable across drafts: a source move can make a complete
+    // edit eligible for the flat path, whose insertion/deletion counts use different units.
+    let complete = Planner(
+      document: document, current: current, next: next, environment: environment
+    ).requiresCompletePlanning
     while true {
       var planner = Planner(
         document: document, current: current, next: next, environment: environment)
-      let operations = adjust(try planner.plan())
+      let operations = adjust(try planner.plan(complete: complete))
       if operations.isEmpty { break }
       guard operations.count < remaining else {
         throw failure(
@@ -122,13 +127,23 @@ private struct Planner {
   let environment: RuntimeEnvironment
   var operations: [DocumentOperation] = []
 
-  mutating func plan() throws -> [DocumentOperation] {
-    if !flat(current) || !flat(next) || !flatOrder() || current.groups != next.groups
+  var requiresCompletePlanning: Bool {
+    !flat(current) || !flat(next) || !flatOrder() || current.groups != next.groups
       || current.uses != next.uses || current.exports != next.exports
-    {
+  }
+
+  mutating func plan(complete: Bool) throws -> [DocumentOperation] {
+    if complete {
       return try CompleteDeclarationPlanner(
         document: document, current: current, next: next, environment: environment
       ).plan()
+    }
+    // Flat operations preserve this shape and uniqueness even while domain constraints are
+    // deferred. Reject a malformed draft rather than switching strategy or using lossy views.
+    guard flat(current) else {
+      throw DeclarationEditPlan.failure(
+        "manifest.ambiguous", "draft is no longer an unambiguous flat declaration",
+        span: document.source.span(0..<0))
     }
     var skillComponents: [String: Int] = [:]
     var instructionsComponent: Int?
