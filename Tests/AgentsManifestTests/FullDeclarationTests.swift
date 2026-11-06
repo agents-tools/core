@@ -7,6 +7,119 @@ import Testing
 
 @Suite("Complete symbolic declarations")
 struct FullDeclarationTests {
+  @Test func removingReferencedSourceAcrossBatchesProducesEmptyDeclaration() throws {
+    let components = (0..<100).map {
+      #"    .subagent(name: "agent\#($0)", description: "d", prompt: .file("x.md", source: "s")),"#
+    }.joined(separator: "\n")
+    let body = """
+      let agents = Agents(sources: [.source(name: "s", path: "missing")], components: [
+      \(components)
+      ])
+      """
+    let previous = try projected(body)
+    #expect(previous.components.count == 100)
+    var next = previous
+    next.components = []
+    next.sourceDeclarations = []
+    let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
+    let result = try ManifestProjection.declaration(
+      of: DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest")),
+      environment: projectionEnvironment)
+    #expect(result == next)
+  }
+
+  @Test func reorderingPromptsMovesTheirCommentsAndRepeatsAsNoOp() throws {
+    let body = """
+      // Keep this header.
+      let agents = Agents(components: [
+        .instructions(chatGPT: [
+          // Prompt a.
+          .prompt(name: "a", sections: ["first"]),
+          // Prompt b.
+          .prompt(name: "b", sections: ["second"]),
+        ]),
+      ])
+      // Keep this tail.
+      """
+    let previous = try projected(body)
+    var next = previous
+    guard case .instructions(var instructions) = next.components[0] else {
+      Issue.record("expected instructions")
+      return
+    }
+    instructions.prompts.reverse()
+    next.components[0] = .instructions(instructions)
+    let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
+    let output = String(decoding: bytes, as: UTF8.self)
+    let expected = body.replacingOccurrences(
+      of: """
+            // Prompt a.
+            .prompt(name: "a", sections: ["first"]),
+            // Prompt b.
+            .prompt(name: "b", sections: ["second"]),
+        """,
+      with: """
+            // Prompt b.
+            .prompt(name: "b", sections: ["second"]),
+            // Prompt a.
+            .prompt(name: "a", sections: ["first"]),
+        """)
+    #expect(output == manifestHeader + expected)
+    let result = try ManifestProjection.declaration(
+      of: DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest")),
+      environment: projectionEnvironment)
+    #expect(result.components == next.components)
+    #expect(try planned(result, next, in: output) == nil)
+  }
+
+  @Test func equivalentSourceSpellingSurvivesFullComponentEdit() throws {
+    let body = """
+      let agents = Agents(
+        sources: [.source(name: "s", /* keep source comment */ path: "./s")],
+        components: [.ignore(name: "i", patterns: ["old"]) ]
+      )
+      """
+    let previous = try projected(body)
+    var next = previous
+    next.sources["s"]?.location =
+      projectionEnvironment.projectDirectory.appendingPathComponent("s").path
+    next.components[0] = .ignore(name: "i", patterns: ["new"])
+    let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
+    let output = String(decoding: bytes, as: UTF8.self)
+    #expect(output.contains(#".source(name: "s", /* keep source comment */ path: "./s")"#))
+    let result = try ManifestProjection.declaration(
+      of: DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest")),
+      environment: projectionEnvironment)
+    #expect(result.components == next.components)
+    #expect(ManifestProjection.equivalent(result, next, environment: projectionEnvironment))
+  }
+
+  @Test func projectionAndConstructionKeepDeclarationOrder() throws {
+    let body = """
+      let agents = Agents(
+        exports: ["b", "a"],
+        sources: [.source(name: "web", url: "https://example.test/repo.git"), .source(name: "git", path: "missing")],
+        components: [.ignore(name: "b", patterns: []), .ignore(name: "a", patterns: [])],
+        groups: [.group(name: "b"), .group(name: "a")],
+        uses: ["b", "a"], watch: ["web", "git"]
+      )
+      """
+    let doc = try document(body)
+    let declaration = try ManifestProjection.declaration(
+      of: doc, environment: projectionEnvironment)
+    #expect(declaration.watch == ["web", "git"])
+    #expect(
+      declaration.components == [
+        .ignore(name: "b", patterns: []), .ignore(name: "a", patterns: []),
+      ])
+    #expect(declaration.groups.map(\.name) == ["b", "a"])
+    #expect(declaration.uses.map(\.name) == ["b", "a"])
+    #expect(declaration.exports == ["b", "a"])
+    #expect(
+      Lowering.declaration(try DeclarationConstruction.root(declaration).constructionValue)
+        == doc.declaration)
+  }
+
   @Test func conditionsRecipientsAndPluginSelectionsKeepInheritanceAndExplicitEmpty() throws {
     let declaration = try projected(
       """

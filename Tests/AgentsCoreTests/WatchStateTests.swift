@@ -8,6 +8,41 @@ import Testing
 
 @Suite("Watch state")
 struct WatchStateTests {
+  @Test func existingDeclarationWatchReorderingPreservesBytesAndInode() throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(
+      scope: .project,
+      environment: RuntimeEnvironment(
+        projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:]
+      ))
+    try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+    let text = """
+      // agents-tools-version: 1.0
+      import AgentsDescription
+
+      // Preserve this layout.
+      let agents = Agents(sources: [
+        .source(name: "web", url: "https://example.test/repo.git"),
+        .source(name: "git", path: "missing"),
+      ], watch: ["web", "git"])
+
+      """
+    let bytes = Data(text.utf8)
+    try bytes.write(to: store.declarationURL)
+    let inode = try #require(
+      FileManager.default.attributesOfItem(atPath: store.declarationURL.path)[.systemFileNumber]
+        as? NSNumber)
+    var declaration = try store.loadDeclaration()
+    #expect(declaration.watch == ["web", "git"])
+    declaration.watch = ["git", "web"]
+    try store.save(declaration: declaration, resolved: ResolvedState())
+    #expect(try Data(contentsOf: store.declarationURL) == bytes)
+    #expect(
+      try FileManager.default.attributesOfItem(atPath: store.declarationURL.path)[.systemFileNumber]
+        as? NSNumber == inode)
+  }
+
   @Test(arguments: [InstallScope.project, .user])
   func storesSortedBaselinesAndPreservesWatchWhenSavingOtherState(_ scope: InstallScope) throws {
     let root = try temporaryDirectory()

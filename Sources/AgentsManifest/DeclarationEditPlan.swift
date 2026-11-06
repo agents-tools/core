@@ -2,8 +2,8 @@ import AgentsCore
 import AgentsDescription
 
 /// Turns a declaration change into source bytes. Existing documents receive the smallest edits
-/// that express the semantic difference, without reordering; bytes outside the edited ranges,
-/// including comments, are unchanged. Batches hold at most 100 requests and are replanned
+/// that express the semantic difference, including ordered occurrence changes. Bytes outside
+/// the edited ranges, including comments, are unchanged. Batches hold at most 100 requests and are replanned
 /// against the bytes each batch produces. The final document must project to `next`.
 package enum DeclarationEditPlan {
   /// Returns `nil` when `next` is semantically equal to `previous`. Without existing bytes, the
@@ -49,7 +49,9 @@ package enum DeclarationEditPlan {
         span: document.source.span(0..<0))
     }
     if equivalent(previous, next) { return nil }
-    var remaining = Int.max
+    // Definition/reference phases can expose more operations after a batch. Detect stalled
+    // or cyclic plans by snapshot instead of requiring the operation count to decrease.
+    var snapshots: Set<String> = [document.digest]
     while true {
       var planner = Planner(
         document: document, current: current, next: next, environment: environment)
@@ -57,12 +59,11 @@ package enum DeclarationEditPlan {
       if operations.isEmpty { break }
       let change = try document.preparing(
         operations: Array(operations.prefix(ManifestLimits.Editing.requests)))
-      guard change.bytes != document.bytes, operations.count < remaining else {
+      guard change.bytes != document.bytes, snapshots.insert(change.digest).inserted else {
         throw failure(
           "manifest.edit.mismatch", "an edit batch made no progress",
           span: document.source.span(0..<0))
       }
-      remaining = operations.count
       document = try DeclarationDocument(bytes: change.bytes, identity: identity)
       current = try ManifestProjection.declaration(of: document, environment: environment)
     }
@@ -101,7 +102,9 @@ private struct Planner {
     if !flat(current) || !flat(next) || !flatOrder() || current.groups != next.groups
       || current.uses != next.uses || current.exports != next.exports
     {
-      return try CompleteDeclarationPlanner(document: document, next: next).plan()
+      return try CompleteDeclarationPlanner(
+        document: document, current: current, next: next, environment: environment
+      ).plan()
     }
     var skillComponents: [String: Int] = [:]
     var instructionsComponent: Int?
@@ -198,7 +201,13 @@ private struct Planner {
     let sourceOrder =
       oldSources.filter(newSet.contains)
       + newSources.filter { !Set(oldSources).contains($0) }.sorted(by: utf8Less)
-    return planned == desired && sourceOrder == newSources
+    let oldPrompts = (try? current.instructions)?.prompts.map(\.name) ?? []
+    let newPrompts = (try? next.instructions)?.prompts.map(\.name) ?? []
+    let promptSet = Set(newPrompts)
+    let promptOrder =
+      oldPrompts.filter(promptSet.contains)
+      + newPrompts.filter { !Set(oldPrompts).contains($0) }.sorted(by: utf8Less)
+    return planned == desired && sourceOrder == newSources && promptOrder == newPrompts
   }
 
   func flat(_ value: Declaration) -> Bool {

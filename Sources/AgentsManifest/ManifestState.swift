@@ -27,6 +27,8 @@ extension StateStore {
     _ next: Declaration, replacing previous: Declaration, prepared: StatePrecondition
   ) throws -> DeclarationChange? {
     let bytes = try declarationBytes(prepared: prepared)
+    var next = next
+    if bytes == nil { next.watch = next.watch?.sorted(by: utf8Less) }
     let output: [UInt8]?
     do {
       output = try DeclarationEditPlan.bytes(

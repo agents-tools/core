@@ -180,11 +180,18 @@ ambiguous comments, fail with `manifest.edit.readOnly`. A batch holds at most
 100 requests, and the document is rebuilt from the new bytes before the
 remaining difference is planned. The projection of the final document must equal
 the intended declaration, or planning fails with `manifest.edit.mismatch`.
+Full plans introduce source and group definitions before references, remove
+obsolete group edges before adding their replacements, and retain definitions
+until all removed references are gone. Each batch therefore remains valid even
+when declaration order differs from dependency order.
 
 Without declaration bytes, planning prints the complete typed declaration with the
 [canonical printer](../Reference/Manifest.md#canonical-printing), retaining its
 ordered collections and symbolic group uses. Dictionary-based convenience
 initializers and domain mutations choose deterministic order for new entries.
+First state-declaration creation sorts only the set-like watch aliases; pure
+construction retains input order, and equivalent watch reorders in existing
+documents preserve their bytes.
 The printed bytes pass the same front end and projection check and are published
 with no-replace. A semantically empty declaration creates no file.
 
