@@ -12,7 +12,8 @@ discovery and lifecycle operations and depends on `AgentsCore`,
 `AgentsManifest` and Yams. `AgentsInstructions` owns instruction lifecycle and
 text transformations. It depends on `AgentsCore` for sources and state,
 `AgentsManifest` for the declaration, and `swift-markdown` for CommonMark
-structure. `AgentsUpdates` composes both domains above those modules. Tests
+structure. `Components` links exact source exports through package readers above those
+modules. `AgentsUpdates` composes the existing skill and instruction lifecycle. Tests
 follow those module boundaries.
 
 ## Belongs Here

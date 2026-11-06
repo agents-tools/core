@@ -1,3 +1,4 @@
+import AgentsCore
 import Foundation
 
 /// The fixed front matter of an instructions file: a required `description` and optional `paths`.
@@ -6,14 +7,16 @@ import Foundation
 struct InstructionFrontMatter: Equatable {
   let description: String
   let paths: [String]
+  let condition: DeclarationCondition
 
   struct Failure: Error {
     let reason: String
   }
 
-  static func parse(_ lines: [String]) throws -> Self {
+  static func parse(_ lines: [String], allowRestrictions: Bool = false) throws -> Self {
     var description: String?
     var paths: [String]?
+    var restrictions: [String: [String]] = [:]
     var index = 0
     func fail(_ reason: String) -> Failure { Failure(reason: reason) }
     while index < lines.count {
@@ -24,12 +27,17 @@ struct InstructionFrontMatter: Equatable {
       else { throw fail("front matter line \(index + 1) is not a 'key: value' entry.") }
       let key = String(line[..<colon])
       let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+      let fieldLine = index + 1
       switch key {
       case "description":
         guard description == nil else { throw fail("'description' appears more than once.") }
         description = try scalar(value, key: key)
-      case "paths":
-        guard paths == nil else { throw fail("'paths' appears more than once.") }
+      case "paths", "agents", "platforms", "scopes":
+        guard key == "paths" || allowRestrictions else {
+          throw fail("unknown front matter key '\(key)'.")
+        }
+        guard restrictions[key] == nil else { throw fail("'\(key)' appears more than once.") }
+        guard key != "paths" || paths == nil else { throw fail("'paths' appears more than once.") }
         if value.isEmpty {
           var items: [String] = []
           while index < lines.count {
@@ -40,14 +48,27 @@ struct InstructionFrontMatter: Equatable {
               try scalar(String(item.dropFirst(2)).trimmingCharacters(in: .whitespaces), key: key))
             index += 1
           }
-          paths = items
+          restrictions[key] = items
         } else {
           guard value.hasPrefix("["),
             let list = try? JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String]
-          else { throw fail("'paths' must be a list of double-quoted strings or a block list.") }
-          paths = list
+          else {
+            throw fail(
+              "'\(key)' on line \(index + 1) must be a list of double-quoted strings or a block list."
+            )
+          }
+          restrictions[key] = list
         }
-        guard paths?.isEmpty == false else { throw fail("'paths' must list at least one pattern.") }
+        if key == "paths" {
+          paths = restrictions.removeValue(forKey: key)
+          guard paths?.isEmpty == false else {
+            throw fail("'paths' must list at least one pattern.")
+          }
+        } else {
+          do { _ = try DeclarationCondition.restrictions([key: restrictions[key]!]) } catch {
+            throw fail("front matter line \(fieldLine): \(error)")
+          }
+        }
       default:
         throw fail("unknown front matter key '\(key)'; only 'description' and 'paths' are allowed.")
       }
@@ -55,7 +76,11 @@ struct InstructionFrontMatter: Equatable {
     guard let description, !description.isEmpty else {
       throw fail("front matter needs a non-empty 'description'.")
     }
-    return Self(description: description, paths: paths ?? [])
+    let condition: DeclarationCondition
+    do { condition = try .restrictions(restrictions) } catch {
+      throw fail("invalid producer restrictions: \(error)")
+    }
+    return Self(description: description, paths: paths ?? [], condition: condition)
   }
 
   private static func scalar(_ value: String, key: String) throws -> String {

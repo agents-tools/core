@@ -99,7 +99,7 @@ public enum SourceRequirement: Codable, Equatable, Sendable {
     }
   }
 
-  private var isVersionRequirement: Bool {
+  var isVersionRequirement: Bool {
     switch kind {
     case "exact", "from", "minor", "range":
       return true

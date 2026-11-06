@@ -48,6 +48,14 @@ let package = Package(
       dependencies: [
         "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "CPlatform",
       ]),
+    .target(
+      name: "Components",
+      dependencies: ["AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions"]),
+    .testTarget(
+      name: "ComponentsTests",
+      dependencies: [
+        "Components", "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions",
+      ]),
     .target(name: "StateTestSupport", path: "Tests/StateTestSupport"),
     .executableTarget(
       name: "StateTestProcess",

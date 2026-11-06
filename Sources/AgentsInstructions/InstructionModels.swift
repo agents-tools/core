@@ -1,3 +1,4 @@
+import AgentsCore
 import Foundation
 
 public struct InstructionSection: Sendable, Equatable {
@@ -10,6 +11,7 @@ public struct InstructionSection: Sendable, Equatable {
   public let description: String
   /// Project-relative glob patterns that scope the section, in source order.
   public let paths: [String]
+  package let condition: DeclarationCondition
   /// SHA-256 of the original source bytes, including their line endings and any byte order mark.
   public let hash: String
   /// The body as written into targets: no front matter, LF endings, no leading or trailing

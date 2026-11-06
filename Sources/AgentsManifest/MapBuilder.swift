@@ -12,8 +12,7 @@ final class MapBuilder {
   private let admission: Admission
   private let digest: String
   private var result = BuiltMap()
-  private var originCount = 0
-  private var encodedBytes = 0
+  private var budget = SourceMapBudget()
 
   init(source: SourceText, admission: Admission, digest: String) {
     self.source = source
@@ -48,25 +47,17 @@ final class MapBuilder {
       resolved = next
     }
     if value.referent != nil {
-      guard resolved.cost.nodes <= ManifestLimits.SourceMap.locations - result.entries.count,
-        value.cost.origins <= ManifestLimits.SourceMap.origins - originCount
+      guard resolved.cost.nodes <= budget.remainingLocations,
+        value.cost.origins <= budget.remainingOrigins
       else {
         throw source.failure("manifest.limit", "reference source map expansion", range.lowerBound)
       }
     }
     let recordedOrigins = inherited + ownOrigins
-    let estimate =
-      pointer.utf8.count + (source.identity.rawValue.utf8.count + 160) * (recordedOrigins.count + 1)
-      + 80
-    guard result.entries.count < ManifestLimits.SourceMap.locations,
-      recordedOrigins.count <= ManifestLimits.SourceMap.origins - originCount,
-      estimate <= ManifestLimits.SourceMap.encodedBytes - encodedBytes
-    else {
+    guard budget.consume(pointer: pointer, span: span, origins: recordedOrigins) else {
       throw source.failure(
         "manifest.limit", "source map locations, origins or encoded bytes", range.lowerBound)
     }
-    originCount += recordedOrigins.count
-    encodedBytes += estimate
     result.entries.append(
       SourceMapEntry(
         pointer: pointer, span: span, origins: recordedOrigins, defaulted: value.defaulted))

@@ -15,6 +15,7 @@ with glibc 2.34 or newer.
 AgentsDescription (standard library only)
 AgentsManifest ──> AgentsDescription, AgentsCore, SwiftSyntax, SwiftParser (swift-syntax)
 
+Components ──> AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions
 AgentsUpdates ──> AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, CPlatform
 
 AgentsCore ──> CPlatform, Crypto (swift-crypto)
@@ -37,6 +38,7 @@ AgentsCoreTests ──> AgentsCore, AgentsManifest, StateTestProcess, StateTestS
 AgentsSkillsTests ──> AgentsSkills, AgentsCore, AgentsManifest, AgentsInstructions, Yams, StateTestProcess, StateTestSupport, CPlatform
 AgentsInstructionsTests ──> AgentsInstructions, AgentsManifest
 AgentsUpdatesTests ──> AgentsUpdates, AgentsManifest, StateTestProcess, StateTestSupport, CPlatform
+ComponentsTests ──> Components, AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions
 ```
 
 `AgentsDescription`, `AgentsManifest`, `AgentsCore`, `AgentsSkills`,
@@ -91,6 +93,11 @@ comparison. Static typing, occurrence-based expanded-size accounting and offline
 domain validation produce `AgentsCore.DeclarationIR` and `DeclarationSourceMap`.
 Constants, inactive values and unused groups receive the same checks. Group
 references and conditions remain symbolic.
+
+The package-only `ManifestExpansionBudget` applies the same value, source-map
+and output accounting to declarations repeated by source/group linking.
+`Components` supplies each original IR record and its reference origins and
+charges traversal work to the linker's retained work budget.
 
 `DeclarationDocument` is the public consumer surface:
 
@@ -371,6 +378,51 @@ The probe is never emitted. Malformed managed markers still produce errors.
 `InstructionOperations` owns ancestor-file warnings, filesystem access,
 declaration and lock updates, and deletion decisions using the lock's `created`
 flag. The `Instructions` and `ClaudeForwarding` text APIs perform no I/O.
+
+## Components
+
+`Components` is an internal target. Its package-only `ComponentLinker` reads a
+complete symbolic declaration and explicitly exported producer groups into an
+ordered, exact source graph. Root components precede uses; groups follow the
+same depth-first order. Producer defaults and frontmatter restrictions determine
+recipients together with nested reference and component conditions. Instructions
+retain repeated occurrences; identical named hooks and policies coalesce while
+retaining their origins. Logical conflicts are checked before artifact lowering.
+
+Core owns frozen Git candidate evidence, exact snapshots, source containment and
+the scoped temporary-read session. Export constraints share one version variable
+per normalized source; discovery roots remain distinct namespaces. Direct skill
+and section pins are independent. The session reuses existing exact cached
+objects only under existing locks; other mirrors, refs, locks and content remain
+temporary. The caller consumes borrowed resources within the linking closure;
+cleanup runs on success, error and cooperative cancellation. The synchronous Git
+runner completes owned in-flight work before cancellation returns.
+
+An exact view retains the original actual-local source environment independently
+of its borrowed content and live-edit eligibility. Local producer aliases resolve
+from that source's actual discovery root and home, even with a Git requirement.
+Remote-contained local declarations inherit their immutable parent snapshot and
+remain subject to lexical and real symlink containment.
+
+`SkillSnapshotReader` and `InstructionSnapshotReader` consume already selected
+views without independently resolving or retaining sources. Actual local edit
+skills preserve their live paths. Remote-contained local sources inherit the
+producer snapshot. Existing skill-index formats supply skill artifacts, and do
+not define an export-package format.
+
+The linked result records relative resource evidence, source requirements,
+reference and contribution occurrences, provenance and exact dependency pins.
+Its protected projection compares other domains' payloads, resource hashes,
+recipients and pins; source sharing alone does not imply a changed projection.
+Producer-owned children report `notEditableHere` with producer and reference
+coordinates. These package seams do not publish state or lower native artifacts.
+The existing public lifecycle operations still enforce their deployment subset.
+
+Root package resources use the project directory in project scope and the
+user-state directory in user scope. Explicit sources retain their declaring
+environment. Root user instructions require named sources, while imported
+producer groups retain their own sections. User prompt append content is
+read relative to the runtime home.
 
 ## AgentsUpdates
 

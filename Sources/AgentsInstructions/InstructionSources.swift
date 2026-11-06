@@ -216,7 +216,7 @@ final class InstructionSources {
 
   /// The `.md` files below a container, by name, except the target names `AGENTS.md` and
   /// `GEMINI.md`, which a project may generate there. Symbolic links and invalid names are errors.
-  private static func files(in directory: URL, tree: URL) throws -> [(String, URL)] {
+  static func files(in directory: URL, tree: URL) throws -> [(String, URL)] {
     guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
     try contained(directory, in: tree)
     try requireNoLinks(directory, below: tree)

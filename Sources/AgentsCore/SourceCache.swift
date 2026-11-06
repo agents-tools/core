@@ -54,6 +54,51 @@ package struct SourceCache {
     return SourceRevision(revision: revision, version: ref.version)
   }
 
+  /// Captures all advertised refs in an owned mirror. The caller uses a disposable cache.
+  func referenceCatalog(
+    _ source: SourceDeclaration, spending: (Int) throws -> Void = { _ in }
+  ) throws -> SourceCatalog {
+    let mirror = try fetch(source, id: source.identity(environment: store.environment))
+    let output = try git(
+      mirror, ["show-ref", "--head", "--dereference"], operation: .listTags,
+      source: source.location)
+    var references: [String: String] = [:]
+    var tags: [String: String] = [:]
+    for line in output.split(separator: "\n") {
+      try spending(1)
+      let fields = line.split(separator: " ", maxSplits: 1).map(String.init)
+      guard fields.count == 2 else { continue }
+      references[fields[1]] = fields[0]
+    }
+    for name in references.keys.sorted()
+    where name.hasPrefix("refs/tags/") && !name.hasSuffix("^{}") {
+      let commit = references[name + "^{}"] ?? references[name]
+      references[name] = commit
+      tags[String(name.dropFirst(10))] = commit
+    }
+    return SourceCatalog(tags: tags, references: references)
+  }
+
+  /// Resolves an expression against the already frozen mirror, without fetching new evidence.
+  func catalogRevision(_ expression: String, source: SourceDeclaration) throws -> String? {
+    try source.requirement?.validate()
+    return try withExistingMirror(sourceID: source.identity(environment: store.environment)) {
+      mirror, descriptor in
+      do {
+        return try git(
+          mirror,
+          [
+            "--no-optional-locks", "rev-parse", "--quiet", "--verify", "--end-of-options",
+            expression + "^{commit}",
+          ],
+          operation: .resolveRevision(revision: expression), source: source.location,
+          lock: descriptor)
+      } catch let error as GitError where error.exitCode == 1 && error.stderr.isEmpty {
+        return nil
+      }
+    } ?? nil
+  }
+
   /// Subscriptions follow branches even when installations select a tag or version range.
   func watchRevision(_ source: SourceDeclaration, revision: String? = nil) throws -> String {
     let id = try source.identity(environment: store.environment)
