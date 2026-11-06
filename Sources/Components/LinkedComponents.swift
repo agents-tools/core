@@ -110,9 +110,15 @@ package struct LinkedComponents: Equatable, Sendable {
     var changes = Set<ComponentKey>()
     func compare(_ lhs: [LinkedComponent], _ rhs: [LinkedComponent]) {
       for (a, b) in zip(lhs, rhs) {
+        // Coalescing retains distinct complete clauses; collection order carries no restriction.
+        let sameConditions =
+          [.hook, .permissions].contains(a.key.kind)
+          ? a.conditions.count == b.conditions.count
+            && a.conditions.allSatisfy { b.conditions.contains($0) }
+          : a.conditions == b.conditions
         if a.key != b.key || a.snapshot != b.snapshot || a.pin != b.pin
           || !a.payload.sameContent(as: b.payload)
-          || a.conditions != b.conditions
+          || !sameConditions
           || a.recipients != b.recipients || a.chatGPT != b.chatGPT || a.resources != b.resources
           || Set(a.origins.flatMap(\.dependencies)) != Set(b.origins.flatMap(\.dependencies))
         {

@@ -105,6 +105,52 @@ struct ImpactTests {
 
 extension ImpactTests {
   @Test(arguments: [false, true])
+  func coalescedRestrictionClausesIgnoreDeclarationOrder(permissions: Bool) throws {
+    let fixture = try LinkFixture()
+    let body =
+      permissions
+      ? ".permissions(name: \"shared\", rules: [.allow(.read, \"Sources/**\")]"
+      : ".hook(name: \"shared\", event: .afterTool, run: .executable(\"never-run\")"
+    func graph(_ conditions: [String]) throws -> LinkedComponents {
+      let components = conditions.map { body + ", condition: \($0))" }.joined(separator: ",")
+      return try fixture.link("let agents = Agents(components: [\(components)])")
+    }
+    let clauses = [
+      ".when(agents: [.codex], scopes: [.project], platforms: [.macOS])",
+      ".when(agents: [.claudeCode], scopes: [.project], platforms: [.macOS, .linux])",
+    ]
+    let before = try graph(clauses)
+    let after = try graph(clauses.reversed())
+    let component = try #require(after.components.first)
+    #expect(after.components.count == 1)
+    #expect(component.origins.count == 2)
+    #expect(component.conditions.count == 2)
+    #expect(component.conditions == before.components[0].conditions.reversed())
+    #expect(after.protectedChanges(from: before, allowing: [.skills]).isEmpty)
+    #expect(before.protectedChanges(from: after, allowing: [.skills]).isEmpty)
+
+    let changed = try graph([
+      clauses[0],
+      ".when(agents: [.claudeCode], scopes: [.project], platforms: [.macOS])",
+    ])
+    #expect(changed.components[0].recipients == component.recipients)
+    #expect(changed.protectedChanges(from: before, allowing: [.skills]) == [component.key])
+
+    let paired = try graph([
+      ".when(agents: [.codex], scopes: [.project], platforms: [.macOS])",
+      ".when(agents: [.claudeCode], scopes: [.project], platforms: [.linux])",
+      ".when(agents: [.codex, .claudeCode], scopes: [.project], platforms: [.macOS])",
+    ])
+    let swapped = try graph([
+      ".when(agents: [.codex], scopes: [.project], platforms: [.linux])",
+      ".when(agents: [.claudeCode], scopes: [.project], platforms: [.macOS])",
+      ".when(agents: [.codex, .claudeCode], scopes: [.project], platforms: [.macOS])",
+    ])
+    #expect(swapped.components[0].recipients == paired.components[0].recipients)
+    #expect(swapped.protectedChanges(from: paired, allowing: [.skills]) == [component.key])
+  }
+
+  @Test(arguments: [false, true])
   func coalescingChecksEveryDifferentPayload(permissions: Bool) throws {
     let fixture = try LinkFixture()
     func declaration(_ payload: String, _ agent: String) -> String {
