@@ -97,7 +97,7 @@ preserve both and existing watch-state bytes.
 | --- | --- | --- |
 | Absent | Absent | An empty declaration. Reads return empty results; the first write that declares something creates `Agents.swift` with no-replace publication. A write whose declaration and resulting lock are both empty creates neither file. |
 | Present | Any | Normal. An absent lock is an empty resolved state: `update` creates it and `install` has nothing to restore. |
-| Absent | Present | Every read and write path, including the `load*` accessors, listings, previews, doctor, install, initialization and export, throws `CoreError.missingDeclaration` with the declaration path. Nothing is written, and no `.agents.lock` is created. |
+| Absent | Present | The state cannot be used. Throwing APIs report `CoreError.missingDeclaration` with the declaration path; export returns `.unavailable`, and batch doctor reports a `.stateUnavailable` diagnostic for the affected scope. Nothing is written, and no `.agents.lock` is created. |
 
 Read paths apply the rule after their pending-recovery check, and writers after
 transaction recovery. Before taking the writer lock, a writer in a scope without
