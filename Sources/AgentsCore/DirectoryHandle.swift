@@ -234,8 +234,13 @@ final class DirectoryHandle {
     }
   }
 
-  /// A non-nil injected errno replaces the platform result and takes the same classifier.
-  @TaskLocal static var atomicRenameFailure: (@Sendable (RenameMode) -> Int32?)?
+  struct AtomicRenameFailure: Sendable {
+    let mode: RenameMode
+    let code: Int32
+  }
+
+  /// A matching injected errno replaces the platform result and takes the same classifier.
+  @TaskLocal static var atomicRenameFailure: AtomicRenameFailure?
 
   var device: UInt64 { get throws { try objectIdentity.device } }
   var objectIdentity: FileObjectIdentity {
@@ -297,7 +302,9 @@ final class DirectoryHandle {
     _ name: String, to parent: DirectoryHandle, named destination: String,
     mode: RenameMode
   ) -> RenameResult {
-    if let code = Self.atomicRenameFailure?(mode) { return RenameResult(code: code) }
+    if let failure = Self.atomicRenameFailure, failure.mode == mode {
+      return RenameResult(code: failure.code)
+    }
     let result =
       mode == .exchange
       ? platform_exchange(descriptor, name, parent.descriptor, destination)

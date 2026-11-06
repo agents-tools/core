@@ -340,7 +340,7 @@ struct PublicationTests {
       : .unsupported(
         "atomic rename is required: \(operation): \(code) (\(String(cString: strerror(code))))")
     DirectoryHandle.$atomicRenameFailure.withValue(
-      { $0 == mode ? code : nil },
+      DirectoryHandle.AtomicRenameFailure(mode: mode, code: code),
       operation: { #expect(throws: expected) { try transaction.commit() } })
     #expect(outcome.disposition == .unchanged)
     try fixture.check(committed: false, journal: nil)
