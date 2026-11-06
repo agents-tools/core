@@ -104,6 +104,68 @@ struct ImpactTests {
 }
 
 extension ImpactTests {
+  @Test(arguments: [false, true])
+  func coalescingChecksEveryDifferentPayload(permissions: Bool) throws {
+    let fixture = try LinkFixture()
+    func declaration(_ payload: String, _ agent: String) -> String {
+      let body =
+        permissions
+        ? ".permissions(name: \"shared\", rules: [.allow(.read, \"\(payload)/**\")]"
+        : ".hook(name: \"shared\", event: .afterTool, run: .executable(\"\(payload)\")"
+      return body + ", condition: .when(agents: [.\(agent)]))"
+    }
+    let a = declaration("a", "codex")
+    let b = declaration("b", "claudeCode")
+    let c = declaration("a", "claudeCode")
+    for declarations in [[a, b, c], [b, a, c], [a, c, b]] {
+      do {
+        _ = try fixture.link(
+          "let agents = Agents(components: [\(declarations.joined(separator: ","))])")
+        Issue.record("expected overlapping different payloads to conflict")
+      } catch LinkError.conflict(let key, let origins) {
+        #expect(key.kind == (permissions ? .permissions : .hook))
+        #expect(origins.count >= 2)
+      }
+    }
+  }
+
+  @Test(arguments: [false, true])
+  func instructionOrderIsProtectedPerDestination(chatGPT: Bool) throws {
+    let fixture = try LinkFixture()
+    for name in ["a", "b"] { try fixture.instruction(name, at: fixture.project) }
+    func expression(_ sections: String) -> String {
+      let component =
+        chatGPT
+        ? ".instructions(chatGPT: [.prompt(name: \"review\", sections: [\(sections)])])"
+        : ".instructions(sections: [\(sections)], agents: [.codex])"
+      return "let agents = Agents(components: [\(component)])"
+    }
+    let before = try fixture.link(expression("\"a\", \"b\""))
+    let after = try fixture.link(expression("\"b\", \"a\""))
+    #expect(after.protectedChanges(from: before, allowing: [.skills]).map(\.name) == ["a", "b"])
+    #expect(after.protectedChanges(from: before, allowing: [.instructions]).isEmpty)
+  }
+
+  @Test func unrelatedOrderAndOccurrenceChangesAreNotProtected() throws {
+    let fixture = try LinkFixture()
+    try fixture.skill("review", at: fixture.project)
+    for name in ["a", "b"] { try fixture.instruction(name, at: fixture.project) }
+    let declarations = [
+      ".instructions(sections: [\"a\"], agents: [.codex])",
+      ".instructions(sections: [\"b\"], agents: [.claudeCode])",
+      ".instructions(chatGPT: [.prompt(name: \"first\", sections: [\"a\"])])",
+      ".instructions(chatGPT: [.prompt(name: \"second\", sections: [\"b\"])])",
+      ".mcpServer(name: \"one\", transport: .stdio(\"never-run\"))",
+      ".mcpServer(name: \"two\", transport: .stdio(\"never-run\"))",
+    ]
+    let before = try fixture.link(
+      "let agents = Agents(components: [\(declarations.joined(separator: ","))])")
+    let after = try fixture.link(
+      "let agents = Agents(components: [.skills(source: \".\", select: [\"review\"], mode: .edit), \(declarations.reversed().joined(separator: ","))])"
+    )
+    #expect(after.protectedChanges(from: before, allowing: [.skills]).isEmpty)
+  }
+
   @Test func identicalNamedHooksUnionRecipientsAndKeepRestrictionOrigins() throws {
     let fixture = try LinkFixture()
     let graph = try fixture.link(

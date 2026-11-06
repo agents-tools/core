@@ -96,26 +96,68 @@ package struct LinkedComponents: Equatable, Sendable {
   package let sourceSnapshots: [SourceSnapshotEvidence]
 
   /// A semantic projection protects pins, payloads, resource evidence and effective targets.
-  /// Reference counts and occurrence numbering do not by themselves change protected content.
+  /// Instructions retain order within each recipient or named prompt. Reference counts and
+  /// occurrence numbering do not by themselves change protected content.
   package func protectedChanges(
     from previous: Self, allowing kinds: Set<DeclaredComponentKind>
   ) -> [ComponentKey] {
     func protected(_ graph: Self) -> [ComponentKey: [LinkedComponent]] {
-      Dictionary(grouping: graph.components.filter { !kinds.contains($0.key.kind) }, by: \.key)
+      Dictionary(
+        grouping: graph.components.filter {
+          $0.key.kind != .instructions && !kinds.contains($0.key.kind)
+        }, by: \.key)
     }
-    let before = protected(previous)
-    let after = protected(self)
-    return Set(before.keys).union(after.keys).filter { key in
-      let lhs = before[key] ?? []
-      let rhs = after[key] ?? []
-      guard lhs.count == rhs.count else { return true }
-      return zip(lhs, rhs).contains { a, b in
-        a.snapshot != b.snapshot || a.pin != b.pin || !a.payload.sameContent(as: b.payload)
+    var changes = Set<ComponentKey>()
+    func compare(_ lhs: [LinkedComponent], _ rhs: [LinkedComponent]) {
+      for (a, b) in zip(lhs, rhs) {
+        if a.key != b.key || a.snapshot != b.snapshot || a.pin != b.pin
+          || !a.payload.sameContent(as: b.payload)
           || a.conditions != b.conditions
           || a.recipients != b.recipients || a.chatGPT != b.chatGPT || a.resources != b.resources
           || Set(a.origins.flatMap(\.dependencies)) != Set(b.origins.flatMap(\.dependencies))
+        {
+          changes.insert(a.key)
+          changes.insert(b.key)
+        }
       }
-    }.sorted { lhs, rhs in
+      for component in lhs.dropFirst(rhs.count) { changes.insert(component.key) }
+      for component in rhs.dropFirst(lhs.count) { changes.insert(component.key) }
+    }
+    let before = protected(previous)
+    let after = protected(self)
+    for key in Set(before.keys).union(after.keys) {
+      compare(before[key] ?? [], after[key] ?? [])
+    }
+    if !kinds.contains(.instructions) {
+      enum Destination: Hashable {
+        case agent(AgentID)
+        case prompt(String)
+        case inactive(ComponentKey)
+      }
+      func instructions(_ graph: Self) -> [Destination: [LinkedComponent]] {
+        var streams: [Destination: [LinkedComponent]] = [:]
+        for component in graph.components {
+          guard case .instruction(_, let prompt, _) = component.payload else { continue }
+          for agent in component.recipients {
+            streams[.agent(agent), default: []].append(component)
+          }
+          if component.chatGPT, let prompt {
+            streams[.prompt(prompt), default: []].append(component)
+          } else if component.recipients.isEmpty {
+            // Inactive declarations still protect their content, without imposing output order
+            // between unrelated keys.
+            streams[.inactive(component.key), default: []].append(component)
+          }
+        }
+        return streams
+      }
+      let before = instructions(previous)
+      let after = instructions(self)
+      for destination in Set(before.keys).union(after.keys) {
+        compare(before[destination] ?? [], after[destination] ?? [])
+      }
+    }
+    return changes.sorted { lhs, rhs in
       [lhs.source, lhs.root, lhs.group ?? "", lhs.kind.rawValue, lhs.name]
         .lexicographicallyPrecedes(
           [rhs.source, rhs.root, rhs.group ?? "", rhs.kind.rawValue, rhs.name])

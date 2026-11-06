@@ -64,6 +64,30 @@ struct LinkBudgetTests {
 }
 
 extension LinkBudgetTests {
+  @Test func distinctLiveSnapshotLimitCountsReusedViewsOnce() throws {
+    let fixture = try LinkFixture()
+    var sources: [String] = []
+    var selections: [String] = []
+    for index in 0..<257 {
+      let source = fixture.root.appendingPathComponent("live\(index)")
+      try fixture.skill("s\(index)", at: source)
+      sources.append(".source(name: \"s\(index)\", path: \"\(source.path)\")")
+      selections.append(".skills(source: \"s\(index)\", select: [\"s\(index)\"], mode: .edit)")
+    }
+    func expression(_ count: Int, repeated: Bool = false) -> String {
+      let selected = Array(selections.prefix(count))
+      let components = repeated ? selected + selected : selected
+      return
+        "let agents = Agents(sources: [\(sources.prefix(count).joined(separator: ","))], components: [\(components.joined(separator: ","))])"
+    }
+    #expect(try fixture.link(expression(256)).sourceSnapshots.count == 256)
+    #expect(try fixture.link(expression(256, repeated: true)).components.count == 512)
+    do {
+      _ = try fixture.link(expression(257))
+      Issue.record("expected live snapshot limit")
+    } catch LinkError.budget(let name) { #expect(name == "distinct snapshots") }
+  }
+
   @Test func distinctSnapshotLimitUsesSourceContent() throws {
     let fixture = try LinkFixture()
     var sources: [String] = []
@@ -82,6 +106,33 @@ extension LinkBudgetTests {
     do {
       _ = try fixture.link(expression(257))
       Issue.record("expected snapshot limit")
+    } catch LinkError.budget(let name) { #expect(name == "distinct snapshots") }
+  }
+
+  @Test func containedLiveSnapshotsShareTheDistinctViewBudget() throws {
+    let fixture = try LinkFixture()
+    var sources: [String] = []
+    var uses: [String] = []
+    for index in 0..<129 {
+      let producer = fixture.root.appendingPathComponent("producer\(index)")
+      try fixture.skill("s\(index)", at: producer)
+      try fixture.manifest(
+        "let agents = Agents(exports: [\"g\"], groups: [.group(name: \"g\", components: [.skills(source: \".\", select: [\"s\(index)\"], mode: .edit)])])",
+        at: producer)
+      sources.append(".source(name: \"p\(index)\", path: \"\(producer.path)\")")
+      uses.append(".group(name: \"g\", source: \"p\(index)\")")
+    }
+    func expression(_ count: Int, repeated: Bool = false) -> String {
+      let selected = Array(uses.prefix(count))
+      let references = repeated ? selected + selected : selected
+      return
+        "let agents = Agents(sources: [\(sources.prefix(count).joined(separator: ","))], uses: [\(references.joined(separator: ","))])"
+    }
+    #expect(try fixture.link(expression(128)).sourceSnapshots.count == 256)
+    #expect(try fixture.link(expression(128, repeated: true)).components.count == 256)
+    do {
+      _ = try fixture.link(expression(129))
+      Issue.record("expected immutable and live views to share the snapshot limit")
     } catch LinkError.budget(let name) { #expect(name == "distinct snapshots") }
   }
 

@@ -244,15 +244,21 @@ final class Expansion {
   {
     if let contained = address.contained {
       if live, let root = contained.liveRoot {
-        return try linking.session.liveSnapshot(
+        let view = try linking.session.liveSnapshot(
           SourceDeclaration(
             kind: .local, location: root.path,
             path: contained.discoveryPath))
+        try linking.budget.snapshot(view.snapshot)
+        return view
       }
       return contained
     }
     let source = address.source!
-    if live { return try linking.session.liveSnapshot(source) }
+    if live {
+      let view = try linking.session.liveSnapshot(source)
+      try linking.budget.snapshot(view.snapshot)
+      return view
+    }
     if let key, let preserved = linking.directPins[key] {
       return try linking.view(address, pin: preserved)!
     }
@@ -536,7 +542,7 @@ final class Expansion {
     for component in components {
       try linking.budget.step()
       if component.key.kind != .instructions {
-        var coalesced = false
+        var identical: Int?
         for index in byKey[component.key] ?? [] {
           try linking.budget.step()
           let prior = result[index]
@@ -545,14 +551,7 @@ final class Expansion {
             && prior.resources == component.resources
             && prior.snapshot == component.snapshot && prior.pin == component.pin
           if same, [.hook, .permissions].contains(component.key.kind) {
-            result[index].origins += component.origins
-            result[index].recipients.formUnion(component.recipients)
-            for condition in component.conditions
-            where !result[index].conditions.contains(condition) {
-              result[index].conditions.append(condition)
-            }
-            coalesced = true
-            break
+            identical = index
           }
           if !same,
             !prior.recipients.isDisjoint(with: component.recipients)
@@ -561,7 +560,15 @@ final class Expansion {
             throw LinkError.conflict(component.key, prior.origins + component.origins)
           }
         }
-        if coalesced { continue }
+        if let index = identical {
+          result[index].origins += component.origins
+          result[index].recipients.formUnion(component.recipients)
+          for condition in component.conditions
+          where !result[index].conditions.contains(condition) {
+            result[index].conditions.append(condition)
+          }
+          continue
+        }
       }
       byKey[component.key, default: []].append(result.count)
       result.append(component)
