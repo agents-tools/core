@@ -7,6 +7,10 @@
     {
       "name": "manifest-fixture-generation",
       "run": "python3 Scripts/generate-manifest-fixtures.py --check"
+    },
+    {
+      "name": "release-crash-diagnostics",
+      "run": "python3 Scripts/diagnose-release-tests.py"
     }
   ],
   "test_configurations": ["debug", "release"],
