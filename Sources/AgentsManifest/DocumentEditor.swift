@@ -250,6 +250,12 @@ final class DocumentEditor {
       if depth == parts.count { return replacement }
       let part = parts[depth]
       switch value {
+      case .node("SkillSelection", "names", var fields) where Int(part) != nil:
+        guard let names = fields["names"] else {
+          throw fail("manifest.edit.mismatch", "expected skill selection is missing")
+        }
+        fields["names"] = try update(names, depth)
+        return .node(type: "SkillSelection", member: "names", fields: fields)
       case .node(let type, let member, var fields):
         guard let child = fields[part] else {
           throw fail("manifest.edit.mismatch", "expected field is missing")

@@ -88,7 +88,7 @@ public enum SkillOperations {
       if !apply {
         return AddOutcome(source: source, sourceID: id, availableSkills: selected, installed: [])
       }
-      var selection = declaration.skills?[alias] ?? SkillDeclaration(select: .names([]))
+      var selection = (try declaration.skills)?[alias] ?? SkillDeclaration(select: .names([]))
       let names = selected.map { PathSafety.sanitizeName($0.name) }
       if options.all {
         selection.select = .all
@@ -96,18 +96,22 @@ public enum SkillOperations {
         selection.select = .names(Array(Set(previous + names)).sorted())
       }
       selection.exclude = selection.exclude?.filter { !names.contains($0) }
-      if declaration.skills?[alias] == nil || options.all {
+      if (try declaration.skills)?[alias] == nil || options.all {
         selection.agents = options.agents
         selection.mode = options.mode
       } else {
+        var overrides = selection.overrides ?? [:]
         for name in names {
-          selection.overrides = selection.overrides ?? [:]
-          let recipients = options.agents ?? selection.overrides?[name]?.agents ?? selection.agents
-          selection.overrides?[name] = SkillOverride(agents: recipients, mode: options.mode)
+          let recipients = options.agents ?? overrides[name]?.agents ?? selection.agents
+          overrides[name] = SkillOverride(agents: recipients, mode: options.mode)
         }
+        selection.overrides = overrides
       }
-      declaration.skills = declaration.skills ?? [:]
-      declaration.skills?[alias] = selection
+      try declaration.updateSkills {
+        var selections = $0 ?? [:]
+        selections[alias] = selection
+        $0 = selections
+      }
       try declaration.validate(environment: options.environment)
       var next = lock
       next.sources[id] = lifecycle.lockedSource(source)
@@ -211,8 +215,9 @@ public enum SkillOperations {
     let requested = Set(skillNames.map(PathSafety.sanitizeName))
     var next = previous
     var prepared: [String: PreparedSkill] = [:]
-    for alias in (declaration.skills ?? [:]).keys.sorted() {
-      guard let selection = declaration.skills?[alias], let source = declaration.sources[alias]
+    for alias in ((try declaration.skills) ?? [:]).keys.sorted() {
+      guard let selection = (try declaration.skills)?[alias],
+        let source = declaration.sources[alias]
       else { continue }
       let id = try source.identity(environment: environment)
       let requestedHere = requested.filter { name in
@@ -350,10 +355,10 @@ public enum SkillOperations {
           skill.installs = [:]
         }
         next.skills[name] = skill.installs.isEmpty ? nil : skill
-        for alias in (declaration.skills ?? [:]).keys {
+        for alias in ((try declaration.skills) ?? [:]).keys {
           guard let source = declaration.sources[alias],
             try source.identity(environment: environment) == skill.source,
-            var selection = declaration.skills?[alias]
+            var selection = (try declaration.skills)?[alias]
           else { continue }
           if skill.installs.isEmpty {
             if case .all = selection.select {
@@ -363,12 +368,13 @@ public enum SkillOperations {
             }
             selection.overrides?.removeValue(forKey: name)
           } else {
-            selection.overrides = selection.overrides ?? [:]
-            let mode = selection.overrides?[name]?.mode
-            selection.overrides?[name] = SkillOverride(
+            var overrides = selection.overrides ?? [:]
+            let mode = overrides[name]?.mode
+            overrides[name] = SkillOverride(
               agents: skill.installs.keys.compactMap(AgentID.init(rawValue:)), mode: mode)
+            selection.overrides = overrides
           }
-          declaration.skills?[alias] = selection
+          try declaration.updateSkills { $0?[alias] = selection }
         }
       }
       let lifecycle = try SkillLifecycle(store: store, provider: WellKnownProvider())
@@ -492,7 +498,7 @@ public enum SkillOperations {
         ])
       },
       {
-        let declaration = try store.readDeclaration()
+        let declaration = try store.readDeploymentDeclaration()
         let lock = try store.readResolved()
         var checks = try managedInventory(store: store, lock: lock, agents: agents).filter {
           $0.status != .installed && $0.status != .editLinked
@@ -551,7 +557,7 @@ public enum SkillOperations {
     let store = StateStore(
       scope: .project, environment: RuntimeEnvironment(projectDirectory: directory))
     return try store.withLock(createIfMissing: false) {
-      _ = try store.readDeclaration()
+      _ = try store.readDeploymentDeclaration()
       _ = try store.readResolved()
       let name = name.map(PathSafety.sanitizeName)
       let root = name.map { directory.appendingPathComponent($0) } ?? directory
@@ -584,9 +590,13 @@ public enum SkillOperations {
     _ store: StateStore, apply: Bool, _ body: (Declaration, ResolvedState) throws -> T
   ) throws -> T {
     if apply {
-      return try store.withLock { try body(store.readDeclaration(), store.readResolved()) }
+      return try store.withLock {
+        try body(store.readDeploymentDeclaration(), store.readResolved())
+      }
     }
-    return try store.withReadLock { try body(store.readDeclaration(), store.readResolved()) }
+    return try store.withReadLock {
+      try body(store.readDeploymentDeclaration(), store.readResolved())
+    }
   }
 
   private static func operate<T>(
@@ -596,7 +606,8 @@ public enum SkillOperations {
     try operate(store, apply: apply, checkpoint: checkpoint) {
       let baseline = try StatePrecondition(store: store)
       return try body(
-        store.readDeclaration(prepared: baseline), store.readResolved(prepared: baseline), baseline)
+        store.readDeploymentDeclaration(prepared: baseline), store.readResolved(prepared: baseline),
+        baseline)
     }
   }
 

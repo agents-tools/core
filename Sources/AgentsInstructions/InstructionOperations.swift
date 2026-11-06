@@ -86,13 +86,13 @@ public enum InstructionOperations {
         }
       }
       guard !selected.isEmpty else { throw CoreError.notFound("source provides no instructions") }
-      var instructions = declaration.instructions ?? InstructionsDeclaration()
+      var instructions = (try declaration.instructions) ?? InstructionsDeclaration()
       if let agents = options.agents { instructions.agents = agents }
       let references = selected.map { (alias.map { $0 + ":" } ?? "") + $0.record.name }
       for reference in references where !instructions.sections.contains(reference) {
         instructions.sections.append(reference)
       }
-      declaration.instructions = instructions
+      try declaration.setInstructions(instructions)
       let prepared = try prepare(
         declaration: declaration, previous: previous, sources: sources, resolving: Set(references))
       let plan = try plan(
@@ -151,9 +151,9 @@ public enum InstructionOperations {
     return try operate(store, apply: apply) { previousDeclaration, previous, baseline in
       var declaration = previousDeclaration
       if let agents {
-        var instructions = declaration.instructions ?? InstructionsDeclaration()
+        var instructions = (try declaration.instructions) ?? InstructionsDeclaration()
         instructions.agents = agents
-        declaration.instructions = instructions
+        try declaration.setInstructions(instructions)
       }
       let resolutions = try SourceResolutionSession(store: store)
       let plan = try prepareUpdate(
@@ -241,7 +241,7 @@ public enum InstructionOperations {
     let store = StateStore(scope: scope, environment: environment)
     return try operate(store, apply: true) { previousDeclaration, previous, baseline in
       var declaration = previousDeclaration
-      var instructions = declaration.instructions ?? InstructionsDeclaration()
+      var instructions = (try declaration.instructions) ?? InstructionsDeclaration()
       let references = Set(
         instructions.sections + (instructions.chatgpt ?? [:]).values.flatMap(\.sections))
       var removed = Set<String>()
@@ -265,7 +265,7 @@ public enum InstructionOperations {
         }
       }
       if let agents { instructions.agents = agents }
-      declaration.instructions = instructions
+      try declaration.setInstructions(instructions)
       let sources = InstructionSources(store: store)
       let prepared = try prepare(
         declaration: declaration, previous: previous, sources: sources, resolving: [])
@@ -363,10 +363,11 @@ public enum InstructionOperations {
       }
     }
     let sections = try units(
-      declaration.instructions?.sections ?? [], locked: previous.instructions.sections)
+      (try declaration.instructions)?.sections ?? [], locked: previous.instructions.sections)
     next.instructions.sections = sections.map(\.record)
-    for (name, prompt) in (declaration.instructions?.chatgpt ?? [:]).sorted(by: { $0.key < $1.key })
-    {
+    for (name, prompt) in ((try declaration.instructions)?.chatgpt ?? [:]).sorted(by: {
+      $0.key < $1.key
+    }) {
       let selected = try units(
         prompt.sections, locked: previous.instructions.chatgpt[name]?.sections ?? [])
       _ = try Instructions.renderChatGPT(sections: selected.map(\.section))
@@ -385,7 +386,7 @@ public enum InstructionOperations {
     var next = prepared.lock
     let targets = try InstructionTargets(store: store).plan(
       sections: prepared.sections,
-      agents: declaration.instructions?.agents ?? declaration.defaultAgents,
+      agents: (try declaration.instructions)?.agents ?? declaration.defaultAgents,
       previous: previous.instructions)
     next.instructions.targets = targets.targets
     try InstructionTargets.validateSourceDirectories(targets.changes, sources: next.sources)
@@ -473,9 +474,13 @@ public enum InstructionOperations {
     _ store: StateStore, apply: Bool, _ body: (Declaration, ResolvedState) throws -> T
   ) throws -> T {
     if apply {
-      return try store.withLock { try body(store.readDeclaration(), store.readResolved()) }
+      return try store.withLock {
+        try body(store.readDeploymentDeclaration(), store.readResolved())
+      }
     }
-    return try store.withReadLock { try body(store.readDeclaration(), store.readResolved()) }
+    return try store.withReadLock {
+      try body(store.readDeploymentDeclaration(), store.readResolved())
+    }
   }
 
   private static func operate<T>(
@@ -485,7 +490,8 @@ public enum InstructionOperations {
     try operate(store, apply: apply) {
       let baseline = try StatePrecondition(store: store)
       return try body(
-        store.readDeclaration(prepared: baseline), store.readResolved(prepared: baseline), baseline)
+        store.readDeploymentDeclaration(prepared: baseline), store.readResolved(prepared: baseline),
+        baseline)
     }
   }
 

@@ -121,8 +121,8 @@ The [manifest language reference](../Reference/Manifest.md) specifies the
 language, editing rules and dump schema.
 
 `AgentsManifest` also connects `Agents.swift` to scope state through
-`extension StateStore`. The public `loadDeclaration()` returns the deployable
-projection and `loadManifest()` the complete document; both are read-only and,
+`extension StateStore`. The public `loadDeclaration()` returns the complete
+typed symbolic declaration and `loadManifest()` the complete document; both are read-only and,
 like the public `WatchOperations.init(discoverSkills:fetchArtifacts:)`, require
 `import AgentsManifest`.
 Package-level declaration reading and planning, the projection onto
@@ -131,8 +131,8 @@ modules, and `DeclarationAccess.manifest` supplies the same access to
 `WatchOperations`, whose public `init(discoverSkills:fetchArtifacts:)` this
 module provides. All file I/O, evidence and publication stay in `AgentsCore`:
 the extension parses prepared bytes and returns planned bytes. See
-[Declaration](State.md#declaration) for the deployable subset and write
-semantics.
+[Declaration](State.md#declaration) for the current deployment boundary and full
+declaration write semantics.
 
 `ManifestTestProcess` is a test-only executable and calls the same instrumented
 front-end pipeline as document construction. `ManifestTestSupport` owns the
@@ -162,10 +162,11 @@ baselines and seeds belong to the test corpus, not the runtime language.
 - `DeclarationIR`, `DeclarationRecord` and `DeclarationValue` hold syntax-independent
   manifest intent; `SourceSpan`, `SourceProvenance` and `DeclarationSourceMap`
   carry document coordinates and origins without syntax or source access.
-- `Declaration` is the typed in-memory projection of the deployable declaration
-  subset and has no serialized form; `ResolvedState` defines resolved version 1
-  state. Together they hold the complete instruction section, prompt and
-  physical-target models.
+- `Declaration` holds complete typed symbolic manifest intent: ordered component
+  and group occurrences, conditions, native values, symbolic group references and
+  source declaration directories. It has no serialized form. `ResolvedState`
+  defines version 1 skill/instruction state, including instruction sections,
+  prompts and physical targets.
 - `StateStore` owns scope paths, validation, deterministic lock and watch
   encoding and state persistence. It holds declaration bytes, their evidence,
   the absent-declaration rule and publication without knowing the declaration

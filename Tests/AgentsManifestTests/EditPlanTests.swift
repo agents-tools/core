@@ -13,17 +13,18 @@ func planned(_ previous: Declaration, _ next: Declaration, in text: String?) thr
 
 private func expectChange(
   _ body: String, to expected: String, sourceLocation: SourceLocation = #_sourceLocation,
-  _ update: (inout Declaration) -> Void
+  _ update: (inout Declaration) throws -> Void
 ) throws {
   let result = try changed(body, update)
   #expect(result == expected, sourceLocation: sourceLocation)
 }
 
 /// Plans a change to a manifest body and returns the edited body, checked against the intent.
-private func changed(_ body: String, _ update: (inout Declaration) -> Void) throws -> String {
+private func changed(_ body: String, _ update: (inout Declaration) throws -> Void) throws -> String
+{
   let previous = try projected(body)
   var next = previous
-  update(&next)
+  try update(&next)
   let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
   let text = String(decoding: bytes, as: UTF8.self)
   #expect(text.hasPrefix(manifestHeader))
@@ -53,7 +54,7 @@ struct EditPlanTests {
       requirement: .upToNextMajor(from: "1.2.0"))
     next.sources["l"] = SourceDeclaration(
       kind: .local, location: "/work/project/rules", path: "skills")
-    next.skills?["g"] = SkillDeclaration(select: .names(["a", "b"]))
+    try next.updateSkills { $0?["g"] = SkillDeclaration(select: .names(["a", "b"])) }
     next.watch = ["g", "l"]
     #expect(try planned(previous, next, in: manifestHeader + body) == nil)
     #expect(try planned(Declaration(), Declaration(), in: nil) == nil)
@@ -137,7 +138,7 @@ struct EditPlanTests {
         """
     ) {
       $0.sources["s"] = nil
-      $0.skills = nil
+      try $0.setSkills(nil)
       $0.watch = nil
     }
   }
@@ -169,9 +170,9 @@ struct EditPlanTests {
         )
         """
     ) {
-      $0.skills = [
+      try $0.setSkills([
         "b": SkillDeclaration(select: .all), "a": SkillDeclaration(select: .names(["x"])),
-      ]
+      ])
     }
     try expectChange(
       "let agents = Agents(sources: [.source(name: \"a\", path: \"a\")])",
@@ -183,7 +184,7 @@ struct EditPlanTests {
           ]
         )
         """
-    ) { $0.skills = ["a": SkillDeclaration(select: .all)] }
+    ) { try $0.setSkills(["a": SkillDeclaration(select: .all)]) }
   }
 
   @Test func selectionSwitchesAndNameEditsKeepOrder() throws {
@@ -205,9 +206,9 @@ struct EditPlanTests {
           ]
         )
         """
-    ) { $0.skills?["s"]?.select = .names(["b", "c", "d", "e"]) }
+    ) { try $0.updateSkills { $0?["s"]?.select = .names(["b", "c", "d", "e"]) } }
     expectManifestFailure("manifest.edit.readOnly") {
-      try changed(body) { $0.skills?["s"]?.select = .all }
+      try changed(body) { try $0.updateSkills { $0?["s"]?.select = .all } }
     }
     let plain = """
       let agents = Agents(sources: [.source(name: "s", path: "s")], components: [
@@ -221,11 +222,11 @@ struct EditPlanTests {
           .skills(source: "s", select: ["y", "z"]),
         ])
         """
-    ) { $0.skills?["s"]?.select = .names(["z", "y"]) }
+    ) { try $0.updateSkills { $0?["s"]?.select = .names(["z", "y"]) } }
     try expectChange(
       plain.replacingOccurrences(of: ".all", with: "[\"a\"]"),
       to: plain
-    ) { $0.skills?["s"]?.select = .all }
+    ) { try $0.updateSkills { $0?["s"]?.select = .all } }
   }
 
   @Test func excludeAgentsAndModeAreArgumentEdits() throws {
@@ -258,9 +259,9 @@ struct EditPlanTests {
         )
         """
     ) {
-      $0.skills?["s"]?.exclude = ["x"]
-      $0.skills?["s"]?.mode = nil
-      $0.skills?["s"]?.agents = []
+      try $0.updateSkills { $0?["s"]?.exclude = ["x"] }
+      try $0.updateSkills { $0?["s"]?.mode = nil }
+      try $0.updateSkills { $0?["s"]?.agents = [] }
     }
     try expectChange(
       """
@@ -274,9 +275,9 @@ struct EditPlanTests {
         ])
         """
     ) {
-      $0.skills?["s"]?.exclude = ["b", "c"]
-      $0.skills?["s"]?.agents = [.codex, .claudeCode]
-      $0.skills?["s"]?.mode = .link
+      try $0.updateSkills { $0?["s"]?.exclude = ["b", "c"] }
+      try $0.updateSkills { $0?["s"]?.agents = [.codex, .claudeCode] }
+      try $0.updateSkills { $0?["s"]?.mode = .link }
     }
   }
 
@@ -303,10 +304,12 @@ struct EditPlanTests {
         ])
         """
     ) {
-      $0.skills?["s"]?.overrides = [
-        "a": SkillOverride(mode: .copy), "c": SkillOverride(agents: [.codex]),
-      ]
-      $0.skills?["s"]?.select = .names(["a", "c"])
+      try $0.updateSkills {
+        $0?["s"]?.overrides = [
+          "a": SkillOverride(mode: .copy), "c": SkillOverride(agents: [.codex]),
+        ]
+      }
+      try $0.updateSkills { $0?["s"]?.select = .names(["a", "c"]) }
     }
   }
 
@@ -327,7 +330,7 @@ struct EditPlanTests {
           ),
         ])
         """
-    ) { $0.instructions = InstructionsDeclaration(sections: ["guide"]) }
+    ) { try $0.setInstructions(InstructionsDeclaration(sections: ["guide"])) }
     let body = """
       let agents = Agents(components: [
         // rules
@@ -335,7 +338,7 @@ struct EditPlanTests {
       ])
       """
     try expectChange(body, to: "let agents = Agents(components: [\n])") {
-      $0.instructions = nil
+      try $0.setInstructions(nil)
     }
     try expectChange(
       body,
@@ -345,7 +348,7 @@ struct EditPlanTests {
           .instructions(sections: ["guide"], agents: [.cursor]),
         ])
         """
-    ) { $0.instructions?.agents = [.cursor] }
+    ) { try $0.updateInstructions { $0?.agents = [.cursor] } }
   }
 
   @Test func sectionsFollowTheLongestCommonSubsequenceAndKeepDuplicates() throws {
@@ -373,7 +376,7 @@ struct EditPlanTests {
           ]),
         ])
         """
-    ) { $0.instructions?.sections = ["a", "x", "a", "s:c", "a", "y"] }
+    ) { try $0.updateInstructions { $0?.sections = ["a", "x", "a", "s:c", "a", "y"] } }
     try expectChange(
       body,
       to: """
@@ -383,7 +386,7 @@ struct EditPlanTests {
           ]),
         ])
         """
-    ) { $0.instructions?.sections = ["b"] }
+    ) { try $0.updateInstructions { $0?.sections = ["b"] } }
   }
 
   @Test func promptsAreUpsertedAndRemovedByName() throws {
@@ -413,10 +416,12 @@ struct EditPlanTests {
         ])
         """
     ) {
-      $0.instructions?.chatgpt = [
-        "daily": PromptDeclaration(sections: ["guide", "notes"]),
-        "monthly": PromptDeclaration(sections: [], append: "notes/monthly.md"),
-      ]
+      try $0.updateInstructions {
+        $0?.chatgpt = [
+          "daily": PromptDeclaration(sections: ["guide", "notes"]),
+          "monthly": PromptDeclaration(sections: [], append: "notes/monthly.md"),
+        ]
+      }
     }
   }
 
@@ -440,7 +445,7 @@ struct EditPlanTests {
       """
     let previous = try projected(constant)
     var next = previous
-    next.skills?["s"]?.select = .names(["a", "b"])
+    try next.updateSkills { $0?["s"]?.select = .names(["a", "b"]) }
     expectManifestFailure("manifest.edit.readOnly") {
       try planned(previous, next, in: manifestHeader + constant)
     }
@@ -457,8 +462,8 @@ struct EditPlanTests {
 
   @Test func largeChangesAreSplitIntoReplannedBatches() throws {
     var next = Declaration()
-    for index in 0..<150 {
-      next.sources["s\(index)"] = SourceDeclaration(kind: .local, location: "s\(index)")
+    for alias in (0..<150).map({ "s\($0)" }).sorted(by: utf8Less) {
+      next.sources[alias] = SourceDeclaration(kind: .local, location: alias)
     }
     var batches: [Int] = []
     let bytes = try #require(
@@ -552,22 +557,26 @@ struct EditPlanTests {
         remainder = remainder[range.upperBound...]
       }
     }
-    let steps: [(inout Declaration) -> Void] = [
-      { $0.skills?["team"]?.exclude = ["deprecated"] },
+    let steps: [(inout Declaration) throws -> Void] = [
+      { try $0.updateSkills { $0?["team"]?.exclude = ["deprecated"] } },
       {
         $0.sources["extra"] = SourceDeclaration(kind: .git, location: "github.com/team/extra")
-        $0.skills?["extra"] = SkillDeclaration(select: .names(["one"]))
+        try $0.updateSkills { $0?["extra"] = SkillDeclaration(select: .names(["one"])) }
       },
       {
-        $0.instructions?.sections.append("extra:style")
-        $0.instructions?.agents = [.codex]
+        try $0.updateInstructions { $0?.sections.append("extra:style") }
+        try $0.updateInstructions { $0?.agents = [.codex] }
       },
       { $0.watch?.append("extra") },
       {
         $0.sources["drafts"] = nil
-        $0.skills?["drafts"] = nil
+        try $0.updateSkills { $0?["drafts"] = nil }
       },
-      { $0.instructions?.chatgpt = ["weekly": PromptDeclaration(sections: ["guide"])] },
+      {
+        try $0.updateInstructions {
+          $0?.chatgpt = ["weekly": PromptDeclaration(sections: ["guide"])]
+        }
+      },
     ]
     for step in steps {
       body = try changed(body, step)

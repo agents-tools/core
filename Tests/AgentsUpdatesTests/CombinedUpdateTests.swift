@@ -14,7 +14,7 @@ struct CombinedUpdateTests {
     try fixture.install(mode: .edit, agents: [.codex])
     try fixture.advance()
     var declaration = try fixture.store.loadDeclaration()
-    declaration.skills?["fixture"]?.mode = .copy
+    try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     declaration.sources["fixture"]?.requirement = .branch("main")
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     let before = try fixture.snapshot()
@@ -55,7 +55,7 @@ struct CombinedUpdateTests {
     try fixture.install(agents: [.codex])
     try fixture.write("Hand written.\n", to: fixture.instruction(.geminiCLI))
     var declaration = try fixture.store.loadDeclaration()
-    declaration.instructions?.agents = [.codex, .geminiCLI]
+    try declaration.updateInstructions { $0?.agents = [.codex, .geminiCLI] }
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     let preview = try fixture.preview()
     #expect(preview.instructions.targets.contains { $0.target == "GEMINI.md" && $0.foreign })
@@ -70,7 +70,7 @@ struct CombinedUpdateTests {
     let fixture = try UpdateFixture()
     try fixture.install(mode: .edit, agents: [.codex])
     var declaration = try fixture.store.loadDeclaration()
-    declaration.skills?["fixture"]?.mode = .copy
+    try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     declaration.sources["fixture"]?.requirement = .branch("main")
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     let before = try fixture.snapshot()
@@ -92,7 +92,7 @@ struct CombinedUpdateTests {
     try fixture.commit()
     try fixture.install(mode: .edit, agents: [.codex])
     var declaration = try fixture.store.loadDeclaration()
-    declaration.skills?["fixture"]?.mode = .copy
+    try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     declaration.sources["fixture"]?.requirement = .branch("main")
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     let before = try fixture.snapshot()
@@ -161,10 +161,12 @@ struct CombinedUpdateTests {
     }
     var declaration = try fixture.store.loadDeclaration()
     declaration.sources["live"] = SourceDeclaration(kind: .local, location: live.path)
-    declaration.skills?["live"] = SkillDeclaration(select: .all, agents: [.codex], mode: .edit)
+    try declaration.updateSkills {
+      $0?["live"] = SkillDeclaration(select: .all, agents: [.codex], mode: .edit)
+    }
     declaration.sources["rules"] = SourceDeclaration(kind: .local, location: rules.repo.path)
-    declaration.instructions?.sections = ["rules:rules"]
-    declaration.instructions?.chatgpt?["weekly"]?.sections = ["rules:rules"]
+    try declaration.updateInstructions { $0?.sections = ["rules:rules"] }
+    try declaration.updateInstructions { $0?.chatgpt?["weekly"]?.sections = ["rules:rules"] }
     declaration.sources["watched"] = SourceDeclaration(
       kind: .wellKnown, location: "https://example.test")
     declaration.watch = ["watched"]
@@ -235,8 +237,8 @@ struct CombinedUpdateTests {
     try fixture.declare()
     var declaration = try fixture.store.loadDeclaration()
     declaration.sources["rules"] = SourceDeclaration(kind: .local, location: other.repo.path)
-    declaration.instructions?.sections = ["rules:rules"]
-    declaration.instructions?.chatgpt?["weekly"]?.sections = ["rules:rules"]
+    try declaration.updateInstructions { $0?.sections = ["rules:rules"] }
+    try declaration.updateInstructions { $0?.chatgpt?["weekly"]?.sections = ["rules:rules"] }
     try fixture.store.save(declaration: declaration, resolved: ResolvedState())
     _ = try fixture.apply()
     try fixture.advance()
@@ -418,7 +420,7 @@ struct CombinedUpdateTests {
     if kind == "skills" {
       try fixture.write("invalid", to: fixture.repo.appendingPathComponent("skills/demo/SKILL.md"))
       var declaration = try fixture.store.loadDeclaration()
-      declaration.skills?["fixture"]?.select = .names(["demo"])
+      try declaration.updateSkills { $0?["fixture"]?.select = .names(["demo"]) }
       try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
       try fixture.commit()
     } else if kind == "instructions" {
@@ -546,11 +548,13 @@ struct CombinedUpdateTests {
     #expect(!FileManager.default.fileExists(atPath: fixture.store.resolvedURL.path))
     try fixture.declare()
     var declaration = try fixture.store.loadDeclaration()
-    declaration.skills = nil
+    try declaration.setSkills(nil)
     try fixture.store.save(declaration: declaration, resolved: ResolvedState())
     #expect(try fixture.apply().report.skills.isEmpty)
-    declaration.instructions = nil
-    declaration.skills = ["fixture": SkillDeclaration(select: .all, agents: [.codex], mode: .copy)]
+    try declaration.setInstructions(nil)
+    try declaration.setSkills([
+      "fixture": SkillDeclaration(select: .all, agents: [.codex], mode: .copy)
+    ])
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     _ = try fixture.apply()
     #expect(try fixture.store.loadResolved().instructions == LockedInstructions())
@@ -561,8 +565,8 @@ struct CombinedUpdateTests {
     let fixture = try UpdateFixture()
     try fixture.install()
     var declaration = try fixture.store.loadDeclaration()
-    declaration.skills = nil
-    declaration.instructions?.sections = []
+    try declaration.setSkills(nil)
+    try declaration.updateInstructions { $0?.sections = [] }
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     _ = try fixture.apply()
     try fixture.git(["commit", "--allow-empty", "-m", "repin"])
@@ -575,10 +579,12 @@ struct CombinedUpdateTests {
       to: fixture.repo.appendingPathComponent("instructions/second.md")
     )
     try fixture.commit()
-    declaration.instructions?.chatgpt?["weekly"]?.sections = ["fixture:rules", "fixture:second"]
+    try declaration.updateInstructions {
+      $0?.chatgpt?["weekly"]?.sections = ["fixture:rules", "fixture:second"]
+    }
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     _ = try fixture.apply()
-    declaration.instructions?.chatgpt?["weekly"]?.sections.reverse()
+    try declaration.updateInstructions { $0?.chatgpt?["weekly"]?.sections.reverse() }
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     #expect(try fixture.preview().hasChanges)
     _ = try fixture.apply()

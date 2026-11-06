@@ -60,7 +60,7 @@ extension InstructionOperations {
       return try store.withReadLock(
         onPendingRecovery: { empty(.pendingRecovery) },
         {
-          _ = try store.readDeclaration()
+          _ = try store.readDeploymentDeclaration()
           guard try store.existingData(store.resolvedURL) != nil else {
             return empty(.missingLock)
           }

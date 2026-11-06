@@ -363,7 +363,7 @@ struct WatchSubscriptionTests {
     try watch.add("rules", environment: fixture.environment)
     try watch.seen("rules", environment: fixture.environment)
     try watch.remove("rules", environment: fixture.environment)
-    #expect(try fixture.store().loadDeclaration().instructions == declaration.instructions)
+    #expect(try fixture.store().loadDeclaration().instructions == (try declaration.instructions))
     #expect(try Data(contentsOf: fixture.store().resolvedURL) == lockBytes)
   }
 }

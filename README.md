@@ -139,7 +139,10 @@ and agent-to-mode mapping. `link` uses shared cached content, `copy` writes a
 directory, and `edit` links a live local source with no requirement or pin.
 Local Git installs in `link` and `copy` use committed content.
 
-`AgentsCore` defines the instruction declaration and lock models. Skill
+`AgentsCore` defines the complete typed declaration and the skill and instruction
+lock models.
+`loadDeclaration()` preserves all component families, conditions and symbolic
+groups; deployment support is checked by the owning operation. Skill
 operations preserve the instruction and watch declarations and the locked
 instruction records.
 

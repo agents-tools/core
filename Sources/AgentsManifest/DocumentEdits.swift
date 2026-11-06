@@ -10,6 +10,15 @@ extension DocumentEditor {
     case .insertElement(let value, let handle, let position):
       try insert(value, into: resolve(handle), at: position)
     case .removeElement(let handle): try remove(resolve(handle))
+    case .moveElement(let handle, let container, let position):
+      try move(resolve(handle), into: resolve(container), at: position)
+    case .replaceValue(let handle, let value): try replace(resolve(handle), with: value)
+    case .dictionaryEntry(let handle, let key, let value):
+      let pointer = try resolve(handle)
+      guard case .dictionary(let type) = current.values[pointer]?.type.unwrapped else {
+        throw fail("manifest.edit.readOnly", "target is not a typed dictionary")
+      }
+      try dictionary(pointer, key: key, value: value.map { StaticValue.checked($0, type: type) })
     }
   }
 
@@ -447,7 +456,7 @@ extension DocumentEditor {
     let value = try direct(pointer)
     let from = parent(pointer)
     guard let old = current.values[from], let index = Int(key(pointer)),
-      let target = current.values[collection], case .array = target.value
+      let target = current.values[collection], arrayElements(target.value) != nil
     else { throw fail("manifest.edit.readOnly", "move requires array containers") }
     let destination = try self.position(
       position, collection: collection, count: target.elementsForUse.count)

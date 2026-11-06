@@ -193,7 +193,7 @@ struct UpdateReportingTests {
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(repair.membership.allSatisfy { $0.before == $0.after } && !repair.changes.isEmpty)
     var declaration = try store.loadDeclaration()
-    declaration.skills = nil
+    try declaration.setSkills(nil)
     try store.save(declaration: declaration, resolved: store.loadResolved())
     let removed = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
@@ -213,15 +213,15 @@ struct UpdateReportingTests {
     _ = try fixture.add(mode: .edit)
     let store = fixture.store()
     var declaration = try store.loadDeclaration()
-    declaration.skills?["fixture"]?.agents = [.codex, .cursor, .claudeCode]
+    try declaration.updateSkills { $0?["fixture"]?.agents = [.codex, .cursor, .claudeCode] }
     try store.save(declaration: declaration, resolved: store.loadResolved())
     let added = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(added.membership.first { $0.agent == .codex }?.before == .installed(mode: .edit))
     #expect(added.membership.first { $0.agent == .cursor }?.before == .absent)
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
-    declaration.skills?["fixture"]?.agents = [.codex, .cursor]
-    declaration.skills?["fixture"]?.mode = .copy
+    try declaration.updateSkills { $0?["fixture"]?.agents = [.codex, .cursor] }
+    try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     try store.save(declaration: declaration, resolved: store.loadResolved())
     let changed = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)

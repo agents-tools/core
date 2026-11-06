@@ -22,7 +22,7 @@ extension InstructionOperations {
     let otherSections: [LockedSection]? = try other.withReadLock(
       onPendingRecovery: { nil },
       {
-        _ = try other.readDeclaration()
+        _ = try other.readDeploymentDeclaration()
         return try other.readResolved().instructions.sections
       })
     let otherDiagnostics = otherSections == nil ? [pendingRecovery(other)] : []
@@ -33,15 +33,15 @@ extension InstructionOperations {
           root: root, diagnostics: otherDiagnostics + [pendingRecovery(store)])
       },
       {
-        let declaration = try store.readDeclaration()
+        let declaration = try store.readDeploymentDeclaration()
         let lock = try store.readResolved()
         var diagnostics = otherDiagnostics
         func report(_ kind: InstructionDiagnostic.Kind, _ message: String, _ path: URL? = nil) {
           diagnostics.append(InstructionDiagnostic(kind: kind, message: message, path: path))
         }
         if !FileManager.default.fileExists(atPath: store.resolvedURL.path),
-          !(declaration.instructions?.sections.isEmpty ?? true)
-            || !(declaration.instructions?.chatgpt?.isEmpty ?? true)
+          try !((declaration.instructions)?.sections.isEmpty ?? true)
+            || !((declaration.instructions)?.chatgpt?.isEmpty ?? true)
         {
           report(
             .missingLock, "Instruction declaration has no lock; update can reconstruct it.",
@@ -127,7 +127,7 @@ extension InstructionOperations {
           }
         }
         let agents = Set(lock.instructions.targets.values.flatMap(\.agents))
-          .union(declaration.instructions?.agents ?? declaration.defaultAgents)
+          .union((try declaration.instructions)?.agents ?? declaration.defaultAgents)
         let claudeTargets = lock.instructions.targets.filter {
           $0.value.import == nil && $0.value.agents.contains(.claudeCode)
         }.keys.sorted()

@@ -98,6 +98,11 @@ private struct Planner {
   var operations: [DocumentOperation] = []
 
   mutating func plan() throws -> [DocumentOperation] {
+    if !flat(current) || !flat(next) || !flatOrder() || current.groups != next.groups
+      || current.uses != next.uses || current.exports != next.exports
+    {
+      return try CompleteDeclarationPlanner(document: document, next: next).plan()
+    }
     var skillComponents: [String: Int] = [:]
     var instructionsComponent: Int?
     for (index, component) in document.declaration.components.enumerated() {
@@ -119,10 +124,10 @@ private struct Planner {
     }
     try recipients(owner: "", field: "defaultAgents", current.agents, next.agents)
 
-    let currentSkills = current.skills ?? [:]
-    let nextSkills = next.skills ?? [:]
+    let currentSkills = (try current.skills) ?? [:]
+    let nextSkills = (try next.skills) ?? [:]
     let retainedInstructions =
-      next.instructions == nil
+      (try next.instructions) == nil
       ? nil : try instructionsComponent.map { try handle("/components/\($0)") }
     for alias in nextSkills.keys.sorted(by: utf8Less) {
       if let existing = currentSkills[alias] {
@@ -135,9 +140,9 @@ private struct Planner {
               at: retainedInstructions.map { .before($0) } ?? .last)))
       }
     }
-    switch (instructionsComponent, next.instructions) {
+    switch (instructionsComponent, (try next.instructions)) {
     case (let index?, let instructions?):
-      try self.instructions(at: "/components/\(index)", current.instructions!, instructions)
+      try self.instructions(at: "/components/\(index)", (try current.instructions)!, instructions)
     case (nil, let instructions?):
       operations.append(
         .edit(
@@ -167,6 +172,63 @@ private struct Planner {
     return operations
   }
 
+  func flatOrder() -> Bool {
+    func keys(_ declaration: Declaration) -> [String] {
+      declaration.components.map { component in
+        switch component {
+        case .skills(let source, _): "skills:" + source
+        default: "instructions"
+        }
+      }
+    }
+    let old = keys(current)
+    let desired = keys(next)
+    let desiredSet = Set(desired)
+    var planned = old.filter(desiredSet.contains)
+    let added = desired.filter { !Set(old).contains($0) && $0 != "instructions" }.sorted(
+      by: utf8Less)
+    planned.insert(
+      contentsOf: added, at: planned.firstIndex(of: "instructions") ?? planned.endIndex)
+    if desiredSet.contains("instructions"), !old.contains("instructions") {
+      planned.append("instructions")
+    }
+    let oldSources = current.sourceDeclarations.map(\.name)
+    let newSources = next.sourceDeclarations.map(\.name)
+    let newSet = Set(newSources)
+    let sourceOrder =
+      oldSources.filter(newSet.contains)
+      + newSources.filter { !Set(oldSources).contains($0) }.sorted(by: utf8Less)
+    return planned == desired && sourceOrder == newSources
+  }
+
+  func flat(_ value: Declaration) -> Bool {
+    var aliases = Set<String>()
+    var instructions = false
+    for component in value.components {
+      switch component {
+      case .skills(let source, let selection):
+        if !aliases.insert(source).inserted || selection.condition != nil
+          || !selection.native.isEmpty
+        {
+          return false
+        }
+      case .instructions(let selection):
+        if instructions || selection.condition != nil || !selection.native.isEmpty
+          || selection.sectionReferences.contains(where: { $0.condition != nil })
+          || selection.prompts.contains(where: {
+            $0.prompt.condition != nil
+              || $0.prompt.sectionReferences.contains(where: { $0.condition != nil })
+          })
+        {
+          return false
+        }
+        instructions = true
+      default: return false
+      }
+    }
+    return true
+  }
+
   mutating func skills(
     at pointer: String, _ current: SkillDeclaration, _ next: SkillDeclaration
   ) throws {
@@ -182,9 +244,11 @@ private struct Planner {
       reductions = changes.removals
     case (.names, .all):
       operations.append(.edit(.setSkillSelection(owner, .all)))
-    case (.all, .names):
+    case (.all, .names(let names)):
       reductions = [
-        .edit(.setSkillSelection(owner, DeclarationConstruction.selection(next.select)))
+        .edit(
+          .setSkillSelection(
+            owner, DeclarationConstruction.selection(.names(names.sorted(by: utf8Less)))))
       ]
     }
     let currentOverrides = current.overrides ?? [:]

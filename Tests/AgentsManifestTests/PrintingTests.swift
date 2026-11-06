@@ -56,15 +56,15 @@ let printedDeclarations: [(String, Declaration)] = [
       ],
       skills: [
         "s": SkillDeclaration(
-          select: .names([String(repeating: "b", count: 24), String(repeating: "a", count: 33)]),
-          exclude: [String(repeating: "d", count: 24), String(repeating: "c", count: 33)],
+          select: .names([String(repeating: "a", count: 33), String(repeating: "b", count: 24)]),
+          exclude: [String(repeating: "c", count: 33), String(repeating: "d", count: 24)],
           mode: .link)
       ])
   ),
   (
     "PrintedFields",
     Declaration(
-      agents: [.opencode, .codex, .claudeCode],
+      agents: [.claudeCode, .codex, .opencode],
       sources: [
         "empty": local("./live"),
         "git": SourceDeclaration(
@@ -77,7 +77,7 @@ let printedDeclarations: [(String, Declaration)] = [
       skills: [
         "empty": SkillDeclaration(select: .all, mode: .edit),
         "git": SkillDeclaration(
-          select: .names(["b", "a"]), exclude: ["b"], agents: [], mode: .copy,
+          select: .names(["a", "b"]), exclude: ["b"], agents: [], mode: .copy,
           overrides: [
             "a": SkillOverride(agents: [.codex], mode: .link), "b": SkillOverride(agents: []),
           ]),
@@ -85,12 +85,12 @@ let printedDeclarations: [(String, Declaration)] = [
         "local": SkillDeclaration(select: .all, overrides: ["future": SkillOverride(mode: .copy)]),
       ],
       instructions: InstructionsDeclaration(
-        agents: [.geminiCLI, .codex], sections: ["own", "git:rule", "own", "local:nested/rule"],
+        agents: [.codex, .geminiCLI], sections: ["own", "git:rule", "own", "local:nested/rule"],
         chatgpt: [
           "": PromptDeclaration(sections: []),
           "周报": PromptDeclaration(sections: ["git:rule", "own"], append: "notes/周报.md"),
         ]),
-      watch: ["local", "git", "index"])
+      watch: ["git", "index", "local"])
   ),
 ]
 
@@ -129,7 +129,7 @@ struct PrintingTests {
     let empty = manifestHeader + "let agents = Agents()\n"
     var added = Declaration()
     added.sources["skills"] = SourceDeclaration(kind: .git, location: "github.com/team/skills")
-    added.skills = ["skills": SkillDeclaration(select: .all)]
+    try added.setSkills(["skills": SkillDeclaration(select: .all)])
     let bytes = try #require(try planned(Declaration(), added, in: empty))
     #expect(
       String(decoding: bytes, as: UTF8.self) == manifestHeader + """

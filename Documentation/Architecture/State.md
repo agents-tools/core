@@ -18,11 +18,13 @@ operations.
 `Agents.swift` records user intent in the [manifest
 language](../Reference/Manifest.md). The document is the declaration's only
 truth. `AgentsManifest` parses and evaluates its bytes and projects them onto
-`AgentsCore.Declaration`, a typed in-memory view of the deployable subset with
-no serialized form. `AgentsCore` holds the declaration's bytes and evidence, the
+`AgentsCore.Declaration`, the complete typed symbolic intent with no serialized
+form. Ordered sources, components, groups, uses, exports, prompt sections and
+parameters retain their occurrences. Conditions, native values, runtime bindings
+and source declaration directories remain data for later linking. `AgentsCore` holds the declaration's bytes and evidence, the
 absent-declaration rule and publication, and knows no syntax; `AgentsManifest`
 extends `StateStore` with declaration reading, planning and loading. Parse, edit
-and subset failures are `ManifestFailure` diagnostics located in the declaration
+and deployment-boundary failures are `ManifestFailure` diagnostics located in the declaration
 file.
 
 ```swift
@@ -48,17 +50,32 @@ let agents = Agents(
 
 ### Deployable subset
 
-The state layer deploys root `defaultAgents`, `sources` and `watch`, and root
-`components` of kinds `.skills` and `.instructions`: at most one skills component
-per source alias and one instructions component, with no `condition` on a
-component, section or prompt and an empty `native`. Groups and exports may be
-declared; unused groups are inert. Every other active structure fails with
-`manifest.unsupported` at its location, and nothing is dropped: root `uses`, a
-condition, native configuration, another component kind, a second skills
-component for one alias, a second instructions component, or
-`.skills(source: ".")`. After projection, `Declaration.validate(environment:)`
-performs the checks that depend on the runtime environment, such as duplicate
-identities after local-path expansion.
+`loadDeclaration()` projects every language 1.0 component family, including MCP,
+hooks, subagents, commands, LSP, permissions, ignores and plugins. It preserves
+unused groups and inactive structures and never resolves sources, reads resources
+or runs component programs. `Declaration.sourceDeclarations` and `components`
+are the ordered owners; alias dictionaries and the flat skill/instruction accessors
+are derived views. Source aliases retain their declaring project and home
+directories so importing code cannot reinterpret their relative paths.
+
+The current skill/instruction deployment paths use
+`readDeploymentDeclaration(prepared:)`. This explicit boundary accepts root
+`defaultAgents`, `sources` and `watch`, and root `.skills` and `.instructions`
+components: at most one skills occurrence per alias and one instructions
+occurrence, with no condition on a component, section or prompt and empty native
+configuration. Unused groups and exports remain preserved. Active group uses,
+own-package skill discovery and other component families require linking or
+native lowering and fail with a located `manifest.unsupported` before source work
+or deployment. Repeated matching root selections fail with `manifest.ambiguous`
+and related occurrence locations. Full declaration reads do not use this gate.
+
+`Declaration.skills` and `instructions` are throwing root-selection views: they
+reject multiple matching occurrences. `setSkills`, `setInstructions`,
+`updateSkills` and `updateInstructions` serve the current domain operations and
+preserve unrelated components. Full occurrence edits use `components`, group
+payloads and typed section references directly. `Declaration.validate(environment:)`
+checks source identities using the aliases' declaring directories and validates
+skill and instruction references.
 
 `defaultAgents` defaults to `codex` and `claude-code`. Explicit recipients,
 including an empty array, replace the default; the projection keeps omitted and
@@ -140,11 +157,17 @@ Semantic equality decides whether anything changes:
 - recipient arrays compare as sets, with omitted and empty distinct;
 - omitted and empty exclusions, overrides, prompts, watch lists and skills
   components are equal;
-- sections compare in order.
+- components, source aliases, groups, uses, exports, sections and prompts compare
+  in order; conditions, symbolic references, runtime bindings and native values
+  all participate.
 
-Planning makes minimal document edits and never reorders existing text. A new
-source is appended, a changed source is replaced in place, and a removed source
-goes after the components that reference it in the same batch. A new skills
+Planning edits direct fields, dictionary members and ordered occurrences. Existing
+skill/instruction workflows keep their established insertion order. Explicit
+changes to full ordered collections retain matching occurrences where possible;
+a length change with repeated matching names is ambiguous and requires an
+occurrence-addressed `ManifestEdit`. The skill/instruction plan appends new
+sources, replaces changed sources in place and removes sources after their
+references. A new skills
 component is inserted before the instructions component, or last; a new
 instructions component is last. Selections, exclusions, recipients, mode,
 overrides, sections, prompts, watch aliases and default recipients change at
@@ -158,10 +181,10 @@ ambiguous comments, fail with `manifest.edit.readOnly`. A batch holds at most
 remaining difference is planned. The projection of the final document must equal
 the intended declaration, or planning fails with `manifest.edit.mismatch`.
 
-Without declaration bytes, planning prints the complete declaration with the
-[canonical printer](../Reference/Manifest.md#canonical-printing): sources, skills
-components, overrides, prompts, selected names and watch aliases sorted by UTF-8
-bytes, recipients deduplicated in agent-ID order, and skills before instructions.
+Without declaration bytes, planning prints the complete typed declaration with the
+[canonical printer](../Reference/Manifest.md#canonical-printing), retaining its
+ordered collections and symbolic group uses. Dictionary-based convenience
+initializers and domain mutations choose deterministic order for new entries.
 The printed bytes pass the same front end and projection check and are published
 with no-replace. A semantically empty declaration creates no file.
 
@@ -476,8 +499,8 @@ recovery material changed. A committed failure is never described as rollback.
 The public `StateStore.loadResolved()` and `loadWatch()` in `AgentsCore` and
 `loadDeclaration()` and `loadManifest()` in `AgentsManifest` are read-only, as
 described below; the latter two require `import AgentsManifest`.
-`loadDeclaration()` returns the deployable projection; `loadManifest()` returns
-the complete `DeclarationDocument` without subset projection, or `nil` for a
+`loadDeclaration()` returns the complete typed symbolic declaration; `loadManifest()`
+returns the complete `DeclarationDocument`, or `nil` for a
 scope without state. Both can also throw the declaration's `ManifestFailure`.
 
 ### Read-only access

@@ -99,6 +99,9 @@ package enum DocumentOperation: Sendable {
   case setArgument(NodeID, field: String, value: ConstructionValue)
   case insertElement(ConstructionValue, into: NodeID, at: InsertionPosition)
   case removeElement(NodeID)
+  case moveElement(NodeID, into: NodeID, at: InsertionPosition)
+  case replaceValue(NodeID, ConstructionValue)
+  case dictionaryEntry(NodeID, key: String, value: ConstructionValue?)
 }
 
 public struct SemanticDelta: Sendable, Equatable {

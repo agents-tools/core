@@ -72,7 +72,7 @@ private struct DeclarationGenerator {
       agents: recipients(), sections: sections(aliases), chatgpt: flip() ? nil : prompts)
   }
 
-  mutating func declaration() -> Declaration {
+  mutating func declaration() throws -> Declaration {
     var declaration = Declaration(agents: recipients())
     for alias in subset(["a", "b", "c", "d"]) {
       declaration.sources[alias] = source(alias)
@@ -80,14 +80,14 @@ private struct DeclarationGenerator {
     let aliases = declaration.sources.keys.sorted()
     var skills: [String: SkillDeclaration] = [:]
     for alias in subset(aliases) { skills[alias] = self.skills() }
-    declaration.skills = skills.isEmpty && flip() ? nil : skills
-    declaration.instructions = instructions(aliases)
+    try declaration.setSkills(skills.isEmpty && flip() ? nil : skills)
+    try declaration.setInstructions(instructions(aliases))
     declaration.watch = flip() ? nil : subset(aliases)
     return declaration
   }
 
   /// A neighbor of `base`: each part is kept, changed or removed, and references follow sources.
-  mutating func change(_ base: Declaration) -> Declaration {
+  mutating func change(_ base: Declaration) throws -> Declaration {
     var result = base
     if random.next(3) == 0 { result.agents = recipients() }
     for alias in base.sources.keys.sorted() {
@@ -99,17 +99,19 @@ private struct DeclarationGenerator {
     }
     for alias in ["e", "f"] where random.next(3) == 0 { result.sources[alias] = source(alias) }
     let aliases = result.sources.keys.sorted()
-    var skills = (result.skills ?? [:]).filter { result.sources[$0.key] != nil }
+    var skills = ((try result.skills) ?? [:]).filter { result.sources[$0.key] != nil }
     for alias in aliases where random.next(3) == 0 {
       skills[alias] = flip() ? nil : self.skills()
     }
-    result.skills = skills
-    let referenced = result.instructions.map {
+    try result.setSkills(skills)
+    let referenced = (try result.instructions).map {
       ($0.sections + ($0.chatgpt ?? [:]).values.flatMap(\.sections)).allSatisfy {
         !$0.contains(":") || result.sources[String($0.split(separator: ":")[0])] != nil
       }
     }
-    if referenced == false || random.next(3) == 0 { result.instructions = instructions(aliases) }
+    if referenced == false || random.next(3) == 0 {
+      try result.setInstructions(instructions(aliases))
+    }
     result.watch = random.next(3) == 0 ? subset(aliases) : result.watch?.filter(aliases.contains)
     return result
   }
@@ -152,7 +154,7 @@ struct DeclarationPropertyTests {
   @Test func printedDeclarationsProjectToThemselves() throws {
     var generator = DeclarationGenerator()
     for _ in 0..<96 {
-      let declaration = generator.declaration()
+      let declaration = try generator.declaration()
       try declaration.validate(environment: projectionEnvironment)
       guard let bytes = try planned(Declaration(), declaration, in: nil) else {
         #expect(equivalent(declaration, Declaration()))
@@ -167,8 +169,8 @@ struct DeclarationPropertyTests {
     var generator = DeclarationGenerator()
     var (edited, markers) = (0, 0)
     for _ in 0..<96 {
-      let previous = generator.declaration()
-      let next = generator.change(previous)
+      let previous = try generator.declaration()
+      let next = try generator.change(previous)
       try next.validate(environment: projectionEnvironment)
       let printed = String(
         decoding: try planned(Declaration(), previous, in: nil) ?? [], as: UTF8.self)
@@ -179,8 +181,8 @@ struct DeclarationPropertyTests {
           kept.append(".source \(alias)")
         }
       }
-      for alias in (previous.skills ?? [:]).keys.sorted()
-      where next.skills?[alias] == previous.skills?[alias] {
+      for alias in ((try previous.skills) ?? [:]).keys.sorted()
+      where (try next.skills)?[alias] == (try previous.skills)?[alias] {
         kept.append(".skills \(alias)")
       }
       let text = commented(printed, keeping: kept)

@@ -49,7 +49,7 @@ struct StatePublicationTests {
     let declaration = try fixture.store.loadDeclaration()
     #expect(declaration.sources.keys.sorted() == ["source"])
     #expect(declaration.watch == ["source"])
-    #expect(declaration.skills?["source"]?.select == .names(["demo"]))
+    #expect((try declaration.skills)?["source"]?.select == .names(["demo"]))
     #expect(try fixture.store.loadResolved().skills.keys.sorted() == ["demo"])
     #expect(try fixture.store.loadWatch().sources.count == 1)
   }
@@ -293,7 +293,7 @@ final class StateOperationFixture {
     switch operation {
     case .freshSkillAdd:
       #expect(
-        declaration.skills == [
+        (try declaration.skills) == [
           "source": SkillDeclaration(select: .names(["demo"]), agents: [.codex], mode: .edit)
         ])
       #expect(declaration.watch == nil)
@@ -305,7 +305,7 @@ final class StateOperationFixture {
           == source.appendingPathComponent("skills/demo").resolvingSymlinksInPath().path)
       #expect(!present(store.watchURL))
     case .watchAdd:
-      #expect(declaration.skills == nil)
+      #expect((try declaration.skills) == nil)
       #expect(declaration.watch == ["source"])
       #expect(watch.sources[id]?.seen == .revision(try gitHead(source)))
       #expect(lock == ResolvedState())

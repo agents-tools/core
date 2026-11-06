@@ -3,12 +3,20 @@ import AgentsDescription
 import Foundation
 
 /// Declaration access for scope state. Core owns the file, its captured bytes, the missing
-/// declaration rule and publication; this module parses, projects and plans edits. Parse, edit
-/// and subset failures are `ManifestFailure` diagnostics identified by the declaration path.
+/// declaration rule and publication; this module parses, projects and plans edits. Parse, projection
+/// and edit failures are `ManifestFailure` diagnostics identified by the declaration path.
 extension StateStore {
-  /// The deployable declaration, or an empty one when the scope has no state.
+  /// The complete declaration, or an empty one when the scope has no state.
   package func readDeclaration(prepared: StatePrecondition? = nil) throws -> Declaration {
     guard let document = try declarationDocument(prepared: prepared) else { return Declaration() }
+    return try ManifestProjection.declaration(of: document, environment: environment)
+  }
+
+  /// Existing skill/instruction deployment paths require a flat selection until linking and
+  /// native lowering are supplied by their owning lifecycle layer.
+  package func readDeploymentDeclaration(prepared: StatePrecondition? = nil) throws -> Declaration {
+    guard let document = try declarationDocument(prepared: prepared) else { return Declaration() }
+    try document.requireDeploymentSubset()
     return try ManifestProjection.declaration(of: document, environment: environment)
   }
 
@@ -65,13 +73,13 @@ extension StateStore {
     }
   }
 
-  /// Reads the deployable declaration under a shared lock, without recovery or creating files.
+  /// Reads the complete declaration under a shared lock, without recovery or creating files.
   public func loadDeclaration() throws -> Declaration {
     try withReadLock { try readDeclaration() }
   }
 
   /// Reads the complete declaration document under a shared lock, without recovery, creating
-  /// files or restricting it to the deployable subset. Nil means the scope has no state.
+  /// files or resolving its sources. Nil means the scope has no state.
   public func loadManifest() throws -> DeclarationDocument? {
     try withReadLock { try declarationDocument(prepared: nil) }
   }

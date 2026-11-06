@@ -61,6 +61,35 @@ struct DeclarationStateTests {
     #expect(try store.withLock { try store.readDeclaration() } == Declaration(agents: [.cursor]))
   }
 
+  @Test func completeDeclarationReadsKeepSymbolicIntentWithoutDeploymentSideEffects() throws {
+    let fixture = try ScopeFixture()
+    let store = fixture.store
+    try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+    let bytes = manifestText(
+      """
+      sources: [.source(name: "remote", url: "https://does-not-exist.invalid/repo.git")],
+      components: [
+        .mcpServer(name: "tools", transport: .stdio("program-does-not-exist")),
+        .hook(name: "hook", event: .sessionStart, run: .executable("program-does-not-exist")),
+        .subagent(name: "agent", description: "d", prompt: .file("missing.md", source: "remote")),
+      ],
+      groups: [.group(name: "unused", components: [.ignore(name: "i", patterns: [], condition: .when(agents: []))])]
+      """)
+    try bytes.write(to: store.declarationURL)
+    let before = try FileHash.folderHash(fixture.root)
+    let declaration = try store.loadDeclaration()
+    #expect(declaration.components.map(\.kind) == [.mcpServer, .hook, .subagent])
+    #expect(declaration.groups.map(\.name) == ["unused"])
+    #expect(
+      declaration.sources["remote"]?.environment
+        == SourceEnvironment(
+          projectDirectory: store.environment.projectDirectory,
+          homeDirectory: store.environment.homeDirectory))
+    #expect(try store.loadManifest()?.bytes == Array(bytes))
+    #expect(throws: ManifestFailure.self) { try store.readDeploymentDeclaration() }
+    #expect(try FileHash.folderHash(fixture.root) == before)
+  }
+
   /// A writer interrupted after moving the declaration aside leaves lock state without a
   /// declaration. Readers report the pending recovery without touching any file, and the next
   /// writer recovers before the missing-declaration rule applies.

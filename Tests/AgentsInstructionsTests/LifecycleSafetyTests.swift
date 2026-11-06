@@ -73,7 +73,7 @@ struct InstructionLifecycleSafetyTests {
     var declaration = try fixture.store().loadDeclaration()
     var lock = try fixture.store().loadResolved()
     let previous = lock.instructions.sections[0]
-    declaration.skills = ["rules": SkillDeclaration(select: .names([]))]
+    try declaration.setSkills(["rules": SkillDeclaration(select: .names([]))])
     lock.skills["example"] = LockedSkill(
       source: previous.source, revision: previous.revision,
       path: "skills/example", hash: previous.hash, installs: ["codex": .copy])
@@ -83,7 +83,7 @@ struct InstructionLifecycleSafetyTests {
     try fixture.add(names: ["two"])
     #expect(try fixture.store().loadResolved().instructions.sections[0] == previous)
     #expect(try fixture.store().loadResolved().skills == lock.skills)
-    #expect(try fixture.store().loadDeclaration().skills == declaration.skills)
+    #expect(try fixture.store().loadDeclaration().skills == (try declaration.skills))
     #expect(try !fixture.text().contains("Changed"))
   }
 
@@ -165,9 +165,11 @@ struct InstructionLifecycleSafetyTests {
     try fixture.commit()
     try fixture.add()
     var declaration = try fixture.store().loadDeclaration()
-    declaration.instructions?.chatgpt = [
-      "prompt": PromptDeclaration(sections: ["rules:rules"], append: "custom.md")
-    ]
+    try declaration.updateInstructions {
+      $0?.chatgpt = [
+        "prompt": PromptDeclaration(sections: ["rules:rules"], append: "custom.md")
+      ]
+    }
     try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     let outside = fixture.root.appendingPathComponent("outside.md")

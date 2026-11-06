@@ -14,60 +14,22 @@ func projected(_ body: String) throws -> Declaration {
 
 @Suite("Manifest projection")
 struct ProjectionTests {
-  @Test func everyDeployableShapeMapsToTheDeclaration() throws {
-    let declaration = try projected(
-      """
-      let agents = Agents(
-        defaultAgents: [.openCode, .claudeCode],
-        sources: [
-          .source(name: "git", url: "github.com/team/skills", branch: "main", subpath: "skills"),
-          .source(name: "local", path: "./drafts", "1.2.0"..<"2.0.0"),
-          .source(name: "index", index: "https://example.org/.well-known/skills/index.json"),
-          .source(name: "pinned", url: "https://example.org/p.git", exact: "1.2.3+build"),
-        ],
-        components: [
-          .skills(source: "git"),
-          .skills(
-            source: "local", select: ["a", "b"], exclude: ["b"], mode: .copy,
-            overrides: [.skill(name: "a", mode: .link, agents: []), .skill(name: "b")],
-            agents: [.codex]),
-          .skills(source: "index", select: [], exclude: []),
-          .instructions(
-            sections: ["guide", .section(name: "rule", source: "git"), .section(name: "own", source: "."), "guide"],
-            chatGPT: [.prompt(name: "weekly", sections: [], append: "notes/weekly.md")],
-            agents: []),
-        ],
-        watch: ["git"]
+  @Test func compilerBackedFixturesProjectAndConstructWithoutLoss() throws {
+    for fixture in compiledFixtures() {
+      let doc = try DeclarationDocument(
+        bytes: manifestFixture(fixture.name), identity: DocumentIdentity(fixture.name))
+      let declaration = try ManifestProjection.declaration(
+        of: doc, environment: projectionEnvironment)
+      let construction = try DeclarationConstruction.root(declaration).constructionValue
+      #expect(Lowering.declaration(construction) == doc.declaration, "\(fixture.name)")
+      #expect(
+        Lowering.declaration(fixture.agents.constructionValue) == doc.declaration, "\(fixture.name)"
       )
-      """)
-    #expect(
-      declaration
-        == Declaration(
-          agents: [.opencode, .claudeCode],
-          sources: [
-            "git": SourceDeclaration(
-              kind: .git, location: "https://github.com/team/skills", requirement: .branch("main"),
-              path: "skills"),
-            "local": SourceDeclaration(
-              kind: .local, location: "./drafts", requirement: .upToNextMajor(from: "1.2.0")),
-            "index": SourceDeclaration(
-              kind: .wellKnown, location: "https://example.org/.well-known/skills/index.json"),
-            "pinned": SourceDeclaration(
-              kind: .git, location: "https://example.org/p.git", requirement: .exact("1.2.3+build")),
-          ],
-          skills: [
-            "git": SkillDeclaration(select: .all),
-            "local": SkillDeclaration(
-              select: .names(["a", "b"]), exclude: ["b"], agents: [.codex], mode: .copy,
-              overrides: [
-                "a": SkillOverride(agents: [], mode: .link), "b": SkillOverride(),
-              ]),
-            "index": SkillDeclaration(select: .names([])),
-          ],
-          instructions: InstructionsDeclaration(
-            agents: [], sections: ["guide", "git:rule", "own", "guide"],
-            chatgpt: ["weekly": PromptDeclaration(sections: [], append: "notes/weekly.md")]),
-          watch: ["git"]))
+      let printed = try CanonicalPrinter().manifest(construction)
+      let roundtrip = try DeclarationDocument(
+        bytes: printed, identity: DocumentIdentity(fixture.name))
+      #expect(roundtrip.declaration == doc.declaration, "\(fixture.name)")
+    }
   }
 
   @Test func absentValuesStayDistinctFromExplicitEmptyValues() throws {
@@ -75,66 +37,38 @@ struct ProjectionTests {
     let explicit = try projected(
       "let agents = Agents(defaultAgents: [], components: [.instructions(agents: [])], watch: [])")
     #expect(explicit.agents == [])
-    #expect(explicit.instructions == InstructionsDeclaration(agents: []))
+    #expect((try explicit.instructions) == InstructionsDeclaration(agents: []))
     #expect(explicit.watch == nil)
     let inherited = try projected("let agents = Agents(components: [.instructions()])")
     #expect(inherited.agents == nil)
-    #expect(inherited.instructions == InstructionsDeclaration())
-    #expect(inherited.instructions?.agents == nil)
+    #expect((try inherited.instructions) == InstructionsDeclaration())
+    #expect((try inherited.instructions)?.agents == nil)
   }
 
   @Test(arguments: [
-    ("groups: [.group(name: \"g\")], uses: [\"g\"]", "\"g\""),
-    (
-      "components: [.skills(source: \"s\", condition: .when(agents: [.codex]))]",
-      ".when(agents: [.codex])"
-    ),
-    (
-      "components: [.skills(source: \"s\", native: [\"claude-code/skill@1\": [\"x\": 1]])]",
-      "[\"claude-code/skill@1\": [\"x\": 1]]"
-    ),
-    ("components: [.instructions(condition: .when(scopes: [.user]))]", ".when(scopes: [.user])"),
-    (
-      "components: [.instructions(sections: [.section(name: \"g\", condition: .when())])]",
-      ".when()"
-    ),
-    (
-      "components: [.instructions(chatGPT: [.prompt(name: \"p\", sections: [], condition: .when(platforms: [.linux]))])]",
-      ".when(platforms: [.linux])"
-    ),
-    (
-      "components: [.instructions(chatGPT: [.prompt(name: \"p\", sections: [.section(name: \"g\", condition: .when())])])]",
-      ".when()"
-    ),
-    ("components: [.ignore(name: \"i\", patterns: [])]", ".ignore(name: \"i\", patterns: [])"),
-    (
-      "components: [.skills(source: \"s\"), .skills(source: \"s\", select: [\"a\"])]",
-      ".skills(source: \"s\", select: [\"a\"])"
-    ),
-    (
-      "components: [.instructions(), .instructions(sections: [\"g\"])]",
-      ".instructions(sections: [\"g\"])"
-    ),
-    ("components: [.skills(source: \".\")]", "\".\""),
+    "groups: [.group(name: \"g\")], uses: [\"g\"]",
+    "components: [.skills(source: \"s\", condition: .when(agents: [.codex]))]",
+    "components: [.skills(source: \"s\", native: [\"claude-code/skill@1\": [\"x\": 1]])]",
+    "components: [.instructions(condition: .when(scopes: [.user]))]",
+    "components: [.instructions(sections: [.section(name: \"g\", condition: .when())])]",
+    "components: [.instructions(chatGPT: [.prompt(name: \"p\", sections: [], condition: .when(platforms: [.linux]))])]",
+    "components: [.instructions(chatGPT: [.prompt(name: \"p\", sections: [.section(name: \"g\", condition: .when())])])]",
+    "components: [.ignore(name: \"i\", patterns: [])]",
+    "components: [.skills(source: \"s\"), .skills(source: \"s\", select: [\"a\"])]",
+    "components: [.instructions(), .instructions(sections: [\"g\"])]",
+    "components: [.skills(source: \".\")]",
   ])
-  func unsupportedStructuresAreReportedAtTheirLocation(_ fields: String, _ located: String) throws {
-    let body =
-      "let agents = Agents(sources: [.source(name: \"s\", path: \"s\")], " + fields + ")"
+  func completeStructuresRemainSymbolic(_ fields: String) throws {
+    let body = #"let agents = Agents(sources: [.source(name: "s", path: "s")], "# + fields + ")"
     let doc = try document(body)
-    do {
-      _ = try ManifestProjection.declaration(of: doc, environment: projectionEnvironment)
-      Issue.record("projection accepted unsupported structure: \(fields)")
-    } catch let failure as ManifestFailure {
-      #expect(failure.diagnostics.map(\.code) == ["manifest.unsupported"])
-      let span = try #require(failure.diagnostics.first?.span)
-      #expect(span.document == DocumentIdentity("manifest"))
-      #expect(
-        String(decoding: doc.bytes[span.start..<span.end], as: UTF8.self) == located, "\(fields)")
-      #expect(span.line == 4 && span.column > 1)
-    }
+    let declaration = try ManifestProjection.declaration(
+      of: doc, environment: projectionEnvironment)
+    #expect(
+      Lowering.declaration(try DeclarationConstruction.root(declaration).constructionValue)
+        == doc.declaration)
   }
 
-  @Test func inertGroupsAndExportsAreAccepted() throws {
+  @Test func unusedGroupsAndExportsArePreserved() throws {
     let declaration = try projected(
       """
       let agents = Agents(
@@ -153,8 +87,10 @@ struct ProjectionTests {
         ]
       )
       """)
-    #expect(
-      declaration == Declaration(sources: ["s": SourceDeclaration(kind: .local, location: "s")]))
+    #expect(declaration.exports == ["review"])
+    #expect(declaration.groups.map(\.name) == ["review", "nested"])
+    #expect(declaration.groups[0].components.count == 2)
+    #expect(declaration.groups[0].uses == [GroupUseDeclaration(name: "nested")])
   }
 
   @Test func environmentDependentValidationFollowsProjection() throws {
@@ -170,7 +106,7 @@ struct ProjectionTests {
     #expect(try ManifestProjection.declaration(of: doc, environment: other).sources.count == 2)
   }
 
-  @Test func semanticEqualityIgnoresSpellingButKeepsInheritanceAndSectionOrder() {
+  @Test func semanticEqualityIgnoresSpellingButKeepsInheritanceAndSectionOrder() throws {
     func equal(_ lhs: Declaration, _ rhs: Declaration) -> Bool {
       ManifestProjection.equivalent(lhs, rhs, environment: projectionEnvironment)
     }
@@ -209,18 +145,20 @@ struct ProjectionTests {
     let base = Declaration(sources: ["s": SourceDeclaration(kind: .local, location: "s")])
     var left = base
     var right = base
-    left.skills = ["s": SkillDeclaration(select: .names(["a", "b"]), exclude: [], overrides: [:])]
-    right.skills = ["s": SkillDeclaration(select: .names(["b", "a"]))]
+    try left.setSkills([
+      "s": SkillDeclaration(select: .names(["a", "b"]), exclude: [], overrides: [:])
+    ])
+    try right.setSkills(["s": SkillDeclaration(select: .names(["b", "a"]))])
     #expect(equal(left, right))
-    right.skills?["s"]?.agents = []
+    try right.updateSkills { $0?["s"]?.agents = [] }
     #expect(!equal(left, right))
-    left.instructions = InstructionsDeclaration(sections: ["a", "b"], chatgpt: [:])
+    try left.setInstructions(InstructionsDeclaration(sections: ["a", "b"], chatgpt: [:]))
     right = left
-    right.instructions?.chatgpt = nil
+    try right.updateInstructions { $0?.chatgpt = nil }
     #expect(equal(left, right))
-    right.instructions?.sections = ["b", "a"]
+    try right.updateInstructions { $0?.sections = ["b", "a"] }
     #expect(!equal(left, right))
-    right.instructions = nil
+    try right.setInstructions(nil)
     #expect(!equal(left, right))
   }
 }

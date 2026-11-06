@@ -42,7 +42,7 @@ struct RequirementUpdateTests {
     try fixture.declare(agents: [.codex])
     var declaration = try fixture.store.loadDeclaration()
     declaration.agents = [.codex]
-    declaration.instructions?.agents = nil
+    try declaration.updateInstructions { $0?.agents = nil }
     declaration.sources["fixture"]?.requirement = .upToNextMajor(from: "1.2.0")
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     _ = try fixture.apply()

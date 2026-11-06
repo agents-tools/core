@@ -123,8 +123,8 @@ struct ManifestLifecycleTests {
     #expect(final.hasSuffix("),\n  ],\n  watch: []\n)\n"))
     let declaration = try store.loadDeclaration()
     #expect(declaration.watch == nil)
-    #expect(declaration.skills?["fixture"]?.select == .all)
-    #expect(declaration.skills?["fixture"]?.exclude == nil)
+    #expect((try declaration.skills)?["fixture"]?.select == .all)
+    #expect((try declaration.skills)?["fixture"]?.exclude == nil)
     #expect(try store.loadResolved().skills.keys.sorted() == ["demo", "other"])
   }
 

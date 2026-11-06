@@ -11,7 +11,10 @@ struct WatchSourceTests {
     let fixture = try WatchGitFixture()
     let store = StateStore(scope: scope, environment: fixture.environment)
     let source = SourceDeclaration(
-      kind: .local, location: "./source", requirement: .exact("1.0.0"), path: "instructions")
+      kind: .local, location: "./source", requirement: .exact("1.0.0"), path: "instructions",
+      environment: SourceEnvironment(
+        projectDirectory: fixture.environment.projectDirectory,
+        homeDirectory: fixture.environment.homeDirectory))
     try store.save(declaration: Declaration(sources: ["source": source]), resolved: ResolvedState())
     let lock = try FileSnapshot.read(at: store.resolvedURL)
 
@@ -31,7 +34,10 @@ struct WatchSourceTests {
   func selectorsReplaceDeclaredRequirementAndPath(_ input: String) throws {
     let fixture = try WatchGitFixture()
     let source = SourceDeclaration(
-      kind: .local, location: "./source", requirement: .exact("1.0.0"), path: "instructions")
+      kind: .local, location: "./source", requirement: .exact("1.0.0"), path: "instructions",
+      environment: SourceEnvironment(
+        projectDirectory: fixture.environment.projectDirectory,
+        homeDirectory: fixture.environment.homeDirectory))
     try fixture.store.save(
       declaration: Declaration(sources: ["source": source]), resolved: ResolvedState())
     let topic = try fixture.head()
@@ -49,7 +55,10 @@ struct WatchSourceTests {
     #expect(
       try fixture.store.loadDeclaration().sources == [
         "source": SourceDeclaration(
-          kind: .local, location: "./source", requirement: .branch("topic"), path: "rules")
+          kind: .local, location: "./source", requirement: .branch("topic"), path: "rules",
+          environment: SourceEnvironment(
+            projectDirectory: fixture.environment.projectDirectory,
+            homeDirectory: fixture.environment.homeDirectory))
       ])
   }
 

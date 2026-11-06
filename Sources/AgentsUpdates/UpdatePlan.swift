@@ -22,7 +22,7 @@ final class UpdatePlan {
     self.store = store
     self.checkpoint = checkpoint
     baseline = try StatePrecondition(store: store)
-    declaration = try store.readDeclaration(prepared: baseline)
+    declaration = try store.readDeploymentDeclaration(prepared: baseline)
     previous = try store.readResolved(prepared: baseline)
     watch = try store.readWatch(prepared: baseline)
     resolutions = try SourceResolutionSession(store: store)

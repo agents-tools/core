@@ -1,20 +1,14 @@
 import AgentsCore
 import AgentsDescription
 
-/// Maps declaration values to construction vocabulary in canonical order: sources, skills
-/// components, overrides, prompts, names and watch subscriptions by UTF-8 name, recipients by
-/// agent ID without duplicates, and skills components before the instructions component.
+/// Constructs the complete symbolic declaration without linking or evaluating conditions.
 package enum DeclarationConstruction {
   package static func root(_ declaration: Declaration) throws -> Agents {
-    let skills = declaration.skills ?? [:]
-    return Agents(
-      defaultAgents: recipients(declaration.agents),
-      sources: try declaration.sources.keys.sorted(by: utf8Less).map {
-        try source(alias: $0, declaration.sources[$0]!)
-      },
-      components: skills.keys.sorted(by: utf8Less).map { self.skills(alias: $0, skills[$0]!) }
-        + (declaration.instructions.map { [instructions($0)] } ?? []),
-      watch: (declaration.watch ?? []).sorted(by: utf8Less))
+    Agents(
+      defaultAgents: declaration.agents.map { $0.map(agent) }, exports: declaration.exports,
+      sources: try declaration.sourceDeclarations.map { try source(alias: $0.name, $0.source) },
+      components: declaration.components.map(component), groups: declaration.groups.map(group),
+      uses: declaration.uses.map(use), watch: declaration.watch ?? [])
   }
 
   /// Git sources use complete transport URLs. Version ranges are checked before construction.
@@ -68,12 +62,12 @@ package enum DeclarationConstruction {
   }
 
   package static func skills(alias: String, _ skills: SkillDeclaration) -> Component {
-    let overrides = skills.overrides ?? [:]
     return .skills(
       source: alias, select: selection(skills.select),
-      exclude: (skills.exclude ?? []).sorted(by: utf8Less), mode: skills.mode.map(mode),
-      overrides: overrides.keys.sorted(by: utf8Less).map { override(name: $0, overrides[$0]!) },
-      agents: recipients(skills.agents))
+      exclude: skills.exclude ?? [], mode: skills.mode.map(mode),
+      overrides: skills.overrideDeclarations.map { override(name: $0.name, $0.override) },
+      agents: skills.agents.map { $0.map(agent) }, condition: condition(skills.condition),
+      native: native(skills.native))
   }
 
   package static func selection(
@@ -85,26 +79,32 @@ package enum DeclarationConstruction {
       return AgentsDescription.SkillSelection(
         value: .construct(
           type: "SkillSelection", member: "names",
-          fields: ["names": names.sorted(by: utf8Less).constructionValue]))
+          fields: ["names": names.constructionValue]))
     }
   }
 
   package static func override(
     name: String, _ override: AgentsCore.SkillOverride
   ) -> AgentsDescription.SkillOverride {
-    .skill(name: name, mode: override.mode.map(mode), agents: recipients(override.agents))
+    .skill(name: name, mode: override.mode.map(mode), agents: override.agents.map { $0.map(agent) })
   }
 
   package static func instructions(_ instructions: InstructionsDeclaration) -> Component {
-    let prompts = instructions.chatgpt ?? [:]
-    return .instructions(
-      sections: instructions.sections.map(section),
-      chatGPT: prompts.keys.sorted(by: utf8Less).map { prompt(name: $0, prompts[$0]!) },
-      agents: recipients(instructions.agents))
+    .instructions(
+      sections: instructions.sectionReferences.map(section),
+      chatGPT: instructions.prompts.map { prompt(name: $0.name, $0.prompt) },
+      agents: instructions.agents.map { $0.map(agent) },
+      condition: condition(instructions.condition), native: native(instructions.native))
   }
 
   package static func prompt(name: String, _ prompt: PromptDeclaration) -> ChatGPTPrompt {
-    .prompt(name: name, sections: prompt.sections.map(section), append: prompt.append)
+    .prompt(
+      name: name, sections: prompt.sectionReferences.map(section), append: prompt.append,
+      condition: condition(prompt.condition))
+  }
+
+  package static func section(_ section: SectionDeclaration) -> SectionReference {
+    .section(name: section.name, source: section.source, condition: condition(section.condition))
   }
 
   /// `alias:name` names a source section; a bare name is the declaring project's own section.
