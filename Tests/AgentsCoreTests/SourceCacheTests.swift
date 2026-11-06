@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 

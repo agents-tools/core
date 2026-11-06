@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 
 extension SkillOperations {
@@ -23,6 +24,7 @@ extension SkillOperations {
           WatchArtifact(
             name: $0.installName, artifact: $0.artifact, files: $0.files, payloads: $0.payloads)
         }
-      })
+      },
+      declarations: .manifest)
   }
 }

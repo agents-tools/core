@@ -2,17 +2,16 @@ import AgentsCore
 import Foundation
 
 /// Assembly and retention inputs for one scope generation; the caller owns commit and pruning.
-package final class InstructionUpdatePlan {
+package final class InstructionUpdatePlan: PreparedEvidence {
   package let next: ResolvedState
   package let report: InstructionUpdateReport
   private let sources: InstructionSources
-  private let identities: [PathIdentity]
-  private let forwardingInputs: [(URL, Data?)]
+  private let identities: [TargetPrecondition]
   private let replace: Bool
 
   init(
     next: ResolvedState, report: InstructionUpdateReport, sources: InstructionSources,
-    replace: Bool
+    replace: Bool, expectedTargets: [String: TargetPrecondition]
   ) throws {
     self.next = next
     self.report = report
@@ -34,30 +33,19 @@ package final class InstructionUpdatePlan {
         store.environment.projectDirectory.appendingPathComponent($0.rawValue)
       }
       paths.append(contentsOf: candidates)
-      forwardingInputs = try candidates.map { url in
-        let resolved = url.resolvingSymlinksInPath()
-        paths.append(resolved)
-        return (resolved, try InstructionTargets.read(resolved))
-      }
-    } else {
-      forwardingInputs = []
+      paths.append(contentsOf: candidates.map { $0.resolvingSymlinksInPath() })
     }
-    identities = try paths.map { try PathIdentity($0) }
+    var evidence = expectedTargets
+    for path in Set(paths.map { $0.standardizedFileURL.path }) where evidence[path] == nil {
+      evidence[path] = try TargetPrecondition(URL(fileURLWithPath: path))
+    }
+    identities = evidence.keys.sorted().map { evidence[$0]! }
   }
 
-  package func validate() throws {
+  package func validate(excludingTargets targets: Set<String> = []) throws {
     if !replace { try InstructionOperations.requireOwnership(report) }
-    for identity in identities { try identity.validate() }
-    for (url, bytes) in forwardingInputs {
-      guard try InstructionTargets.read(url) == bytes else {
-        throw CoreError.invalidState("Claude forwarding changed during preparation: \(url.path)")
-      }
-    }
-    for change in report.targets {
-      guard try InstructionTargets.read(change.url) == change.before else {
-        throw CoreError.invalidState(
-          "instruction target changed during preparation: \(change.target)")
-      }
+    for identity in identities where !targets.contains(identity.url.path) {
+      try identity.validate()
     }
     try InstructionTargets.validateSourceDirectories(report.targets, sources: next.sources)
   }
@@ -66,7 +54,18 @@ package final class InstructionUpdatePlan {
 
   package func stage(transaction: FileTransaction) throws {
     for change in report.targets.sorted(by: { $0.url.path < $1.url.path }) where change.changed {
-      try transaction.replace(change.url, content: nil, data: change.after)
+      guard
+        let evidence = identities.first(where: {
+          $0.url.path == change.url.standardizedFileURL.path
+        })
+      else {
+        throw CoreError.invalidState("instruction target has no prepared preimage")
+      }
+      if let after = change.after {
+        try transaction.replace(change.url, with: .data(after), expecting: evidence)
+      } else {
+        try transaction.delete(change.url, expecting: evidence)
+      }
     }
   }
 }

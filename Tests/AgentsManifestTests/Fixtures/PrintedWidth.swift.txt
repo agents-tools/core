@@ -1,0 +1,24 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  sources: [
+    .source(name: "s", path: "./s"),
+    .source(name: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", path: "p"),
+    .source(
+      name: "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+      path: "p2"
+    ),
+  ],
+  components: [
+    .skills(
+      source: "s",
+      select: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbb"],
+      exclude: [
+        "ccccccccccccccccccccccccccccccccc",
+        "dddddddddddddddddddddddd",
+      ],
+      mode: .link
+    ),
+  ]
+)

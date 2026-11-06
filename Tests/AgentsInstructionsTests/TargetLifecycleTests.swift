@@ -1,10 +1,24 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import Foundation
 import Testing
 
 @Suite("Own instructions and generated targets")
 struct TargetLifecycleTests {
+  @Test func doctorReportsAnOwnFileReplacedByADirectory() throws {
+    let fixture = try InstructionFixture()
+    try fixture.own("guide", heading: "# Project Guide")
+    try fixture.addOwn(names: ["guide"])
+    let file = fixture.project.appendingPathComponent(".agent/instructions/guide.md")
+    try FileManager.default.removeItem(at: file)
+    try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+    #expect(
+      try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
+        $0.kind == .ownChanged
+      })
+  }
+
   @Test func ownInstructionsAreReadLiveAndRecordedByHash() throws {
     let fixture = try InstructionFixture()
     try fixture.section("shared")
@@ -45,30 +59,49 @@ struct TargetLifecycleTests {
       })
   }
 
-  @Test func updateApplyWritesStateInTheStandardLayout() throws {
+  @Test func updateApplyKeepsAnUnchangedDeclarationAndLedgerAsWritten() throws {
     let fixture = try InstructionFixture()
     try fixture.own("guide")
     try fixture.addOwn(names: ["guide"], agents: [.codex])
     let declarationFile = fixture.store().declarationURL
     let lockFile = fixture.store().resolvedURL
-    let declaration = try Data(contentsOf: declarationFile)
-    let lock = try Data(contentsOf: lockFile)
     #expect(
-      String(decoding: declaration, as: UTF8.self)
-        == "{\n  \"instructions\": {\n    \"agents\": [\"codex\"],\n    \"sections\": [\"guide\"]\n  },\n  \"sources\": {}\n}\n"
-    )
-    let lockText = String(decoding: lock, as: UTF8.self)
+      String(decoding: try Data(contentsOf: declarationFile), as: UTF8.self) == """
+        // agents-tools-version: 1.0
+        import AgentsDescription
+
+        let agents = Agents(
+          components: [
+            .instructions(
+              sections: ["guide"],
+              agents: [.codex]
+            ),
+          ]
+        )
+
+        """)
+    let lockText = String(decoding: try Data(contentsOf: lockFile), as: UTF8.self)
     #expect(lockText.contains("\"chatgpt\": {}") && lockText.contains("\"skills\": {}"))
     #expect(!lockText.contains(" : "))
-    // An earlier version wrote this content in Foundation's layout.
-    try StateStore.encode(fixture.store().loadDeclaration()).write(to: declarationFile)
-    try StateStore.encode(fixture.store().loadResolved()).write(to: lockFile)
+    // The same intent in another layout, with a comment, is not rewritten.
+    let declaration = Data(
+      """
+      // agents-tools-version: 1.0
+      import AgentsDescription
+
+      // Project instructions.
+      let agents = Agents(components: [.instructions(sections: ["guide"], agents: [.codex])])
+
+      """.utf8)
+    try declaration.write(to: declarationFile)
+    let existingLockBytes = try StateStore.encode(fixture.store().loadResolved())
+    try existingLockBytes.write(to: lockFile)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(try Data(contentsOf: declarationFile) == declaration)
-    #expect(try Data(contentsOf: lockFile) == lock)
+    #expect(try Data(contentsOf: lockFile) == existingLockBytes)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(try Data(contentsOf: declarationFile) == declaration)
-    #expect(try Data(contentsOf: lockFile) == lock)
+    #expect(try Data(contentsOf: lockFile) == existingLockBytes)
   }
 
   @Test func pathsPlaceSectionsInNestedTargets() throws {

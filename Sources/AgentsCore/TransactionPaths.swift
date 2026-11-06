@@ -50,9 +50,14 @@ struct TransactionPaths {
     throw CoreError.unsafePath("transaction destination is outside managed paths")
   }
 
-  func root(_ key: String, create: Bool = false, checkpoint: (String) throws -> Void = { _ in })
-    throws -> DirectoryHandle
-  {
+  func root(
+    _ key: String, create: Bool = false,
+    checkpoint: (DirectoryHandle.AncestryStep) throws -> Void = { _ in }
+  ) throws -> DirectoryHandle {
+    try DirectoryHandle(at: rootURL(key), create: create, checkpoint: checkpoint)
+  }
+
+  func rootURL(_ key: String) throws -> URL {
     let url: URL
     if key == "state" {
       let base =
@@ -77,7 +82,7 @@ struct TransactionPaths {
     } else {
       throw CoreError.invalidState("unknown transaction root")
     }
-    return try DirectoryHandle(at: url, create: create, checkpoint: checkpoint)
+    return url
   }
 
   /// A top-level file in the project's own instructions container, `.agent/instructions/<name>.md`.
@@ -98,9 +103,7 @@ struct TransactionPaths {
     else { throw CoreError.invalidState("invalid scope-relative transaction path") }
     let descendants = Array(parts.dropFirst())
     if key == "state" {
-      let stateFile =
-        descendants.count == 1
-        && ["agents.json", "agents.resolved", "agents.watch"].contains(descendants[0])
+      let stateFile = descendants.count == 1 && StateStore.stateFileNames.contains(descendants[0])
       let cache =
         descendants.first == "cache" && descendants.count >= 3
         && ((descendants[1] == "materialized" && (3...4).contains(descendants.count))
@@ -131,19 +134,26 @@ struct TransactionPaths {
     return (key, descendants)
   }
 
+  /// With `create`, each descendant's parent is synced. Checkpoints mark only descendants
+  /// this call creates; depth counts levels above the returned parent, as for roots.
   func parent(
     for path: String, roots: [String: DirectoryHandle], create: Bool = false,
-    checkpoint: (String) throws -> Void = { _ in }
+    checkpoint: (DirectoryHandle.AncestryStep) throws -> Void = { _ in }
   ) throws -> DirectoryHandle {
     let components = try components(path)
     guard var directory = roots[components.root] else {
       throw CoreError.invalidState("missing transaction root")
     }
-    for name in components.descendants.dropLast() {
+    let ancestry = components.descendants.dropLast()
+    for (index, name) in ancestry.enumerated() {
       if create {
-        if try directory.info(name) == nil { try directory.makeDirectory(name) }
+        let depth = ancestry.count - 1 - index
+        let created = try directory.info(name) == nil
+        if created {
+          try directory.makeDirectory(name) { try checkpoint(.created(depth: depth)) }
+        }
         try directory.sync()
-        try checkpoint("directory.synced.\(name)")
+        if created { try checkpoint(.synced(depth: depth)) }
       }
       directory = try directory.child(name)
     }

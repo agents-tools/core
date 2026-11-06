@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -44,7 +45,7 @@ struct LifecycleRegressionTests {
         source: fixture.repo.path, alias: "fixture", agents: [.codex, .claudeCode], mode: .copy,
         environment: fixture.environment))
     var declaration = try fixture.store().loadDeclaration()
-    declaration.skills?["fixture"]?.agents = [.codex]
+    try declaration.updateSkills { $0?["fixture"]?.agents = [.codex] }
     try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
     let target = fixture.target("demo")
     try FileManager.default.createDirectory(
@@ -101,7 +102,9 @@ struct LifecycleRegressionTests {
     try fixture.commit()
     _ = try fixture.add(mode: .copy)
     var declaration = try fixture.store().loadDeclaration()
-    declaration.skills?["fixture"]?.overrides = ["demo": SkillOverride(mode: .edit)]
+    try declaration.updateSkills {
+      $0?["fixture"]?.overrides = ["demo": SkillOverride(mode: .edit)]
+    }
     try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
     try FileManager.default.removeItem(at: fixture.repo.appendingPathComponent("skills/demo"))

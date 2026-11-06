@@ -1,0 +1,11 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  components: [
+    .instructions(
+      sections: ["guide", "code-review-rules"],
+      agents: [.claudeCode, .codex]
+    ),
+  ]
+)

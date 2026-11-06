@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -154,7 +155,9 @@ struct SkillLifecycleTests {
     #expect(!FileManager.default.fileExists(atPath: fixture.store().resolvedURL.path))
   }
 
-  @Test(arguments: ["agents.json", "agents.resolved"], ["add", "update", "install", "remove"])
+  @Test(
+    arguments: [StateStore.declarationFileName, StateStore.resolvedFileName],
+    ["add", "update", "install", "remove"])
   func corruptStateStopsEveryMutation(_ filename: String, _ operation: String) throws {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "A")
@@ -197,9 +200,10 @@ struct SkillLifecycleTests {
     try fixture.commit()
     _ = try fixture.add()
     var declaration = try fixture.store().loadDeclaration()
-    declaration.instructions = InstructionsDeclaration(
-      sections: ["fixture:rules"],
-      chatgpt: ["prompt": PromptDeclaration(sections: ["fixture:rules"])])
+    try declaration.setInstructions(
+      InstructionsDeclaration(
+        sections: ["fixture:rules"],
+        chatgpt: ["prompt": PromptDeclaration(sections: ["fixture:rules"])]))
     declaration.watch = ["fixture"]
     var lock = try fixture.store().loadResolved()
     let skill = try #require(lock.skills["demo"])
@@ -211,7 +215,7 @@ struct SkillLifecycleTests {
     try fixture.store().save(declaration: declaration, resolved: lock)
     try SkillOperations.remove(skillNames: ["demo"], environment: fixture.environment)
     #expect(try fixture.store().loadResolved().instructions == lock.instructions)
-    #expect(try fixture.store().loadDeclaration().instructions == declaration.instructions)
+    #expect(try fixture.store().loadDeclaration().instructions == (try declaration.instructions))
     #expect(try fixture.store().loadDeclaration().watch == ["fixture"])
   }
 

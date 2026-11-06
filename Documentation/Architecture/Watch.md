@@ -1,8 +1,9 @@
 # Watch Subscriptions
 
 `AgentsCore.WatchOperations` manages subscriptions independently of installation
-intent and pins. `agents.json` lists subscribed source aliases in `watch`;
-`agents.watch` records a seen baseline per normalized source ID. Subscribing
+intent and pins. `Agents.swift` lists subscribed source aliases in the `watch:`
+argument of `Agents(...)`; `agents.watch` records a seen baseline per normalized
+source ID. Subscribing
 installs nothing, and removing a subscription preserves source declarations,
 skill selections, locked records and installed content.
 
@@ -11,21 +12,27 @@ skill selections, locked records and installed content.
 Both CLI consumers can construct `SkillOperations.watchOperations()` from
 `AgentsSkills`. It supplies the existing skill discovery rules and well-known
 loader to `AgentsCore`. Callers implementing another content provider can use
-`WatchOperations.init(discoverSkills:fetchArtifacts:)` directly. This keeps
-frontmatter, skill discovery and artifact format parsing in their owning module;
-core has no dependency on `AgentsSkills`, Yams or instruction rendering.
+`WatchOperations.init(discoverSkills:fetchArtifacts:)` after `import
+AgentsManifest`; that module provides the initializer because it also supplies
+the declaration access that core receives by injection. This keeps frontmatter,
+skill discovery, artifact format parsing and manifest syntax in their owning
+modules; core has no dependency on `AgentsManifest`, `AgentsSkills`, Yams or
+instruction rendering.
 
 Every operation accepts `scope` and `RuntimeEnvironment`:
 
 | Operation | Behavior |
 | --- | --- |
-| `add(_:alias:requirement:path:scope:environment:)` | Resolve an alias or source location, declare it if needed, subscribe and record current content as seen. Returns `WatchSeen`. |
+| `add(_:alias:requirement:path:scope:environment:)` | Resolve an alias or source location, declare it if needed, subscribe and record current content as seen. Returns `WatchChange`. |
 | `status(scope:environment:)` | Return sorted `WatchStatus` values for all subscribed sources. |
 | `diff(_:name:kind:scope:environment:)` | Inspect one subscribed source, optionally filtering item name and kind. Returns file bytes and entry metadata for presentation by the caller. |
-| `seen(_:revision:scope:environment:)` | Acknowledge the current head or resolve a supplied Git revision to a full commit ID. Well-known sources accept no revision argument. |
-| `remove(_:scope:environment:)` | Remove the alias from `watch` and delete its baseline without changing installations. |
+| `seen(_:revision:scope:environment:)` | Acknowledge the current head or resolve a supplied Git revision to a full commit ID. Well-known sources accept no revision argument. Returns `WatchChange`. |
+| `remove(_:scope:environment:)` | Remove the alias from `watch` and delete its baseline without changing installations. Returns `WatchChange` without a baseline. |
 
-Existing subscriptions can be addressed by alias, normalized source ID or source
+`WatchChange` has `alias`, the normalized `sourceID` and `seen`, the
+acknowledged `WatchSeen` baseline or `nil` after removal, so callers need no
+separate declaration read. Existing
+subscriptions can be addressed by alias, normalized source ID or source
 location. Repeating `add` records current content as seen. Missing subscriptions,
 invalid revisions and missing baseline content produce errors. A local directory
 must be a Git repository to be subscribed.
@@ -103,31 +110,33 @@ is reported even when expanded file contents are identical. Expanded baseline
 contents remain in the digest-addressed cache while referenced by watch state;
 skill lifecycle pruning respects those references.
 
-`StateStore.loadWatch()` reads and validates the baseline. `save` accepts an
-optional `watch` value; omitting it preserves existing watch bytes. JSON is
+`StateStore.loadWatch()` reads and validates the baseline without recovery or
+writes. Writes that do not replace watch state preserve its bytes. JSON is
 sorted, timestamp-free, UTF-8 without a BOM and newline-terminated. Duplicate
 keys, malformed input, unknown non-null fields, unsupported versions and invalid
 revisions or digests are errors. Subscriptions cannot repeat an alias.
 
 Add, seen and remove hold the scope writer lock and recover interrupted
-transactions and pending ref cleanup before proceeding. Add and seen prepare
-cached content before publishing its baseline. Declaration and watch replacements
-and cache pruning commit through the existing scope transaction journal; recovery
-follows the same retry contract as other mutating state operations. Every scope
+transactions and pending ref cleanup before proceeding. They capture declaration,
+lock and watch evidence before contacting Git. Add and remove plan the
+`Agents.swift` change at that point, so a declaration the editor cannot change
+fails before any fetch; seen leaves the declaration unchanged. Add and seen
+prepare cached content before publishing its baseline. Declaration and watch
+replacements and cache pruning commit through the existing scope transaction
+journal, expecting the captured evidence; recovery follows the same retry
+contract as other mutating state operations. Every scope
 mutation checks watch state after transaction recovery, and corrupt watch state
 blocks mutations before fetching, cache publication, installation or state
 replacement.
 
 Status and diff take an existing shared scope lock without creating state files
 or replaying recovery. When a first writer creates the scope lock during an
-unlocked read, inspection discards that attempt, including any error, and retries
-under the shared lock. A pending transaction journal or watch-ref cleanup marker
-fails inspection with
-`CoreError.invalidState` ("transaction recovery is required before inspection").
-Inspection leaves pending cleanup and retained refs untouched for the next
-mutating operation to recover.
-Status and diff may fetch into mirrors under each mirror's lock and download
-current index artifacts for inspection. They use disposable snapshots and memory,
-leave retained artifact content unchanged, and do not write declaration, lock,
-watch state, installations or source working trees. Scheduling and diff rendering
-belong to consumers.
+unlocked read, inspection discards that attempt, including any error, and
+retries under the shared lock. A pending transaction journal or watch-ref
+cleanup marker fails inspection with `CoreError.recoveryPending`. Inspection
+leaves pending cleanup and retained refs untouched for the next mutating
+operation to recover. Status and diff may fetch into mirrors under each mirror's
+lock and download current index artifacts for inspection. They use disposable
+snapshots and memory, leave retained artifact content unchanged, and do not
+write declaration, lock, watch state, installations or source working trees.
+Scheduling and diff rendering belong to consumers.

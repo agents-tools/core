@@ -11,8 +11,29 @@ public struct LockedSource: Codable, Equatable, Sendable {
   ) {
     self.kind = kind
     self.url = url
-    self.requirement = requirement
+    self.requirement = requirement?.canonical
     self.path = path
+  }
+
+  /// Location spelling is not identity; range spelling is not selection intent.
+  public static func == (lhs: LockedSource, rhs: LockedSource) -> Bool {
+    guard lhs.kind == rhs.kind, lhs.discoveryRoot == rhs.discoveryRoot else { return false }
+    if lhs.kind == .git, let left = lhs.url, let right = rhs.url {
+      let a = try? SourceDeclaration(kind: .git, location: left).transportIdentity()
+      let b = try? SourceDeclaration(kind: .git, location: right).transportIdentity()
+      guard a != nil && b != nil ? a == b : left == right else { return false }
+    } else if lhs.url != rhs.url {
+      return false
+    }
+    switch (lhs.requirement, rhs.requirement) {
+    case (nil, nil): return true
+    case (.some(let a), .some(let b)): return a == b || a.declarationEquivalent(to: b)
+    default: return false
+    }
+  }
+
+  private var discoveryRoot: String {
+    (try? PathSafety.sanitizeSubpath(path ?? ".")) ?? (path ?? ".")
   }
 }
 
@@ -284,6 +305,10 @@ public struct ResolvedState: Codable, Equatable, Sendable {
 
   package var normalized: ResolvedState {
     var result = self
+    for id in result.sources.keys {
+      let requirement = result.sources[id]?.requirement?.canonical
+      result.sources[id]?.requirement = requirement
+    }
     for name in result.skills.keys {
       result.skills[name]?.artifact?.files?.sort { $0.path < $1.path }
     }

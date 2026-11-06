@@ -1,0 +1,81 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+// A team repository's .agent/Agents.swift.
+// Everything here is a declaration: agents reads it, never runs it.
+
+let reviewer: Component = .subagent(
+  name: "reviewer",
+  description: "Review correctness and tests.",
+  prompt: "Check invariants and explain concrete failures.",
+  agents: [.claudeCode]
+)
+
+let agents = Agents(
+  // Components without their own `agents:` go to these.
+  defaultAgents: [.claudeCode, .codex],
+
+  sources: [
+    .source(name: "org", url: "https://github.com/acme/.github", branch: "main", subpath: ".agent"),
+    .source(name: "rules", url: "https://example.org/team/rules.git", from: "1.2.0"),
+    .source(name: "drafts", path: "./draft-skills"),
+  ],
+
+  components: [
+    // AGENTS.md / CLAUDE.md, assembled from sections.
+    .instructions(
+      sections: [
+        "guide",
+        .section(name: "shared/swift-package-route", source: "org"),
+      ]
+    ),
+
+    // Every skill from `rules` except one; Codex gets `testing` as a link.
+    .skills(
+      source: "rules", exclude: ["experimental"], mode: .copy,
+      overrides: [.skill(name: "testing", mode: .link, agents: [.codex])]
+    ),
+
+    // Work-in-progress skills, only for Claude Code in this project.
+    .skills(
+      source: "drafts", select: ["draft"], mode: .edit,
+      condition: .when(agents: [.claudeCode], scopes: [.project])
+    ),
+
+    .mcpServer(
+      name: "workspace",
+      transport: .stdio(
+        "workspace-tools", arguments: ["serve"],
+        environment: ["TOKEN": .secret("workspace-token"), "LOG_LEVEL": "info"]
+      )
+    ),
+
+    .hook(
+      name: "format", event: .afterTool,
+      run: .executable("swift", arguments: ["format", "--in-place", "Sources"]),
+      timeoutSeconds: 30, agents: [.claudeCode], condition: .when(scopes: [.project])
+    ),
+
+    .lspServer(
+      name: "swift", run: .executable("sourcekit-lsp"),
+      languages: [".swift": "swift"],
+      agents: [.claudeCode], condition: .when(platforms: [.macOS])
+    ),
+
+    .permissions(
+      name: "private-files",
+      rules: [.deny(.read, "secrets/**")],
+      condition: .when(scopes: [.project])
+    ),
+
+    .ignore(
+      name: "build-products", patterns: [".build/", "DerivedData/"], purpose: .indexing,
+      agents: [.cursor]
+    ),
+
+    reviewer,
+  ],
+
+  // Re-check these sources for updates.
+  watch: ["rules"]
+)

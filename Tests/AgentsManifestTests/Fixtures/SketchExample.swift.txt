@@ -1,0 +1,16 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  defaultAgents: [.cursor],
+  sources: [.source(name: "team", path: "./team")],
+  components: [
+    .ignore(
+      name: "build-products", patterns: [".build/"], purpose: .indexing,
+      condition: .when(scopes: [.project])
+    ),
+  ],
+  uses: [
+    .group(name: "review", source: "team", condition: .when(agents: [.codex])),
+  ]
+)

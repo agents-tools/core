@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 
 /// One scope's locked instruction mapping. It describes the lock, not the files on disk.
@@ -59,7 +60,7 @@ extension InstructionOperations {
       return try store.withReadLock(
         onPendingRecovery: { empty(.pendingRecovery) },
         {
-          _ = try store.readDeclaration()
+          _ = try store.readDeploymentDeclaration()
           guard try store.existingData(store.resolvedURL) != nil else {
             return empty(.missingLock)
           }

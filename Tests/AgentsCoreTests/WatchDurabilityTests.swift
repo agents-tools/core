@@ -1,7 +1,10 @@
-import AgentsCore
-import Darwin
+import AgentsManifest
+import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
+
+@testable import AgentsCore
 
 @Suite("Watch Git durability")
 struct WatchDurabilityTests {
@@ -10,8 +13,10 @@ struct WatchDurabilityTests {
     [
       "watch.mirror.fetched", "watch.references.pending", "watch.objects.synced",
       "watch.ref.updated", "watch.ref.synced",
-      "watch.mirror.synced", "journal.applying", "replace.0.renamed",
-      "journal.committed.renamed", "journal.committed", "journal.removed",
+      "watch.mirror.synced", TransactionCheckpoint.progress(0, .publishing).name,
+      TransactionCheckpoint.publication(0, .exchanged).name,
+      TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name,
+      TransactionCheckpoint.phase(.committed).name, TransactionCheckpoint.journalRemoved.name,
     ])
   func interruptedAcknowledgmentRetainsTheRecoveredBaseline(_ advancing: Bool, _ step: String)
     throws
@@ -27,7 +32,10 @@ struct WatchDurabilityTests {
     let child = try stateTestProcess(
       root: fixture.root, arguments: [advancing ? "watch-seen" : "watch-add", step])
     try fixture.kill(child, at: step)
-    let committed = step.hasPrefix("journal.committed") || step == "journal.removed"
+    let committed = [
+      TransactionCheckpoint.persisted(.committed, .terminal, .renamed), .phase(.committed),
+      .journalRemoved,
+    ].map(\.name).contains(step)
     let state = try fixture.recoveredWatch()
     let expected = committed ? current : advancing ? first : nil
     #expect(state.sources[fixture.id]?.seen == expected.map(WatchSeen.revision))
@@ -106,7 +114,7 @@ struct WatchDurabilityTests {
     let before = try fixture.stateBytes()
     let watch = WatchOperations(
       discoverSkills: { _ in [] },
-      fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+      fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") }, declarations: .manifest,
       checkpoint: { step in
         if step == "watch.ref.updated" {
           throw CoreError.invalidState("injected durability failure")
@@ -208,10 +216,10 @@ final class WatchGitFixture {
     }
   }
 
+  /// Recovers as the next mutating command would, then reads the watch state.
   func recoveredWatch() throws -> WatchState {
-    do { return try store.loadWatch() } catch CoreError.transactionRecovered {
-      return try store.loadWatch()
-    }
+    do { try store.withLock {} } catch CoreError.transactionRecovered {}
+    return try store.loadWatch()
   }
 
   func cachedInstruction(_ revision: String) throws -> String {
@@ -229,21 +237,11 @@ final class WatchGitFixture {
   }
 
   func kill(_ child: Process, at step: String) throws {
-    defer {
-      if child.isRunning {
-        Darwin.kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     let marker = root.appendingPathComponent("ready")
-    let deadline = Date().addingTimeInterval(30)
-    while !FileManager.default.fileExists(atPath: marker.path), child.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path), "did not reach \(step)")
+    try ProcessWait.marker(marker, child: child, root: root)
     #expect(try String(contentsOf: marker, encoding: .utf8) == step)
-    Darwin.kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    terminateProcess(child)
     try FileManager.default.removeItem(at: marker)
   }
 }

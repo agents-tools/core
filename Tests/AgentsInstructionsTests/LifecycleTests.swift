@@ -1,5 +1,6 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -62,7 +63,7 @@ struct InstructionLifecycleTests {
     try fixture.add(names: ["one", "two"], scope: .user, agents: [.cursor])
     let store = fixture.store(.user)
     var declaration = try store.loadDeclaration()
-    declaration.instructions?.sections.reverse()
+    try declaration.updateInstructions { $0?.sections.reverse() }
     try store.save(declaration: declaration, resolved: store.loadResolved())
     let report = try InstructionOperations.updateInstalled(
       scope: .user, environment: fixture.environment)
@@ -213,10 +214,13 @@ struct InstructionLifecycleTests {
     try fixture.commit()
     try fixture.add(agents: [.codex, .geminiCLI])
     var declaration = try fixture.store().loadDeclaration()
-    declaration.instructions?.chatgpt = [
-      "daily": PromptDeclaration(sections: ["rules:one", "rules:two"], append: ".agent/custom.md"),
-      "stable": PromptDeclaration(sections: ["rules:two"]),
-    ]
+    try declaration.updateInstructions {
+      $0?.chatgpt = [
+        "daily": PromptDeclaration(
+          sections: ["rules:one", "rules:two"], append: ".agent/custom.md"),
+        "stable": PromptDeclaration(sections: ["rules:two"]),
+      ]
+    }
     try fixture.write(
       "Custom prompt.\r\n", to: fixture.project.appendingPathComponent(".agent/custom.md"))
     try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())

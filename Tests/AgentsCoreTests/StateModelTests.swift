@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -97,7 +98,10 @@ struct StateModelTests {
     try store.save(declaration: declaration, resolved: lock)
     #expect(try Data(contentsOf: store.resolvedURL) == first)
     #expect(try Data(contentsOf: store.declarationURL) == firstDeclaration)
-    #expect(try store.loadDeclaration() == declaration)
+    // The document spells the Git location as a URL; the projection keeps its meaning.
+    #expect(
+      ManifestProjection.equivalent(
+        try store.loadDeclaration(), declaration, environment: environment))
     #expect(try store.loadResolved() == lock)
     #expect(String(decoding: first, as: UTF8.self).contains("\"from\": \"1.0.0\""))
   }
@@ -141,23 +145,10 @@ struct StateModelTests {
       StateStore(scope: .user, environment: environment).resolvedURL.path
         == "/home/test/.agents/agents.resolved")
   }
-
-  @Test(arguments: [
-    #"{"git":"github.com/a/b","local":"/a"}"#,
-    #"{"git":"github.com/a/b","from":"1.0.0","exact":"2.0.0"}"#, #"{"local":"/a","to":"2.0.0"}"#,
-  ])
-  func rejectsAmbiguousSources(_ json: String) {
-    #expect(throws: (any Error).self) {
-      try JSONDecoder().decode(SourceDeclaration.self, from: Data(json.utf8))
-    }
-  }
 }
 
 extension StateModelTests {
   @Test(arguments: [
-    #"{"sources":{"same":{"local":"/a"},"same":{"local":"/b"}}}"#,
-    #"{"sources":{"same":{"local":"/a"},"sa\u006de":{"local":"/b"}}}"#,
-    #"{"sources":{},"skills":{"demo":{"select":"all"},"demo":{"select":[]}}}"#,
     #"{"version":1,"sources":{},"skills":{"demo":{},"demo":{}},"instructions":{"sections":[],"chatgpt":{},"targets":{}}}"#,
     #"{"version":1,"sources":{},"skills":{"demo":{"source":"local:/a","installs":{"codex":"link","codex":"copy"}}},"instructions":{"sections":[],"chatgpt":{},"targets":{}}}"#,
   ])
@@ -166,32 +157,14 @@ extension StateModelTests {
     defer { removeTemporaryDirectory(root) }
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     try store.save(declaration: Declaration(), resolved: ResolvedState())
-    let url = json.contains("version") ? store.resolvedURL : store.declarationURL
-    try Data(json.utf8).write(to: url)
+    try Data(json.utf8).write(to: store.resolvedURL)
     let beforeDeclaration = try Data(contentsOf: store.declarationURL)
     let beforeLock = try Data(contentsOf: store.resolvedURL)
-    #expect(throws: CoreError.self) {
-      if url == store.resolvedURL {
-        _ = try store.loadResolved()
-      } else {
-        _ = try store.loadDeclaration()
-      }
-    }
+    #expect(throws: CoreError.self) { _ = try store.loadResolved() }
     #expect(throws: CoreError.self) {
       try store.save(declaration: Declaration(), resolved: ResolvedState())
     }
     #expect(try Data(contentsOf: store.declarationURL) == beforeDeclaration)
     #expect(try Data(contentsOf: store.resolvedURL) == beforeLock)
-  }
-
-  @Test func rejectsUnknownFieldsInsteadOfDiscardingIntent() throws {
-    let root = try temporaryDirectory()
-    defer { removeTemporaryDirectory(root) }
-    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
-    try store.save(declaration: Declaration(), resolved: ResolvedState())
-    let bytes = Data(#"{"sources":{},"unexpected":{"intent":true}}"#.utf8)
-    try bytes.write(to: store.declarationURL)
-    #expect(throws: CoreError.self) { try store.loadDeclaration() }
-    #expect(try Data(contentsOf: store.declarationURL) == bytes)
   }
 }

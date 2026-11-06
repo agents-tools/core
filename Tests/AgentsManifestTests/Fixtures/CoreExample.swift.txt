@@ -1,0 +1,23 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let agents = Agents(
+  sources: [
+    .source(
+      name: "agents-tools",
+      url: "https://github.com/agents-tools/.github",
+      branch: "master",
+      subpath: ".agent"
+    ),
+  ],
+  components: [
+    .instructions(
+      sections: [
+        "guide",
+        .section(name: "shared/swift-package-route", source: "agents-tools"),
+        .section(name: "shared/swift-package-tests", source: "agents-tools"),
+      ],
+      agents: [.claudeCode, .codex]
+    ),
+  ]
+)

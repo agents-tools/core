@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -5,7 +6,7 @@ import Testing
 
 @Suite("State JSON encoding")
 struct StateEncodingTests {
-  @Test(arguments: ["agents.json", "agents.resolved", "transaction.json"])
+  @Test(arguments: ["agents.resolved", "transaction.json"])
   func rejectsEncodedDocumentsWithoutChangingFiles(_ name: String) throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
@@ -15,8 +16,6 @@ struct StateEncodingTests {
     let resolved = try Data(contentsOf: store.resolvedURL)
     let json: String
     switch name {
-    case "agents.json":
-      json = #"{"sources":{"same":{"local":"/a"},"same":{"local":"/b"}}}"#
     case "agents.resolved": json = String(decoding: resolved, as: UTF8.self)
     default:
       let directory = try #require(try store.openDirectoryIfPresent())
@@ -36,20 +35,12 @@ struct StateEncodingTests {
     for data in encodings {
       let url = store.directory.appendingPathComponent(name)
       try data.write(to: url)
-      #expect(throws: (any Error).self) {
-        if name == "agents.json" {
-          _ = try store.loadDeclaration()
-        } else {
-          _ = try store.loadResolved()
-        }
-      }
+      #expect(throws: (any Error).self) { _ = try store.loadResolved() }
       #expect(throws: (any Error).self) {
         try store.save(declaration: Declaration(), resolved: ResolvedState())
       }
       #expect(try Data(contentsOf: url) == data)
-      if name != "agents.json" {
-        #expect(try Data(contentsOf: store.declarationURL) == declaration)
-      }
+      #expect(try Data(contentsOf: store.declarationURL) == declaration)
       if name != "agents.resolved" { #expect(try Data(contentsOf: store.resolvedURL) == resolved) }
     }
   }

@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -6,6 +7,17 @@ import Testing
 
 @Suite("Skill Discovery")
 struct SkillDiscoveryTests {
+  @Test(arguments: ["marketplace.json", "plugin.json"])
+  func pluginMetadataThatIsADirectoryDoesNotStopDiscovery(_ name: String) throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    try writeDiscoverySkill(root.appendingPathComponent("skills/source"), name: "source")
+    try FileManager.default.createDirectory(
+      at: root.appendingPathComponent(".claude-plugin/" + name),
+      withIntermediateDirectories: true)
+    #expect(try Discovery.discover(in: root).map(\.name) == ["source"])
+  }
+
   @Test func discoversSkillsWithUndecodableResolvedHint() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }

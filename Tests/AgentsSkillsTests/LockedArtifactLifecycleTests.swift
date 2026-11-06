@@ -1,8 +1,9 @@
-import AgentsCore
-import Darwin
+import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
+@testable import AgentsCore
 @testable import AgentsSkills
 
 @Suite("Locked artifacts")
@@ -175,23 +176,13 @@ extension LockedArtifactLifecycleTests {
     try FileManager.default.removeItem(at: store.cacheDirectory)
     try FileManager.default.removeItem(at: fixture.target("demo"))
     let child = try artifactTestProcess(root: project)
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     let marker = project.appendingPathComponent("ready")
-    let deadline = Date().addingTimeInterval(10)
-    while !FileManager.default.fileExists(atPath: marker.path), child.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
+    try ProcessWait.marker(marker, child: child, root: fixture.root)
     let final = store.cacheDirectory.appendingPathComponent(
       "artifact-content/" + digest.dropFirst(7))
     #expect(!FileManager.default.fileExists(atPath: final.path))
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    terminateProcess(child)
     let restore = WellKnownProvider {
       guard $0.absoluteString == url else {
         throw CoreError.invalidState("restore consulted index")
@@ -212,7 +203,7 @@ extension LockedArtifactLifecycleTests {
   }
 
   private func artifactTestProcess(root: URL) throws -> Process {
-    var directory = Bundle(for: ArtifactTestBundle.self).bundleURL.deletingLastPathComponent()
+    var directory = Bundle(for: ArtifactTestBundle.self).bundleURL
     while !FileManager.default.isExecutableFile(
       atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
     {
@@ -220,7 +211,12 @@ extension LockedArtifactLifecycleTests {
     }
     let process = Process()
     process.executableURL = directory.appendingPathComponent("StateTestProcess")
-    process.arguments = [root.path, "cache-content", "stage.0.copy.entry"]
+    process.arguments = [
+      root.path, "cache-content",
+      TransactionCheckpoint.copy(
+        0, .init(path: TransactionSlot.staged.name(0) + "/SKILL.md", step: .entryCopied)
+      ).name,
+    ]
     try process.run()
     return process
   }

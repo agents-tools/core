@@ -1,5 +1,6 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import AgentsSkills
 import AgentsUpdates
 import Foundation

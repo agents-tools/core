@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import AgentsSkills
 import Foundation
 import Testing
@@ -22,6 +23,6 @@ struct SkillSourceAliasTests {
     let declaration = try fixture.store().loadDeclaration()
     #expect(declaration.sources["source"]?.location == fixture.repo.path)
     #expect(declaration.sources["mirror-source"]?.location == mirror.path)
-    #expect(declaration.skills?["mirror-source"]?.select == .names(["other"]))
+    #expect((try declaration.skills)?["mirror-source"]?.select == .names(["other"]))
   }
 }

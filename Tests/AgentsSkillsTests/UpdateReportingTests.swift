@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -126,20 +127,24 @@ struct UpdateReportingTests {
       } else {
         let retained = try plan.retain()
         let transaction = FileTransaction(store: store) { step in
-          if step == "stage.0.ready" {
+          if step == TransactionCheckpoint.stage(0, .constructed).name {
             let parent = fixture.target("demo").deletingLastPathComponent()
             let staged = try #require(
               FileManager.default.contentsOfDirectory(
                 at: parent,
                 includingPropertiesForKeys: nil
-              ).first { $0.lastPathComponent.hasSuffix(".new") })
+              ).first { $0.lastPathComponent.hasPrefix(".agents-") }
+            )
+            .appendingPathComponent(TransactionSlot.exchanged.name(0))
             try FileManager.default.setAttributes(
               [.posixPermissions: 0o755],
               ofItemAtPath: staged.appendingPathComponent("SKILL.md").path)
           }
         }
         try plan.stage(retained: retained, transaction: transaction)
-        #expect(throws: CoreError.self) { try transaction.commit() }
+        #expect(throws: CoreError.invalidState("staged content executable mode mismatch")) {
+          try transaction.commit()
+        }
       }
     }
     #expect(try fixture.stateAndTargetBytes() == before)
@@ -188,7 +193,7 @@ struct UpdateReportingTests {
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(repair.membership.allSatisfy { $0.before == $0.after } && !repair.changes.isEmpty)
     var declaration = try store.loadDeclaration()
-    declaration.skills = nil
+    try declaration.setSkills(nil)
     try store.save(declaration: declaration, resolved: store.loadResolved())
     let removed = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
@@ -208,15 +213,15 @@ struct UpdateReportingTests {
     _ = try fixture.add(mode: .edit)
     let store = fixture.store()
     var declaration = try store.loadDeclaration()
-    declaration.skills?["fixture"]?.agents = [.codex, .cursor, .claudeCode]
+    try declaration.updateSkills { $0?["fixture"]?.agents = [.codex, .cursor, .claudeCode] }
     try store.save(declaration: declaration, resolved: store.loadResolved())
     let added = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(added.membership.first { $0.agent == .codex }?.before == .installed(mode: .edit))
     #expect(added.membership.first { $0.agent == .cursor }?.before == .absent)
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
-    declaration.skills?["fixture"]?.agents = [.codex, .cursor]
-    declaration.skills?["fixture"]?.mode = .copy
+    try declaration.updateSkills { $0?["fixture"]?.agents = [.codex, .cursor] }
+    try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     try store.save(declaration: declaration, resolved: store.loadResolved())
     let changed = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)

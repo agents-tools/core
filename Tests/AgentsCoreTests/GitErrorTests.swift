@@ -1,3 +1,4 @@
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -144,11 +145,15 @@ struct GitErrorTests {
     try initGitRepo(upstream)
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     let source = SourceDeclaration(kind: .local, location: upstream.path)
-    try store.save(declaration: Declaration(sources: ["source": source]), resolved: ResolvedState())
+    let id = try source.identity(environment: store.environment)
+    // Recovery knows a source location from the lock or watch state, never the declaration.
+    try store.save(
+      declaration: Declaration(sources: ["source": source]),
+      resolved: ResolvedState(sources: [id: LockedSource(kind: .local)]))
     let cache = SourceCache(store: store)
     _ = try cache.resolve(source)
     try cache.beginWatchReferenceUpdate()
-    let mirror = cache.mirrorURL(sourceID: try source.identity(environment: store.environment))
+    let mirror = cache.mirrorURL(sourceID: id)
     try Data("[invalid\n".utf8).write(to: mirror.appendingPathComponent("config"))
 
     let error = try #require(throws: GitError.self) { try cache.recoverWatchReferences() }

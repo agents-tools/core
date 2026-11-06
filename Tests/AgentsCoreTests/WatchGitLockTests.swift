@@ -1,6 +1,7 @@
 import AgentsCore
-import Darwin
+import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Watch Git lock recovery")
@@ -39,13 +40,13 @@ struct WatchGitLockTests {
     defer {
       // Freeze the scope owner before killing its Git children, so error handling
       // cannot race the assertions about abandoned locks.
-      if writer.isRunning { Darwin.kill(writer.processIdentifier, SIGSTOP) }
+      if writer.isRunning { CPlatform.kill(writer.processIdentifier, SIGSTOP) }
       if let text = try? String(contentsOf: ready, encoding: .utf8) {
         for pid in text.split(whereSeparator: \.isWhitespace).compactMap({ Int32($0) }) {
-          Darwin.kill(pid, SIGKILL)
+          CPlatform.kill(pid, SIGKILL)
         }
       }
-      terminate(writer)
+      terminateProcess(writer)
     }
     try waitFor(ready, process: writer)
     var locks = [
@@ -55,30 +56,31 @@ struct WatchGitLockTests {
     if packed { locks.append(fixture.mirror.appendingPathComponent("packed-refs.new")) }
     for lock in locks { try #require(FileManager.default.fileExists(atPath: lock.path)) }
     let reader = try stateTestProcess(root: fixture.root, arguments: ["read", ""])
-    defer { terminate(reader) }
+    defer { terminateProcess(reader) }
     try waitFor(fixture.root.appendingPathComponent("reader-started"), process: reader)
     Thread.sleep(forTimeInterval: 0.05)
     #expect(
       !FileManager.default.fileExists(
         atPath: fixture.root.appendingPathComponent("reader-finished").path))
     for lock in locks { #expect(FileManager.default.fileExists(atPath: lock.path)) }
-    terminate(reader)
-    Darwin.kill(writer.processIdentifier, SIGSTOP)
+    terminateProcess(reader)
+    CPlatform.kill(writer.processIdentifier, SIGSTOP)
     let pids = try String(contentsOf: ready, encoding: .utf8)
       .split(whereSeparator: \.isWhitespace).compactMap { Int32($0) }
     try #require(pids.count == 2)
-    for pid in pids { Darwin.kill(pid, SIGKILL) }
-    terminate(writer)
+    for pid in pids { CPlatform.kill(pid, SIGKILL) }
+    terminateProcess(writer)
     try FileManager.default.removeItem(at: ready)
     try FileManager.default.removeItem(at: hook)
     for lock in locks { #expect(FileManager.default.fileExists(atPath: lock.path)) }
     // Pruning the disappeared upstream branch would need the abandoned packed-refs lock.
     try fixture.rewrite("later")
     let before = try FileHash.folderHash(fixture.store.directory)
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
-    #expect(throws: pending) { try fixture.watch.status(environment: fixture.environment) }
+    #expect(throws: pendingRecovery) { try fixture.watch.status(environment: fixture.environment) }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
-    #expect(throws: pending) { try fixture.watch.diff("source", environment: fixture.environment) }
+    #expect(throws: pendingRecovery) {
+      try fixture.watch.diff("source", environment: fixture.environment)
+    }
     #expect(try FileHash.folderHash(fixture.store.directory) == before)
     let committed = try fixture.stateBytes()
 
@@ -87,8 +89,8 @@ struct WatchGitLockTests {
     }
     for lock in additional { try Data("abandoned".utf8).write(to: lock) }
     let recovery = try stateTestProcess(
-      root: fixture.root, arguments: ["watch-recover", "watch.git-lock.unlinked"])
-    try fixture.kill(recovery, at: "watch.git-lock.unlinked")
+      root: fixture.root, arguments: ["watch-recover", "watch.git-lock.0.0.unlinked"])
+    try fixture.kill(recovery, at: "watch.git-lock.0.0.unlinked")
     #expect(
       try fixture.recoveredWatch().sources[fixture.id]?.seen
         == (removing ? nil : .revision(replacement)))
@@ -124,7 +126,7 @@ struct WatchGitLockTests {
       try #require(mkfifo(unsafe.path, 0o600) == 0)
     }
     let before = try fixture.stateBytes()
-    #expect(throws: CoreError.self) { try fixture.store.loadWatch() }
+    #expect(throws: CoreError.self) { try fixture.store.withLock {} }
     #expect(try fixture.stateBytes() == before)
     #expect(try Data(contentsOf: safe) == original)
     #expect(try Data(contentsOf: external) == original)
@@ -151,18 +153,6 @@ struct WatchGitLockTests {
   }
 
   private func waitFor(_ marker: URL, process: Process) throws {
-    let deadline = Date().addingTimeInterval(30)
-    while !FileManager.default.fileExists(atPath: marker.path), process.isRunning, Date() < deadline
-    {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
-  }
-
-  private func terminate(_ process: Process) {
-    if process.isRunning {
-      Darwin.kill(process.processIdentifier, SIGKILL)
-      process.waitUntilExit()
-    }
+    try ProcessWait.marker(marker, child: process, root: marker.deletingLastPathComponent())
   }
 }

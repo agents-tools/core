@@ -1,200 +1,161 @@
 import Foundation
 
-/// A durable undo journal covers targets, scope state files and cache pruning.
-/// The scope writer lock must be held through planning, commit and recovery.
+/// The scope's sole durable undo journal owns private construction containers,
+/// sealed publication evidence and terminal disposal. The scope writer lock spans
+/// preparation, commit and recovery; external writers are identified by inode and digest.
 package final class FileTransaction {
-  private struct Entry: Codable {
-    var path: String
-    var existed: Bool
-    var replacement: Bool
-    var name: String { String(path.split(separator: "/").last!) }
+  package enum Source {
+    case data(Data)
+    case copy(URL)
+    /// A symbolic link to the URL, relative to the target parent when the URL is in the scope.
+    case link(URL)
+    /// A producer may construct arbitrary intermediate objects only inside its private container.
+    case prepared((URL) throws -> URL)
   }
-  private struct Journal: Codable {
-    var id: UUID
-    var scope: String
-    var roots: [String: String]
-    var phase: Phase
-    var entries: [Entry]
-  }
-  private enum Phase: String, Codable { case preparing, applying, committed, rolledBack }
-  private struct Content {
-    var url: URL?
-    var link: Bool
-    var data: Data?
-    var expectedHash: String?
+  /// Checks for the sealed staging; nil fields are not compared.
+  struct Expectation {
+    var hash: String?
     var executableFlags: [String: Bool]?
-    var prepare: ((URL) throws -> URL)?
+    var kind: mode_t?
+    var mode: mode_t?
+    /// The destination a staged symbolic link must contain.
+    var linkDestination: String?
+  }
+  private struct Request {
+    let path: String
+    let evidence: TargetPrecondition
+    /// Absent for a deletion.
+    let source: Source?
+    let expectation: Expectation
   }
   private let store: StateStore
   private let checkpoint: (String) throws -> Void
   private let outcome: TransactionOutcome
-  private var entries: [Entry] = []
-  private var contents: [Content] = []
+  private var requests: [Request] = []
+  private var unchanged: [any PreparedEvidence] = []
+  private var targetPaths: Set<String> { Set(requests.map { $0.evidence.url.path }) }
 
   package init(
     store: StateStore, outcome: TransactionOutcome = TransactionOutcome(),
     checkpoint: @escaping (String) throws -> Void = { _ in }
   ) {
     self.store = store
-    self.checkpoint = checkpoint
     self.outcome = outcome
+    self.checkpoint = checkpoint
   }
 
+  /// `expectedHash` and `executableFlags` describe the content's tree hash and execute bits.
   package func replace(
-    _ destination: URL, content: URL?, link: Bool = false, data: Data? = nil,
-    expectedHash: String? = nil, executableFlags: [String: Bool]? = nil
+    _ destination: URL, with source: Source, expectedHash: String? = nil,
+    executableFlags: [String: Bool]? = nil, expecting: TargetPrecondition? = nil
   ) throws {
-    if let expectedHash {
-      try StateValidation.digest(expectedHash)
-      guard content != nil || data != nil else {
-        throw CoreError.invalidState("verification requires content")
-      }
+    if let expectedHash { try StateValidation.digest(expectedHash) }
+    let (path, evidence) = try request(destination, expecting: expecting)
+    var expectation = Expectation(hash: expectedHash, executableFlags: executableFlags)
+    switch source {
+    case .copy(let url):
+      expectation = try Self.copyExpectation(url, hash: expectedHash, flags: executableFlags)
+    case .link(let url):
+      expectation.linkDestination = Self.linkDestination(
+        url, parent: destination.deletingLastPathComponent(), store: store)
+    case .data, .prepared: break
     }
+    requests.append(
+      Request(path: path, evidence: evidence, source: source, expectation: expectation))
+  }
+
+  package func delete(_ destination: URL, expecting: TargetPrecondition? = nil) throws {
+    let (path, evidence) = try request(destination, expecting: expecting)
+    requests.append(Request(path: path, evidence: evidence, source: nil, expectation: .init()))
+  }
+
+  /// Prepared inputs that this journal does not replace must still match at commit entry,
+  /// after staging and after publication; the journal verifies its own targets itself.
+  package func requireUnchanged(since evidence: any PreparedEvidence...) {
+    unchanged += evidence
+  }
+
+  private func validateUnchanged() throws {
+    for evidence in unchanged { try evidence.validate(excludingTargets: targetPaths) }
+  }
+
+  private func request(_ destination: URL, expecting: TargetPrecondition?) throws -> (
+    path: String, evidence: TargetPrecondition
+  ) {
     let path = try TransactionPaths(store: store).path(for: destination)
-    guard !entries.contains(where: { $0.path == path }) else {
+    guard !requests.contains(where: { $0.path == path }) else {
       throw CoreError.invalidState("duplicate transaction destination")
     }
-    entries.append(Entry(path: path, existed: false, replacement: content != nil || data != nil))
-    contents.append(
-      Content(
-        url: content, link: link, data: data, expectedHash: expectedHash,
-        executableFlags: executableFlags, prepare: nil))
+    let evidence = try expecting ?? TargetPrecondition(destination)
+    guard evidence.url.path == destination.standardizedFileURL.path else {
+      throw CoreError.invalidState("precondition belongs to another target")
+    }
+    return (path, evidence)
   }
 
-  /// Builds source content inside journal-owned scratch storage before verified copying.
-  func prepare(_ destination: URL, content: @escaping (URL) throws -> URL) throws {
-    try replace(destination, content: nil)
-    entries[entries.count - 1].replacement = true
-    contents[contents.count - 1].prepare = content
-  }
-
-  func remove(_ name: String, from parent: DirectoryHandle) throws {
-    try replace(parent.url.appendingPathComponent(name), content: nil)
+  static func copyExpectation(
+    _ source: URL, hash: String?, flags: [String: Bool]?
+  ) throws -> Expectation {
+    let physical = source.resolvingSymlinksInPath()
+    let parent = try DirectoryHandle(at: physical.deletingLastPathComponent())
+    if let hash, let flags {
+      let info = try parent.info(physical.lastPathComponent)
+      return Expectation(
+        hash: hash, executableFlags: flags, kind: info.map(FileObjectIdentity.init)?.kind,
+        mode: info.map { $0.st_mode & 0o7777 })
+    }
+    let capture = try FileSnapshot.capture(physical.lastPathComponent, from: parent)
+    guard let snapshot = capture.snapshot else { throw CoreError.notFound(source.path) }
+    return Expectation(
+      hash: hash ?? "sha256:" + capture.contentHash,
+      executableFlags: flags ?? capture.executableFlags,
+      kind: snapshot.identity.kind, mode: snapshot.mode)
   }
 
   package func commit() throws {
+    guard !requests.isEmpty else { return }
     guard let directory = try store.openDirectoryIfPresent(),
-      try directory.info("transaction.json") == nil
+      try !TransactionJournal.isPresent(in: directory)
     else {
       throw CoreError.invalidState("transaction recovery is required")
     }
-    let paths = TransactionPaths(store: store)
-    var roots: [String: DirectoryHandle] = [:]
-    for entry in entries {
-      let key = try paths.components(entry.path).root
-      if roots[key] == nil {
-        roots[key] = try paths.root(key, create: true, checkpoint: checkpoint)
-      }
-    }
-    let parents = try entries.map {
-      try paths.parent(for: $0.path, roots: roots, create: true, checkpoint: checkpoint)
-    }
-    try Self.validateDestinations(entries, parents: parents)
-    if entries.contains(where: {
-      ["state/agents.watch", "state/agents.resolved"].contains($0.path)
-    }) {
-      try SourceCache(store: store, checkpoint: checkpoint).beginWatchReferenceUpdate()
-    }
-    for index in entries.indices {
-      entries[index].existed = try parents[index].info(entries[index].name) != nil
-    }
-    var journal = Journal(
-      id: UUID(), scope: try directory.identity,
-      roots: try roots.mapValues { try $0.identity }, phase: .preparing, entries: entries)
-    outcome.journalID = journal.id
+    try validateUnchanged()
+    for request in requests { try request.evidence.validate() }
+    try validateOverlap()
+    let session = try makeSession(directory)
+    outcome.journalID = session.journal.id
     do {
-      try Self.persist(journal, directory: directory, checkpoint: checkpoint)
-      try checkpoint("journal.preparing")
-      for (index, entry) in entries.enumerated() {
-        let parent = parents[index]
-        let backup = Self.temporaryName(journal, index, "old")
-        let staged = Self.temporaryName(journal, index, "new")
-        if entry.existed { try parent.copy(backup, from: parent, named: entry.name) }
-        try checkpoint("backup.\(index)")
-        var content = contents[index]
-        if let prepare = content.prepare {
-          let work = Self.temporaryName(journal, index, "work")
-          try parent.makeDirectory(work)
-          try checkpoint("prepare.\(index).directory")
-          let root = parent.url.appendingPathComponent(work)
-          let source = try prepare(root)
-          guard PathSafety.isContained(source.resolvingSymlinksInPath(), in: root) else {
-            throw CoreError.unsafePath("prepared content escapes transaction staging")
-          }
-          content.url = source
-          content.expectedHash = "sha256:" + (try FileHash.folderHash(source))
-          content.executableFlags = try FileHash.executableFlags(source)
-          try checkpoint("prepare.\(index).ready")
-        }
-        if let data = content.data {
-          try parent.write(staged, data: data, preservingMetadataOf: entry.existed ? backup : nil)
-          try checkpoint("stage.\(index).written")
-        } else if let source = content.url {
-          if content.link {
-            try parent.link(
-              staged, destination: Self.linkDestination(source, parent: parent.url, store: store))
-          } else {
-            try Self.validateCopy(source)
-            let origin = source.resolvingSymlinksInPath()
-            try parent.copy(
-              staged, from: DirectoryHandle(at: origin.deletingLastPathComponent()),
-              named: origin.lastPathComponent,
-              checkpoint: { try checkpoint("stage.\(index).copy.\($0)") })
-          }
-        }
-        try checkpoint("stage.\(index).ready")
-        if let expectedHash = content.expectedHash {
-          let hash: String
-          if content.link, let source = content.url {
-            hash = try FileHash.folderHash(source)
-          } else if content.data == nil {
-            hash = try FileHash.folderHash(parent.child(staged))
-          } else {
-            hash = try FileHash.sha256Hex(data: parent.read(staged))
-          }
-          guard "sha256:" + hash == expectedHash else {
-            throw CoreError.invalidState("staged content digest mismatch")
-          }
-          try checkpoint("stage.\(index).verified")
-        }
-        if let flags = content.executableFlags {
-          let actual =
-            try content.link
-            ? FileHash.executableFlags(content.url!)
-            : FileHash.executableFlags(parent.child(staged))
-          guard actual == flags else {
-            throw CoreError.invalidState("staged content executable mode mismatch")
-          }
-        }
-        try checkpoint("stage.\(index)")
+      try session.persist(.created)
+      try session.emit(.phase(.preparing))
+      try session.createContainers()
+      try session.checkCapabilities()
+      // Capability probing may only touch missing ancestry, journal and private containers.
+      if session.journal.entries.contains(where: {
+        ["state/agents.watch", "state/agents.resolved"].contains($0.path)
+      }) {
+        try SourceCache(store: store, checkpoint: checkpoint).beginWatchReferenceUpdate()
       }
-      journal.phase = .applying
+      for (index, request) in requests.enumerated() {
+        try session.stage(index, source: request.source, expectation: request.expectation)
+      }
+      try session.emit(.preconditions)
+      try validateUnchanged()
+      try session.validatePreimages()
       outcome.disposition = .recoveryRequired
-      try Self.persist(journal, directory: directory, checkpoint: checkpoint)
-      try checkpoint("journal.applying")
-      for (index, entry) in entries.enumerated() {
-        let parent = parents[index]
-        if entry.replacement {
-          try parent.rename(
-            Self.temporaryName(journal, index, "new"), to: entry.name, swap: entry.existed
-          ) {
-            try checkpoint("replace.\(index).renamed")
-          }
-        } else if entry.existed {
-          try parent.rename(entry.name, to: Self.temporaryName(journal, index, "removed")) {
-            try checkpoint("replace.\(index).renamed")
-          }
-        }
-        try checkpoint("replace.\(index)")
-      }
-      journal.phase = .committed
-      try Self.persist(journal, directory: directory, checkpoint: checkpoint)
+      for index in session.journal.entries.indices { try session.publish(index) }
+      try validateUnchanged()
+      try session.sealDisposal()
+      try session.emit(.commitValidated)
+      try session.finish(.committed)
       outcome.disposition = .committed
-      try checkpoint("journal.committed")
-      try Self.cleanup(journal, directory: directory, parents: parents, checkpoint: checkpoint)
+      try session.emit(.phase(.committed))
+      try session.dispose()
     } catch {
+      // Recovery names its checkpoints under `recovery.`, apart from the failed commit's.
       do {
-        _ = try Self.recover(store: store, outcome: outcome)
+        _ = try Self.recover(store: store, outcome: outcome) {
+          try self.checkpoint("recovery." + $0)
+        }
       } catch {
         outcome.disposition = .recoveryRequired
       }
@@ -202,123 +163,66 @@ package final class FileTransaction {
     }
   }
 
-  /// Recovers only after validating and pinning every parent in the journal.
-  package static func recover(
-    store: StateStore, outcome: TransactionOutcome? = nil,
-    checkpoint: (String) throws -> Void = { _ in }
-  )
-    throws -> Bool
-  {
-    guard let directory = try store.openDirectoryIfPresent() else { return false }
-    guard try directory.info("transaction.json") != nil else {
-      guard try directory.info("transaction.new") != nil else { return false }
-      _ = try directory.read("transaction.new")
-      try directory.remove("transaction.new")
-      return true
-    }
-    var journal = try StateStore.decode(directory.read("transaction.json"), as: Journal.self)
-    guard journal.scope == (try directory.identity) else {
-      throw CoreError.invalidState("transaction journal belongs to another scope location")
-    }
-    let paths = TransactionPaths(store: store)
-    var roots: [String: DirectoryHandle] = [:]
-    let keys = try Set(journal.entries.map { try paths.components($0.path).root })
-    guard keys == Set(journal.roots.keys) else {
-      throw CoreError.invalidState("invalid transaction roots")
-    }
-    for key in keys {
-      let root = try paths.root(key)
-      guard try root.identity == journal.roots[key] else {
-        throw CoreError.invalidState("transaction root identity changed")
-      }
-      roots[key] = root
-    }
-    let parents = try journal.entries.map { try paths.parent(for: $0.path, roots: roots) }
-    try validateDestinations(journal.entries, parents: parents)
-    for (index, entry) in journal.entries.enumerated() {
-      if journal.phase == .applying, entry.existed,
-        try parents[index].info(temporaryName(journal, index, "old")) == nil
-      {
-        throw CoreError.invalidState("missing transaction backup")
-      }
-    }
-    // Validate the journal's scratch file before any recovery mutation as well.
-    if try directory.info("transaction.new") != nil { _ = try directory.read("transaction.new") }
-    if journal.phase == .applying {
-      for (index, entry) in journal.entries.enumerated().reversed() {
-        let parent = parents[index]
-        if entry.existed {
-          let restore = temporaryName(journal, index, "restore")
-          try parent.remove(restore)
-          try parent.copy(restore, from: parent, named: temporaryName(journal, index, "old"))
-          try parent.rename(restore, to: entry.name, swap: try parent.info(entry.name) != nil) {
-            try checkpoint("restore.\(index).renamed")
-          }
-          try parent.remove(restore)
-        } else {
-          try parent.remove(entry.name) { try checkpoint("restore.\(index).remove.\($0)") }
-        }
-        try checkpoint("restore.\(index)")
-      }
-    }
-    if journal.phase == .applying || journal.phase == .preparing {
-      journal.phase = .rolledBack
-      try persist(journal, directory: directory, checkpoint: checkpoint)
-    }
-    try cleanup(journal, directory: directory, parents: parents, checkpoint: checkpoint)
-    if outcome?.journalID == journal.id {
-      outcome?.disposition = journal.phase == .committed ? .committed : .unchanged
-    }
-    return true
-  }
-
-  private static func validateDestinations(_ entries: [Entry], parents: [DirectoryHandle]) throws {
-    var paths: [URL] = []
-    for (index, entry) in entries.enumerated() {
-      let path = parents[index].url.appendingPathComponent(entry.name)
+  private func validateOverlap() throws {
+    var targets: [URL] = []
+    for request in requests {
+      let target = request.evidence.physicalURL
       guard
-        !paths.contains(where: {
-          PathSafety.isContained(path, in: $0) || PathSafety.isContained($0, in: path)
+        !targets.contains(where: {
+          PathSafety.isContained(target, in: $0) || PathSafety.isContained($0, in: target)
         })
       else {
         throw CoreError.invalidState("overlapping transaction destinations")
       }
-      paths.append(path)
+      targets.append(target)
     }
   }
 
-  private static func cleanup(
-    _ journal: Journal, directory: DirectoryHandle, parents: [DirectoryHandle],
-    checkpoint: (String) throws -> Void
-  ) throws {
-    // A visible terminal phase may have been renamed but not synced by a killed
-    // writer. Make that observed generation durable before deleting any backup.
-    try directory.syncFile("transaction.json")
-    try checkpoint("journal.terminalSynced")
-    for (index, _) in journal.entries.enumerated() {
-      for suffix in ["old", "new", "removed", "restore", "work"] {
-        try parents[index].remove(temporaryName(journal, index, suffix))
+  private func makeSession(_ directory: DirectoryHandle) throws -> TransactionSession {
+    let paths = TransactionPaths(store: store)
+    var roots: [String: DirectoryHandle] = [:]
+    for request in requests {
+      let key = try paths.components(request.path).root
+      if roots[key] == nil {
+        roots[key] = try paths.root(key, create: true) { step in
+          try checkpoint(TransactionCheckpoint.rootAncestry(key, step).name)
+        }
       }
-      try checkpoint("cleanup.\(index)")
     }
-    try directory.remove("transaction.new")
-    try directory.remove("transaction.json")
-    try checkpoint("journal.removed")
-  }
-
-  private static func temporaryName(_ journal: Journal, _ index: Int, _ suffix: String) -> String {
-    ".agents-\(journal.id.uuidString)-\(index).\(suffix)"
-  }
-
-  private static func persist(
-    _ journal: Journal, directory: DirectoryHandle,
-    checkpoint: (String) throws -> Void
-  ) throws {
-    try directory.remove("transaction.new")
-    try directory.write("transaction.new", data: StateStore.encode(journal))
-    try directory.rename("transaction.new", to: "transaction.json") {
-      try checkpoint("journal.\(journal.phase.rawValue).renamed")
+    let parents = try requests.enumerated().map { index, request in
+      try paths.parent(for: request.path, roots: roots, create: true) { step in
+        try checkpoint(TransactionCheckpoint.parentAncestry(entry: index, step).name)
+      }
     }
+    for request in requests { try request.evidence.validateIdentity() }
+    let id = UUID()
+    var containers: [TransactionJournal.Container] = []
+    var identities: [String: Int] = [:]
+    var entries: [TransactionJournal.Entry] = []
+    for (index, request) in requests.enumerated() {
+      let identity = try parents[index].identity
+      let container: Int
+      if let existing = identities[identity] {
+        container = existing
+      } else {
+        container = containers.count
+        identities[identity] = container
+        containers.append(
+          .init(entry: index, name: TransactionJournal.containerName(id: id, index: container)))
+      }
+      entries.append(
+        .init(
+          path: request.path, action: request.source == nil ? .delete : .install,
+          preimage: request.evidence.snapshot, parentIdentity: identity, container: container))
+    }
+    let journal = TransactionJournal(
+      id: id, scope: try directory.identity,
+      roots: try roots.mapValues { try $0.identity }, entries: entries, containers: containers)
+    let session = TransactionSession(
+      journal: journal, directory: directory, parents: parents,
+      checkpoint: checkpoint)
+    try session.validateRecords(store: store)
+    return session
   }
 
   package static func linkDestination(_ source: URL, parent: URL, store: StateStore) -> String {
@@ -333,23 +237,5 @@ package final class FileTransaction {
         separator: "/")
     }
     return source.path
-  }
-
-  /// A copied subtree keeps relative links that stay inside it, dangling ones included.
-  private static func validateCopy(_ source: URL) throws {
-    guard let root = PathSafety.realPath(source.path),
-      let entries = FileManager.default.enumerator(
-        at: URL(fileURLWithPath: root), includingPropertiesForKeys: [.isSymbolicLinkKey])
-    else { return }
-    for case let entry as URL in entries {
-      if try entry.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
-        entries.skipDescendants()
-        let destination = try FileManager.default.destinationOfSymbolicLink(atPath: entry.path)
-        guard !destination.hasPrefix("/"), try PathSafety.linkStaysInside(entry, root: root)
-        else {
-          throw CoreError.unsafePath("copy symlink escapes installed subtree: \(entry.path)")
-        }
-      }
-    }
   }
 }

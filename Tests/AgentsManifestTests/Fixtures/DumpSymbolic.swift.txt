@@ -1,0 +1,20 @@
+// agents-tools-version: 1.0
+import AgentsDescription
+
+let shared: Condition = .when(agents: [.openCode, .codex], scopes: [.user, .project], platforms: [.linux, .macOS])
+let agents = Agents(
+  defaultAgents: [],
+  exports: ["z", "a"],
+  sources: [
+    .source(name: "z", url: "intranet/team.git", "1.2.0"..<"1.3.0"),
+    .source(name: "a", path: "./a"),
+  ],
+  components: [
+    .instructions(sections: ["own", .section(name: "rule", source: "z", condition: shared)], chatGPT: [.prompt(name: "z", sections: []), .prompt(name: "a", sections: ["own"])], agents: []),
+    .skills(source: "z", select: ["z", "a"], exclude: ["z", "a"], overrides: [.skill(name: "z", agents: []), .skill(name: "a")]),
+    .plugin(name: "bundle", path: "bundle", source: "z", exclude: [.hook(name: "aaa"), .command(name: "zzz"), .hook(name: "bbb"), .skill(name: "ccc")]),
+  ],
+  groups: [.group(name: "z", condition: shared), .group(name: "a")],
+  uses: [.group(name: "review", source: "z", condition: shared), "a"],
+  watch: ["z", "a"]
+)
