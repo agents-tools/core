@@ -35,9 +35,16 @@ public struct WatchOperations: Sendable {
       var declaration = previous
       let lock = try store.readResolved(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
-      let argument = try SourceArgument(source)
+      var argument = try SourceArgument(source)
       guard argument.name == nil else {
         throw CoreError.invalidSource("@skill: selects skills; watch subscribes to whole sources")
+      }
+      if declaration.sources[argument.location] == nil,
+        let alias = try declaration.sources.keys.sorted().first(where: {
+          try declaration.sources[$0]?.identity(environment: environment) == argument.location
+        })
+      {
+        argument.location = alias
       }
       let selection = try argument.selection(
         in: declaration, requirement: requirement, path: path, environment: environment)
