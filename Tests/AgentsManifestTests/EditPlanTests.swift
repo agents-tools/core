@@ -176,9 +176,12 @@ struct EditPlanTests {
     try expectChange(
       "let agents = Agents(sources: [.source(name: \"a\", path: \"a\")])",
       to: """
-        let agents = Agents(sources: [.source(name: "a", path: "a")], components: [
+        let agents = Agents(
+          sources: [.source(name: "a", path: "a")],
+          components: [
             .skills(source: "a"),
-          ])
+          ]
+        )
         """
     ) { $0.skills = ["a": SkillDeclaration(select: .all)] }
   }

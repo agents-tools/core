@@ -117,7 +117,8 @@ struct ManifestLifecycleTests {
     let final = try text()
     #expect(
       final.hasPrefix(
-        header + "\n  components: [\n    // Everything the fixture publishes.\n    .skills(source: "
+        header
+          + "\n  components: [\n    // Everything the fixture publishes.\n    .skills(\n      source: "
       ))
     #expect(final.hasSuffix("),\n  ],\n  watch: []\n)\n"))
     let declaration = try store.loadDeclaration()

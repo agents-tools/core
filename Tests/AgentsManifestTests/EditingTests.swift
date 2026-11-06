@@ -23,6 +23,123 @@ func edited(_ doc: DeclarationDocument, _ edits: [ManifestEdit]) throws -> Decla
 
 @Suite("Manifest document editing")
 struct EditingTests {
+  @Test(arguments: [("  ", "\n"), ("    ", "\r\n"), ("\t", "\n"), ("\t", "\r\n")])
+  func multilineArgumentInsertionExpandsOnlyItsCall(_ indent: String, _ newline: String) throws {
+    let prefix =
+      manifestHeader + """
+        let alias = "fixture"
+        let recipients: [Agent] = [.codex]
+        let agents = Agents(
+          sources: [.source(name: "fixture", path: "./fixture")],
+          components: [
+            // Keep this component.
+
+        """
+    let suffix = ", // Keep its neighbor.\n    .instructions(sections: []),\n  ]\n)"
+    let old =
+      ".skills(source : alias /* source */, /* source note */ exclude: [] /* exclude */, agents: recipients)"
+    let text = (prefix + "    " + old + suffix).replacingOccurrences(of: "  ", with: indent)
+      .replacingOccurrences(of: "\n", with: newline)
+    let doc = try DeclarationDocument(
+      bytes: Array(text.utf8), identity: DocumentIdentity("manifest"))
+    let override = SkillOverride.skill(name: "review", mode: .copy, agents: [.cursor])
+    let handle = try #require(doc.node(at: "/components/0"))
+    let change = try doc.preparing([.upsertSkillOverride(handle, override)])
+    let expanded = """
+      .skills(
+            source : alias /* source */, /* source note */
+            exclude: [] /* exclude */,
+            overrides: [
+              .skill(
+                name: "review",
+                mode: .copy,
+                agents: [.cursor]
+              ),
+            ],
+            agents: recipients
+          )
+      """
+      .replacingOccurrences(of: "  ", with: indent)
+      .replacingOccurrences(of: "\n", with: newline)
+    #expect(
+      String(decoding: change.bytes, as: UTF8.self)
+        == text.replacingOccurrences(of: old, with: expanded))
+    let call = doc.admission.nodes[handle.syntax].range
+    #expect(
+      change.patches.allSatisfy {
+        $0.range.lowerBound >= call.lowerBound && $0.range.upperBound <= call.upperBound
+      })
+    let result = try DeclarationDocument(
+      bytes: change.bytes, identity: DocumentIdentity("manifest"))
+    #expect(result.declaration == change.expectedDeclaration)
+    let noOp = try result.preparing([
+      .upsertSkillOverride(result.node(at: "/components/0")!, override)
+    ])
+    #expect(noOp.bytes == result.bytes && noOp.patches.isEmpty)
+    let batched = try doc.preparing(operations: [
+      .edit(.upsertSkillOverride(handle, override)),
+      .insertElement(.text("unused"), into: doc.node(at: "/components/0/exclude")!, at: .last),
+    ])
+    #expect(
+      String(decoding: batched.bytes, as: UTF8.self).contains("exclude: [\"unused\"] /* exclude */")
+    )
+  }
+
+  @Test func multilineArgumentCanPrecedeTheFirstExistingArgument() throws {
+    let doc = try document("let agents = Agents(watch: [])")
+    let result = try edited(doc, [.upsertSource(.source(name: "s", path: "./s"))])
+    #expect(
+      String(decoding: result.bytes, as: UTF8.self) == manifestHeader + """
+        let agents = Agents(
+          sources: [
+            .source(name: "s", path: "./s"),
+          ],
+          watch: []
+        )
+        """)
+  }
+
+  @Test func multilineArgumentAppendsToSingleLineCallsAndScalarEditsStayInline() throws {
+    let old = ".skills(source: \"fixture\", exclude: [])"
+    let doc = try document(
+      "let agents = Agents(sources: [.source(name: \"fixture\", path: \"./fixture\")], components: [\(old)])"
+    )
+    let handle = try #require(doc.node(at: "/components/0"))
+    let result = try edited(
+      doc, [.upsertSkillOverride(handle, .skill(name: "review", mode: .copy))])
+    let expanded = """
+      .skills(
+        source: "fixture",
+        exclude: [],
+        overrides: [
+          .skill(name: "review", mode: .copy)
+        ]
+      )
+      """
+    #expect(
+      result.bytes
+        == Array(
+          String(decoding: doc.bytes, as: UTF8.self).replacingOccurrences(of: old, with: expanded)
+            .utf8))
+    let scalar = try doc.preparing(operations: [
+      .setArgument(handle, field: "mode", value: InstallMode.copy.constructionValue)
+    ])
+    #expect(
+      String(decoding: scalar.bytes, as: UTF8.self)
+        == String(decoding: doc.bytes, as: UTF8.self).replacingOccurrences(
+          of: old, with: ".skills(source: \"fixture\", exclude: [], mode: .copy)"))
+    let commented = try document(
+      "let agents = Agents(sources: [.source(name: \"fixture\", path: \"./fixture\")], components: [.skills(source: \"fixture\" /* trailing */)])"
+    )
+    expectManifestFailure("manifest.edit.readOnly") {
+      try commented.preparing([
+        .upsertSkillOverride(
+          commented.node(at: "/components/0")!, .skill(name: "review", mode: .copy))
+      ])
+    }
+    #expect(try doc.preparing([.setSkillSelection(handle, .all)]).bytes == doc.bytes)
+  }
+
   @Test func rootArgumentsUseSignatureOrderAndCanonicalSourceRequirements() throws {
     let initial = try document("let agents = Agents()")
     let result = try edited(

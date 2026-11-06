@@ -129,7 +129,10 @@ extension DocumentEditor {
           value, indentation: indentation + style.indent,
           column: (indentation + style.indent + label).utf8.count,
           trailing: multiline && next == nil ? 0 : 1))
-    if let next {
+    if !multiline, !node.arguments.isEmpty, content.utf8.contains(10) || content.utf8.contains(13) {
+      try multilineArgument(
+        content, before: next, call: node, style: style, indentation: indentation)
+    } else if let next {
       let start =
         next.labelRange?.lowerBound ?? current.admission.nodes[next.value].range.lowerBound
       if multiline {
@@ -160,6 +163,40 @@ extension DocumentEditor {
       }
     }
     try mutate(pointer + "/" + pointerEscape(field), value)
+  }
+
+  /// Expand only argument boundaries; existing expressions and same-line comments retain
+  /// their spelling and ownership, and their occurrence handles remain addressable.
+  func multilineArgument(
+    _ content: String, before next: GrammarArgument?, call: GrammarNode,
+    style: PrintStyle, indentation: String
+  ) throws {
+    let argumentIndent = indentation + style.indent
+    func boundary(before offset: Int) -> Range<Int> {
+      var start = offset
+      while start > call.range.lowerBound && blank(start - 1) { start -= 1 }
+      return start..<offset
+    }
+    let close = call.range.upperBound - 1
+    if next == nil {
+      let end = current.admission.nodes[call.arguments.last!.value].range.upperBound
+      guard !internalComments(end..<close) else {
+        throw fail("manifest.edit.readOnly", "ambiguous trailing argument comments")
+      }
+      try patch(
+        end..<close,
+        "," + style.newline + argumentIndent + content + style.newline + indentation)
+    } else {
+      try patch(boundary(before: close), style.newline + indentation)
+    }
+    for argument in call.arguments.reversed() {
+      try charge(1)
+      let start =
+        argument.labelRange?.lowerBound ?? current.admission.nodes[argument.value].range.lowerBound
+      let insertion =
+        argument.value == next?.value ? content + "," + style.newline + argumentIndent : ""
+      try patch(boundary(before: start), style.newline + argumentIndent + insertion)
+    }
   }
 
   /// The first argument of an empty call takes the canonical call layout, so collections and

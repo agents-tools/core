@@ -946,6 +946,12 @@ precedence. Inserting the first argument into an empty argument list, such as
 argument starts a multiline list. Conflicting local style is an editability
 diagnostic, not permission to reformat the file.
 
+Inserting a multiline argument into a nonempty single-line call expands that
+call's argument boundaries using the document's indentation and newline style.
+Existing argument expressions, order and owned comments keep their spelling;
+bytes outside the call remain unchanged. Scalar additions keep the existing
+single-line layout.
+
 The editor and canonical printer emit one ASCII space on each side of `=` and
 `+`, with adjacent sign/digits for negative integers: `let value = -1`. A value
 replacement re-checks both joins with the unchanged source, including neighboring
