@@ -10,61 +10,26 @@ struct CompleteDeclarationPlanner {
   let environment: RuntimeEnvironment
 
   func plan() throws -> [DocumentOperation] {
-    // Keep definitions until their references leave. New groups start without references, so
-    // declaration order need not be dependency order and every split batch remains valid.
-    var stage = current
-    let sourceNames = Set(next.sourceDeclarations.map(\.name))
-    stage.sourceDeclarations =
-      next.sourceDeclarations
-      + current.sourceDeclarations.filter { !sourceNames.contains($0.name) }
-    var operations = try plan(stage)
-    if !operations.isEmpty { return operations }
-
-    let groupNames = Set(current.groups.map(\.name))
-    stage.groups += next.groups.filter { !groupNames.contains($0.name) }.map {
-      ComponentGroupDeclaration(name: $0.name, condition: $0.condition)
-    }
-    operations = try plan(stage)
-    if !operations.isEmpty { return operations }
-
-    // Remove obsolete edges before adding final edges; their union can contain a cycle even
-    // when both declarations are acyclic. Definitions remain available throughout this phase.
-    for index in stage.groups.indices {
-      let desired = next.groups.first { $0.name == stage.groups[index].name }
-      stage.groups[index].uses.removeAll { use in
-        use.source == nil
-          && !(desired?.uses.contains { $0.source == nil && $0.name == use.name } ?? false)
-      }
-    }
-    operations = try plan(stage)
-    if !operations.isEmpty { return operations }
-
-    let desiredGroups = Set(next.groups.map(\.name))
-    let obsoleteGroups = stage.groups.filter { !desiredGroups.contains($0.name) }
-    stage.groups = next.groups + obsoleteGroups
-    operations = try plan(stage)
-    if !operations.isEmpty { return operations }
-
-    var referenced = next
-    referenced.sourceDeclarations = stage.sourceDeclarations
-    referenced.groups = stage.groups
-    operations = try plan(referenced)
-    if !operations.isEmpty { return operations }
-
-    referenced.groups = next.groups
-    operations = try plan(referenced)
-    if !operations.isEmpty { return operations }
-    return try plan(next)
-  }
-
-  private func plan(_ target: Declaration) throws -> [DocumentOperation] {
     var operations: [DocumentOperation] = []
-    var desired = try DeclarationConstruction.root(target).constructionValue
+    var desired = try DeclarationConstruction.root(next).constructionValue
     if case .node(let type, let member, var fields) = desired {
       let originals = document.evaluation.root.value.fields["sources"]!.array!
       fields["sources"] = .array(
-        try target.sourceDeclarations.map { entry in
-          if let index = current.sourceDeclarations.firstIndex(where: { $0.name == entry.name }),
+        try next.sourceDeclarations.map { entry in
+          let matches = current.sourceDeclarations.indices.filter {
+            current.sourceDeclarations[$0].name == entry.name
+          }
+          if matches.count > 1 {
+            let spans = matches.compactMap {
+              document.sourceMap.locations(at: "/sources/\($0)").first?.span
+            }
+            throw ManifestFailure(
+              ManifestDiagnostic(
+                code: "manifest.ambiguous", message: "multiple matching source declarations",
+                span: spans.first ?? document.source.span(0..<0), related: Array(spans.dropFirst()))
+            )
+          }
+          if let index = matches.first,
             ManifestProjection.equivalent(
               current.sourceDeclarations[index].source, entry.source, environment: environment)
           {

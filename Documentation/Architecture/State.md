@@ -180,10 +180,15 @@ ambiguous comments, fail with `manifest.edit.readOnly`. A batch holds at most
 100 requests, and the document is rebuilt from the new bytes before the
 remaining difference is planned. The projection of the final document must equal
 the intended declaration, or planning fails with `manifest.edit.mismatch`.
-Full plans introduce source and group definitions before references, remove
-obsolete group edges before adding their replacements, and retain definitions
-until all removed references are gone. Each batch therefore remains valid even
-when declaration order differs from dependency order.
+Complete edits compose private static drafts across batches. Each batch retains
+the front end's static limits and compares its complete IR with the expected
+batch result. Domain validation waits until composition finishes, so related
+source and reference changes can cross a batch boundary. The final bytes must
+pass normal domain validation, environment-aware typed validation and the full
+intended-declaration comparison before they can leave planning. Public prepared
+changes always validate their final domain, including no-ops.
+Composition has an operation budget of twice the combined current and target
+value-node counts, and each replan must reduce the remaining direct difference.
 
 Without declaration bytes, planning prints the complete typed declaration with the
 [canonical printer](../Reference/Manifest.md#canonical-printing), retaining its

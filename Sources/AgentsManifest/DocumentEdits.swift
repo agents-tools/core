@@ -248,7 +248,13 @@ extension DocumentEditor {
       throw fail("manifest.edit.readOnly", "collection has no source map")
     }
     let name = value.fields[key]?.text
-    if let index = old.elementsForUse.firstIndex(where: { $0.value.fields[key]?.text == name }) {
+    let matches = old.elementsForUse.indices.filter {
+      old.elementsForUse[$0].value.fields[key]?.text == name
+    }
+    guard matches.count <= 1 else {
+      throw fail("manifest.ambiguous", "multiple matching declarations")
+    }
+    if let index = matches.first {
       try replace(collection + "/\(index)", with: value)
     } else {
       try insert(value, into: collection, at: .last)
@@ -259,7 +265,13 @@ extension DocumentEditor {
     guard let old = current.values[collection] else {
       throw fail("manifest.edit.readOnly", "collection has no source map")
     }
-    if let index = old.elementsForUse.firstIndex(where: { $0.value.fields[key]?.text == name }) {
+    let matches = old.elementsForUse.indices.filter {
+      old.elementsForUse[$0].value.fields[key]?.text == name
+    }
+    guard matches.count <= 1 else {
+      throw fail("manifest.ambiguous", "multiple matching declarations")
+    }
+    if let index = matches.first {
       try remove(collection + "/\(index)")
     }
   }

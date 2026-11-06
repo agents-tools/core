@@ -28,7 +28,7 @@ extension FullDeclarationTests {
     #expect(try planned(result, next, in: String(decoding: bytes, as: UTF8.self)) == nil)
   }
 
-  @Test func reversingGroupDependenciesAcrossBatchesKeepsAcyclicIntermediateDeclarations() throws {
+  @Test func reversingGroupDependenciesAcrossBatchesProducesTheCompleteDeclaration() throws {
     var previous = Declaration(
       sourceDeclarations: [],
       groups: (0..<102).map { index in

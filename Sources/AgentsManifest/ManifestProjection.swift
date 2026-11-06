@@ -6,6 +6,15 @@ package enum ManifestProjection {
   package static func declaration(of document: DeclarationDocument, environment: RuntimeEnvironment)
     throws -> Declaration
   {
+    let result = try draftDeclaration(of: document, environment: environment)
+    try result.validate(environment: environment)
+    return result
+  }
+
+  /// Converts statically typed values without domain validation for private edit composition.
+  static func draftDeclaration(of document: DeclarationDocument, environment: RuntimeEnvironment)
+    throws -> Declaration
+  {
     let projection = Projection(document: document)
     let ir = document.declaration
     let sources = ir.sources.map { record in
@@ -34,7 +43,6 @@ package enum ManifestProjection {
           condition: projection.condition(record["condition"]))
       }, uses: ir.uses.map(projection.use), exports: ir.exports,
       watch: ir.watch.isEmpty ? nil : ir.watch)
-    try result.validate(environment: environment)
     return result
   }
 
@@ -86,8 +94,15 @@ package enum ManifestProjection {
     case (.names(let left), .names(let right)): selections = Set(left) == Set(right)
     default: selections = false
     }
-    let left = lhs.overrides ?? [:]
-    let right = rhs.overrides ?? [:]
+    let leftNames = lhs.overrideDeclarations.map(\.name)
+    let rightNames = rhs.overrideDeclarations.map(\.name)
+    guard Set(leftNames).count == leftNames.count, Set(rightNames).count == rightNames.count else {
+      return false
+    }
+    let left = Dictionary(
+      uniqueKeysWithValues: lhs.overrideDeclarations.map { ($0.name, $0.override) })
+    let right = Dictionary(
+      uniqueKeysWithValues: rhs.overrideDeclarations.map { ($0.name, $0.override) })
     return selections && Set(lhs.exclude ?? []) == Set(rhs.exclude ?? []) && lhs.mode == rhs.mode
       && sameRecipients(lhs.agents, rhs.agents) && left.keys == right.keys
       && left.allSatisfy { equivalent($1, right[$0]!) }
@@ -108,7 +123,7 @@ package enum ManifestProjection {
   }
 }
 
-/// The front end has already checked the vocabulary and field types before projection.
+/// Static evaluation checks vocabulary and field types before conversion, including in drafts.
 private struct Projection {
   let document: DeclarationDocument
 
@@ -175,7 +190,7 @@ private struct Projection {
     case "object": return .object(dictionary(r["value"]).mapValues(nativeValue))
     default: break
     }
-    preconditionFailure("validated configuration value")
+    preconditionFailure("statically typed configuration value")
   }
   func native(_ value: DeclarationValue?) -> AgentsCore.NativeConfiguration {
     dictionary(value).mapValues { dictionary($0).mapValues(nativeValue) }

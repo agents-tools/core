@@ -49,26 +49,51 @@ package enum DeclarationEditPlan {
         span: document.source.span(0..<0))
     }
     if equivalent(previous, next) { return nil }
-    // Definition/reference phases can expose more operations after a batch. Detect stalled
-    // or cyclic plans by snapshot instead of requiring the operation count to decrease.
-    var snapshots: Set<String> = [document.digest]
+    let target = try DeclarationConstruction.root(next).constructionValue
+    let targetCost = try DocumentEditor(document: document).valueCost(target)
+    // Direct differences finalize fields, insert/delete occurrences, or move them toward
+    // retained subsequence anchors. Each original/target node needs at most a field edit and
+    // an occurrence edit. Replanning must also strictly reduce the remaining operation count.
+    var operationBudget = 2 * (document.evaluation.root.cost.nodes + targetCost.nodes)
+    var remaining = Int.max
     while true {
       var planner = Planner(
         document: document, current: current, next: next, environment: environment)
       let operations = adjust(try planner.plan())
       if operations.isEmpty { break }
-      let change = try document.preparing(
-        operations: Array(operations.prefix(ManifestLimits.Editing.requests)))
-      guard change.bytes != document.bytes, snapshots.insert(change.digest).inserted else {
+      guard operations.count < remaining else {
         throw failure(
           "manifest.edit.mismatch", "an edit batch made no progress",
           span: document.source.span(0..<0))
       }
-      document = try DeclarationDocument(bytes: change.bytes, identity: identity)
-      current = try ManifestProjection.declaration(of: document, environment: environment)
+      // Each operation re-evaluates the snapshot, scans syntax for local style and checks
+      // expected values. Size the prefix from that snapshot work, leaving room for growth
+      // and the final IR comparison. Actual charges still enforce the batch budget; failures
+      // are never retried with a fresh counter.
+      let snapshotWork =
+        document.metrics.evaluationSteps + document.metrics.syntaxNodes
+        + document.admission.nodes.count + 4 * document.evaluation.root.cost.nodes
+      let workRequests = max(1, ManifestLimits.Editing.steps / (2 * snapshotWork))
+      let batch = Array(operations.prefix(min(ManifestLimits.Editing.requests, workRequests)))
+      guard batch.count <= operationBudget else {
+        throw failure(
+          "manifest.limit", "declaration composition operation budget",
+          span: document.source.span(0..<0))
+      }
+      operationBudget -= batch.count
+      let draft = try DocumentEditor(document: document).prepareDraft(operations: batch)
+      guard draft.document.bytes != document.bytes else {
+        throw failure(
+          "manifest.edit.mismatch", "an edit batch made no progress",
+          span: document.source.span(0..<0))
+      }
+      remaining = operations.count
+      document = draft.document
+      current = try ManifestProjection.draftDeclaration(of: document, environment: environment)
     }
-    try verify(document, next, environment: environment)
-    return document.bytes
+    let validated = try DeclarationDocument(bytes: document.bytes, identity: identity)
+    try verify(validated, next, environment: environment)
+    return validated.bytes
   }
 
   private static func verify(
@@ -87,10 +112,9 @@ package enum DeclarationEditPlan {
   }
 }
 
-/// Plans one batch over one snapshot. Sources are added before references to them and removed
-/// after every reference. Each collection receives insertions before removals, so a retained
-/// element stays the insertion anchor. Selections grow before overrides arrive and shrink after
-/// overrides leave, so every prefix of a split plan keeps overrides inside the selection.
+/// Plans skill/instruction edits or delegates complete occurrence changes over one snapshot.
+/// Collections receive insertions before removals, so retained elements stay insertion anchors.
+/// Internal drafts defer domain validation until the complete edit is ready.
 private struct Planner {
   let document: DeclarationDocument
   let current: Declaration
@@ -211,18 +235,23 @@ private struct Planner {
   }
 
   func flat(_ value: Declaration) -> Bool {
+    let sources = value.sourceDeclarations.map(\.name)
+    guard Set(sources).count == sources.count else { return false }
     var aliases = Set<String>()
     var instructions = false
     for component in value.components {
       switch component {
       case .skills(let source, let selection):
+        let overrides = selection.overrideDeclarations.map(\.name)
         if !aliases.insert(source).inserted || selection.condition != nil
-          || !selection.native.isEmpty
+          || !selection.native.isEmpty || Set(overrides).count != overrides.count
         {
           return false
         }
       case .instructions(let selection):
+        let prompts = selection.prompts.map(\.name)
         if instructions || selection.condition != nil || !selection.native.isEmpty
+          || Set(prompts).count != prompts.count
           || selection.sectionReferences.contains(where: { $0.condition != nil })
           || selection.prompts.contains(where: {
             $0.prompt.condition != nil

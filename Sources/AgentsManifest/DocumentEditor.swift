@@ -78,6 +78,32 @@ final class DocumentEditor {
   }
 
   func prepare(operations: [DocumentOperation]) throws -> DocumentChange {
+    let draft = try prepareDraft(operations: operations)
+    // Public prepared changes always have valid final domain semantics, including no-ops
+    // prepared from a module-internal draft snapshot.
+    let candidate = try DeclarationDocument(
+      bytes: draft.document.bytes, identity: original.source.identity)
+    if candidate.bytes == original.bytes {
+      return DocumentChange(
+        originalDigest: original.digest, patches: [], bytes: candidate.bytes,
+        digest: candidate.digest, expectedDeclaration: candidate.declaration,
+        impactedReferences: [], diagnostics: candidate.diagnostics,
+        delta: SemanticDelta(changedPointers: []))
+    }
+    return DocumentChange(
+      originalDigest: original.digest, patches: table.patches(), bytes: candidate.bytes,
+      digest: candidate.digest, expectedDeclaration: candidate.declaration,
+      impactedReferences: Array(Set(impacted)).sorted { $0.syntax < $1.syntax },
+      diagnostics: candidate.diagnostics, delta: try semanticDelta())
+  }
+
+  /// A checked static snapshot for composing a complete declaration edit. It is not a
+  /// publishable change; only the composition owner may validate and return its final bytes.
+  struct DraftBatch {
+    let document: DeclarationDocument
+  }
+
+  func prepareDraft(operations: [DocumentOperation]) throws -> DraftBatch {
     if operations.count > ManifestLimits.Editing.requests {
       throw fail("manifest.limit", "edit batch has more than 100 requests")
     }
@@ -93,16 +119,8 @@ final class DocumentEditor {
     let expectedCost = try valueCost(expected)
     try charge(expectedCost.nodes)
     let bytes = table.bytes
-    if bytes == original.bytes {
-      guard Lowering.declaration(expected) == original.declaration else {
-        throw fail("manifest.edit.mismatch", "no-op bytes disagree with expected declaration")
-      }
-      return DocumentChange(
-        originalDigest: original.digest, patches: [], bytes: bytes, digest: original.digest,
-        expectedDeclaration: original.declaration, impactedReferences: [],
-        diagnostics: original.diagnostics, delta: SemanticDelta(changedPointers: []))
-    }
-    let candidate = try DeclarationDocument(bytes: bytes, identity: original.source.identity)
+    let candidate = try DeclarationDocument(
+      bytes: bytes, identity: original.source.identity, validateDomain: false)
     let actualCost = candidate.evaluation.root.cost
     if expectedCost.nodes + actualCost.nodes > ManifestLimits.Editing.comparisonPairs {
       throw fail("manifest.limit", "comparison node-pair budget")
@@ -113,12 +131,7 @@ final class DocumentEditor {
       throw fail(
         "manifest.edit.mismatch", "complete candidate differs from the expected declaration")
     }
-    return DocumentChange(
-      originalDigest: original.digest, patches: table.patches(), bytes: bytes,
-      digest: candidate.digest, expectedDeclaration: expectedIR,
-      impactedReferences: Array(Set(impacted)).sorted { $0.syntax < $1.syntax },
-      diagnostics: candidate.diagnostics,
-      delta: try semanticDelta())
+    return DraftBatch(document: candidate)
   }
 
   func semanticDelta() throws -> SemanticDelta {

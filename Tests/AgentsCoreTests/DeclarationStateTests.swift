@@ -7,6 +7,33 @@ import Testing
 
 @Suite("Declaration state")
 struct DeclarationStateTests {
+  @Test func failedFinalValidationAfterDraftBatchesPreservesStateAndTargets() throws {
+    let fixture = try ScopeFixture()
+    let store = fixture.store
+    let declaration = Declaration(
+      sources: ["s": SourceDeclaration(kind: .local, location: "missing")],
+      components: (0..<101).map {
+        .subagent(
+          name: "a\($0)", description: "d",
+          prompt: .file(ResourceDeclaration(path: "x.md", source: "s")))
+      })
+    try store.save(declaration: declaration, resolved: ResolvedState())
+    try Data("installed content".utf8).write(
+      to: fixture.root.appendingPathComponent("installed-target"))
+    let previous = try store.loadDeclaration()
+    var next = previous
+    next.sourceDeclarations = []
+    next.components = Array(previous.components.suffix(1))
+    let baseline = try StatePrecondition(store: store)
+    let before = try FileHash.folderHash(fixture.root)
+    #expect(throws: ManifestFailure.self) {
+      try store.planDeclaration(next, replacing: previous, prepared: baseline)
+    }
+    #expect(try FileHash.folderHash(fixture.root) == before)
+    #expect(try store.loadDeclaration() == previous)
+    #expect(try store.loadResolved() == ResolvedState())
+  }
+
   @Test(arguments: ["lock", "watch"])
   func stateWithoutADeclarationStopsEveryAccessWithoutWriting(_ kind: String) throws {
     let fixture = try ScopeFixture()

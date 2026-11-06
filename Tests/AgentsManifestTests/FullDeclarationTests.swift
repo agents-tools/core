@@ -7,6 +7,102 @@ import Testing
 
 @Suite("Complete symbolic declarations")
 struct FullDeclarationTests {
+  @Test(arguments: [0, 101])
+  func renamingSourceAtSameIdentityRetargetsAllReferences(_ referenceCount: Int) throws {
+    let references = (0..<referenceCount).map {
+      #"    .subagent(name: "agent\#($0)", description: "d", prompt: .file("x.md", source: "s")),"#
+    }.joined(separator: "\n")
+    let body = """
+      // Keep the header.
+      let agents = Agents(
+        sources: [.source(name: "s", path: "./missing")],
+        components: [
+          // Keep this unrelated component.
+          .ignore(name: "keep", patterns: ["private/**"]),
+      \(references)
+        ]
+      )
+      // Keep the tail.
+      """
+    let target = body.replacingOccurrences(of: #"name: "s", path:"#, with: #"name: "t", path:"#)
+      .replacingOccurrences(of: #"source: "s""#, with: #"source: "t""#)
+    let previous = try projected(body)
+    let next = try projected(target)
+    try previous.validate(environment: projectionEnvironment)
+    try next.validate(environment: projectionEnvironment)
+    #expect(next.components.count == referenceCount + 1)
+    let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
+    let output = String(decoding: bytes, as: UTF8.self)
+    #expect(output.hasPrefix(manifestHeader + "// Keep the header.\n"))
+    #expect(output.hasSuffix("\n// Keep the tail."))
+    #expect(
+      output.contains(
+        "// Keep this unrelated component.\n    .ignore(name: \"keep\", patterns: [\"private/**\"]),"
+      ))
+    let document = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
+    #expect(
+      document.declaration
+        == Lowering.declaration(try DeclarationConstruction.root(next).constructionValue))
+    let result = try ManifestProjection.declaration(
+      of: document, environment: projectionEnvironment)
+    #expect(try planned(result, next, in: output) == nil)
+  }
+
+  @Test func changingLocalEditSourceToGitCopyKeepsCompleteIntent() throws {
+    let body = """
+      // Keep the header.
+      let agents = Agents(
+        sources: [.source(name: "s", path: "missing")],
+        components: [
+          .skills(source: "s", mode: .edit),
+          // Keep this unrelated component.
+          .ignore(name: "keep", patterns: ["private/**"]),
+        ]
+      )
+      // Keep the tail.
+      """
+    let target =
+      body
+      .replacingOccurrences(
+        of: #".source(name: "s", path: "missing")"#,
+        with: #".source(name: "s", url: "https://example.invalid/repo.git")"#
+      )
+      .replacingOccurrences(of: "mode: .edit", with: "mode: .copy")
+    let previous = try projected(body)
+    let next = try projected(target)
+    try previous.validate(environment: projectionEnvironment)
+    try next.validate(environment: projectionEnvironment)
+    let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
+    let output = String(decoding: bytes, as: UTF8.self)
+    #expect(output.hasPrefix(manifestHeader + "// Keep the header.\n"))
+    #expect(output.hasSuffix("\n// Keep the tail."))
+    #expect(
+      output.contains(
+        "// Keep this unrelated component.\n    .ignore(name: \"keep\", patterns: [\"private/**\"]),"
+      ))
+    let document = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
+    #expect(
+      document.declaration
+        == Lowering.declaration(try DeclarationConstruction.root(next).constructionValue))
+    let result = try ManifestProjection.declaration(
+      of: document, environment: projectionEnvironment)
+    #expect(try planned(result, next, in: output) == nil)
+  }
+
+  @Test func publicEditRejectsGitSourceWithExistingEditMode() throws {
+    let doc = try document(
+      """
+      let agents = Agents(sources: [.source(name: "s", path: "missing")], components: [
+        .skills(source: "s", mode: .edit),
+        .ignore(name: "keep", patterns: []),
+      ])
+      """)
+    expectManifestFailure("manifest.domain") {
+      try doc.preparing([.upsertSource(.source(name: "s", url: "https://example.invalid/repo.git"))]
+      )
+    }
+  }
+
   @Test func removingReferencedSourceAcrossBatchesProducesEmptyDeclaration() throws {
     let components = (0..<100).map {
       #"    .subagent(name: "agent\#($0)", description: "d", prompt: .file("x.md", source: "s")),"#
