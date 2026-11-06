@@ -89,4 +89,4 @@ physical locations; Codex, Cursor, Gemini CLI and OpenCode read the same
 - Current agent locations and state: [Package](../Architecture/Package.md),
   [State](../Architecture/State.md)
 - Manifest that declares components: [Swift Manifest](SwiftManifest.md)
-- Approval before executable components deploy: [Executable Component Approval](ExecutableApproval.md)
+- Configuration application and connection tests: [Configuration Application](ConfigurationApplication.md)

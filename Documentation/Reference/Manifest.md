@@ -10,7 +10,7 @@ and conformance requirements. `AgentsDescription` supplies the vocabulary and
 [State](../Architecture/State.md#declaration) specifies the subset the state
 layer deploys and how declaration writes are published. The
 [manifest proposal](../Proposals/AgentsManifest.md) holds the pending targeting,
-source linking, component deployment, approval and lock design.
+source linking, component deployment, configuration application and lock design.
 
 The core repository declares:
 
@@ -451,8 +451,8 @@ constants, inactive values and unused groups. A failure is a located
 | Plugins | The source is declared and `path` is a safe relative path. Native mode has exactly one explicit recipient and no selection or exclusions. Selections and exclusions have no duplicates. |
 | Configuration values | `.decimal` text is a finite JSON number. Duplicate decoded keys at any dictionary level are `manifest.dictionary.duplicateKey`. |
 
-Recipient capabilities, native schema registration, executable approval and
-adapter rules are deployment checks; the
+Recipient capabilities, native schema registration and adapter rules are
+deployment checks; the
 [manifest proposal](../Proposals/AgentsManifest.md#component-deployment) specifies
 them.
 

@@ -4,7 +4,8 @@
 
 Accepted — partially implemented. Language version 1.0, its document editor and
 dump, and the `Agents.swift` state integration are implemented; targeting,
-source linking, component deployment, approvals and lock version 2 are pending.
+source linking, component deployment, configuration application and lock version 2
+are pending.
 
 ## Authors / Owners
 
@@ -19,8 +20,8 @@ grammar recognition, SwiftSyntax parsing and static type checking produce an
 agent-independent intermediate
 representation (IR); source linking and capability-driven adapters produce native
 configuration files. The **deployment ledger**, `agents.resolved`, records exact
-source pins, physical artifacts, owned keys/sections and their hashes. Machine
-user state separately owns approvals for executable content.
+source pins, physical artifacts, owned keys/sections and their hashes. CLI and
+GUI apply concrete configuration changes through one shared transaction.
 
 The core repository's complete declaration is:
 
@@ -85,7 +86,7 @@ resolved deployment facts. Comments and untouched source bytes remain intact.
 | --- | --- |
 | Construction vocabulary, files and versions, grammar, typing, resource limits, document editing, evaluated dump, diagnostics and conformance | Implemented; specified in the [manifest language reference](../Reference/Manifest.md). |
 | `Agents.swift` as scope declaration, deployable subset, declaration writes, absent-declaration rule and requirement comparison | Implemented; specified in [State](../Architecture/State.md#declaration). |
-| [Component deployment](#component-deployment), [Targeting](#targeting), [Groups and source linking](#groups-and-source-linking), the `Components` target in [Target Architecture](#target-architecture), [Approvals](#approvals) and [Lock version 2](#lock-version-2-and-ownership-conversion) | Pending; specified below. |
+| [Component deployment](#component-deployment), [Targeting](#targeting), [Groups and source linking](#groups-and-source-linking), the `Components` target in [Target Architecture](#target-architecture), [Configuration application](#configuration-application) and [Lock version 2](#lock-version-2-and-ownership-conversion) | Pending; specified below. |
 
 ## Motivation
 
@@ -96,14 +97,15 @@ conditions and source provenance make deployment and conflicts explainable.
 
 The accepted [Swift manifest](../Decisions/SwiftManifest.md),
 [component](../Decisions/AgentComponents.md) and
-[approval](../Decisions/ExecutableApproval.md) decisions constrain this contract.
+[configuration application](../Decisions/ConfigurationApplication.md) decisions
+constrain this contract.
 
 ## Proposed Change
 
 Adopt the vocabulary, static grammar, source editing and JSON contract of the
 [manifest language reference](../Reference/Manifest.md), and complete deployment
 of the whole vocabulary: targeting, group and source linking, native adapters
-and executable approval. The types-only `AgentsDescription` and
+and shared configuration application. The types-only `AgentsDescription` and
 document/compiler-front-end `AgentsManifest` library products exist; linking and
 native adapters belong in an internal `Components` target. Shared IR, source
 storage, capabilities and transactions stay in `AgentsCore`, and orchestration in
@@ -142,7 +144,7 @@ resolved components are lowered to native configuration.
 | --- | --- |
 | Skills | Selection, exclusions, installation mode and member overrides preserve membership tracking and item pins. Duplicate names and conflicting members are diagnosed. |
 | Instructions | Contributions append sections in traversal order. Prompt names are unique; each prompt has its own ordered sections. |
-| MCP server | Stdio, Streamable HTTP and SSE are distinct transports. Transport conversion must be exact; all registrations require approval. |
+| MCP server | Stdio, Streamable HTTP and SSE are distinct transports. Transport conversion must be exact. Registration is a configuration change; an optional connection test is a separate explicit action. |
 | Hook | Portable events mean before/after a tool invocation and session start/end. Adapters preserve event and command-result behavior. `.native("event")` uses its single recipient's event grammar. Matchers use its verified grammar. Omitted timeouts retain the native default. Hooks preserve declaration order. |
 | Subagent | Description and prompt are portable text. Model/tool names are identifiers validated by the recipient adapter. Omitted tools inherit its default; `[]` requires no tools. |
 | Command | A named user-invoked prompt. Parameter tokens appear as literal `${input:name}`; missing required inputs are errors. Substitution is text, not shell evaluation. |
@@ -164,18 +166,17 @@ component kind and adapter schema version. Agent identity is not repeated in the
 value. Registry validation checks fields, client-version compatibility and the
 component's recipients. A schema contributes only to its own agent and cannot
 replace portable fields, conditions, resource identities, target paths, owned-key
-boundaries or approval metadata. Collisions and unknown schemas/fields/types are
-errors for active deployment. A native permission policy can use empty portable
+boundaries. Collisions and unknown schemas/fields/types are errors for active
+deployment. A native permission policy can use empty portable
 rules when no exact portable translation exists. Native configuration remains
-subject to ordinary preview, ownership and approval checks.
+subject to ordinary preview, ownership and freshness checks.
 
 Capability validation checks every active agent/component/scope/feature against
 the registry; unsupported requests are reported rather than dropped. Inactive
-branches still undergo syntax, type and domain checks. Pending executable
-approval is separate: apply deploys approved components and reports pending or
-refused components as undeployed. Local additions approve their reviewed content
-identity through core's mutation API. Imports and group declarations do not
-approve transitive or future content.
+branches still undergo syntax, type and domain checks. Applying a valid candidate
+commits its selected configuration changes. Imports and group selections use the
+same preview and application boundary. Client runtime trust and tool-call
+permissions remain with the client.
 
 ### Targeting
 
@@ -489,9 +490,9 @@ Deployment adds or extends:
 
 | Target | Ownership and dependencies |
 | --- | --- |
-| `AgentsCore` | Adds capability protocols/descriptors, resolved component IR and approval identity. No syntax or adapter-implementation dependency. |
+| `AgentsCore` | Adds capability protocols/descriptors, resolved component IR and content identity. No syntax or adapter-implementation dependency. |
 | `Components` | Internal group linker, input-container adapters and native output adapters. Depends on `AgentsCore`, `AgentsManifest`, `AgentsSkills`, `AgentsInstructions`. Uses core source-resolution sessions and registers capability implementations during composition. Agent adapters are types/files, not one target per agent. |
-| `AgentsUpdates` | Public prepare/apply orchestration across document edits, domains, components, approvals and one state transaction. Depends on the targets above; front ends consume its workflows. |
+| `AgentsUpdates` | Public prepare/apply orchestration across document edits, domains, components and one state transaction. Depends on the targets above; front ends consume its workflows. |
 
 Core does not depend on `Components`; descriptions and document editing do not
 own a second state store. Public import names retain family identity; the
@@ -526,13 +527,23 @@ publication of validated source bytes, the shared transaction with the ledger,
 watch state, native outputs and cache, and the preparation evidence for the
 manifest.
 
-### Approvals
+### Configuration application
 
-Approval identity covers declarations, commands and shipped content, excluding
-comments and formatting. Approval is machine-local; a copied ledger disposition
-is not authorization on another machine. Apply checks the local approval for the
-resolved content identity and reports pending/refused components independently
-of source validity.
+The GUI presents concrete configuration changes and targets. Confirming applies
+that candidate through core. An explicit modifying CLI command expresses the
+same application intent. Before publication, core checks the candidate and
+relevant target state against the preparation evidence; changed evidence
+requires preparation and preview to be refreshed.
+
+Configuration reads and application do not start declared component programs.
+An optional MCP connection test is explicitly invoked against a selected
+configuration snapshot. It initializes the protocol and discovers tools, with
+bounded time/output, cancellation and cleanup of its own connections and
+processes. A local stdio test starts the displayed command. The test does not
+invoke business tools or determine whether configuration can be applied.
+Client runtime trust, authentication and tool-call authorization remain with
+the client. [Configuration Application](../Decisions/ConfigurationApplication.md)
+owns this boundary.
 
 ## Compatibility / Migration Impact
 
@@ -562,8 +573,7 @@ A deployment records registered-root-relative target, artifact kind, owners,
 recipients, owned keys/sections, expected content hash, source pins and adapter
 format. Whole-file versus managed-section ownership is explicit. For structured
 files, hash the owned values and retain formatting-sensitive patch preconditions;
-unmanaged keys are not claimed. Local approval dispositions are observations,
-not transferable authorization.
+unmanaged keys are not claimed.
 
 Lock conversion derives ownership only from existing install/target records.
 Shared skill destinations coalesce only when mode, content and ownership agree.
@@ -624,7 +634,7 @@ require current client probes.
 - [Agents Manifest Language](../Reference/Manifest.md)
 - [Swift Manifest](../Decisions/SwiftManifest.md)
 - [Agent Components and Adapters](../Decisions/AgentComponents.md)
-- [Executable Component Approval](../Decisions/ExecutableApproval.md)
+- [Configuration Application](../Decisions/ConfigurationApplication.md)
 - [Package Architecture](../Architecture/Package.md)
 - [State and Source Cache](../Architecture/State.md)
 - [Updates](../Architecture/Updates.md)

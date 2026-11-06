@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Superseded on 2026-11-06 by
+[Configuration Application](ConfigurationApplication.md). The original decision
+and its acceptance record below are retained as history.
 
 ## Context
 

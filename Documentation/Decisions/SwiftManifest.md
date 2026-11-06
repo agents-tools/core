@@ -87,5 +87,5 @@ uneditable for tools once it contains logic.
 - Current declaration, lock and state layout: [State](../Architecture/State.md)
 - Language specification: [Agents Manifest Language](../Reference/Manifest.md)
 - Component model the manifest describes: [Agent Components and Adapters](AgentComponents.md)
-- Approval of executable components: [Executable Component Approval](ExecutableApproval.md)
+- Configuration application: [Configuration Application](ConfigurationApplication.md)
 - Product scope and front ends: [agents-tools/cli decisions](https://github.com/agents-tools/cli/tree/master/Documentation/Decisions)

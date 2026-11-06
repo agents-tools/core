@@ -14,7 +14,9 @@ This directory holds durable decision records for `skill-cli`.
   declaration with lossless edits
 - `AgentComponents.md`: component model, capability registry, input adapters
   and native deployment
-- `ExecutableApproval.md`: per-machine approval of components that run code
+- `ConfigurationApplication.md`: shared configuration preview/application and
+  explicitly invoked MCP connection tests
+- `ExecutableApproval.md`: superseded decision, retained as history
 
 ## Placement
 
