@@ -25,7 +25,7 @@ public struct StateStore: Sendable {
   package static let watchFileName = "agents.watch"
   /// The scope files a state transaction may replace.
   package static let stateFileNames: Set<String> = [
-    declarationFileName, resolvedFileName, watchFileName,
+    declarationFileName, resolvedFileName, watchFileName, MaterializationReceipts.fileName,
   ]
 
   /// The declaration's bytes, or nil when the scope has no declaration and no lock or watch

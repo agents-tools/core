@@ -315,7 +315,7 @@ the denial. Existing user content and metadata are preserved.
 
 ### Journal records
 
-Journal format version 1 is independent of the manifest language, lock and watch
+Journal format version 2 is independent of the manifest language, lock and watch
 versions.
 The root records its version, transaction UUID, scope identity, registered root
 identities, transaction phase, operations, private containers and disposal
@@ -496,6 +496,92 @@ described below; the latter two require `import AgentsManifest`.
 `loadDeclaration()` returns the complete typed symbolic declaration; `loadManifest()`
 returns the complete `DeclarationDocument`, or `nil` for a
 scope without state. Both can also throw the declaration's `ManifestFailure`.
+
+### Private runtime materialization
+
+Package callers obtain a `MaterializationTarget` from `StateStore` and prepare it
+with `preparePrivateMaterialization`. Core admits only its registered file paths;
+source-authoring and arbitrary external paths are refused. Current registrations
+cover existing instruction-file destinations. Native settings, provider routes
+and cross-scope destinations require verified adapter registrations before use.
+
+Callers retain the existing scope read/writer lock and pending-recovery checks
+around preparation. Preparation captures the target's physical identity, UID/GID, mode and ordered
+ACL evidence, together with every existing physical ancestor. It does not call a
+binding provider or renderer. A permissive existing file requires the caller's
+explicit `changingAccess` intent, as does an existing owner-only mode that differs
+from the intended 0600 (for example, owner execute). The prepared `accessChange` exposes its before
+access and intended owner-only mode for the caller's report. This is part of the
+prepared mutation, without a separate approval record. Missing ancestors may be
+created by the transaction; their final identities and access are sealed before
+staging. Existing ancestry, ACL, ownership or permission drift invalidates the
+preparation. The prepared `accessFingerprint()` is a non-secret segment for the
+complete displayed candidate fingerprint: it covers registered target, intended
+owner, access/ancestry evidence, effective permission-change intent and local
+receipt generation, and excludes binding values and materialized content digests.
+It does not replace the enclosing candidate fingerprint or apply-handle lifecycle.
+
+`FileTransaction.replacePrivate` queues a cold renderer and explicitly injected
+`RuntimeBindingProvider` using the store's runtime environment. Binding names are
+data, never commands supplied by a source. The same scope lock and sole journal
+cover ordinary targets, private targets, declaration/lock updates and the local
+receipt. Ordinary requests preserve their existing metadata behavior. A private
+replacement uses its own independently sealed access rather than copying the
+live target's metadata. Core verifies its private construction directory and an
+empty owner-readable/writable file before resolving bindings or writing payload
+bytes. It rechecks access before writing and publication. Arbitrary path-based
+prepared producers are not a private materialization interface. Provider and
+renderer failures have fixed diagnostics; returned values have no encoding and
+redacted diagnostic/reflection representations.
+
+The private `materializations.json` file in the scope directory stores only
+registered target coordinates, materialization generation, registered-root
+identity, materialized digest and access evidence. It contains no binding values,
+source closure or declaration model. It is updated in the same transaction as
+the target. A later ordinary replacement or deletion still classifies its old
+materialized preimage as sensitive, then removes that target's receipt record
+when the new ordinary generation commits. Direct caller writes to the receipt
+are refused. Corrupt, permissive or stale receipts stop mutation rather than
+silently downgrading a known sensitive object. `materializationReceipt(for:)`
+returns only the local generation and access metadata. A caller that knows from
+its prior symbolic deployment that an existing target was materialized must set
+`requiringReceiptForExistingTarget`; a missing receipt then stops preparation.
+`expecting:` also binds a known local receipt generation. These expectations stay
+local; host materialization data does not enter the portable declaration or
+ledger. A freshly observed absent target has no sensitive preimage and can be
+restored or removed while its stale receipt record is reconciled atomically.
+
+Journal entries require preimage/replacement security classifications and the
+necessary sealed access/ancestry evidence. Private container identity and access
+are durable before payload construction. Missing security fields or older
+journal versions require recovery with the writing version; there is no implicit
+ordinary default or migration. Recovery consumes physical evidence only and
+never invokes binding providers or renderers. Before restoring a sensitive
+preimage, it verifies the destination ancestry, private container and preimage
+access again, including after the restoration checkpoint. Unsafe or stale
+access retains the journal and available private objects as a conflict.
+Ordinary preimages keep their recorded metadata on rollback, including when a
+private replacement had an explicit permission-change intent. Disposal validates
+sensitive evidence before erasing retained objects.
+
+Linux assessment applies POSIX ACL masks to named and owning-group entries;
+default ACLs are captured and inherited access is checked on the actual created
+inode. macOS assessment preserves ACE order/inheritance, ignores inherit-only
+ACEs for the current inode, and refuses active content/control grants or relevant
+denials whose principal membership cannot be proved without directory-service
+lookups. Unprovable layouts fail without repairing host permissions. Traversable
+ordinary ancestors are allowed when trusted ownership and effective replacement
+protection hold; sticky protection is bound to the child owner. Root and same-UID
+adversaries are outside this boundary. Snapshot capture may retry a transient
+stat/ACL generation race; retries never refresh prepared or sealed evidence.
+
+No cross-scope native route is registered by these primitives. Verified F routes
+must supply their physical root/relative target derivation, native scope and
+version, shared resource identity, owned region, actual readers/precedence,
+private/reference alternatives and collision evidence before the corresponding
+shared footprint, lock ordering and durable reservation can be integrated. These
+local operations retain the ordinary scope writer lock and do not acquire a
+global user lock.
 
 ### Read-only access
 

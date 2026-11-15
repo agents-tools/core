@@ -53,6 +53,8 @@ func signalContention() throws {
 }
 if arguments[2].hasPrefix("ledger-") {
   try ledgerProbe(arguments[2], store: store)
+} else if arguments[2].hasPrefix("private-") {
+  try privateMaterializationProbe(arguments[2], store: store, checkpoint: { try stop($0) })
 } else if arguments[2] == "git-environment" {
   let before = ProcessInfo.processInfo.environment
   let cache = SourceCache(store: store)

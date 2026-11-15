@@ -3,16 +3,16 @@ import Foundation
 
 /// Access metadata is separate from content generations. ACL bytes contain ordered
 /// numeric identities and inheritance, never resolved account names or payload bytes.
-struct FileAccessEvidence: Codable, Equatable, Sendable {
+package struct FileAccessEvidence: Codable, Equatable, Sendable {
   enum ACLFormat: String, Codable, Sendable {
     case darwinExternal
     case linuxPOSIX
   }
 
   let identity: FileObjectIdentity
-  let owner: UInt32
-  let group: UInt32
-  let mode: mode_t
+  package let owner: UInt32
+  package let group: UInt32
+  package let mode: mode_t
   let aclFormat: ACLFormat
   let acl: Data
   let defaultACL: Data
@@ -66,7 +66,17 @@ struct FileAccessEvidence: Codable, Equatable, Sendable {
     evidence: Self, assessment: UInt32, links: UInt64
   ) {
     var value = platform_file_access()
-    guard platform_read_file_access(descriptor, &value) == 0 else {
+    // Concurrent directory-entry activity can move stat's generation during an
+    // ACL query. Retry only capture; sealed/prepared evidence is never refreshed.
+    var captured = false
+    for attempt in 0..<3 {
+      if platform_read_file_access(descriptor, &value) == 0 {
+        captured = true
+        break
+      }
+      if errno != EAGAIN || attempt == 2 { break }
+    }
+    guard captured else {
       throw CoreError.invalidState("cannot capture descriptor access evidence: \(errno)")
     }
     defer { platform_dispose_file_access(&value) }
@@ -236,5 +246,66 @@ final class PrivateFileHandle {
 private func requireAccessComponent(_ name: String) throws {
   guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\0") else {
     throw CoreError.invalidState("access operation requires one path component")
+  }
+}
+
+/// Ordered physical ancestry, derived from a registered target rather than journal paths.
+/// A prefix can describe a not-yet-created parent during preparation only.
+struct DirectoryAccessEvidence: Codable, Equatable {
+  let directories: [FileAccessEvidence]
+
+  static func capture(at url: URL) throws -> Self {
+    var descriptor = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard descriptor >= 0 else { throw CoreError.unsafePath("cannot open access ancestry") }
+    defer { close(descriptor) }
+    var evidence = [try FileAccessEvidence.capture(descriptor: descriptor)]
+    for (index, name) in url.standardizedFileURL.pathComponents.dropFirst().enumerated() {
+      let alias = index == 0 && platform_system_alias(name)
+      let next = openat(
+        descriptor, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | (alias ? 0 : O_NOFOLLOW))
+      if next < 0 {
+        guard errno == ENOENT else { throw CoreError.unsafePath("cannot open access ancestry") }
+        break
+      }
+      do {
+        let child = try FileAccessEvidence.capture(descriptor: next)
+        _ = try FileAccessEvidence.requireNonReplaceableDirectory(
+          descriptor: descriptor, protectingOwner: child.owner)
+        evidence.append(child)
+      } catch {
+        close(next)
+        throw error
+      }
+      close(descriptor)
+      descriptor = next
+    }
+    _ = try FileAccessEvidence.requireNonReplaceableDirectory(
+      descriptor: descriptor, protectingOwner: geteuid())
+    return Self(directories: evidence)
+  }
+
+  func validate(at url: URL, allowingCreation: Bool = false) throws {
+    let current = try Self.capture(at: url)
+    guard
+      allowingCreation
+        ? current.directories.starts(with: directories) : current == self
+    else { throw CoreError.invalidState("filesystem access ancestry changed during preparation") }
+  }
+}
+
+extension DirectoryHandle {
+  @discardableResult
+  func requirePrivateAccess(_ name: String, matching expected: FileAccessEvidence? = nil) throws
+    -> FileAccessEvidence
+  {
+    try requireAccessComponent(name)
+    let file = openat(descriptor, name, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+    guard file >= 0 else { throw CoreError.invalidState("cannot open private object") }
+    defer { close(file) }
+    let evidence = try FileAccessEvidence.requirePrivate(descriptor: file)
+    guard expected == nil || expected == evidence,
+      try info(name).map(FileObjectIdentity.init) == evidence.identity
+    else { throw CoreError.invalidState("private object access changed") }
+    return evidence
   }
 }

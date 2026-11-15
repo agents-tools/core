@@ -89,6 +89,7 @@ package struct TargetPrecondition {
   package let url: URL
   let snapshot: FileSnapshot?
   private let identity: PathIdentity
+  private(set) var access: TargetAccessPrecondition?
 
   var physicalURL: URL {
     url.deletingLastPathComponent().resolvingSymlinksInPath().appendingPathComponent(
@@ -120,16 +121,44 @@ package struct TargetPrecondition {
     return (capture.bytes, Self(url: url, snapshot: capture.snapshot, identity: identity))
   }
 
+  func capturingAccess() throws -> Self {
+    var result = self
+    result.access = try TargetAccessPrecondition.capture(at: physicalURL)
+    try result.validate()
+    return result
+  }
+
   package func sameGeneration(as other: Self) -> Bool {
-    url.path == other.url.path && snapshot == other.snapshot
+    url.path == other.url.path && snapshot == other.snapshot && access == other.access
   }
 
   func validateIdentity() throws { try identity.validate() }
 
   package func validate() throws {
     try validateIdentity()
+    try access?.validate(at: physicalURL)
     guard try FileSnapshot.read(at: url) == snapshot else {
       throw CoreError.invalidState("target changed during preparation: \(url.path)")
+    }
+  }
+}
+
+struct TargetAccessPrecondition: Equatable {
+  let ancestry: DirectoryAccessEvidence
+  let target: FileAccessEvidence?
+
+  static func capture(at url: URL) throws -> Self {
+    let parentURL = url.deletingLastPathComponent()
+    let ancestry = try DirectoryAccessEvidence.capture(at: parentURL)
+    let complete = ancestry.directories.count == parentURL.standardizedFileURL.pathComponents.count
+    let target =
+      try complete ? DirectoryHandle(at: parentURL).accessEvidence(url.lastPathComponent) : nil
+    return Self(ancestry: ancestry, target: target)
+  }
+
+  func validate(at url: URL) throws {
+    guard try Self.capture(at: url) == self else {
+      throw CoreError.invalidState("target or ancestry access changed during preparation")
     }
   }
 }

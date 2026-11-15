@@ -5,7 +5,12 @@ extension TransactionSession {
   func createContainers() throws {
     for index in journal.containers.indices {
       let parent = parents[journal.containers[index].entry]
-      let created = try parent.makeDirectory(journal.containerName(index))
+      let needsPrivate = journal.entries.contains { $0.container == index && $0.security.isPrivate }
+      let created =
+        try needsPrivate
+        ? parent.createPrivateDirectory(journal.containerName(index))
+        : parent.makeDirectory(journal.containerName(index))
+      if needsPrivate { journal.containers[index].access = try created.accessEvidence() }
       let identity = try created.objectIdentity
       try emit(.containerCreated(index))
       guard try parent.info(journal.containerName(index)).map(FileObjectIdentity.init) == identity
@@ -35,7 +40,8 @@ extension TransactionSession {
   }
 
   func stage(
-    _ index: Int, source: FileTransaction.Source?, expectation: FileTransaction.Expectation
+    _ index: Int, source: FileTransaction.Source?, expectation: FileTransaction.Expectation,
+    privateData: (() throws -> Data)? = nil
   ) throws {
     let entry = journal.entries[index]
     let parent = parents[index]
@@ -44,10 +50,10 @@ extension TransactionSession {
     try emit(.stage(index, .preimageSynced))
     let staging = TransactionSlot.staging(for: entry)
     var staged: FileSnapshot?
-    if let source {
+    if source != nil || entry.security.replacement == .privateMaterialization {
       let sealed = try construct(
         source, expectation: expectation, named: staging.name(index), index: index,
-        container: container, parent: parent)
+        container: container, parent: parent, privateData: privateData)
       try emit(.stage(index, .constructed))
       let capture = try FileSnapshot.capture(staging.name(index), from: container)
       try verify(source, sealed, capture: capture)
@@ -55,10 +61,14 @@ extension TransactionSession {
         throw conflict(index, "missing constructed object")
       }
       staged = snapshot
+      if entry.security.replacement == .privateMaterialization {
+        journal.entries[index].security.stagedAccess = try container.requirePrivateAccess(
+          staging.name(index))
+      }
     } else {
       try emit(.stage(index, .constructed))
     }
-    for slot in TransactionSlot.objectSlots where source == nil || slot != staging {
+    for slot in TransactionSlot.objectSlots where entry.action == .delete || slot != staging {
       guard try container.info(slot.name(index)) == nil else {
         throw CoreError.invalidState("unexpected private recovery slot before sealing")
       }
@@ -70,11 +80,30 @@ extension TransactionSession {
 
   /// Returns the expectation the sealed staging must meet.
   private func construct(
-    _ source: FileTransaction.Source, expectation: FileTransaction.Expectation,
-    named name: String, index: Int, container: DirectoryHandle, parent: DirectoryHandle
+    _ source: FileTransaction.Source?, expectation: FileTransaction.Expectation,
+    named name: String, index: Int, container: DirectoryHandle, parent: DirectoryHandle,
+    privateData: (() throws -> Data)?
   ) throws -> FileTransaction.Expectation {
     let entry = journal.entries[index]
     var expectation = expectation
+    if entry.security.replacement == .privateMaterialization {
+      guard let privateData else {
+        throw conflict(index, "missing private materialization producer")
+      }
+      let file = try container.createPrivateFile(name)
+      try emit(.stage(index, .writeCreated))
+      try requirePreimage(index)
+      _ = try container.requirePrivateAccess(name, matching: file.evidence)
+      // The callback is never given a path or unverified descriptor.
+      let data = try privateData()
+      try requireParent(index)
+      try file.write(data)
+      expectation.hash = "sha256:" + FileHash.sha256Hex(data: data)
+      expectation.kind = S_IFREG
+      expectation.mode = file.evidence.mode
+      return expectation
+    }
+    guard let source else { throw conflict(index, "missing ordinary construction input") }
     switch source {
     case .data(let data):
       let original = entry.preimage?.isRegular == true ? entry.preimage : nil
@@ -118,14 +147,14 @@ extension TransactionSession {
   }
 
   private func verify(
-    _ source: FileTransaction.Source, _ expectation: FileTransaction.Expectation,
+    _ source: FileTransaction.Source?, _ expectation: FileTransaction.Expectation,
     capture: FileSnapshot.Capture
   ) throws {
     let snapshot = capture.snapshot
     if let kind = expectation.kind, snapshot?.identity.kind != kind {
       throw CoreError.invalidState("staged content type mismatch")
     }
-    if case .data = source, snapshot?.isRegular != true {
+    if case .data? = source, snapshot?.isRegular != true {
       throw CoreError.invalidState("staged content type mismatch")
     }
     if let mode = expectation.mode, snapshot?.mode != mode {
@@ -133,16 +162,16 @@ extension TransactionSession {
     }
     var linked: URL?
     switch source {
-    case .data(let data):
+    case .data(let data)?:
       guard snapshot?.digest == FileHash.sha256Hex(data: data) else {
         throw CoreError.invalidState("staged content bytes mismatch")
       }
-    case .link(let url):
+    case .link(let url)?:
       guard snapshot?.isSymbolicLink == true, let destination = expectation.linkDestination,
         snapshot?.digest == FileHash.sha256Hex(data: Data(destination.utf8))
       else { throw CoreError.invalidState("staged symbolic link destination mismatch") }
       linked = url
-    case .copy, .prepared: break
+    case .copy?, .prepared?, nil: break
     }
     if let expected = expectation.hash {
       let actual = try linked.map(FileHash.folderHash) ?? capture.contentHash
@@ -175,6 +204,7 @@ extension TransactionSession {
     try advance(index, to: .publishing)
     try requirePreimage(index)
     try emit(.publication(index, .validated))
+    if entry.security.isPrivate { try requirePreimage(index) }
     try grantDirectoryPermissions(index, layout: layout, purpose: .publicationGrant)
     if entry.action == .install {
       let exchange = entry.preimage != nil
@@ -201,12 +231,34 @@ extension TransactionSession {
 
   func requirePreimage(_ index: Int) throws {
     try requireParent(index)
+    let entry = journal.entries[index]
+    if let preimage = entry.preimage {
+      try entry.security.validateObject(preimage, named: entry.name, in: parents[index])
+    }
     guard
       try FileSnapshot.read(journal.entries[index].name, from: parents[index])
         == journal.entries[index].preimage
     else {
       throw conflict(index, "preparation is stale; prepare again")
     }
+  }
+
+  func materializationReceipts(previous: MaterializationReceipts) throws -> MaterializationReceipts
+  {
+    var records = previous
+    for entry in journal.entries where entry.path != "state/" + MaterializationReceipts.fileName {
+      if entry.security.replacement == .privateMaterialization {
+        guard let snapshot = entry.staged, let access = entry.security.stagedAccess,
+          let root = entry.path.split(separator: "/").first,
+          let identity = journal.roots[String(root)]
+        else { throw CoreError.invalidState("materialization is missing sealed receipt evidence") }
+        records.targets[entry.path] = .init(
+          generation: journal.id, rootIdentity: identity, digest: snapshot.digest, access: access)
+      } else {
+        records.targets.removeValue(forKey: entry.path)
+      }
+    }
+    return records
   }
 
   /// A copied subtree keeps relative links that stay inside it, dangling ones included.

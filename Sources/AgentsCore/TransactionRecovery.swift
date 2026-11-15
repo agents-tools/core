@@ -209,6 +209,11 @@ extension TransactionSession {
     let parent = parents[index]
     let container = try self.container(entry.container)
     try emit(.restoration(index, .validated))
+    try requireParent(index)
+    if let preimage = entry.preimage {
+      let slot: TransactionSlot = entry.action == .install ? .exchanged : .deleted
+      try entry.security.validateObject(preimage, named: slot.name(index), in: container)
+    }
     if entry.preimage != nil {
       if entry.action == .install {
         try container.move(

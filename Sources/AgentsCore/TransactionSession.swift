@@ -79,6 +79,7 @@ final class TransactionSession {
   }
 
   func requireParent(_ index: Int) throws {
+    try journal.entries[index].security.ancestry?.validate(at: parents[index].url)
     guard
       try DirectoryHandle(at: parents[index].url).identity == journal.entries[index].parentIdentity
     else {
@@ -117,6 +118,13 @@ final class TransactionSession {
     guard try handle.objectIdentity == expected else {
       throw conflict(record.entry, "private container changed while opening")
     }
+    if journal.entries.contains(where: { $0.container == index && $0.security.isPrivate }) {
+      guard let access = record.access else {
+        throw conflict(record.entry, "missing private container access")
+      }
+      _ = try FileAccessEvidence.requirePrivate(descriptor: handle.descriptor)
+      try access.validate(descriptor: handle.descriptor)
+    }
     return handle
   }
 
@@ -130,6 +138,7 @@ final class TransactionSession {
     var targets: [URL] = []
     for (index, entry) in journal.entries.enumerated() {
       try requireParent(index)
+      try entry.security.validate(entry: entry)
       let target = parents[index].url.appendingPathComponent(entry.name)
       guard
         !targets.contains(where: {
@@ -170,6 +179,11 @@ final class TransactionSession {
       guard entry.progress == .queued || record.identity != nil else {
         throw CoreError.invalidState("sealed operation is missing private container identity")
       }
+    }
+    let needsPrivate = journal.entries.contains { $0.container == index && $0.security.isPrivate }
+    guard !needsPrivate || record.identity == nil || record.access?.identity == record.identity
+    else {
+      throw CoreError.invalidState("private container is missing access evidence")
     }
     try record.disposal?.validate()
     if let disposal = record.disposal {
@@ -214,11 +228,17 @@ final class TransactionSession {
     let entry = journal.entries[index]
     try requireParent(index)
     let layouts = TransactionLayout.expected(entry)
-    if entry.progress == .queued { return layouts[0] }
+    if entry.progress == .queued {
+      if entry.security.preimage == .privateMaterialization, let original = entry.preimage {
+        try entry.security.validateObject(original, named: entry.name, in: parents[index])
+      }
+      return layouts[0]
+    }
     let container = try self.container(entry.container)
     var objects: [TransactionSlot: FileSnapshot] = [:]
     for slot in TransactionSlot.objectSlots {
       if let value = try FileSnapshot.read(slot.name(index), from: container) {
+        try entry.security.validateObject(value, named: slot.name(index), in: container)
         objects[slot] = value
       }
     }
@@ -230,6 +250,14 @@ final class TransactionSession {
           return expected.matches(actual, permittingDirectoryWrite: permitsWrite)
         })
       else { continue }
+      if layout.kind == .prepared, let original = entry.preimage {
+        try entry.security.validateObject(original, named: entry.name, in: parents[index])
+      }
+      if case .object(let expected) = layout.target,
+        try parents[index].info(entry.name).map(FileObjectIdentity.init) == expected.identity
+      {
+        try entry.security.validateObject(expected, named: entry.name, in: parents[index])
+      }
       if try layout.target.matches(
         entry.name, from: parents[index], permittingDirectoryWrite: permitsWrite)
       {

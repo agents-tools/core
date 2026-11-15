@@ -2,7 +2,7 @@ import Foundation
 
 /// The version is independent of declaration, resolved and watch formats.
 struct TransactionJournal: Codable {
-  static let currentVersion = 1
+  static let currentVersion = 2
   static let fileName = "transaction.json"
   /// The next journal generation before it replaces `fileName`.
   static let incompleteFileName = "transaction.new"
@@ -54,6 +54,7 @@ struct TransactionJournal: Codable {
     var staged: FileSnapshot?
     var progress: Progress = .queued
     var conflict: Conflict?
+    var security = TransactionSecurity()
     var name: String { String(path.split(separator: "/").last!) }
   }
 
@@ -67,6 +68,7 @@ struct TransactionJournal: Codable {
     /// entries are admitted only after `disposing` is durable; private unfinished construction
     /// needs no tree evidence.
     var disposal: FileSnapshot?
+    var access: FileAccessEvidence?
   }
 
   static func containerName(id: UUID, index: Int) -> String { ".agents-\(id.uuidString)-\(index)" }
