@@ -192,6 +192,9 @@ extension TransactionSession {
   }
 
   func publish(_ index: Int) throws {
+    guard journal.footprint.isEmpty || journal.reservationsReady else {
+      throw CoreError.invalidState("shared reservations are not ready")
+    }
     let entry = journal.entries[index]
     let parent = parents[index]
     let container = try self.container(entry.container)
@@ -243,17 +246,25 @@ extension TransactionSession {
     }
   }
 
-  func materializationReceipts(previous: MaterializationReceipts) throws -> MaterializationReceipts
+  func materializationReceipts(previous: MaterializationReceipts, shared: Bool = false) throws
+    -> MaterializationReceipts
   {
+
     var records = previous
-    for entry in journal.entries where entry.path != "state/" + MaterializationReceipts.fileName {
+    for entry in journal.entries
+    where entry.path != "state/" + MaterializationReceipts.fileName
+      && !entry.path.hasPrefix(NativeTargetRoute.metadataRoot + "/")
+      && entry.path.hasPrefix(NativeTargetRoute.globalRoot + "/") == shared
+    {
       if entry.security.replacement == .privateMaterialization {
         guard let snapshot = entry.staged, let access = entry.security.stagedAccess,
           let root = entry.path.split(separator: "/").first,
           let identity = journal.roots[String(root)]
         else { throw CoreError.invalidState("materialization is missing sealed receipt evidence") }
         records.targets[entry.path] = .init(
-          generation: journal.id, rootIdentity: identity, digest: snapshot.digest, access: access)
+          generation: journal.id,
+          rootIdentity: shared ? resources[0].identity.orderingKey : identity,
+          digest: snapshot.digest, access: access)
       } else {
         records.targets.removeValue(forKey: entry.path)
       }

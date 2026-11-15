@@ -19,6 +19,26 @@ extension FileTransaction {
     let incomplete = TransactionJournal.incompleteFileName
     guard try directory.info(primary) != nil else {
       guard try directory.info(incomplete) != nil else { return false }
+      let bytes = try directory.read(incomplete)
+      if (try? JSONSerialization.jsonObject(with: bytes)) != nil {
+        let journal = try readJournal(bytes)
+        if journal.finalized {
+          try validateRecoveryCoordination(journal, store: store, directory: directory)
+          try directory.syncFile(incomplete)
+          try cleanupFinalized(journal, store: store, directory: directory, checkpoint: checkpoint)
+          if outcome?.journalID == journal.id {
+            outcome?.disposition = journal.phase == .committed ? .committed : .unchanged
+          }
+          return true
+        }
+        if journal.isReservationOnly {
+          try validateRecoveryCoordination(journal, store: store, directory: directory)
+          try finalizeReservationConstruction(
+            journal, store: store, directory: directory, checkpoint: checkpoint)
+          if outcome?.journalID == journal.id { outcome?.disposition = .unchanged }
+          return true
+        }
+      }
       // An unstarted journal owns no object, so it is discarded without a journal barrier.
       try requireUnstartedIncompleteJournal(in: directory)
       try directory.remove(incomplete)
@@ -28,6 +48,21 @@ extension FileTransaction {
     do {
       let journal = try readJournal(directory.read(primary))
       recoveredID = journal.id
+      try validateRecoveryCoordination(journal, store: store, directory: directory)
+      if journal.isReservationOnly {
+        try finalizeReservationConstruction(
+          journal, store: store, directory: directory, checkpoint: checkpoint)
+        if outcome?.journalID == journal.id { outcome?.disposition = .unchanged }
+        return true
+      }
+      if journal.finalized {
+        try directory.syncFile(primary)
+        try cleanupFinalized(journal, store: store, directory: directory, checkpoint: checkpoint)
+        if outcome?.journalID == journal.id {
+          outcome?.disposition = journal.phase == .committed ? .committed : .unchanged
+        }
+        return true
+      }
       let session = try recoverySession(
         journal, store: store, directory: directory, checkpoint: checkpoint)
       // Validate the incomplete next generation before any recovery mutation.
@@ -65,11 +100,32 @@ extension FileTransaction {
       }
       if try directory.info(TransactionJournal.fileName) == nil {
         if try directory.info(TransactionJournal.incompleteFileName) != nil {
+          let bytes = try directory.read(TransactionJournal.incompleteFileName)
+          if (try? JSONSerialization.jsonObject(with: bytes)) != nil {
+            let journal = try readJournal(bytes)
+            if journal.finalized {
+              try validateRecoveryCoordination(journal, store: store, directory: directory)
+              return .init(
+                requiresOwner: false,
+                message: "Transaction metadata cleanup is pending (\(journal.phase.rawValue)).")
+            }
+            if journal.isReservationOnly {
+              try validateRecoveryCoordination(journal, store: store, directory: directory)
+              return .init(
+                requiresOwner: false, message: TransactionRecoveryDiagnostic.pendingMessage)
+            }
+          }
           try requireUnstartedIncompleteJournal(in: directory)
         }
         return .init(requiresOwner: false, message: TransactionRecoveryDiagnostic.pendingMessage)
       }
       let journal = try readJournal(directory.read(TransactionJournal.fileName))
+      try validateRecoveryCoordination(journal, store: store, directory: directory)
+      if journal.finalized {
+        return .init(
+          requiresOwner: false,
+          message: "Transaction metadata cleanup is pending (\(journal.phase.rawValue)).")
+      }
       retained += journal.entries.compactMap(journal.containerLocation(of:))
       let session = try recoverySession(
         journal, store: store, directory: directory, checkpoint: { _ in })
@@ -104,7 +160,7 @@ extension FileTransaction {
     }
   }
 
-  private static func readJournal(_ bytes: Data) throws -> TransactionJournal {
+  static func readJournal(_ bytes: Data) throws -> TransactionJournal {
     try JSONKeys.validate(bytes)
     let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
     guard value?["version"] as? Int == TransactionJournal.currentVersion else {
@@ -115,6 +171,58 @@ extension FileTransaction {
     do { return try StateStore.decode(bytes, as: TransactionJournal.self) } catch {
       throw CoreError.invalidState("unresolved transaction journal: \(error)")
     }
+  }
+
+  private static func finalizeReservationConstruction(
+    _ journal: TransactionJournal, store: StateStore, directory: DirectoryHandle,
+    checkpoint: @escaping (String) throws -> Void
+  ) throws {
+    // Reservation construction precedes every container and publication. No data object
+    // belongs to this journal yet; a later writer may already have advanced the target.
+    var terminal = journal
+    terminal.phase = .rolledBack
+    terminal.disposing = true
+    terminal.finalized = true
+    let session = TransactionSession(
+      journal: terminal, directory: directory, parents: [], checkpoint: checkpoint)
+    try session.persist(.finalized)
+    try checkpoint("journal.finalized")
+    try cleanupFinalized(terminal, store: store, directory: directory, checkpoint: checkpoint)
+  }
+
+  private static func validateRecoveryCoordination(
+    _ journal: TransactionJournal, store: StateStore, directory: DirectoryHandle
+  ) throws {
+    try journal.validateCoordination()
+    guard try directory.identity == journal.scope else {
+      throw CoreError.invalidState("transaction scope identity changed")
+    }
+    if !journal.footprint.isEmpty {
+      guard let context = TransactionLockContext.current(store) else {
+        throw CoreError.invalidState("shared recovery requires its held coordination footprint")
+      }
+      try context.validate(journal, scope: directory)
+      if journal.finalized {
+        for identity in journal.footprint {
+          try context.resource(identity).validateFinalized(journal)
+        }
+      }
+    }
+  }
+
+  private static func cleanupFinalized(
+    _ journal: TransactionJournal, store: StateStore, directory: DirectoryHandle,
+    checkpoint: (String) throws -> Void
+  ) throws {
+    for (index, identity) in journal.footprint.enumerated() {
+      let resource = try TransactionLockContext.current(store).requiredResource(identity)
+      try resource.release(journal) { try checkpoint("shared.\(index)." + $0) }
+    }
+    try directory.removeFiles([TransactionJournal.incompleteFileName, TransactionJournal.fileName])
+    { name in
+      if name == TransactionJournal.fileName { try checkpoint("journal.unlinked") }
+    }
+    try checkpoint("journal.removed")
   }
 
   private static func recoverySession(
@@ -132,7 +240,10 @@ extension FileTransaction {
     }
     let parents = try journal.entries.map { try paths.parent(for: $0.path, roots: roots) }
     let session = TransactionSession(
-      journal: journal, directory: directory, parents: parents, checkpoint: checkpoint)
+      journal: journal, directory: directory, parents: parents, checkpoint: checkpoint,
+      resources: try journal.footprint.map { identity in
+        try TransactionLockContext.current(store).requiredResource(identity)
+      })
     try session.validateRecords(store: store)
     return session
   }

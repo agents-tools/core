@@ -8,6 +8,16 @@ extension StateStore {
   /// The body may be retried when a first writer creates the scope lock.
   package func withReadLock<T>(
     onPendingRecovery: (() throws -> T)? = nil,
+    footprint: Set<NativeTargetRoute> = [],
+    _ body: () throws -> T
+  ) throws -> T {
+    try withCoordination(routes: footprint, writable: false) {
+      try withScopeReadLock(onPendingRecovery: onPendingRecovery, body)
+    }
+  }
+
+  private func withScopeReadLock<T>(
+    onPendingRecovery: (() throws -> T)? = nil,
     _ body: () throws -> T
   ) throws -> T {
     while true {
@@ -28,6 +38,10 @@ extension StateStore {
         }
       }
       defer { if descriptor >= 0 { platform_flock(descriptor, LOCK_UN) } }
+      if descriptor >= 0, let directory {
+        try TransactionLockContext.current(self)?.bindScope(directory, descriptor: descriptor)
+      }
+      try verifyCoordinationAdmission()
       let pending = try hasPendingRecovery(in: directory)
       let result = Result {
         guard pending else { return try body() }

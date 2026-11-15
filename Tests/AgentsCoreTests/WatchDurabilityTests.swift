@@ -240,7 +240,9 @@ final class WatchGitFixture {
     defer { terminateProcess(child) }
     let marker = root.appendingPathComponent("ready")
     try ProcessWait.marker(marker, child: child, root: root)
-    #expect(try String(contentsOf: marker, encoding: .utf8) == step)
+    try ProcessWait.stopped(child, root: root)
+    let observed = try String(contentsOf: marker, encoding: .utf8)
+    #expect(observed == step)
     terminateProcess(child)
     try FileManager.default.removeItem(at: marker)
   }

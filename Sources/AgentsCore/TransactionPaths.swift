@@ -29,6 +29,19 @@ struct TransactionPaths {
         }
       }
     }
+    let nativeRoutes: [NativeTargetRoute] =
+      store.scope == .project
+      ? [.claudeMCPProject, .claudeMCPLocal] : [.claudeMCPUser]
+    for route in nativeRoutes {
+      guard destination.lastPathComponent == (route.shared ? ".claude.json" : ".mcp.json") else {
+        continue
+      }
+      let target = try store.nativeTarget(for: route)
+      if target.url == destination.standardizedFileURL {
+        if route.shared { _ = try TransactionLockContext.current(store).requiredResource() }
+        return target.path
+      }
+    }
     for agent in AgentID.allCases {
       let logical = AgentRegistry.installSkillsDirectory(
         for: agent, scope: store.scope, environment: store.environment)
@@ -64,6 +77,16 @@ struct TransactionPaths {
         store.scope == .project
         ? store.environment.projectDirectory : store.environment.homeDirectory
       url = base.resolvingSymlinksInPath().appendingPathComponent(store.directory.lastPathComponent)
+    } else if key == NativeTargetRoute.projectRoot, store.scope == .project {
+      url = store.environment.projectDirectory.resolvingSymlinksInPath()
+    } else if key == NativeTargetRoute.globalRoot {
+      url = try TransactionLockContext.current(store).requiredResource().parent.url
+    } else if key == NativeTargetRoute.metadataRoot {
+      guard let metadata = try TransactionLockContext.current(store).requiredResource().metadata
+      else {
+        throw CoreError.invalidState("shared metadata directory is missing")
+      }
+      url = metadata.url
     } else if key == "instructions-project" || key == "instructions-authoring",
       store.scope == .project
     {
@@ -110,6 +133,18 @@ struct TransactionPaths {
           || (["artifacts", "artifact-content"].contains(descendants[1]) && descendants.count == 3))
       guard stateFile || cache else {
         throw CoreError.unsafePath("unmanaged state transaction path")
+      }
+    } else if key == NativeTargetRoute.projectRoot {
+      guard store.scope == .project, descendants == [".mcp.json"] else {
+        throw CoreError.unsafePath("unregistered project native target")
+      }
+    } else if key == NativeTargetRoute.globalRoot {
+      guard descendants == [".claude.json"] else {
+        throw CoreError.unsafePath("unregistered shared native target")
+      }
+    } else if key == NativeTargetRoute.metadataRoot {
+      guard descendants == ["receipt"] else {
+        throw CoreError.unsafePath("unregistered shared transaction metadata")
       }
     } else if key == "instructions-project", store.scope == .project {
       guard InstructionLocations.isProjectTarget(descendants.joined(separator: "/")) else {

@@ -68,6 +68,49 @@ package enum FileLock {
     return try withDescriptor(descriptor, at: url, checkpoint: { _ in }, body)
   }
 
+  static func withCoordinationDescriptor<T>(
+    at url: URL, writable: Bool, checkpoint: (String) throws -> Void = { _ in },
+    _ body: (Int32) throws -> T
+  ) throws -> T {
+    let parent = try DirectoryHandle(at: url.deletingLastPathComponent())
+    let descriptor = openat(
+      parent.descriptor, url.lastPathComponent,
+      (writable ? O_RDWR : O_RDONLY) | O_NOFOLLOW | O_CLOEXEC)
+    if descriptor < 0, !writable, errno == ENOENT {
+      let result = Result { try body(-1) }
+      if try parent.info(url.lastPathComponent) != nil { throw CoordinationReadmission.required }
+      return try result.get()
+    }
+    guard descriptor >= 0 else {
+      throw CoreError.invalidState("cannot open shared coordination lock")
+    }
+    defer { close(descriptor) }
+    let evidence = try FileAccessEvidence.requirePrivate(descriptor: descriptor)
+    guard evidence.identity.kind == S_IFREG else {
+      throw CoreError.invalidState("shared coordination lock is not a regular file")
+    }
+    let mode = writable ? LOCK_EX : LOCK_SH
+    while platform_flock(descriptor, mode | LOCK_NB) != 0 {
+      if errno == EINTR { continue }
+      guard errno == EWOULDBLOCK else {
+        throw CoreError.invalidState("cannot acquire shared coordination lock")
+      }
+      try checkpoint("contended")
+      while platform_flock(descriptor, mode) != 0 {
+        if errno != EINTR {
+          throw CoreError.invalidState("cannot acquire shared coordination lock")
+        }
+      }
+      break
+    }
+    guard try parent.info(url.lastPathComponent).map(FileObjectIdentity.init) == evidence.identity
+    else {
+      throw CoreError.invalidState("shared coordination lock changed")
+    }
+    try evidence.validate(descriptor: descriptor)
+    return try body(descriptor)
+  }
+
   private static func withDescriptor<T>(
     _ descriptor: Int32, at url: URL, checkpoint: (String) throws -> Void,
     _ body: (Int32) throws -> T

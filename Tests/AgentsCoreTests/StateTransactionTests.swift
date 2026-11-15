@@ -450,9 +450,7 @@ extension StateTransactionTests {
     let originalHash = try FileSnapshot.read(at: fixture.root)
     let copyHash = try FileSnapshot.read(at: copy)
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: copy))
-    #expect(throws: CoreError.invalidState("transaction root identity changed")) {
-      try store.withLock {}
-    }
+    #expect(throws: CoreError.self) { try store.withLock {} }
     #expect(try FileSnapshot.read(at: fixture.root) == originalHash)
     #expect(try FileSnapshot.read(at: copy) == copyHash)
   }

@@ -141,38 +141,48 @@ struct PrivateMaterializationTests {
     #expect(provider.calls == (["provider", "renderer"].contains(kind) ? 1 : 0))
   }
 
-  @Test func ordinaryReplacementAndDeletionRetainSensitivePreimageClassification() throws {
+  @Test func ordinaryRegionEditsKeepSensitiveSiblingsAndPrivateReceipt() throws {
+    let fixture = try TransactionFixture()
+    try installPrivate("secret sibling; region before", in: fixture)
+    let target = try fixture.store.materializationTarget(
+      at: fixture.root.appendingPathComponent("AGENTS.md"))
+    let before = try fixture.store.preparePrivateMaterialization(target)
+    var inspected = false
+    try fixture.store.withLock {
+      let transaction = FileTransaction(store: fixture.store) { point in
+        if point == "stage.0.writeCreated" {
+          let journal = try readMaterializationJournal(fixture)
+          let container = target.url.deletingLastPathComponent().appendingPathComponent(
+            journal.containers[0].name)
+          let handle = try DirectoryHandle(at: container)
+          let access = try handle.requirePrivateAccess("entry.0.exchanged")
+          #expect(access.mode == 0o600)
+          #expect(try handle.read("entry.0.exchanged").isEmpty)
+          inspected = true
+        }
+      }
+      try transaction.replace(target.url, with: .data(Data("secret sibling; region after".utf8)))
+      try transaction.commit()
+    }
+    #expect(inspected)
+    #expect(try Data(contentsOf: target.url) == Data("secret sibling; region after".utf8))
+    let after = try fixture.store.preparePrivateMaterialization(
+      target, requiringReceiptForExistingTarget: true)
+    #expect(after.receiptGeneration != before.receiptGeneration)
+    #expect(throws: CoreError.self) { try before.evidence.validate() }
+  }
+
+  @Test func wholeFileDeletionRemovesSensitiveReceipt() throws {
     let fixture = try TransactionFixture()
     try installPrivate("private-before", in: fixture)
     let target = fixture.root.appendingPathComponent("AGENTS.md")
-    for deleting in [false, true] {
-      if deleting { try installPrivate("private-again", in: fixture) }
-      var inspected = false
-      try fixture.store.withLock {
-        let transaction = FileTransaction(store: fixture.store) { point in
-          if point == "entry.0.ready" {
-            let journal = try readMaterializationJournal(fixture)
-            #expect(journal.entries[0].security.preimage == .privateMaterialization)
-            #expect(journal.entries.count == 2)
-            inspected = true
-          }
-        }
-        if deleting {
-          try transaction.delete(target)
-        } else {
-          try transaction.replace(target, with: .data(Data("ordinary".utf8)))
-        }
-        try transaction.commit()
-      }
-      #expect(inspected)
-      #expect(try fixture.store.materializationReceipts().records.targets.isEmpty)
-      if !deleting {
-        #expect(try Data(contentsOf: target) == Data("ordinary".utf8))
-        #expect(try DirectoryHandle(at: fixture.root).accessEvidence("AGENTS.md")?.mode == 0o600)
-      } else {
-        #expect(!FileManager.default.fileExists(atPath: target.path))
-      }
+    try fixture.store.withLock {
+      let transaction = FileTransaction(store: fixture.store)
+      try transaction.delete(target)
+      try transaction.commit()
     }
+    #expect(try fixture.store.materializationReceipts().records.targets.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: target.path))
   }
 
   @Test(arguments: [

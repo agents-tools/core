@@ -91,10 +91,11 @@ extension StateStore {
   package func materializationReceipt(for target: MaterializationTarget) throws
     -> MaterializationReceipt?
   {
-    guard target.scope == directory,
+    guard target.scope.path == directory.path,
       try TransactionPaths(store: self).path(for: target.url) == target.path
     else { throw CoreError.invalidState("materialization target belongs to another scope") }
-    guard let record = try materializationReceipts().records.targets[target.path] else {
+    guard let record = try materializationReceipts(for: target.path).records.targets[target.path]
+    else {
       return nil
     }
     _ = try preparePrivateMaterialization(target, expecting: record.generation)
@@ -106,10 +107,10 @@ extension StateStore {
     _ target: MaterializationTarget, changingAccess: Bool = false,
     requiringReceiptForExistingTarget: Bool = false, expecting generation: UUID? = nil
   ) throws -> PreparedPrivateMaterialization {
-    guard target.scope == directory,
+    guard target.scope.path == directory.path,
       try TransactionPaths(store: self).path(for: target.url) == target.path
     else { throw CoreError.invalidState("materialization target belongs to another scope") }
-    let receipt = try materializationReceipts()
+    let receipt = try materializationReceipts(for: target.path)
     let record = receipt.records.targets[target.path]
     if let generation, record?.generation != generation {
       throw CoreError.invalidState("materialization receipt generation changed or is missing")
@@ -142,7 +143,7 @@ extension StateStore {
     if let record = receipt.records.targets[target.path] {
       let paths = TransactionPaths(store: self)
       let key = try paths.components(target.path).root
-      guard try paths.root(key).identity == record.rootIdentity else {
+      guard try materializationRootIdentity(key) == record.rootIdentity else {
         throw CoreError.invalidState("materialization receipt root changed")
       }
       if evidence.snapshot != nil {
@@ -180,7 +181,13 @@ struct MaterializationReceipts: Codable {
     for (path, record) in targets {
       let paths = TransactionPaths(store: store)
       let parts = try paths.components(path)
-      guard parts.root.hasPrefix("instructions-"), parts.root != "instructions-authoring",
+      guard
+        (parts.root.hasPrefix("instructions-") && parts.root != "instructions-authoring")
+          || [NativeTargetRoute.projectRoot, NativeTargetRoute.globalRoot].contains(parts.root)
+      else {
+        throw CoreError.invalidState("invalid materialization receipt target")
+      }
+      guard
         record.access.identity.kind == S_IFREG,
         !record.rootIdentity.isEmpty
       else { throw CoreError.invalidState("invalid materialization receipt target") }
@@ -194,23 +201,58 @@ extension StateStore {
     directory.appendingPathComponent(MaterializationReceipts.fileName)
   }
 
-  func materializationReceipts() throws -> (
-    records: MaterializationReceipts, evidence: TargetPrecondition, access: FileAccessEvidence?
-  ) {
-    let evidence = try TargetPrecondition(materializationReceiptURL)
-    guard evidence.snapshot != nil else { return (.init(), evidence, nil) }
-    guard let directory = try openDirectoryIfPresent() else {
-      throw CoreError.invalidState("materialization receipt directory is missing")
+  func materializationRootIdentity(_ root: String) throws -> String {
+    if root == NativeTargetRoute.globalRoot {
+      return try TransactionLockContext.current(self).requiredResource().identity.orderingKey
     }
+    return try TransactionPaths(store: self).root(root).identity
+  }
+
+  func materializationReceipts(for path: String = "") throws -> MaterializationReceiptState {
+    let shared = path.hasPrefix(NativeTargetRoute.globalRoot + "/")
+    let resource = shared ? try TransactionLockContext.current(self).requiredResource() : nil
+    let url: URL
+    let receiptPath: String
+    if let resource {
+      let metadataURL = resource.parent.url.appendingPathComponent(SharedResource.metadataName)
+        .appendingPathComponent(resource.identity.directoryName)
+      url = (resource.metadata?.url ?? metadataURL).appendingPathComponent("receipt")
+      receiptPath = NativeTargetRoute.metadataRoot + "/receipt"
+    } else {
+      url = materializationReceiptURL
+      receiptPath = "state/" + MaterializationReceipts.fileName
+    }
+    let evidence = try TargetPrecondition(url)
+    guard evidence.snapshot != nil else {
+      return .init(path: receiptPath, url: url, records: .init(), evidence: evidence, access: nil)
+    }
+    let directory = try DirectoryHandle(at: url.deletingLastPathComponent())
     let evidenceWithAccess = try evidence.capturingAccess()
-    let access = try directory.requirePrivateAccess(MaterializationReceipts.fileName)
+    let access = try directory.requirePrivateAccess(url.lastPathComponent)
     do {
       let records = try Self.decode(
-        directory.read(MaterializationReceipts.fileName), as: MaterializationReceipts.self)
+        directory.read(url.lastPathComponent), as: MaterializationReceipts.self)
       try records.validate(store: self)
+      if shared, Set(records.targets.keys) != [NativeTargetRoute.globalRoot + "/.claude.json"] {
+        throw CoreError.invalidState("shared receipt must identify its physical file")
+      }
+      for (key, record) in records.targets {
+        guard shared == key.hasPrefix(NativeTargetRoute.globalRoot + "/"),
+          !shared || record.rootIdentity == resource?.identity.orderingKey
+        else { throw CoreError.invalidState("receipt belongs to another physical resource") }
+      }
       try evidence.validate()
-      _ = try directory.requirePrivateAccess(MaterializationReceipts.fileName, matching: access)
-      return (records, evidenceWithAccess, access)
+      _ = try directory.requirePrivateAccess(url.lastPathComponent, matching: access)
+      return .init(
+        path: receiptPath, url: url, records: records, evidence: evidenceWithAccess, access: access)
     } catch { throw CoreError.invalidState("invalid private materialization receipt") }
   }
+}
+
+struct MaterializationReceiptState {
+  let path: String
+  let url: URL
+  let records: MaterializationReceipts
+  let evidence: TargetPrecondition
+  let access: FileAccessEvidence?
 }

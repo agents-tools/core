@@ -221,7 +221,21 @@ struct CombinedUpdateTests {
         guard step == "plan.skills" else { return }
         attempts += 1
         if attempts == 1 {
-          try fixture.declare()
+          let store = fixture.store
+          let source = fixture.repo.path
+          let finished = DispatchSemaphore(value: 0)
+          Thread.detachNewThread {
+            defer { finished.signal() }
+            do {
+              try store.save(
+                declaration: Declaration(
+                  sources: ["fixture": SourceDeclaration(kind: .local, location: source)],
+                  skills: ["fixture": SkillDeclaration(select: .all, agents: [.codex], mode: .copy)]
+                ),
+                resolved: ResolvedState())
+            } catch { Issue.record(error) }
+          }
+          try #require(finished.wait(timeout: .now() + 10) == .success)
           if throwFirst { throw CoreError.invalidState("discarded read") }
         }
       })

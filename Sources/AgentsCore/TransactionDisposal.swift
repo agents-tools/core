@@ -88,6 +88,10 @@ extension TransactionSession {
     }
     for index in journal.containers.indices { try disposeContainer(index) }
     try requireScope()
+    journal.finalized = true
+    try persist(.finalized)
+    try checkpoint("journal.finalized")
+    try releaseReservations()
     try directory.removeFiles(
       [TransactionJournal.incompleteFileName, TransactionJournal.fileName]
     ) { name in

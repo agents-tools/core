@@ -36,9 +36,8 @@ package final class FileTransaction {
   private let checkpoint: (String) throws -> Void
   private let outcome: TransactionOutcome
   private var requests: [Request] = []
-  private var receiptState:
-    (records: MaterializationReceipts, evidence: TargetPrecondition, access: FileAccessEvidence?)?
-  private var receiptIndex: Int?
+  private var receiptStates: [String: MaterializationReceiptState] = [:]
+  private var receiptIndices: [Int: MaterializationReceiptState] = [:]
   private var unchanged: [any PreparedEvidence] = []
   private var targetPaths: Set<String> { Set(requests.map { $0.evidence.url.path }) }
 
@@ -57,7 +56,8 @@ package final class FileTransaction {
     executableFlags: [String: Bool]? = nil, expecting: TargetPrecondition? = nil
   ) throws {
     if let expectedHash { try StateValidation.digest(expectedHash) }
-    let (path, evidence, security) = try request(destination, expecting: expecting)
+    let (path, evidence, previous) = try request(destination, expecting: expecting)
+    var security = previous
     var expectation = Expectation(hash: expectedHash, executableFlags: executableFlags)
     switch source {
     case .copy(let url):
@@ -67,10 +67,21 @@ package final class FileTransaction {
         url, parent: destination.deletingLastPathComponent(), store: store)
     case .data, .prepared: break
     }
-    requests.append(
-      Request(
-        path: path, evidence: evidence, source: source, expectation: expectation,
-        security: security, privateData: nil))
+    if security.preimage == .privateMaterialization {
+      guard case .data(let data) = source else {
+        throw CoreError.invalidState("sensitive replacement requires private byte construction")
+      }
+      security.replacement = .privateMaterialization
+      requests.append(
+        Request(
+          path: path, evidence: evidence, source: nil, expectation: expectation,
+          security: security, privateData: { data }))
+    } else {
+      requests.append(
+        Request(
+          path: path, evidence: evidence, source: source, expectation: expectation,
+          security: security, privateData: nil))
+    }
   }
 
   package func delete(_ destination: URL, expecting: TargetPrecondition? = nil) throws {
@@ -87,7 +98,7 @@ package final class FileTransaction {
     provider: any RuntimeBindingProvider,
     render: @escaping (RuntimeBindingValues) throws -> Data
   ) throws {
-    guard prepared.target.scope == store.directory, prepared.owner == geteuid(),
+    guard prepared.target.scope.path == store.directory.path, prepared.owner == geteuid(),
       bindings.allSatisfy({ !$0.isEmpty && !$0.contains("\0") })
     else { throw CoreError.invalidState("invalid private materialization inputs") }
     try prepared.receiptEvidence.validate()
@@ -121,22 +132,27 @@ package final class FileTransaction {
   }
 
   private func queueReceipt() throws {
-    guard receiptIndex == nil, let receiptState,
-      requests.contains(where: {
-        $0.security.isPrivate || receiptState.records.targets[$0.path] != nil
-      })
-    else { return }
-    let target = store.materializationReceiptURL
-    var security = TransactionSecurity()
-    security.preimage = receiptState.access == nil ? .ordinary : .privateMaterialization
-    security.replacement = .privateMaterialization
-    security.preimageAccess = receiptState.access
-    security.ancestry = try DirectoryAccessEvidence.capture(at: target.deletingLastPathComponent())
-    receiptIndex = requests.count
-    requests.append(
-      Request(
-        path: "state/" + MaterializationReceipts.fileName, evidence: receiptState.evidence,
-        source: nil, expectation: .init(), security: security, privateData: nil))
+    let originals = requests
+    for state in receiptStates.values.sorted(by: { $0.path < $1.path }) {
+      let shared = state.path.hasPrefix(NativeTargetRoute.metadataRoot + "/")
+      let affected = originals.filter {
+        $0.path.hasPrefix(NativeTargetRoute.globalRoot + "/") == shared
+          && ($0.security.isPrivate || state.records.targets[$0.path] != nil)
+      }
+      guard !affected.isEmpty else { continue }
+      var security = TransactionSecurity()
+      security.preimage = state.access == nil ? .ordinary : .privateMaterialization
+      let deletesShared = shared && affected.allSatisfy { !$0.installs }
+      security.replacement = deletesShared ? .ordinary : .privateMaterialization
+      security.preimageAccess = state.access
+      security.ancestry = try DirectoryAccessEvidence.capture(
+        at: state.url.deletingLastPathComponent())
+      if !deletesShared { receiptIndices[requests.count] = state }
+      requests.append(
+        Request(
+          path: state.path, evidence: state.evidence, source: nil,
+          expectation: .init(), security: security, privateData: nil))
+    }
   }
 
   /// Prepared inputs that this journal does not replace must still match at commit entry,
@@ -156,7 +172,14 @@ package final class FileTransaction {
     guard path != "state/" + MaterializationReceipts.fileName else {
       throw CoreError.unsafePath("materialization receipts are transaction-owned")
     }
-    if receiptState == nil { receiptState = try store.materializationReceipts() }
+    if path.hasPrefix(NativeTargetRoute.globalRoot + "/") {
+      guard TransactionLockContext.current(store)?.writable == true else {
+        throw CoreError.invalidState("shared writes require the held writer footprint")
+      }
+    }
+    let receipt = try store.materializationReceipts(for: path)
+    if receiptStates[receipt.path] == nil { receiptStates[receipt.path] = receipt }
+    let receiptState = receiptStates[receipt.path]!
     guard !requests.contains(where: { $0.path == path }) else {
       throw CoreError.invalidState("duplicate transaction destination")
     }
@@ -165,10 +188,10 @@ package final class FileTransaction {
       throw CoreError.invalidState("precondition belongs to another target")
     }
     var security = TransactionSecurity()
-    if let record = receiptState?.records.targets[path] {
+    if let record = receiptState.records.targets[path] {
       let paths = TransactionPaths(store: store)
       let key = try paths.components(path).root
-      guard try paths.root(key).identity == record.rootIdentity else {
+      guard try store.materializationRootIdentity(key) == record.rootIdentity else {
         throw CoreError.invalidState("materialization receipt root changed")
       }
       // A known absence has no sensitive preimage; its receipt is reconciled in this journal.
@@ -206,13 +229,28 @@ package final class FileTransaction {
 
   package func commit() throws {
     guard !requests.isEmpty else { return }
+    let shared = requests.filter { $0.path.hasPrefix(NativeTargetRoute.globalRoot + "/") }
+    if !shared.isEmpty {
+      guard let context = TransactionLockContext.current(store), context.writable else {
+        throw CoreError.invalidState("shared commit requires its held writer footprint")
+      }
+      try context.requireWriterScope()
+      let resource = try context.resource()
+      for request in shared {
+        let parent = try DirectoryHandle(
+          at: request.evidence.physicalURL.deletingLastPathComponent())
+        guard try parent.objectIdentity == resource.identity.parent else {
+          throw CoreError.invalidState("shared commit physical registration changed")
+        }
+      }
+    }
     guard let directory = try store.openDirectoryIfPresent(),
       try !TransactionJournal.isPresent(in: directory)
     else {
       throw CoreError.invalidState("transaction recovery is required")
     }
     try queueReceipt()
-    try receiptState?.evidence.validate()
+    for state in receiptStates.values { try state.evidence.validate() }
     try validateUnchanged()
     for request in requests { try request.evidence.validate() }
     try validateOverlap()
@@ -221,6 +259,7 @@ package final class FileTransaction {
     do {
       try session.persist(.created)
       try session.emit(.phase(.preparing))
+      try session.createReservations(owner: store.directory.path)
       try session.createContainers()
       try session.checkCapabilities()
       // Capability probing may only touch missing ancestry, journal and private containers.
@@ -230,10 +269,12 @@ package final class FileTransaction {
         try SourceCache(store: store, checkpoint: checkpoint).beginWatchReferenceUpdate()
       }
       for (index, request) in requests.enumerated() {
-        if index == receiptIndex {
+        if let state = receiptIndices[index] {
           try session.stage(index, source: request.source, expectation: request.expectation) {
             try StateStore.encode(
-              session.materializationReceipts(previous: self.receiptState!.records))
+              session.materializationReceipts(
+                previous: state.records,
+                shared: state.path.hasPrefix(NativeTargetRoute.metadataRoot + "/")))
           }
         } else {
           try session.stage(
@@ -324,12 +365,16 @@ package final class FileTransaction {
           preimage: request.evidence.snapshot, parentIdentity: identity, container: container,
           security: security))
     }
+    let shared =
+      roots[NativeTargetRoute.globalRoot] != nil || roots[NativeTargetRoute.metadataRoot] != nil
+    let resources = shared ? [try TransactionLockContext.current(store).requiredResource()] : []
     let journal = TransactionJournal(
       id: id, scope: try directory.identity,
-      roots: try roots.mapValues { try $0.identity }, entries: entries, containers: containers)
+      roots: try roots.mapValues { try $0.identity }, entries: entries, containers: containers,
+      footprint: resources.map(\.identity))
     let session = TransactionSession(
       journal: journal, directory: directory, parents: parents,
-      checkpoint: checkpoint)
+      checkpoint: checkpoint, resources: resources)
     try session.validateRecords(store: store)
     return session
   }

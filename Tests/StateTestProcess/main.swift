@@ -13,12 +13,16 @@ let root = URL(fileURLWithPath: arguments[1])
 let scopeIndex = arguments.firstIndex(of: "--scope")
 let scope: InstallScope =
   scopeIndex.flatMap { InstallScope(rawValue: arguments[$0 + 1]) } ?? .project
+let sharedConfigIndex = arguments.firstIndex(of: "--shared-config")
+let sharedConfig =
+  sharedConfigIndex.map { arguments[$0 + 1] }
+  ?? root.appendingPathComponent("configured-claude").path
 let store = StateStore(
   scope: scope,
   environment: RuntimeEnvironment(
     projectDirectory: root,
     homeDirectory: root.appendingPathComponent("home"),
-    environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path]))
+    environment: ["CLAUDE_CONFIG_DIR": sharedConfig]))
 let checkpointState = Mutex(
   (requested: arguments.count > 3 ? arguments[3] : "", seen: Set<String>()))
 let traceURL = root.appendingPathComponent(
@@ -53,6 +57,8 @@ func signalContention() throws {
 }
 if arguments[2].hasPrefix("ledger-") {
   try ledgerProbe(arguments[2], store: store)
+} else if arguments[2].hasPrefix("shared-") {
+  try sharedMaterializationProbe(arguments[2], store: store, checkpoint: { try stop($0) })
 } else if arguments[2].hasPrefix("private-") {
   try privateMaterializationProbe(arguments[2], store: store, checkpoint: { try stop($0) })
 } else if arguments[2] == "git-environment" {

@@ -6,18 +6,20 @@ final class TransactionSession {
   let directory: DirectoryHandle
   let parents: [DirectoryHandle]
   let checkpoint: (String) throws -> Void
+  let resources: [SharedResource]
   /// Devices whose atomic renames passed a probe during this session only; `st_dev` values
   /// can be reused by another filesystem after an unmount.
   var capableDevices: Set<UInt64> = []
 
   init(
     journal: TransactionJournal, directory: DirectoryHandle, parents: [DirectoryHandle],
-    checkpoint: @escaping (String) throws -> Void
+    checkpoint: @escaping (String) throws -> Void, resources: [SharedResource] = []
   ) {
     self.journal = journal
     self.directory = directory
     self.parents = parents
     self.checkpoint = checkpoint
+    self.resources = resources
   }
 
   func emit(_ point: TransactionCheckpoint) throws { try checkpoint(point.name) }
@@ -73,12 +75,15 @@ final class TransactionSession {
   }
 
   func requireScope() throws {
+    try TransactionLockContext.validateHeldScope(journal.scope)
+    for resource in resources { try resource.validate() }
     guard try DirectoryHandle(at: directory.url).identity == journal.scope else {
       throw CoreError.invalidState("transaction scope identity changed")
     }
   }
 
   func requireParent(_ index: Int) throws {
+    if !resources.isEmpty { try requireScope() }
     try journal.entries[index].security.ancestry?.validate(at: parents[index].url)
     guard
       try DirectoryHandle(at: parents[index].url).identity == journal.entries[index].parentIdentity
@@ -130,6 +135,13 @@ final class TransactionSession {
 
   func validateRecords(store: StateStore) throws {
     try requireScope()
+    try journal.validateCoordination()
+    if !journal.footprint.isEmpty {
+      guard let context = TransactionLockContext.current(store) else {
+        throw CoreError.invalidState("shared transaction is outside its held writer context")
+      }
+      try context.validate(journal, scope: directory)
+    }
     let paths = TransactionPaths(store: store)
     let keys = try Set(journal.entries.map { try paths.components($0.path).root })
     guard keys == Set(journal.roots.keys), !journal.entries.isEmpty else {
@@ -269,5 +281,23 @@ final class TransactionSession {
       index,
       "missing or changed expected target or recovery slot object; expected slots: "
         + (expected.isEmpty ? "none" : expected.joined(separator: ", ")))
+  }
+}
+
+extension TransactionSession {
+  func createReservations(owner: String) throws {
+    guard !journal.footprint.isEmpty else { return }
+    for (index, resource) in resources.enumerated() {
+      try resource.reserve(journal, owner: owner) { try checkpoint("shared.\(index)." + $0) }
+    }
+    journal.reservationsReady = true
+    try persist(.reservationsReady)
+    try checkpoint("shared.ready")
+  }
+
+  func releaseReservations() throws {
+    for (index, resource) in resources.enumerated() {
+      try resource.release(journal) { try checkpoint("shared.\(index)." + $0) }
+    }
   }
 }
