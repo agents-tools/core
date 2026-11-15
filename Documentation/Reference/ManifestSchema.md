@@ -7,13 +7,13 @@ Generated from `Sources/AgentsManifest/Resources/agents.schema.json`.
 | Field | Required | Shape |
 | --- | --- | --- |
 | `version` | yes | `1` |
-| `defaultAgents` |  | sequence of agent |
-| `sources` |  | name → source |
-| `components` |  | sequence of component |
-| `groups` |  | name → group |
-| `uses` |  | sequence of use |
-| `exports` |  | sequence of string |
-| `watch` |  | sequence of string |
+| `defaultAgents` |  | sequence of agent (at most 10000 items) |
+| `sources` |  | name → source (at most 10000 properties) |
+| `components` |  | sequence of component (at most 10000 items) |
+| `groups` |  | name → group (at most 10000 properties) |
+| `uses` |  | sequence of use (at most 10000 items) |
+| `exports` |  | sequence of string (at most 10000 items) |
+| `watch` |  | sequence of string (at most 10000 items) |
 
 ## agent
 
@@ -23,9 +23,9 @@ Generated from `Sources/AgentsManifest/Resources/agents.schema.json`.
 
 | Field | Required | Shape |
 | --- | --- | --- |
-| `agents` |  | sequence of agent |
-| `scopes` |  | sequence of `project` / `user` |
-| `platforms` |  | sequence of `macos` / `linux` |
+| `agents` |  | sequence of agent (at most 10000 items) |
+| `scopes` |  | sequence of `project` / `user` (at most 10000 items) |
+| `platforms` |  | sequence of `macos` / `linux` (at most 10000 items) |
 
 ## resource
 
@@ -55,8 +55,8 @@ one of: string, mapping
 | Field | Required | Shape |
 | --- | --- | --- |
 | `executable` | yes | string |
-| `arguments` |  | sequence of string |
-| `environment` |  | name → binding |
+| `arguments` |  | sequence of string (at most 10000 items) |
+| `environment` |  | name → binding (at most 10000 properties) |
 | `workingDirectory` |  | resource |
 
 ## transport
@@ -91,7 +91,7 @@ one of: `read` / `write` / `execute`, mapping
 
 | Field | Required | Shape |
 | --- | --- | --- |
-| `sections` |  | sequence of section |
+| `sections` |  | sequence of section (at most 10000 items) |
 | `append` |  | string |
 | `condition` |  | condition |
 
@@ -99,7 +99,7 @@ one of: `read` / `write` / `execute`, mapping
 
 | Field | Required | Shape |
 | --- | --- | --- |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `mode` |  | `link` / `copy` / `edit` |
 
 ## requirement
@@ -122,34 +122,34 @@ one of: mapping, mapping, mapping
 | Field | Required | Shape |
 | --- | --- | --- |
 | `kind` | yes | `skills` |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `condition` |  | condition |
-| `native` |  | name → name → NativeValue |
+| `native` |  | name → name → NativeValue (at most 10000 properties) (at most 10000 properties) |
 | `source` | yes | string |
-| `select` |  | one of: `all`, sequence of string |
-| `exclude` |  | sequence of string |
+| `select` |  | one of: `all`, sequence of string (at most 10000 items) |
+| `exclude` |  | sequence of string (at most 10000 items) |
 | `mode` |  | `link` / `copy` / `edit` |
-| `overrides` |  | name → override |
+| `overrides` |  | name → override (at most 10000 properties) |
 
 ## component_instructions
 
 | Field | Required | Shape |
 | --- | --- | --- |
 | `kind` | yes | `instructions` |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `condition` |  | condition |
-| `native` |  | name → name → NativeValue |
-| `sections` |  | sequence of section |
-| `chatgpt` |  | name → promptDeclaration |
+| `native` |  | name → name → NativeValue (at most 10000 properties) (at most 10000 properties) |
+| `sections` |  | sequence of section (at most 10000 items) |
+| `chatgpt` |  | name → promptDeclaration (at most 10000 properties) |
 
 ## component_mcpServer
 
 | Field | Required | Shape |
 | --- | --- | --- |
 | `kind` | yes | `mcpServer` |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `condition` |  | condition |
-| `native` |  | name → name → NativeValue |
+| `native` |  | name → name → NativeValue (at most 10000 properties) (at most 10000 properties) |
 | `name` | yes | string |
 | `transport` | yes | transport |
 
@@ -158,76 +158,76 @@ one of: mapping, mapping, mapping
 | Field | Required | Shape |
 | --- | --- | --- |
 | `kind` | yes | `hook` |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `condition` |  | condition |
-| `native` |  | name → name → NativeValue |
+| `native` |  | name → name → NativeValue (at most 10000 properties) (at most 10000 properties) |
 | `name` | yes | string |
 | `event` | yes | event |
 | `run` | yes | run |
 | `matcher` |  | string |
-| `timeoutSeconds` |  | integer |
+| `timeoutSeconds` |  | integer ≥ 1 |
 
 ## component_subagent
 
 | Field | Required | Shape |
 | --- | --- | --- |
 | `kind` | yes | `subagent` |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `condition` |  | condition |
-| `native` |  | name → name → NativeValue |
+| `native` |  | name → name → NativeValue (at most 10000 properties) (at most 10000 properties) |
 | `name` | yes | string |
 | `description` | yes | string |
 | `prompt` | yes | prompt |
 | `model` |  | string |
-| `tools` |  | sequence of string |
+| `tools` |  | sequence of string (at most 10000 items) |
 
 ## component_command
 
 | Field | Required | Shape |
 | --- | --- | --- |
 | `kind` | yes | `command` |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `condition` |  | condition |
-| `native` |  | name → name → NativeValue |
+| `native` |  | name → name → NativeValue (at most 10000 properties) (at most 10000 properties) |
 | `name` | yes | string |
 | `description` | yes | string |
 | `prompt` | yes | prompt |
-| `parameters` |  | sequence of parameter |
+| `parameters` |  | sequence of parameter (at most 10000 items) |
 
 ## component_lspServer
 
 | Field | Required | Shape |
 | --- | --- | --- |
 | `kind` | yes | `lspServer` |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `condition` |  | condition |
-| `native` |  | name → name → NativeValue |
+| `native` |  | name → name → NativeValue (at most 10000 properties) (at most 10000 properties) |
 | `name` | yes | string |
 | `run` | yes | run |
-| `languages` | yes | name → string |
-| `initializationOptions` |  | name → NativeValue |
+| `languages` | yes | name → string (at most 10000 properties) |
+| `initializationOptions` |  | name → NativeValue (at most 10000 properties) |
 
 ## component_permissions
 
 | Field | Required | Shape |
 | --- | --- | --- |
 | `kind` | yes | `permissions` |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `condition` |  | condition |
-| `native` |  | name → name → NativeValue |
+| `native` |  | name → name → NativeValue (at most 10000 properties) (at most 10000 properties) |
 | `name` | yes | string |
-| `rules` | yes | sequence of rule |
+| `rules` | yes | sequence of rule (at most 10000 items) |
 
 ## component_ignore
 
 | Field | Required | Shape |
 | --- | --- | --- |
 | `kind` | yes | `ignore` |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `condition` |  | condition |
-| `native` |  | name → name → NativeValue |
+| `native` |  | name → name → NativeValue (at most 10000 properties) (at most 10000 properties) |
 | `name` | yes | string |
-| `patterns` | yes | sequence of string |
+| `patterns` | yes | sequence of string (at most 10000 items) |
 | `purpose` |  | `context` / `indexing` |
 
 ## component_plugin
@@ -235,15 +235,15 @@ one of: mapping, mapping, mapping
 | Field | Required | Shape |
 | --- | --- | --- |
 | `kind` | yes | `plugin` |
-| `agents` |  | sequence of agent |
+| `agents` |  | sequence of agent (at most 10000 items) |
 | `condition` |  | condition |
-| `native` |  | name → name → NativeValue |
+| `native` |  | name → name → NativeValue (at most 10000 properties) (at most 10000 properties) |
 | `name` | yes | string |
 | `source` | yes | string |
 | `path` | yes | string |
 | `mode` |  | `native` / `components` |
-| `select` |  | sequence of `skills` / `instructions` / `mcpServer` / `hook` / `subagent` / `command` / `lspServer` / `permissions` / `ignore` / `plugin` |
-| `exclude` |  | sequence of componentReference |
+| `select` |  | sequence of `skills` / `instructions` / `mcpServer` / `hook` / `subagent` / `command` / `lspServer` / `permissions` / `ignore` / `plugin` (at most 10000 items) |
+| `exclude` |  | sequence of componentReference (at most 10000 items) |
 
 ## component
 
@@ -261,6 +261,6 @@ one of: component_skills, component_instructions, component_mcpServer, component
 
 | Field | Required | Shape |
 | --- | --- | --- |
-| `components` |  | sequence of component |
-| `uses` |  | sequence of use |
+| `components` |  | sequence of component (at most 10000 items) |
+| `uses` |  | sequence of use (at most 10000 items) |
 | `condition` |  | condition |

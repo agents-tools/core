@@ -3,79 +3,94 @@
 enum ManifestSchema {
   static let root: YAMLRule = .object(
     [
-      "version": .version, "defaultAgents": .array(.named("agent")),
-      "sources": .dictionary(.named("source")), "components": .array(.named("component")),
-      "groups": .dictionary(.named("group")), "uses": .array(.named("use")),
-      "exports": .array(.string), "watch": .array(.string),
-    ], required: ["version"])
+      "version": .integerConstant(1), "defaultAgents": .array(.named("agent"), maximum: 10000),
+      "sources": .dictionary(.named("source"), maximum: 10000),
+      "components": .array(.named("component"), maximum: 10000),
+      "groups": .dictionary(.named("group"), maximum: 10000),
+      "uses": .array(.named("use"), maximum: 10000), "exports": .array(.string, maximum: 10000),
+      "watch": .array(.string, maximum: 10000),
+    ], required: ["version"], maximum: nil)
   static let definitions: [String: YAMLRule] = [
     "agent": .enumeration(["codex", "claude-code", "cursor", "gemini-cli", "opencode"]),
     "condition": .object(
       [
-        "agents": .array(.named("agent")), "scopes": .array(.enumeration(["project", "user"])),
-        "platforms": .array(.enumeration(["macos", "linux"])),
-      ], required: []),
-    "resource": .object(["path": .string, "source": .string], required: ["path"]),
+        "agents": .array(.named("agent"), maximum: 10000),
+        "scopes": .array(.enumeration(["project", "user"]), maximum: 10000),
+        "platforms": .array(.enumeration(["macos", "linux"]), maximum: 10000),
+      ], required: [], maximum: nil),
+    "resource": .object(["path": .string, "source": .string], required: ["path"], maximum: nil),
     "section": .object(
-      ["name": .string, "source": .string, "condition": .named("condition")], required: ["name"]),
+      ["name": .string, "source": .string, "condition": .named("condition")], required: ["name"],
+      maximum: nil),
     "binding": .oneOf([
-      .string, .object(["env": .string], required: ["env"]),
-      .object(["secret": .string], required: ["secret"]),
+      .string, .object(["env": .string], required: ["env"], maximum: nil),
+      .object(["secret": .string], required: ["secret"], maximum: nil),
     ]),
-    "prompt": .oneOf([.string, .object(["file": .named("resource")], required: ["file"])]),
+    "prompt": .oneOf([
+      .string, .object(["file": .named("resource")], required: ["file"], maximum: nil),
+    ]),
     "run": .object(
       [
-        "executable": .string, "arguments": .array(.string),
-        "environment": .dictionary(.named("binding")), "workingDirectory": .named("resource"),
-      ], required: ["executable"]),
+        "executable": .string, "arguments": .array(.string, maximum: 10000),
+        "environment": .dictionary(.named("binding"), maximum: 10000),
+        "workingDirectory": .named("resource"),
+      ], required: ["executable"], maximum: nil),
     "transport": .oneOf([
       .object(
         [
-          "kind": .constant("stdio"), "executable": .string, "arguments": .array(.string),
-          "environment": .dictionary(.named("binding")), "workingDirectory": .named("resource"),
-        ], required: ["kind", "executable"]),
+          "kind": .constant("stdio"), "executable": .string,
+          "arguments": .array(.string, maximum: 10000),
+          "environment": .dictionary(.named("binding"), maximum: 10000),
+          "workingDirectory": .named("resource"),
+        ], required: ["kind", "executable"], maximum: nil),
       .object(
         [
           "kind": .enumeration(["streamableHTTP", "sse"]), "url": .string,
-          "headers": .dictionary(.named("binding")),
-        ], required: ["kind", "url"]),
+          "headers": .dictionary(.named("binding"), maximum: 10000),
+        ], required: ["kind", "url"], maximum: nil),
     ]),
     "event": .oneOf([
       .enumeration(["beforeTool", "afterTool", "sessionStart", "sessionEnd"]),
-      .object(["native": .string], required: ["native"]),
+      .object(["native": .string], required: ["native"], maximum: nil),
     ]),
     "operation": .oneOf([
-      .enumeration(["read", "write", "execute"]), .object(["tool": .string], required: ["tool"]),
+      .enumeration(["read", "write", "execute"]),
+      .object(["tool": .string], required: ["tool"], maximum: nil),
     ]),
     "rule": .object(
       [
         "effect": .enumeration(["allow", "ask", "deny"]), "operation": .named("operation"),
         "pattern": .string,
-      ], required: ["effect", "operation", "pattern"]),
+      ], required: ["effect", "operation", "pattern"], maximum: nil),
     "parameter": .object(
       ["name": .string, "description": .string, "defaultValue": .string],
-      required: ["name", "description"]),
+      required: ["name", "description"], maximum: nil),
     "promptDeclaration": .object(
-      ["sections": .array(.named("section")), "append": .string, "condition": .named("condition")],
-      required: []),
+      [
+        "sections": .array(.named("section"), maximum: 10000), "append": .string,
+        "condition": .named("condition"),
+      ], required: [], maximum: nil),
     "override": .object(
-      ["agents": .array(.named("agent")), "mode": .enumeration(["link", "copy", "edit"])],
-      required: []),
+      [
+        "agents": .array(.named("agent"), maximum: 10000),
+        "mode": .enumeration(["link", "copy", "edit"]),
+      ], required: [], maximum: nil),
     "requirement": .oneOf([
-      .object(["branch": .string], required: ["branch"]),
-      .object(["revision": .string], required: ["revision"]),
-      .object(["exact": .string], required: ["exact"]),
-      .object(["from": .string], required: ["from"]),
-      .object(["upToNextMinor": .string], required: ["upToNextMinor"]),
-      .object(["from": .string, "to": .string], required: ["from", "to"]),
+      .object(["branch": .string], required: ["branch"], maximum: nil),
+      .object(["revision": .string], required: ["revision"], maximum: nil),
+      .object(["exact": .string], required: ["exact"], maximum: nil),
+      .object(["from": .string], required: ["from"], maximum: nil),
+      .object(["upToNextMinor": .string], required: ["upToNextMinor"], maximum: nil),
+      .object(["from": .string, "to": .string], required: ["from", "to"], maximum: nil),
     ]),
     "source": .oneOf([
       .object(
         ["url": .string, "subpath": .string, "requirement": .named("requirement")],
-        required: ["url"]),
+        required: ["url"], maximum: nil),
       .object(
         ["path": .string, "subpath": .string, "requirement": .named("requirement")],
-        required: ["path"]), .object(["index": .string, "subpath": .string], required: ["index"]),
+        required: ["path"], maximum: nil),
+      .object(["index": .string, "subpath": .string], required: ["index"], maximum: nil),
     ]),
     "componentReference": .object(
       [
@@ -83,80 +98,91 @@ enum ManifestSchema {
           "skill", "instruction", "mcpServer", "hook", "subagent", "command", "lspServer",
           "permissions", "ignore", "plugin",
         ]), "name": .string,
-      ], required: ["kind", "name"]),
+      ], required: ["kind", "name"], maximum: nil),
     "component_skills": .object(
       [
-        "kind": .constant("skills"), "agents": .array(.named("agent")),
-        "condition": .named("condition"), "native": .dictionary(.dictionary(.native)),
-        "source": .string, "select": .oneOf([.constant("all"), .array(.string)]),
-        "exclude": .array(.string), "mode": .enumeration(["link", "copy", "edit"]),
-        "overrides": .dictionary(.named("override")),
-      ], required: ["kind", "source"]),
+        "kind": .constant("skills"), "agents": .array(.named("agent"), maximum: 10000),
+        "condition": .named("condition"),
+        "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
+        "source": .string, "select": .oneOf([.constant("all"), .array(.string, maximum: 10000)]),
+        "exclude": .array(.string, maximum: 10000), "mode": .enumeration(["link", "copy", "edit"]),
+        "overrides": .dictionary(.named("override"), maximum: 10000),
+      ], required: ["kind", "source"], maximum: nil),
     "component_instructions": .object(
       [
-        "kind": .constant("instructions"), "agents": .array(.named("agent")),
-        "condition": .named("condition"), "native": .dictionary(.dictionary(.native)),
-        "sections": .array(.named("section")), "chatgpt": .dictionary(.named("promptDeclaration")),
-      ], required: ["kind"]),
+        "kind": .constant("instructions"), "agents": .array(.named("agent"), maximum: 10000),
+        "condition": .named("condition"),
+        "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
+        "sections": .array(.named("section"), maximum: 10000),
+        "chatgpt": .dictionary(.named("promptDeclaration"), maximum: 10000),
+      ], required: ["kind"], maximum: nil),
     "component_mcpServer": .object(
       [
-        "kind": .constant("mcpServer"), "agents": .array(.named("agent")),
-        "condition": .named("condition"), "native": .dictionary(.dictionary(.native)),
+        "kind": .constant("mcpServer"), "agents": .array(.named("agent"), maximum: 10000),
+        "condition": .named("condition"),
+        "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
         "name": .string, "transport": .named("transport"),
-      ], required: ["kind", "name", "transport"]),
+      ], required: ["kind", "name", "transport"], maximum: nil),
     "component_hook": .object(
       [
-        "kind": .constant("hook"), "agents": .array(.named("agent")),
-        "condition": .named("condition"), "native": .dictionary(.dictionary(.native)),
+        "kind": .constant("hook"), "agents": .array(.named("agent"), maximum: 10000),
+        "condition": .named("condition"),
+        "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
         "name": .string, "event": .named("event"), "run": .named("run"), "matcher": .string,
         "timeoutSeconds": .integer(minimum: 1),
-      ], required: ["kind", "name", "event", "run"]),
+      ], required: ["kind", "name", "event", "run"], maximum: nil),
     "component_subagent": .object(
       [
-        "kind": .constant("subagent"), "agents": .array(.named("agent")),
-        "condition": .named("condition"), "native": .dictionary(.dictionary(.native)),
+        "kind": .constant("subagent"), "agents": .array(.named("agent"), maximum: 10000),
+        "condition": .named("condition"),
+        "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
         "name": .string, "description": .string, "prompt": .named("prompt"), "model": .string,
-        "tools": .array(.string),
-      ], required: ["kind", "name", "description", "prompt"]),
+        "tools": .array(.string, maximum: 10000),
+      ], required: ["kind", "name", "description", "prompt"], maximum: nil),
     "component_command": .object(
       [
-        "kind": .constant("command"), "agents": .array(.named("agent")),
-        "condition": .named("condition"), "native": .dictionary(.dictionary(.native)),
+        "kind": .constant("command"), "agents": .array(.named("agent"), maximum: 10000),
+        "condition": .named("condition"),
+        "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
         "name": .string, "description": .string, "prompt": .named("prompt"),
-        "parameters": .array(.named("parameter")),
-      ], required: ["kind", "name", "description", "prompt"]),
+        "parameters": .array(.named("parameter"), maximum: 10000),
+      ], required: ["kind", "name", "description", "prompt"], maximum: nil),
     "component_lspServer": .object(
       [
-        "kind": .constant("lspServer"), "agents": .array(.named("agent")),
-        "condition": .named("condition"), "native": .dictionary(.dictionary(.native)),
-        "name": .string, "run": .named("run"), "languages": .dictionary(.string),
-        "initializationOptions": .dictionary(.native),
-      ], required: ["kind", "name", "run", "languages"]),
+        "kind": .constant("lspServer"), "agents": .array(.named("agent"), maximum: 10000),
+        "condition": .named("condition"),
+        "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
+        "name": .string, "run": .named("run"), "languages": .dictionary(.string, maximum: 10000),
+        "initializationOptions": .dictionary(.native, maximum: 10000),
+      ], required: ["kind", "name", "run", "languages"], maximum: nil),
     "component_permissions": .object(
       [
-        "kind": .constant("permissions"), "agents": .array(.named("agent")),
-        "condition": .named("condition"), "native": .dictionary(.dictionary(.native)),
-        "name": .string, "rules": .array(.named("rule")),
-      ], required: ["kind", "name", "rules"]),
+        "kind": .constant("permissions"), "agents": .array(.named("agent"), maximum: 10000),
+        "condition": .named("condition"),
+        "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
+        "name": .string, "rules": .array(.named("rule"), maximum: 10000),
+      ], required: ["kind", "name", "rules"], maximum: nil),
     "component_ignore": .object(
       [
-        "kind": .constant("ignore"), "agents": .array(.named("agent")),
-        "condition": .named("condition"), "native": .dictionary(.dictionary(.native)),
-        "name": .string, "patterns": .array(.string),
+        "kind": .constant("ignore"), "agents": .array(.named("agent"), maximum: 10000),
+        "condition": .named("condition"),
+        "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
+        "name": .string, "patterns": .array(.string, maximum: 10000),
         "purpose": .enumeration(["context", "indexing"]),
-      ], required: ["kind", "name", "patterns"]),
+      ], required: ["kind", "name", "patterns"], maximum: nil),
     "component_plugin": .object(
       [
-        "kind": .constant("plugin"), "agents": .array(.named("agent")),
-        "condition": .named("condition"), "native": .dictionary(.dictionary(.native)),
+        "kind": .constant("plugin"), "agents": .array(.named("agent"), maximum: 10000),
+        "condition": .named("condition"),
+        "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
         "name": .string, "source": .string, "path": .string,
         "mode": .enumeration(["native", "components"]),
         "select": .array(
           .enumeration([
             "skills", "instructions", "mcpServer", "hook", "subagent", "command", "lspServer",
             "permissions", "ignore", "plugin",
-          ])), "exclude": .array(.named("componentReference")),
-      ], required: ["kind", "name", "source", "path"]),
+          ]), maximum: 10000), "exclude": .array(.named("componentReference"), maximum: 10000),
+      ], required: ["kind", "name", "source", "path"], maximum: nil),
     "component": .oneOf([
       .named("component_skills"), .named("component_instructions"), .named("component_mcpServer"),
       .named("component_hook"), .named("component_subagent"), .named("component_command"),
@@ -164,11 +190,12 @@ enum ManifestSchema {
       .named("component_plugin"),
     ]),
     "use": .object(
-      ["group": .string, "source": .string, "condition": .named("condition")], required: ["group"]),
+      ["group": .string, "source": .string, "condition": .named("condition")], required: ["group"],
+      maximum: nil),
     "group": .object(
       [
-        "components": .array(.named("component")), "uses": .array(.named("use")),
-        "condition": .named("condition"),
-      ], required: []),
+        "components": .array(.named("component"), maximum: 10000),
+        "uses": .array(.named("use"), maximum: 10000), "condition": .named("condition"),
+      ], required: [], maximum: nil),
   ]
 }
