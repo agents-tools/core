@@ -24,7 +24,11 @@ exports: [checks]
 
 The distributed [JSON schema](../../Sources/AgentsManifest/Resources/agents.schema.json)
 is the field-shape owner. [Generated field help](ManifestSchema.md) lists every
-supported shape. Unknown fixed fields, decoded duplicate keys and invalid scalar
+supported shape and its schema-owned collection bounds. The finite compiler
+rejects unsupported validation keywords, values and combinations; its generated
+rules enforce the accepted constraints. Parser and decoded-value safety budgets
+apply independently of these field constraints.
+Unknown fixed fields, decoded duplicate keys and invalid scalar
 kinds are errors. Domain validation also checks unused groups and inactive
 components. References remain symbolic until linking; declaration reads never
 resolve sources, access resources or execute component programs.

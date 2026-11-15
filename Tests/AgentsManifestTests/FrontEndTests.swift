@@ -64,4 +64,36 @@ struct FrontEndTests {
       #expect(throws: ManifestFailure.self) { try document(body) }
     }
   }
+
+  @Test func schemaBoundsAreIndependentOfParserSafetyLimits() throws {
+    for (rule, accepted, rejected) in [
+      (YAMLRule.array(.string, maximum: 1), "[a]", "[a, b]"),
+      (.dictionary(.string, maximum: 1), "{a: x}", "{a: x, b: y}"),
+      (.object(["a": .string], required: [], maximum: 0), "{}", "{a: x}"),
+      (.integerConstant(2), "2", "1"),
+    ] {
+      try validate(accepted, against: rule)
+      expectManifestFailure("manifest.schema") { try validate(rejected, against: rule) }
+    }
+    for text in ["2.0", "'2'", "9223372036854775808"] {
+      expectManifestFailure("manifest.schema") { try validate(text, against: .integerConstant(2)) }
+    }
+  }
+
+  @Test func oneOfRejectsOverlappingDiscriminatorsAndUnconstrainedBranches() throws {
+    let record = YAMLRule.object(["kind": .constant("a")], required: ["kind"], maximum: nil)
+    let optional = YAMLRule.object(["kind": .constant("a")], required: [], maximum: nil)
+    for choices in [[record, record], [record, optional]] {
+      expectManifestFailure("manifest.schema") {
+        try validate("{kind: a}", against: .oneOf(choices))
+      }
+    }
+    try validate("{kind: a}", against: .oneOf([record, .string]))
+  }
+
+  private func validate(_ text: String, against rule: YAMLRule) throws {
+    let source = SourceText(Array(text.utf8), identity: DocumentIdentity("schema-test"))
+    let node = try YAMLParser.parse(source).root
+    try YAMLValidation(source: source).check(node, rule)
+  }
 }

@@ -2,14 +2,15 @@ import AgentsCore
 
 /// The finite constraints compiled from the bundled declaration schema. No caller supplies rules.
 indirect enum YAMLRule: Sendable {
-  case string, native, version
+  case string, native
   case integer(minimum: Int)
+  case integerConstant(Int)
   case constant(String)
   case enumeration([String])
   case named(String)
-  case array(YAMLRule)
-  case dictionary(YAMLRule)
-  case object([String: YAMLRule], required: [String])
+  case array(YAMLRule, maximum: Int?)
+  case dictionary(YAMLRule, maximum: Int?)
+  case object([String: YAMLRule], required: [String], maximum: Int?)
   case oneOf([YAMLRule])
 }
 
@@ -60,7 +61,7 @@ final class YAMLValidation {
     }
   }
 
-  private func check(_ node: YAMLNode, _ rule: YAMLRule) throws {
+  func check(_ node: YAMLNode, _ rule: YAMLRule) throws {
     try spend(node)
     func fail(_ message: String) -> ManifestFailure {
       source.failure("manifest.schema", message, node.range.lowerBound, end: node.range.upperBound)
@@ -80,24 +81,32 @@ final class YAMLValidation {
       guard try values.contains(string()) else {
         throw fail("expected one of \(values.joined(separator: ", "))")
       }
-    case .integer, .version:
+    case .integer, .integerConstant:
       guard case .scalar(let text, let quoted, let tag) = node.data,
         !quoted, !tag, YAMLScalar.classify(text) == .integer, let integer = YAMLScalar.integer(text)
       else { throw fail("expected a representable plain integer") }
       switch rule {
-      case .version: guard integer == 1 else { throw fail("unsupported manifest version") }
+      case .integerConstant(let expected):
+        guard integer == expected else { throw fail("expected integer \(expected)") }
       case .integer(let minimum):
         guard integer >= minimum else { throw fail("integer is below its minimum") }
       default: break
       }
-    case .array(let item):
+    case .array(let item, let maximum):
       guard let items = node.items else { throw fail("expected a sequence") }
+      if let maximum, items.count > maximum { throw fail("sequence exceeds maxItems: \(maximum)") }
       for node in items { try check(node, item) }
-    case .dictionary(let value):
+    case .dictionary(let value, let maximum):
       guard let pairs = node.pairs else { throw fail("expected a mapping") }
+      if let maximum, pairs.count > maximum {
+        throw fail("mapping exceeds maxProperties: \(maximum)")
+      }
       for pair in pairs { try check(pair.value, value) }
-    case .object(let fields, let required):
+    case .object(let fields, let required, let maximum):
       guard let pairs = node.pairs else { throw fail("expected a mapping") }
+      if let maximum, pairs.count > maximum {
+        throw fail("mapping exceeds maxProperties: \(maximum)")
+      }
       let present = Set(pairs.map { $0.key.text! })
       for name in required where !present.contains(name) { throw fail("missing field: \(name)") }
       for pair in pairs {
@@ -109,9 +118,11 @@ final class YAMLValidation {
         try check(pair.value, rule)
       }
     case .oneOf(let choices):
-      // Component and transport records have a literal discriminator in the generated schema.
-      // Select that branch before traversing descendants, rather than rescanning whole subtrees.
+      // Disjoint literal discriminators permit one traversal of component/transport subtrees.
+      // Other unions must count all matching branches to enforce oneOf.
       if let kind = node.pairs?.first(where: { $0.key.text == "kind" })?.value.text {
+        var discriminated: [String: YAMLRule] = [:]
+        var disjoint = true
         for candidate in choices {
           let resolved: YAMLRule
           if case .named(let name) = candidate {
@@ -119,19 +130,27 @@ final class YAMLValidation {
           } else {
             resolved = candidate
           }
-          if case .object(let fields, _) = resolved,
-            let discriminator = fields["kind"]
-          {
-            switch discriminator {
-            case .constant(let value) where value == kind:
-              try check(node, candidate)
-              return
-            case .enumeration(let values) where values.contains(kind):
-              try check(node, candidate)
-              return
-            default: continue
-            }
+          guard case .object(let fields, let required, _) = resolved,
+            required.contains("kind"), let discriminator = fields["kind"]
+          else {
+            disjoint = false
+            break
           }
+          let values: [String]
+          switch discriminator {
+          case .constant(let value): values = [value]
+          case .enumeration(let options): values = options
+          default:
+            disjoint = false
+            values = []
+          }
+          for value in values {
+            if discriminated.updateValue(candidate, forKey: value) != nil { disjoint = false }
+          }
+        }
+        if disjoint, let candidate = discriminated[kind] {
+          try check(node, candidate)
+          return
         }
       }
       var matches = 0
