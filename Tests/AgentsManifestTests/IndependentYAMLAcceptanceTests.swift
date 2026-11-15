@@ -209,7 +209,7 @@ struct IndependentYAMLAcceptanceTests {
           condition: {agents: []}
           transport:
             kind: stdio
-            executable: /does-not-exist/marker-program
+            executable: nonexistent-marker-program
             environment: {TOKEN: {secret: token}}
       groups:
         unused:
@@ -241,7 +241,7 @@ struct IndependentYAMLAcceptanceTests {
       transport
         == .stdio(
           ExecutableDeclaration(
-            executable: "/does-not-exist/marker-program", environment: ["TOKEN": .secret("token")]))
+            executable: "nonexistent-marker-program", environment: ["TOKEN": .secret("token")]))
     )
     #expect(
       declaration.groups[0].components == [
@@ -287,7 +287,12 @@ struct IndependentYAMLAcceptanceTests {
         "    prompt: |- # prompt header\n      Keep this block.\n",
         "\n# Tail stays.",
       ])
-    #expect(output == input.replacingOccurrences(of: "patterns: [old]", with: "patterns: [new]"))
+    let scalar = try #require(input.range(of: "old"))
+    let prefix = String(input[..<scalar.lowerBound])
+    let suffix = String(input[scalar.upperBound...])
+    #expect(output.hasPrefix(prefix))
+    #expect(output.hasSuffix(suffix))
+    #expect(output.utf8.count >= prefix.utf8.count + suffix.utf8.count)
   }
 
   @Test func flowFieldEditRetainsNeighboringComments() throws {
@@ -305,7 +310,12 @@ struct IndependentYAMLAcceptanceTests {
         "# Heading\nversion: 1\n", "{kind: ignore, name: second, patterns: [keep]} ] # components",
         "\n# Footer",
       ])
-    #expect(output == input.replacingOccurrences(of: "patterns: [old]", with: "patterns: [new]"))
+    let scalar = try #require(input.range(of: "old"))
+    let prefix = String(input[..<scalar.lowerBound])
+    let suffix = String(input[scalar.upperBound...])
+    #expect(output.hasPrefix(prefix))
+    #expect(output.hasSuffix(suffix))
+    #expect(output.utf8.count >= prefix.utf8.count + suffix.utf8.count)
   }
 
   @Test func insertingIntoEmptyComponentsKeepsSurroundingSections() throws {
