@@ -38,7 +38,7 @@ struct InstructionTransactionTests {
         try transaction.replace(file.resolvingSymlinksInPath(), with: .data(Data("new".utf8)))
       }
       try transaction.replace(
-        store.declarationURL, with: .data(manifestText("defaultAgents: [.codex]")))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [\"codex\"]\n")))
       #expect(throws: Interrupted.self) { try transaction.commit() }
     }
     for file in files { #expect(try Data(contentsOf: file) == Data("original".utf8)) }

@@ -1,0 +1,1217 @@
+{
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": 1,
+      "type": "integer",
+      "x-agents-scalar-kind": "integer"
+    },
+    "defaultAgents": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/agent"
+      },
+      "maxItems": 10000
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/source"
+      },
+      "maxProperties": 10000
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/component"
+      },
+      "maxItems": 10000
+    },
+    "groups": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/group"
+      },
+      "maxProperties": 10000
+    },
+    "uses": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/use"
+      },
+      "maxItems": 10000
+    },
+    "exports": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 10000
+    },
+    "watch": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 10000
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agents.tools/schemas/agents-1.json",
+  "title": "Agents declaration",
+  "description": "Version 1 symbolic sources, components and groups. Parsing never resolves sources or runs programs.",
+  "$defs": {
+    "agent": {
+      "type": "string",
+      "enum": [
+        "codex",
+        "claude-code",
+        "cursor",
+        "gemini-cli",
+        "opencode"
+      ]
+    },
+    "condition": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "project",
+              "user"
+            ]
+          },
+          "maxItems": 10000
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "macos",
+              "linux"
+            ]
+          },
+          "maxItems": 10000
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "resource": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "section": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "binding": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "env": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "secret": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "secret"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "prompt": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/resource"
+            }
+          },
+          "required": [
+            "file"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "run": {
+      "type": "object",
+      "properties": {
+        "executable": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/binding"
+          },
+          "maxProperties": 10000
+        },
+        "workingDirectory": {
+          "$ref": "#/$defs/resource"
+        }
+      },
+      "required": [
+        "executable"
+      ],
+      "additionalProperties": false
+    },
+    "transport": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "stdio"
+            },
+            "executable": {
+              "type": "string"
+            },
+            "arguments": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10000
+            },
+            "environment": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/binding"
+              },
+              "maxProperties": 10000
+            },
+            "workingDirectory": {
+              "$ref": "#/$defs/resource"
+            }
+          },
+          "required": [
+            "kind",
+            "executable"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "streamableHTTP",
+                "sse"
+              ]
+            },
+            "url": {
+              "type": "string"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/binding"
+              },
+              "maxProperties": 10000
+            }
+          },
+          "required": [
+            "kind",
+            "url"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "event": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "beforeTool",
+            "afterTool",
+            "sessionStart",
+            "sessionEnd"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "native": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "native"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "operation": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "read",
+            "write",
+            "execute"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "properties": {
+        "effect": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "ask",
+            "deny"
+          ]
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "effect",
+        "operation",
+        "pattern"
+      ],
+      "additionalProperties": false
+    },
+    "parameter": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "defaultValue": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "additionalProperties": false
+    },
+    "promptDeclaration": {
+      "type": "object",
+      "properties": {
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/section"
+          },
+          "maxItems": 10000
+        },
+        "append": {
+          "type": "string"
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "override": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "link",
+            "copy",
+            "edit"
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "requirement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "branch": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "branch"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "revision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "exact": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exact"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "from"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "upToNextMinor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "upToNextMinor"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "subpath": {
+              "type": "string"
+            },
+            "requirement": {
+              "$ref": "#/$defs/requirement"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "subpath": {
+              "type": "string"
+            },
+            "requirement": {
+              "$ref": "#/$defs/requirement"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "string"
+            },
+            "subpath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "index"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "componentReference": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "skill",
+            "instruction",
+            "mcpServer",
+            "hook",
+            "subagent",
+            "command",
+            "lspServer",
+            "permissions",
+            "ignore",
+            "plugin"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "component_skills": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "skills"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "x-agents-native-value": true
+            },
+            "maxProperties": 10000
+          },
+          "maxProperties": 10000
+        },
+        "source": {
+          "type": "string"
+        },
+        "select": {
+          "oneOf": [
+            {
+              "const": "all"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10000
+            }
+          ]
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "link",
+            "copy",
+            "edit"
+          ]
+        },
+        "overrides": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/override"
+          },
+          "maxProperties": 10000
+        }
+      },
+      "required": [
+        "kind",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "component_instructions": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "instructions"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "x-agents-native-value": true
+            },
+            "maxProperties": 10000
+          },
+          "maxProperties": 10000
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/section"
+          },
+          "maxItems": 10000
+        },
+        "chatgpt": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/promptDeclaration"
+          },
+          "maxProperties": 10000
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "component_mcpServer": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "mcpServer"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "x-agents-native-value": true
+            },
+            "maxProperties": 10000
+          },
+          "maxProperties": 10000
+        },
+        "name": {
+          "type": "string"
+        },
+        "transport": {
+          "$ref": "#/$defs/transport"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "transport"
+      ],
+      "additionalProperties": false
+    },
+    "component_hook": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "hook"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "x-agents-native-value": true
+            },
+            "maxProperties": 10000
+          },
+          "maxProperties": 10000
+        },
+        "name": {
+          "type": "string"
+        },
+        "event": {
+          "$ref": "#/$defs/event"
+        },
+        "run": {
+          "$ref": "#/$defs/run"
+        },
+        "matcher": {
+          "type": "string"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "x-agents-scalar-kind": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "event",
+        "run"
+      ],
+      "additionalProperties": false
+    },
+    "component_subagent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "subagent"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "x-agents-native-value": true
+            },
+            "maxProperties": 10000
+          },
+          "maxProperties": 10000
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "prompt": {
+          "$ref": "#/$defs/prompt"
+        },
+        "model": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "description",
+        "prompt"
+      ],
+      "additionalProperties": false
+    },
+    "component_command": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "command"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "x-agents-native-value": true
+            },
+            "maxProperties": 10000
+          },
+          "maxProperties": 10000
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "prompt": {
+          "$ref": "#/$defs/prompt"
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/parameter"
+          },
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "description",
+        "prompt"
+      ],
+      "additionalProperties": false
+    },
+    "component_lspServer": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "lspServer"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "x-agents-native-value": true
+            },
+            "maxProperties": 10000
+          },
+          "maxProperties": 10000
+        },
+        "name": {
+          "type": "string"
+        },
+        "run": {
+          "$ref": "#/$defs/run"
+        },
+        "languages": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 10000
+        },
+        "initializationOptions": {
+          "type": "object",
+          "additionalProperties": {
+            "x-agents-native-value": true
+          },
+          "maxProperties": 10000
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "run",
+        "languages"
+      ],
+      "additionalProperties": false
+    },
+    "component_permissions": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "permissions"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "x-agents-native-value": true
+            },
+            "maxProperties": 10000
+          },
+          "maxProperties": 10000
+        },
+        "name": {
+          "type": "string"
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rule"
+          },
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "rules"
+      ],
+      "additionalProperties": false
+    },
+    "component_ignore": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "ignore"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "x-agents-native-value": true
+            },
+            "maxProperties": 10000
+          },
+          "maxProperties": 10000
+        },
+        "name": {
+          "type": "string"
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000
+        },
+        "purpose": {
+          "type": "string",
+          "enum": [
+            "context",
+            "indexing"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "patterns"
+      ],
+      "additionalProperties": false
+    },
+    "component_plugin": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "plugin"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "x-agents-native-value": true
+            },
+            "maxProperties": 10000
+          },
+          "maxProperties": 10000
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "native",
+            "components"
+          ]
+        },
+        "select": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "skills",
+              "instructions",
+              "mcpServer",
+              "hook",
+              "subagent",
+              "command",
+              "lspServer",
+              "permissions",
+              "ignore",
+              "plugin"
+            ]
+          },
+          "maxItems": 10000
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/componentReference"
+          },
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "source",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "component": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/component_skills"
+        },
+        {
+          "$ref": "#/$defs/component_instructions"
+        },
+        {
+          "$ref": "#/$defs/component_mcpServer"
+        },
+        {
+          "$ref": "#/$defs/component_hook"
+        },
+        {
+          "$ref": "#/$defs/component_subagent"
+        },
+        {
+          "$ref": "#/$defs/component_command"
+        },
+        {
+          "$ref": "#/$defs/component_lspServer"
+        },
+        {
+          "$ref": "#/$defs/component_permissions"
+        },
+        {
+          "$ref": "#/$defs/component_ignore"
+        },
+        {
+          "$ref": "#/$defs/component_plugin"
+        }
+      ]
+    },
+    "use": {
+      "type": "object",
+      "properties": {
+        "group": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        }
+      },
+      "required": [
+        "group"
+      ],
+      "additionalProperties": false
+    },
+    "group": {
+      "type": "object",
+      "properties": {
+        "components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/component"
+          },
+          "maxItems": 10000
+        },
+        "uses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/use"
+          },
+          "maxItems": 10000
+        },
+        "condition": {
+          "$ref": "#/$defs/condition"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  }
+}

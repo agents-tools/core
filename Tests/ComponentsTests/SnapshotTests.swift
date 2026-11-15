@@ -74,13 +74,17 @@ struct SnapshotTests {
     try fixture.skill("one", at: repository)
     try fixture.manifest(
       """
-      let agents = Agents(exports: ["tools"], groups: [.group(name: "tools", components: [.skills(source: ".", mode: .edit)])])
+      version: 1
+      exports: ["tools"]
+      groups: {"tools": {"components": [{"kind": "skills", "source": ".", "mode": "edit"}]}}
       """, at: repository)
     try fixture.commit(repository)
     do {
       _ = try fixture.link(
         """
-        let agents = Agents(sources: [.source(name: "p", url: "file://localhost\(repository.path)")], uses: [.group(name: "tools", source: "p")])
+        version: 1
+        sources: {"p": {"url": "file://localhost\(repository.path)"}}
+        uses: [{"source": "p", "group": "tools"}]
         """)
       Issue.record("expected immutable edit rejection")
     } catch LinkError.invalid(_, let positions) {
@@ -94,7 +98,9 @@ struct SnapshotTests {
     #expect(throws: (any Error).self) {
       try fixture.link(
         """
-        let agents = Agents(sources: [.source(name: "p", url: "file://localhost\(repository.path)")], uses: [.group(name: "tools", source: "p")])
+        version: 1
+        sources: {"p": {"url": "file://localhost\(repository.path)"}}
+        uses: [{"source": "p", "group": "tools"}]
         """)
     }
   }
@@ -104,19 +110,20 @@ struct SnapshotTests {
     let repository = fixture.root.appendingPathComponent("remote")
     try fixture.initialize(repository)
     try fixture.manifest(
-      "let agents = Agents(exports: [\"leaf\"], groups: [.group(name: \"leaf\", components: [.mcpServer(name: \"leaf\", transport: .stdio(\"never-run\"))])])",
+      "version: 1\nexports: [\"leaf\"]\ngroups: {\"leaf\": {\"components\": [{\"kind\": \"mcpServer\", \"name\": \"leaf\", \"transport\": {\"kind\": \"stdio\", \"executable\": \"never-run\"}}]}}\n",
       at: repository.appendingPathComponent("child"))
     func producer(path: String, requirement: String = "") throws {
       try fixture.manifest(
         """
-        let agents = Agents(exports: ["g"], sources: [
-          .source(name: "child", path: "\(path)"\(requirement))], groups: [
-          .group(name: "g", uses: [.group(name: "leaf", source: "child")])])
+        version: 1
+        exports: [g]
+        sources: {child: {path: "\(path)"\(requirement)}}
+        groups: {g: {uses: [{group: leaf, source: child}]}}
         """, at: repository)
       try fixture.commit(repository)
     }
     let expression =
-      "let agents = Agents(sources: [.source(name: \"p\", url: \"file://localhost\(repository.path)\")], uses: [.group(name: \"g\", source: \"p\")])"
+      "version: 1\nsources: {\"p\": {\"url\": \"file://localhost\(repository.path)\"}}\nuses: [{\"source\": \"p\", \"group\": \"g\"}]\n"
     try producer(path: "child")
     let graph = try fixture.link(expression)
     #expect(graph.components.first?.key.name == "leaf")
@@ -126,7 +133,7 @@ struct SnapshotTests {
       try producer(path: path)
       #expect(throws: (any Error).self) { try fixture.link(expression) }
     }
-    try producer(path: "child", requirement: ", exact: \"1.0.0\"")
+    try producer(path: "child", requirement: ", requirement: {exact: \"1.0.0\"}")
     #expect(throws: LinkError.self) { try fixture.link(expression) }
     try FileManager.default.createSymbolicLink(
       at: repository.appendingPathComponent("escape"), withDestinationURL: fixture.project)
@@ -166,7 +173,7 @@ extension SnapshotTests {
     for name in ["a", "b"] {
       let directory = repository.appendingPathComponent(name)
       try fixture.manifest(
-        "let agents = Agents(exports: [\"tools\"], groups: [.group(name: \"tools\", components: [.mcpServer(name: \"\(name)\", transport: .stdio(\"never-run\"))])])",
+        "version: 1\nexports: [\"tools\"]\ngroups: {\"tools\": {\"components\": [{\"kind\": \"mcpServer\", \"name\": \"\(name)\", \"transport\": {\"kind\": \"stdio\", \"executable\": \"never-run\"}}]}}\n",
         at: directory)
     }
     let commit = try fixture.commit(repository)
@@ -175,12 +182,15 @@ extension SnapshotTests {
       let producer = fixture.root.appendingPathComponent("producer-" + name)
       try fixture.manifest(
         """
-        let agents = Agents(exports: ["tools"], sources: [.source(name: "s", url: "file://localhost\(repository.path)", subpath: "\(name)")], groups: [.group(name: "tools", uses: [.group(name: "tools", source: "s")])])
+        version: 1
+        exports: ["tools"]
+        sources: {"s": {"url": "file://localhost\(repository.path)", "subpath": "\(name)"}}
+        groups: {"tools": {"uses": [{"source": "s", "group": "tools"}]}}
         """, at: producer)
-      sources.append(".source(name: \"\(name)\", path: \"\(producer.path)\")")
+      sources.append("\"\(name)\": {\"path\": \"\(producer.path)\"}")
     }
     let graph = try fixture.link(
-      "let agents = Agents(sources: [\(sources.joined(separator: ","))], uses: [.group(name: \"tools\", source: \"a\"), .group(name: \"tools\", source: \"b\")])"
+      "version: 1\nsources: {\(sources.joined(separator: ","))}\nuses: [{\"source\": \"a\", \"group\": \"tools\"}, {\"source\": \"b\", \"group\": \"tools\"}]\n"
     )
     #expect(graph.components.map(\.key.name) == ["a", "b"])
     #expect(graph.components.map(\.key.root) == ["a", "b"])
@@ -258,11 +268,13 @@ extension SnapshotTests {
     try fixture.write("Prompt bytes", to: "prompts/review.md", base: repository)
     try fixture.manifest(
       """
-      let agents = Agents(exports: ["tools"], groups: [.group(name: "tools", components: [.command(name: "review", description: "Review", prompt: .file("prompts/review.md"))])])
+      version: 1
+      exports: ["tools"]
+      groups: {"tools": {"components": [{"kind": "command", "name": "review", "description": "Review", "prompt": {"file": {"path": "prompts/review.md"}}}]}}
       """, at: repository)
     let pin = try fixture.commit(repository, tag: "1.0.0")
     let document = try fixture.document(
-      "let agents = Agents(sources: [.source(name: \"p\", path: \"\(repository.path)\")], uses: [.group(name: \"tools\", source: \"p\")])"
+      "version: 1\nsources: {\"p\": {\"path\": \"\(repository.path)\"}}\nuses: [{\"source\": \"p\", \"group\": \"tools\"}]\n"
     )
     var borrowed: URL?
     let graph = try ComponentLinker.withLinkedComponents(
@@ -292,11 +304,12 @@ extension SnapshotTests {
     try fixture.skill("one", at: fixture.project)
     let pin = try fixture.commit(fixture.project)
     try fixture.skill("two", at: fixture.project)
-    let linked = try fixture.link("let agents = Agents(components: [.skills(source: \".\")])")
+    let linked = try fixture.link(
+      "version: 1\ncomponents: [{\"kind\": \"skills\", \"source\": \".\"}]\n")
     #expect(linked.components.map(\.key.name) == ["one"])
     #expect(linked.components[0].pin?.revision == pin)
     let edited = try fixture.link(
-      "let agents = Agents(components: [.skills(source: \".\", mode: .edit)])")
+      "version: 1\ncomponents: [{\"kind\": \"skills\", \"source\": \".\", \"mode\": \"edit\"}]\n")
     #expect(edited.components.map(\.key.name) == ["one", "two"])
     for component in edited.components {
       guard case .skill(let skill, .edit, _) = component.payload else {

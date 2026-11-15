@@ -2,10 +2,12 @@
 
 ## Status
 
-Accepted — partially implemented. Language version 1.0, its document editor and
-dump, and the `Agents.swift` state integration are implemented; targeting,
-source linking, component deployment, configuration application and lock version 2
-are pending.
+The frontend/authoring portions are superseded by the accepted
+[YAML manifest decision](../Decisions/YAMLManifest.md) and
+[current manifest reference](../Reference/Manifest.md). This proposal retains
+historical design context for the broader component-management requirement;
+source, targeting, state, security and lifecycle ownership remain with their
+current architecture documents.
 
 ## Authors / Owners
 

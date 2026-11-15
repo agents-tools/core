@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [YAML Manifest](YAMLManifest.md).
 
 ## Context
 

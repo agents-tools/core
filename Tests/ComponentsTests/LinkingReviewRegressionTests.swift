@@ -11,29 +11,25 @@ struct LinkingReviewRegressionTests {
 
     for kind in ["hook", "permissions"] {
       func component(_ payload: String, _ agent: String) -> String {
+        let recipient = agent == "claudeCode" ? "claude-code" : agent
         if kind == "hook" {
-          return """
-            .hook(
-              name: "shared", event: .afterTool, run: .executable("\(payload)"),
-              agents: [.\(agent)])
-            """
+          return
+            "{kind: hook, name: shared, event: afterTool, run: {executable: \"\(payload)\"}, agents: [\(recipient)]}"
         }
         let rule = payload == "a" ? "allow" : "deny"
-        return """
-          .permissions(
-            name: "shared", rules: [.\(rule)(.read, "files/**")],
-            agents: [.\(agent)])
-          """
+        return
+          "{kind: permissions, name: shared, rules: [{effect: \(rule), operation: read, pattern: files/**}], agents: [\(recipient)]}"
+
       }
 
       let aCodex = component("a", "codex")
       let bClaude = component("b", "claudeCode")
       let aClaude = component("a", "claudeCode")
       let disjoint = try fixture.link(
-        "let agents = Agents(components: [\(aCodex), \(bClaude)])")
+        "version: 1\ncomponents: [\(aCodex), \(bClaude)]\n")
       #expect(disjoint.components.count == 2)
       let identical = try fixture.link(
-        "let agents = Agents(components: [\(aCodex), \(aClaude)])")
+        "version: 1\ncomponents: [\(aCodex), \(aClaude)]\n")
       let merged = try #require(identical.components.first)
       #expect(identical.components.count == 1)
       #expect(merged.recipients == [.codex, .claudeCode])
@@ -45,7 +41,7 @@ struct LinkingReviewRegressionTests {
       ] {
         do {
           _ = try fixture.link(
-            "let agents = Agents(components: [\(components.joined(separator: ", "))])")
+            "version: 1\ncomponents: [\(components.joined(separator: ", "))]\n")
           Issue.record("Expected conflicting \(kind) payloads to be rejected")
         } catch let error as LinkError {
           guard case .conflict(let key, _) = error else {
@@ -70,27 +66,26 @@ struct LinkingReviewRegressionTests {
       func declaration(_ sections: String, extra: Bool = false) -> String {
         let instruction =
           prompt
-          ? #".instructions(chatGPT: [.prompt(name: "review", sections: ["# + sections + "])])"
-          : ".instructions(sections: [\(sections)], agents: [.codex])"
+          ? "{kind: instructions, chatgpt: {review: {sections: [\(sections)]}}}"
+          : "{kind: instructions, sections: [\(sections)], agents: [codex]}"
         let skill =
           extra
-          ? #".skills(source: "drafts", select: ["draft"], mode: .edit, agents: [.codex]),"#
-          : ""
-        let uses = extra ? #"uses: ["empty"],"# : ""
+          ? "{kind: skills, source: drafts, select: [draft], mode: edit, agents: [codex]}," : ""
+        let uses = extra ? "uses: [{group: empty}]" : ""
         return """
-          let agents = Agents(
-            sources: [.source(name: "drafts", path: "../drafts")],
-            components: [\(skill) \(instruction)],
-            groups: [.group(name: "empty")],
-            \(uses)
-            watch: []
-          )
+          version: 1
+          sources: {drafts: {path: ../drafts}}
+          components: [\(skill) \(instruction)]
+          groups: {empty: {}}
+          \(uses)
+          watch: []
           """
+
       }
 
-      let before = try fixture.link(declaration(#""a", "b""#))
-      let after = try fixture.link(declaration(#""b", "a""#))
-      let unrelated = try fixture.link(declaration(#""a", "b""#, extra: true))
+      let before = try fixture.link(declaration(#"{name: a}, {name: b}"#))
+      let after = try fixture.link(declaration(#"{name: b}, {name: a}"#))
+      let unrelated = try fixture.link(declaration(#"{name: a}, {name: b}"#, extra: true))
       let beforeSections = before.components.filter {
         $0.key.kind == .instructions && $0.chatGPT == prompt
       }
@@ -114,19 +109,18 @@ struct LinkingReviewRegressionTests {
 
     func declaration(distinct count: Int, repetitions: Int = 1) -> String {
       let sources = (0..<count).map {
-        #".source(name: "source-\#($0)", path: "../source-\#($0)")"#
-      }.joined(separator: ",\n")
+        "\"source-\($0)\": {\"path\": \"../source-\($0)\"}"
+      }.joined(separator: ",\n  ")
       let components = (0..<count).flatMap { index in
         Array(
           repeating:
-            #".skills(source: "source-\#(index)", select: ["skill-\#(index)"], mode: .edit)"#,
+            "{\"kind\": \"skills\", \"source\": \"source-\(index)\", \"select\": [\"skill-\(index)\"], \"mode\": \"edit\"}",
           count: repetitions)
-      }.joined(separator: ",\n")
+      }.joined(separator: ",\n  ")
       return """
-        let agents = Agents(
-          sources: [\(sources)],
-          components: [\(components)]
-        )
+        version: 1
+        sources: {\(sources)}
+        components: [\(components)]
         """
     }
 

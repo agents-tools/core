@@ -1,21 +1,10 @@
-/// Language 1.0 front-end bounds, grouped by their owner in the manifest contract.
+/// YAML declaration bounds, grouped by their owner in the manifest contract.
 /// Counts are charged by occurrence, including unused definitions and repeated origins.
 package enum ManifestLimits {
   package enum Input {
     package static let bytes = 2_097_152
   }
-  enum Admission {
-    static let tokens = 100_000
-    static let syntaxReservation = 100_000
-    static let reservationBase = 16
-    static let reservationPerUnit = 4
-    static let squareDepth = 8
-    static let delimiterDepth = 20
-    static let commentDepth = 20
-    static let additiveTerms = 32
-  }
   enum Syntax {
-    static let parserNesting = 20
     static let depth = 128
     static let nodes = 100_000
   }

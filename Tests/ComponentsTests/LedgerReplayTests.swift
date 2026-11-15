@@ -21,11 +21,8 @@ struct LedgerReplayTests {
       atPath: project.appendingPathComponent("vendor/alias").path, withDestinationPath: "data")
     try fixture.manifest(
       """
-      let agents = Agents(components: [
-        .mcpServer(name: "server", transport: .stdio("./bin/server")),
-        .command(name: "task", description: "Task", prompt: .file("prompts/task.md")),
-        .plugin(name: "vendor", path: "vendor", source: ".")
-      ])
+      version: 1
+      components: [{"kind": "mcpServer", "name": "server", "transport": {"kind": "stdio", "executable": "./bin/server"}}, {"kind": "command", "name": "task", "description": "Task", "prompt": {"file": {"path": "prompts/task.md"}}}, {"kind": "plugin", "name": "vendor", "path": "vendor", "source": "."}]
       """, at: project)
     try run("ledger-freeze", root: project)
     let ledger = try fixture.store.loadLedger(limits: .standard)
@@ -36,7 +33,7 @@ struct LedgerReplayTests {
     try FileManager.default.createDirectory(
       at: cold.appendingPathComponent(".agent"), withIntermediateDirectories: true)
     try FileManager.default.copyItem(
-      at: fixture.store.declarationURL, to: cold.appendingPathComponent(".agent/Agents.swift"))
+      at: fixture.store.declarationURL, to: cold.appendingPathComponent(".agent/agents.yaml"))
     try locked.write(to: cold.appendingPathComponent(".agent/agents.resolved"))
     try FileManager.default.removeItem(at: project)
     try run("ledger-replay", root: cold)
@@ -62,7 +59,7 @@ struct LedgerReplayTests {
     let fixture = try LinkFixture()
     try fixture.write("before", to: "prompt.md", base: fixture.project)
     let document = try fixture.document(
-      "let agents = Agents(components: [.command(name: \"task\", description: \"Task\", prompt: .file(\"prompt.md\"))])"
+      "version: 1\ncomponents: [{\"kind\": \"command\", \"name\": \"task\", \"description\": \"Task\", \"prompt\": {\"file\": {\"path\": \"prompt.md\"}}}]\n"
     )
     try ComponentLinker.withLinkedComponents(
       document: document, store: fixture.store, platform: .macOS
@@ -188,7 +185,7 @@ struct LedgerResourceClosureTests {
       atPath: fixture.project.appendingPathComponent("vendor/reference").path,
       withDestinationPath: "../shared/text")
     let document = try fixture.document(
-      "let agents = Agents(components: [.plugin(name: \"vendor\", path: \"vendor\", source: \".\")])"
+      "version: 1\ncomponents: [{\"kind\": \"plugin\", \"name\": \"vendor\", \"path\": \"vendor\", \"source\": \".\"}]\n"
     )
     var ledger = try ComponentLinker.withLinkedComponents(
       document: document, store: fixture.store, platform: .macOS
@@ -247,15 +244,16 @@ struct LedgerExactGitTests {
     try fixture.write("original", to: "prompt.md", base: producer)
     try fixture.manifest(
       """
-      let agents = Agents(exports: ["task"], groups: [
-        .group(name: "task", components: [.command(name: "task", description: "Task", prompt: .file("prompt.md"))])
-      ])
+      version: 1
+      exports: ["task"]
+      groups: {"task": {"components": [{"kind": "command", "name": "task", "description": "Task", "prompt": {"file": {"path": "prompt.md"}}}]}}
       """, at: producer)
     let original = try fixture.commit(producer)
     let document = try fixture.document(
       """
-      let agents = Agents(sources: [.source(name: "producer", path: "../producer", branch: "main")],
-        uses: [.group(name: "task", source: "producer")])
+      version: 1
+      sources: {"producer": {"path": "../producer", "requirement": {"branch": "main"}}}
+      uses: [{"source": "producer", "group": "task"}]
       """)
     var ledger = try ComponentLinker.withLinkedComponents(
       document: document, store: fixture.store, platform: .macOS
@@ -271,7 +269,7 @@ struct LedgerExactGitTests {
     #expect(ledger.groups.first?.manifestHash.hasPrefix("sha256:") == true)
     #expect(ledger.sources.values.contains { $0.revision == original })
     try fixture.write("changed", to: "prompt.md", base: producer)
-    try fixture.write("invalid producer manifest", to: ".agent/Agents.swift", base: producer)
+    try fixture.write("invalid producer manifest", to: ".agent/agents.yaml", base: producer)
     _ = try fixture.commit(producer)
     let resource = try #require(ledger.resources.keys.first)
     #if os(macOS)

@@ -523,7 +523,7 @@ final class Expansion {
       revision: context.view.pin?.revision,
       artifactDigest: context.view.snapshot.revision.hasPrefix("sha256:")
         ? context.view.snapshot.revision : nil,
-      relativePath: context.manifestPath, format: "Agents.swift", adapterVersion: "1.0",
+      relativePath: context.manifestPath, format: "yaml", adapterVersion: "1",
       group: group, referenceChain: chain)
     let origin = ContributionOrigin(
       occurrence: occurrence, provenance: provenance,

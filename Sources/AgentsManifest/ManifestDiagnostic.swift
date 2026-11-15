@@ -47,8 +47,7 @@ public struct SourcePatch: Sendable, Equatable {
 
 package struct FrontEndMetrics: Sendable, Codable {
   package var parserCalls = 0
-  package var tokens = 0
-  package var syntaxReservation = 0
+  package var parserCallbacks = 0
   package var syntaxNodes = 0
   package var syntaxDepth = 0
   package var evaluationSteps = 0

@@ -46,3 +46,5 @@ struct SourceText: Sendable {
     String(decoding: bytes[range], as: UTF8.self)
   }
 }
+
+func utf8Less(_ lhs: String, _ rhs: String) -> Bool { lhs.utf8.lexicographicallyPrecedes(rhs.utf8) }

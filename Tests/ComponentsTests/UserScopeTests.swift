@@ -18,10 +18,9 @@ struct UserScopeTests {
     }
     let document = try fixture.document(
       """
-      let agents = Agents(defaultAgents: [.codex], components: [
-        .command(name: "review", description: "Review", prompt: .file("prompt.md")),
-        .hook(name: "run", event: .afterTool, run: .executable("tools/run")),
-        .skills(source: ".", mode: .edit)])
+      version: 1
+      defaultAgents: ["codex"]
+      components: [{"kind": "command", "name": "review", "description": "Review", "prompt": {"file": {"path": "prompt.md"}}}, {"kind": "hook", "name": "run", "event": "afterTool", "run": {"executable": "tools/run"}}, {"kind": "skills", "source": ".", "mode": "edit"}]
       """)
     func link() throws -> LinkedComponents {
       try ComponentLinker.withLinkedComponents(document: document, store: store, platform: .macOS) {
@@ -31,7 +30,7 @@ struct UserScopeTests {
           #expect(component.recipients == [.codex])
           let provenance = try #require(component.origins.first?.provenance)
           #expect(provenance.sourceIdentity == "local:" + store.directory.path)
-          #expect(provenance.relativePath == "Agents.swift")
+          #expect(provenance.relativePath == "agents.yaml")
         }
         for component in graph.components.prefix(2) {
           let resource = try #require(component.resources.first)
@@ -69,9 +68,9 @@ struct UserScopeTests {
     }
     let document = try fixture.document(
       """
-      let agents = Agents(sources: [.source(name: "rules", path: "rules")], components: [
-        .instructions(sections: [.section(name: "rules", source: "rules")],
-          chatGPT: [.prompt(name: "p", sections: [.section(name: "rules", source: "rules")], append: "append.md")])])
+      version: 1
+      sources: {"rules": {"path": "rules"}}
+      components: [{"kind": "instructions", "sections": [{"name": "rules", "source": "rules"}], "chatgpt": {"p": {"sections": [{"name": "rules", "source": "rules"}], "append": "append.md"}}}]
       """)
     try ComponentLinker.withLinkedComponents(document: document, store: store, platform: .macOS) {
       graph, session in
@@ -84,7 +83,7 @@ struct UserScopeTests {
       #expect(append.snapshot.source == "local:" + fixture.home.path)
       #expect(append.path == "append.md")
       #expect(graph.components[1].origins[0].dependencies.contains(append.snapshot))
-      #expect(graph.components[1].origins[0].provenance.relativePath == "Agents.swift")
+      #expect(graph.components[1].origins[0].provenance.relativePath == "agents.yaml")
     }
   }
 
@@ -94,14 +93,14 @@ struct UserScopeTests {
     for directory in [fixture.project, fixture.home, store.directory] {
       try fixture.instruction("rules", at: directory)
     }
-    for section in ["\"rules\"", ".section(name: \"rules\", source: \".\")"] {
+    for section in ["{name: rules}", "{\"name\": \"rules\", \"source\": \".\"}"] {
       for selection in [
-        ".instructions(sections: [\(section)])",
-        ".instructions(chatGPT: [.prompt(name: \"p\", sections: [\(section)])])",
+        "{\"kind\": \"instructions\", \"sections\": [\(section)]}",
+        "{\"kind\": \"instructions\", \"chatgpt\": {\"p\": {\"sections\": [\(section)]}}}",
       ] {
         do {
           _ = try ComponentLinker.withLinkedComponents(
-            document: fixture.document("let agents = Agents(components: [\(selection)])"),
+            document: fixture.document("version: 1\ncomponents: [\(selection)]\n"),
             store: store, platform: .macOS
           ) { _, _ in Issue.record("expected named-source requirement") }
         } catch LinkError.invalid(let message, let spans) {
@@ -118,14 +117,15 @@ struct UserScopeTests {
     try fixture.write("home append", to: "append.md", base: fixture.home)
     try fixture.manifest(
       """
-      let agents = Agents(defaultAgents: [.claudeCode], exports: ["g"], groups: [
-        .group(name: "g", components: [.instructions(sections: ["producer"],
-          chatGPT: [.prompt(name: "p", sections: ["producer"], append: "append.md")])])])
+      version: 1
+      defaultAgents: ["claude-code"]
+      exports: ["g"]
+      groups: {"g": {"components": [{"kind": "instructions", "sections": [{"name": "producer"}], "chatgpt": {"p": {"sections": [{"name": "producer"}], "append": "append.md"}}}]}}
       """, at: producer)
     let pin = try fixture.commit(producer)
     try ComponentLinker.withLinkedComponents(
       document: fixture.document(
-        "let agents = Agents(sources: [.source(name: \"p\", path: \"producer\")], uses: [.group(name: \"g\", source: \"p\")])"
+        "version: 1\nsources: {\"p\": {\"path\": \"producer\"}}\nuses: [{\"source\": \"p\", \"group\": \"g\"}]\n"
       ), store: store, platform: .macOS
     ) { graph, session in
       let component = try #require(graph.components.first)
@@ -133,7 +133,7 @@ struct UserScopeTests {
       #expect(component.snapshot.revision == pin)
       #expect(component.recipients == [.claudeCode])
       #expect(component.origins[0].provenance.sourceIdentity == "local:" + producer.path)
-      #expect(component.origins[0].provenance.relativePath == ".agent/Agents.swift")
+      #expect(component.origins[0].provenance.relativePath == ".agent/agents.yaml")
       #expect(!component.origins[0].consumerEditable)
       let prompt = try #require(graph.components.last)
       #expect(prompt.chatGPT)
