@@ -102,7 +102,7 @@ struct YAMLPatches {
     }
     let node = document.locations[pointer]!
     if value == nil || value == .null {
-      guard let container = document.locations[parent],
+      guard let container = mapping(at: parent),
         let pair = container.pairs?.first(where: { $0.key.text == yamlKey(key, parent: parent) })
       else {
         throw readOnly(pointer, "value has no removable mapping entry")
@@ -168,13 +168,18 @@ struct YAMLPatches {
     {
       rendered += newline
     }
+    if node.range.isEmpty, node.range.lowerBound > 0,
+      [UInt8(ascii: ":"), UInt8(ascii: "-")].contains(bytes[node.range.lowerBound - 1])
+    {
+      rendered = " " + rendered
+    }
     return [SourcePatch(range: node.range, replacement: Array(rendered.utf8))]
   }
 
   private func addField(_ parent: String, _ key: String, _ value: DeclarationValue) throws
     -> [SourcePatch]
   {
-    guard let container = document.locations[parent] else {
+    guard let container = mapping(at: parent) else {
       throw readOnly(parent, "missing owning mapping")
     }
     if document.defaulted.contains(parent) {
@@ -194,19 +199,15 @@ struct YAMLPatches {
             replacement: Array(("{" + source.spelling(container.range) + ", " + text + "}").utf8))
         ]
       }
-      let end = container.range.upperBound - 1
-      return [
-        SourcePatch(range: end..<end, replacement: Array(((pairs.isEmpty ? "" : ", ") + text).utf8))
-      ]
+      return appendFlow(text, to: container)
     }
     let indent =
       pairs.first.map { indentation(at: $0.key.range.lowerBound) }
       ?? indentation(at: container.range.lowerBound)
     let end =
       pairs.last.map { lineEnd($0.value.entryRange.upperBound) } ?? container.range.upperBound
-    let prefix = end > 0 && bytes[end - 1] != 10 ? newline : ""
     return [
-      SourcePatch(range: end..<end, replacement: Array((prefix + indent + text + newline).utf8))
+      SourcePatch(range: end..<end, replacement: blockEntry(indent + text, at: end))
     ]
   }
 
@@ -232,6 +233,7 @@ struct YAMLPatches {
       return try addField(parent, key, .array([value]))
     }
     if container.flow {
+      if index == children.count { return appendFlow(text, to: container) }
       if document.comments.contains(where: { container.range.contains($0.lowerBound) }) {
         var content = flowContent(container)
         content.entries.insert(FlowEntry(text: text), at: index)
@@ -245,11 +247,6 @@ struct YAMLPatches {
         let offset = (named ? children[index].entryRange : children[index].range).lowerBound
         return [SourcePatch(range: offset..<offset, replacement: Array((text + ", ").utf8))]
       }
-      let offset = container.range.upperBound - 1
-      return [
-        SourcePatch(
-          range: offset..<offset, replacement: Array(((children.isEmpty ? "" : ", ") + text).utf8))
-      ]
     }
     let indent =
       children.first.map { indentation(at: $0.entryRange.lowerBound) }
@@ -262,8 +259,57 @@ struct YAMLPatches {
     return [
       SourcePatch(
         range: offset..<offset,
-        replacement: Array((indent + (named ? "" : "- ") + text + newline).utf8))
+        replacement: blockEntry(indent + (named ? "" : "- ") + text, at: offset))
     ]
+  }
+
+  private func mapping(at pointer: String) -> YAMLNode? {
+    guard let node = document.locations[pointer] else { return nil }
+    if IRTree.value(IRTree.root(document.declaration), at: pointer)?.record?.kind == "file" {
+      return node.pairs?.first(where: { $0.key.text == "file" })?.value
+    }
+    return node
+  }
+
+  private func blockEntry(_ text: String, at offset: Int) -> [UInt8] {
+    let prefix = offset > 0 && bytes[offset - 1] != 10 ? newline : ""
+    let suffix = offset == bytes.count && bytes.last != 10 ? "" : newline
+    return Array((prefix + text + suffix).utf8)
+  }
+
+  private func appendFlow(_ text: String, to container: YAMLNode) -> [SourcePatch] {
+    let last = container.items?.last ?? container.pairs?.last?.value
+    let start = last?.entryRange.upperBound ?? container.range.lowerBound + 1
+    let end = container.range.upperBound - 1
+    if start == end {
+      return [
+        SourcePatch(range: end..<end, replacement: Array(((last == nil ? "" : ", ") + text).utf8))
+      ]
+    }
+    var cursor = start
+    var trailingComma = false
+    for comment in document.comments where comment.lowerBound >= start && comment.lowerBound < end {
+      if bytes[cursor..<comment.lowerBound].contains(UInt8(ascii: ",")) {
+        trailingComma = true
+        break
+      }
+      cursor = comment.upperBound
+    }
+    if !trailingComma {
+      trailingComma = bytes[cursor..<end].contains(UInt8(ascii: ","))
+    }
+    let gap = source.spelling(start..<end)
+    let addition: String
+    if gap.contains("\n") {
+      addition = "  " + text + (trailingComma ? "," : "") + newline + indentation(at: end)
+    } else {
+      addition = text + (trailingComma ? "," : "")
+    }
+    var patches = [SourcePatch(range: end..<end, replacement: Array(addition.utf8))]
+    if last != nil && !trailingComma {
+      patches.append(SourcePatch(range: start..<start, replacement: Array(",".utf8)))
+    }
+    return patches
   }
 
   private func remove(_ pointer: String, _ index: Int, retainComments: Bool) throws -> [SourcePatch]
