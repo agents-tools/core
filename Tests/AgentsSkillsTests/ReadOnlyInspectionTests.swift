@@ -4,6 +4,7 @@ import AgentsSkills
 import CPlatform
 import Foundation
 import StateTestSupport
+import Synchronization
 import Testing
 
 @testable import AgentsCore
@@ -29,7 +30,18 @@ struct ReadOnlyInspectionTests {
       let skills = try store.readResolved().skills
       if reads == 1 {
         try #require(skills.isEmpty)
-        _ = try fixture.add(mode: .copy)
+        let options = AddOptions(
+          source: fixture.repo.path, alias: "fixture", agents: [.codex], mode: .copy, all: true,
+          environment: fixture.environment)
+        let finished = DispatchSemaphore(value: 0)
+        let writer = Mutex<Result<Void, any Error>?>(nil)
+        Thread.detachNewThread {
+          let outcome = Result { _ = try SkillOperations.add(options) }
+          writer.withLock { $0 = outcome }
+          finished.signal()
+        }
+        finished.wait()
+        try #require(writer.withLock { $0 }).get()
         if bodyThrows { throw CoreError.invalidState("inconsistent inspection") }
       } else {
         let descriptor = open(lock.path, O_RDONLY | O_CLOEXEC)
