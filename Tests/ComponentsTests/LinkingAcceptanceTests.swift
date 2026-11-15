@@ -14,54 +14,36 @@ struct LinkingAcceptanceTests {
 
     let repository = try fixture.gitRepository("a")
     try fixture.write(
-      repository, ".agent/Agents.swift",
+      repository, ".agent/agents.yaml",
       manifest(
         """
-        exports: ["server"],
-        groups: [
-          .group(name: "server", components: [
-            .mcpServer(
-              name: "server", transport: .stdio("server-v1"), agents: [.codex])
-          ])
-        ]
+        exports: ["server"]
+        groups: {"server": {"components": [{"kind": "mcpServer", "name": "server", "transport": {"kind": "stdio", "executable": "server-v1"}, "agents": ["codex"]}]}}
         """))
     let older = try fixture.commit(repository, tag: "1.0.0")
     try fixture.write(
-      repository, ".agent/Agents.swift",
+      repository, ".agent/agents.yaml",
       manifest(
         """
-        exports: ["server"],
-        groups: [
-          .group(name: "server", components: [
-            .mcpServer(
-              name: "server", transport: .stdio("server-v2"), agents: [.codex])
-          ])
-        ]
+        exports: ["server"]
+        groups: {"server": {"components": [{"kind": "mcpServer", "name": "server", "transport": {"kind": "stdio", "executable": "server-v2"}, "agents": ["codex"]}]}}
         """))
     _ = try fixture.commit(repository, tag: "2.0.0")
 
     let bridge = fixture.root.appendingPathComponent("bridge", isDirectory: true)
     try fixture.write(
-      bridge, ".agent/Agents.swift",
+      bridge, ".agent/agents.yaml",
       manifest(
         """
-        exports: ["bridge"],
-        sources: [.source(name: "a", path: "../a", exact: "1.0.0")],
-        groups: [
-          .group(name: "bridge", uses: [.group(name: "server", source: "a")])
-        ]
+        exports: ["bridge"]
+        sources: {"a": {"path": "../a", "requirement": {"exact": "1.0.0"}}}
+        groups: {"bridge": {"uses": [{"source": "a", "group": "server"}]}}
         """))
     let document = try fixture.document(
       manifest(
         """
-        sources: [
-          .source(name: "a", path: "../a", from: "1.0.0"),
-          .source(name: "bridge", path: "../bridge"),
-        ],
-        uses: [
-          .group(name: "server", source: "a"),
-          .group(name: "bridge", source: "bridge"),
-        ]
+        sources: {"a": {"path": "../a", "requirement": {"from": "1.0.0"}}, "bridge": {"path": "../bridge"}}
+        uses: [{"source": "a", "group": "server"}, {"source": "bridge", "group": "bridge"}]
         """))
 
     let graph = try fixture.link(document)
@@ -88,38 +70,20 @@ struct LinkingAcceptanceTests {
 
     let producer = fixture.root.appendingPathComponent("producer", isDirectory: true)
     try fixture.write(
-      producer, ".agent/Agents.swift",
+      producer, ".agent/agents.yaml",
       manifest(
         """
-        defaultAgents: [.claudeCode, .codex],
-        exports: ["left", "right"],
-        components: [
-          .mcpServer(name: "root-only", transport: .stdio("root-only"))
-        ],
-        groups: [
-          .group(
-            name: "leaf",
-            components: [
-              .mcpServer(name: "leaf-server", transport: .stdio("leaf")),
-              .mcpServer(
-                name: "empty-server", transport: .stdio("empty"),
-                condition: .when(agents: [])),
-            ],
-            condition: .when(agents: [.codex], scopes: [.project])),
-          .group(name: "left", uses: ["leaf"]),
-          .group(name: "right", uses: ["leaf"]),
-        ]
+        defaultAgents: ["claude-code", "codex"]
+        exports: ["left", "right"]
+        components: [{"kind": "mcpServer", "name": "root-only", "transport": {"kind": "stdio", "executable": "root-only"}}]
+        groups: {"leaf": {"components": [{"kind": "mcpServer", "name": "leaf-server", "transport": {"kind": "stdio", "executable": "leaf"}}, {"kind": "mcpServer", "name": "empty-server", "transport": {"kind": "stdio", "executable": "empty"}, "condition": {"agents": []}}], "condition": {"agents": ["codex"], "scopes": ["project"]}}, "left": {"uses": [{"group": "leaf"}]}, "right": {"uses": [{"group": "leaf"}]}}
         """))
     let document = try fixture.document(
       manifest(
         """
-        defaultAgents: [.cursor],
-        sources: [.source(name: "producer", path: "../producer")],
-        uses: [
-          .group(name: "left", source: "producer"),
-          .group(name: "right", source: "producer"),
-          .group(name: "left", source: "producer"),
-        ]
+        defaultAgents: ["cursor"]
+        sources: {"producer": {"path": "../producer"}}
+        uses: [{"source": "producer", "group": "left"}, {"source": "producer", "group": "right"}, {"source": "producer", "group": "left"}]
         """))
 
     let graph = try fixture.link(document)
@@ -147,7 +111,7 @@ struct LinkingAcceptanceTests {
         return
       }
       #expect(key == leaf.key)
-      #expect(provenance.relativePath.hasSuffix(".agent/Agents.swift"))
+      #expect(provenance.relativePath.hasSuffix(".agent/agents.yaml"))
       #expect(!provenance.referenceChain.isEmpty)
     }
   }
@@ -160,15 +124,10 @@ struct LinkingAcceptanceTests {
     let repository = try fixture.gitRepository("shared")
     let producer = manifest(
       """
-      exports: ["server", "empty"],
-      groups: [
-        .group(name: "server", components: [
-          .mcpServer(name: "shared-server", transport: .stdio("shared"), agents: [.codex])
-        ]),
-        .group(name: "empty"),
-      ]
+      exports: ["server", "empty"]
+      groups: {"server": {"components": [{"kind": "mcpServer", "name": "shared-server", "transport": {"kind": "stdio", "executable": "shared"}, "agents": ["codex"]}]}, "empty": {}}
       """)
-    try fixture.write(repository, ".agent/Agents.swift", producer)
+    try fixture.write(repository, ".agent/agents.yaml", producer)
     let older = try fixture.commit(repository, tag: "1.0.0")
     try fixture.write(repository, "revision-marker", "second snapshot\n")
     let newer = try fixture.commit(repository, tag: "2.0.0")
@@ -180,17 +139,14 @@ struct LinkingAcceptanceTests {
     func root(version: String, includeSkill: Bool, includeEmpty: Bool) -> String {
       let component =
         includeSkill
-        ? #".skills(source: "drafts", select: ["draft"], mode: .edit, agents: [.codex])"#
+        ? "{\"kind\": \"skills\", \"source\": \"drafts\", \"select\": [\"draft\"], \"mode\": \"edit\", \"agents\": [\"codex\"]}"
         : ""
-      let extra = includeEmpty ? #", .group(name: "empty", source: "shared")"# : ""
+      let extra = includeEmpty ? #", {group: empty, source: shared}"# : ""
       return manifest(
         """
-        sources: [
-          .source(name: "shared", path: "../shared", exact: "\(version)"),
-          .source(name: "drafts", path: "../skills"),
-        ],
-        components: [\(component)],
-        uses: [.group(name: "server", source: "shared")\(extra)]
+        sources: {shared: {path: ../shared, requirement: {exact: "\(version)"}}, drafts: {path: ../skills}}
+        components: [\(component)]
+        uses: [{group: server, source: shared}\(extra)]
         """)
     }
 
@@ -241,15 +197,8 @@ struct LinkingAcceptanceTests {
   }
 }
 
-private func manifest(_ arguments: String) -> String {
-  """
-  // agents-tools-version: 1.0
-  import AgentsDescription
-
-  let agents = Agents(
-  \(arguments)
-  )
-  """
+private func manifest(_ fields: String) -> String {
+  "version: 1\n" + fields + "\n"
 }
 
 private struct LinkingFixture {
@@ -279,7 +228,7 @@ private struct LinkingFixture {
 
   func document(_ text: String) throws -> DeclarationDocument {
     try DeclarationDocument(
-      bytes: Array(text.utf8), identity: DocumentIdentity("consumer/.agent/Agents.swift"))
+      bytes: Array(text.utf8), identity: DocumentIdentity("consumer/.agent/agents.yaml"))
   }
 
   func link(_ document: DeclarationDocument) throws -> LinkedComponents {

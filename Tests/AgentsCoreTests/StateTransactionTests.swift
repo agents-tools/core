@@ -150,7 +150,7 @@ final class TransactionFixture {
         root.appendingPathComponent(".agents/skills/target"),
         with: .copy(root.appendingPathComponent("new")))
       try transaction.replace(
-        store.declarationURL, with: .data(manifestText("defaultAgents: [.codex]")))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [\"codex\"]\n")))
       try transaction.replace(
         store.resolvedURL,
         with: .data(
@@ -363,7 +363,7 @@ extension StateTransactionTests {
     try Data("keep".utf8).write(to: victim.appendingPathComponent("sentinel"))
     let maliciousPaths = [
       victim.path, "file://" + victim.path, "state/../../Documents/victim", "state/cache/../victim",
-      "state/Agents.swift/child", "codex/../victim", "codex/other/child", "unknown/victim",
+      "state/agents.yaml/child", "codex/../victim", "codex/other/child", "unknown/victim",
       "state/cache/artifact-content/../../victim",
     ]
     for path in maliciousPaths {
@@ -616,7 +616,7 @@ extension StateTransactionTests {
           try transaction.replace(target, with: .copy(fixture.root.appendingPathComponent("new")))
         }
         try transaction.replace(
-          store.declarationURL, with: .data(manifestText("defaultAgents: [.codex]")))
+          store.declarationURL, with: .data(manifestText("defaultAgents: [\"codex\"]\n")))
         try transaction.replace(
           store.resolvedURL,
           with: .data(

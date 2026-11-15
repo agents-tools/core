@@ -326,7 +326,7 @@ if arguments[2].hasPrefix("ledger-") {
         InstructionLocations.file(for: .geminiCLI, scope: scope, environment: store.environment)!,
         with: .data(Data("New instructions\n".utf8)))
       try transaction.replace(
-        store.declarationURL, with: .data(manifestText("defaultAgents: [.cursor]")))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [\"cursor\"]\n")))
       try transaction.replace(store.resolvedURL, with: .data(StateStore.encode(ResolvedState())))
       try transaction.commit()
     } else if arguments[2] == "watch-crash" {
@@ -367,7 +367,7 @@ if arguments[2].hasPrefix("ledger-") {
         )
         .appendingPathComponent("target"), with: .copy(root.appendingPathComponent("new")))
       try transaction.replace(
-        store.declarationURL, with: .data(manifestText("defaultAgents: [.codex]")))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [\"codex\"]\n")))
       try transaction.replace(
         store.resolvedURL,
         with: .data(

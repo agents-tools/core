@@ -9,7 +9,6 @@ let package = Package(
     .macOS(.v15)
   ],
   products: [
-    .library(name: "AgentsDescription", targets: ["AgentsDescription"]),
     .library(name: "AgentsManifest", targets: ["AgentsManifest"]),
     .library(name: "AgentsCore", targets: ["AgentsCore"]),
     .library(name: "AgentsSkills", targets: ["AgentsSkills"]),
@@ -18,20 +17,22 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/apple/swift-crypto.git", from: "5.0.0"),
-    .package(url: "https://github.com/jpsim/Yams", from: "6.0.0"),
+    .package(url: "https://github.com/jpsim/Yams", exact: "6.2.2"),
     .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.9.0"),
-    .package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "604.0.0"),
+    .package(url: "https://github.com/tree-sitter/tree-sitter", exact: "0.25.10"),
   ],
   targets: [
     .target(name: "CPlatform"),
-    .target(name: "AgentsDescription"),
+    .target(
+      name: "TreeSitterYAML", exclude: ["LICENSE", "provenance.json"],
+      sources: ["parser.c", "scanner.c"], publicHeadersPath: "include",
+      cSettings: [.headerSearchPath(".")]),
     .target(
       name: "AgentsManifest",
       dependencies: [
-        "AgentsDescription", "AgentsCore",
-        .product(name: "SwiftSyntax", package: "swift-syntax"),
-        .product(name: "SwiftParser", package: "swift-syntax"),
-      ]),
+        "AgentsCore", "TreeSitterYAML", "Yams",
+        .product(name: "TreeSitter", package: "tree-sitter"),
+      ], resources: [.copy("Resources/agents.schema.json")]),
     .target(
       name: "AgentsCore",
       dependencies: ["CPlatform", .product(name: "Crypto", package: "swift-crypto")]
@@ -77,17 +78,14 @@ let package = Package(
       path: "Tests/ManifestTestSupport"),
     .executableTarget(
       name: "ManifestTestProcess",
-      dependencies: ["AgentsManifest", "AgentsCore", "AgentsDescription", "ManifestTestSupport"],
+      dependencies: ["AgentsManifest", "AgentsCore", "ManifestTestSupport"],
       path: "Tests/ManifestTestProcess"),
     .testTarget(
       name: "AgentsManifestTests",
       dependencies: [
-        "AgentsManifest", "AgentsDescription", "AgentsCore", "ManifestTestProcess",
+        "AgentsManifest", "AgentsCore", "ManifestTestProcess",
         "ManifestTestSupport",
-        .product(name: "SwiftParser", package: "swift-syntax"),
-        .product(name: "SwiftSyntax", package: "swift-syntax"),
-      ],
-      resources: [.copy("Fixtures")]),
+      ]),
     .testTarget(
       name: "AgentsUpdatesTests",
       dependencies: [

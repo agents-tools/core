@@ -51,12 +51,10 @@ Both [agents](https://github.com/agents-tools/cli) and
 [skill](https://github.com/skill-cli/cli) consume this package. Consumers own
 command parsing, terminal output and executable distribution.
 
-- **AgentsDescription**: standard-library-only types for authoring the Swift
-  manifest construction vocabulary.
-- **AgentsManifest**: parses and statically evaluates `Agents.swift` snapshots
-  into declaration IR and source maps, prepares byte-preserving edits, and
-  connects the scope declaration to state: read-only `loadDeclaration()` and
-  `loadManifest()`, and the declaration writes of the domain modules.
+- **AgentsManifest**: reads and edits `agents.yaml`, validates complete symbolic
+  declaration intent and prepares byte-preserving changes. It supplies read-only
+  `loadDeclaration()` and `loadManifest()` access and declaration writes for the
+  domain modules.
 - **AgentsCore**: source parsing and identity, Git requirements, declaration and
   resolved-state models, atomic state storage, bare mirrors and immutable source
   materializations, watch subscriptions, hashing, path safety, process execution
@@ -104,7 +102,6 @@ targets: [
   .executableTarget(
     name: "YourCLI",
     dependencies: [
-      .product(name: "AgentsDescription", package: "core"),
       .product(name: "AgentsManifest", package: "core"),
       .product(name: "AgentsCore", package: "core"),
       .product(name: "AgentsSkills", package: "core"),
@@ -124,10 +121,10 @@ requirement. Pin a reviewed revision when reproducibility is required. Use
 
 ### State and lifecycle
 
-Project state lives in `.agent/Agents.swift`, `.agent/agents.resolved` and
+Project state lives in `.agent/agents.yaml`, `.agent/agents.resolved` and
 `.agent/agents.watch`. User state uses the same filenames under `~/.agents/`.
 The respective `cache/` directory holds source mirrors and exact content. A
-project commits its `Agents.swift` declaration and `agents.resolved` lock; keep
+project commits its `agents.yaml` declaration and `agents.resolved` lock; keep
 `agents.watch`, `cache/`, `.agents.lock` and `transaction.json` out of version
 control.
 
@@ -153,7 +150,7 @@ cache pruning. Corrupt watch state stops scope mutations before any replacement.
 Read-only access, including `loadResolved()`, `loadWatch()` and, with `import
 AgentsManifest`, `loadDeclaration()` and `loadManifest()`, never recovers and
 reports a pending transaction with `CoreError.recoveryPending`. A scope with a
-lock or watch state but no `Agents.swift` reports
+lock or watch state but no `agents.yaml` reports
 `CoreError.missingDeclaration`.
 
 ### Skills
@@ -233,7 +230,7 @@ by bare name. `InstructionOperations` generates whole target files from them:
   deletes a target that no longer receives sections while it still equals its
   locked rendering.
 - `renderChatGPT(prompt:...)` renders locked sections plus a custom append file.
-  Prompts are declared with `.instructions(chatGPT:)`.
+  Prompts are declared in an instructions component’s `chatgpt` mapping.
 - `doctor(...)` checks missing, drifted and unowned locked targets, changed own
   files, links, scope duplication, Claude forwarding, Codex overrides and the
   project size budget, newer matching source revisions and uncommitted sources.
@@ -302,8 +299,8 @@ Read the [organization contributing guide][contributing] and the
 The generation commands in `.github/swift-package.json` run on the last
 compiler entry's runner, using `python3` and the toolchain's `swift format`.
 They regenerate into temporary directories and compare committed bytes.
-`swift test` checks contract signatures and the complete compiler-backed fixture
-inventory without invoking these generators.
+`swift test` checks YAML admission, complete domain round trips, source maps,
+lossless edits and the existing lifecycle contracts.
 
 Run the package's build, test, generation and formatting checks:
 
@@ -312,8 +309,7 @@ swift build
 env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME \
   -u XDG_STATE_HOME -u XDG_CACHE_HOME swift test
 swift build -c release
-python3 Scripts/generate-manifest-vocabulary.py --check
-python3 Scripts/generate-manifest-fixtures.py --check
+python3 Scripts/generate-manifest-schema.py --check
 swift format lint --strict --configuration .swift-format \
   --recursive Package.swift Sources Tests
 ```

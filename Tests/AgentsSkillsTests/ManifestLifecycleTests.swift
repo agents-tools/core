@@ -7,7 +7,7 @@ import Testing
 
 @testable import AgentsCore
 
-/// Skill and watch writes through the scope's `Agents.swift` declaration document.
+/// Skill and watch writes through the scope's `agents.yaml` declaration document.
 @Suite("Skill declaration documents")
 struct ManifestLifecycleTests {
   @Test func freshAddCreatesTheCanonicalDeclarationInTheLockJournal() throws {
@@ -28,28 +28,15 @@ struct ManifestLifecycleTests {
         entries.value = journal.entries
       })
     #expect(
-      entries.value.map(\.path) == ["codex/demo", "state/Agents.swift", "state/agents.resolved"])
+      entries.value.map(\.path) == ["codex/demo", "state/agents.yaml", "state/agents.resolved"])
     #expect(entries.value.allSatisfy { $0.preimage == nil })
     #expect(
       String(decoding: try Data(contentsOf: store.declarationURL), as: UTF8.self) == """
-        // agents-tools-version: 1.0
-        import AgentsDescription
-
-        let agents = Agents(
-          sources: [
-            .source(
-              name: "fixture",
-              path: "\(fixture.repo.path)"
-            ),
-          ],
-          components: [
-            .skills(
-              source: "fixture",
-              mode: .copy,
-              agents: [.codex]
-            ),
-          ]
-        )
+        version: 1
+        sources:
+          "fixture": {"path": "\(fixture.repo.path)"}
+        components:
+          - {"kind": "skills", "source": "fixture", "select": "all", "exclude": [], "mode": "copy", "overrides": {}, "agents": ["codex"], "native": {}}
 
         """)
     #expect(try store.loadResolved().skills["demo"]?.installs == ["codex": .copy])
@@ -62,27 +49,18 @@ struct ManifestLifecycleTests {
     try fixture.commit()
     let store = fixture.store()
     let header = """
-      // agents-tools-version: 1.0
-      import AgentsDescription
+      # Team skills, reviewed weekly.
+      version: 1
+      sources:
+        # The fixture repository.
+        fixture: {path: "\(fixture.repo.path)"}
 
-      // Team skills, reviewed weekly.
-      let agents = Agents(
-        sources: [
-          // The fixture repository.
-          .source(name: "fixture", path: "\(fixture.repo.path)"),
-        ],
       """
     try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
     try Data(
-      (header + """
-
-          components: [
-            // Everything the fixture publishes.
-            .skills(source: "fixture", agents: [.codex]),
-          ]
-        )
-
-        """).utf8
+      (header
+        + "components:\n  # Everything the fixture publishes.\n  - {kind: skills, source: fixture, agents: [codex]}\n")
+        .utf8
     ).write(to: store.declarationURL)
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(try store.loadResolved().skills.keys.sorted() == ["demo", "other"])
@@ -92,7 +70,7 @@ struct ManifestLifecycleTests {
     func expectUntouched() throws {
       let current = try text()
       #expect(current.hasPrefix(header))
-      #expect(current.contains("    // Everything the fixture publishes.\n"))
+      #expect(current.contains("  # Everything the fixture publishes.\n"))
     }
 
     try SkillOperations.remove(skillNames: ["demo"], environment: fixture.environment)
@@ -113,14 +91,14 @@ struct ManifestLifecycleTests {
     #expect(try store.loadDeclaration().watch == ["fixture"])
     try watch.remove("fixture", environment: fixture.environment)
     try expectUntouched()
-    // Only the component's arguments and the root's watch argument were edited.
+    // Only the component fields and the watch field were edited.
     let final = try text()
     #expect(
       final.hasPrefix(
         header
-          + "\n  components: [\n    // Everything the fixture publishes.\n    .skills(\n      source: "
+          + "components:\n  # Everything the fixture publishes.\n  - {kind: skills, source: fixture, agents: [codex]"
       ))
-    #expect(final.hasSuffix("),\n  ],\n  watch: []\n)\n"))
+    #expect(final.hasSuffix("\"watch\": []\n"))
     let declaration = try store.loadDeclaration()
     #expect(declaration.watch == nil)
     #expect((try declaration.skills)?["fixture"]?.select == .all)
@@ -158,7 +136,7 @@ struct ManifestLifecycleTests {
       try SkillOperations.updateInstalled(
         environment: fixture.environment, apply: true,
         beforeApply: { _ in
-          edited = try Data(contentsOf: store.declarationURL) + Data("// Reviewed.\n".utf8)
+          edited = try Data(contentsOf: store.declarationURL) + Data("# Reviewed.\n".utf8)
           try edited.write(to: store.declarationURL)
         })
     } throws: { error in
@@ -170,9 +148,8 @@ struct ManifestLifecycleTests {
     #expect(try fixture.body(fixture.target("demo")) == target)
   }
 
-  /// A selection held in a constant has no direct source range, so the add stops before
-  /// retaining content or touching targets.
-  @Test func readOnlySelectionStopsAnAddBeforeRetention() throws {
+  /// Unsupported shared aliases stop before retaining content or touching targets.
+  @Test func unsupportedSelectionStopsAnAddBeforeRetention() throws {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "A")
     try fixture.skill("other", body: "B")
@@ -181,18 +158,11 @@ struct ManifestLifecycleTests {
     let store = fixture.store()
     let declaration = Data(
       """
-      // agents-tools-version: 1.0
-      import AgentsDescription
-
-      let picked: SkillSelection = ["demo"]
-      let agents = Agents(
-        sources: [.source(name: "fixture", path: "\(fixture.repo.path)")],
-        components: [.skills(source: "fixture", select: picked, mode: .copy, agents: [.codex])]
-      )
-
+      version: 1
+      sources: {"fixture": {"path": "\(fixture.repo.path)"}}
+      components: [{"kind": "skills", "source": "fixture", "select": &picked [demo], "mode": "copy", "agents": ["codex"]}]
       """.utf8)
     try declaration.write(to: store.declarationURL)
-    _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
     let before = try snapshot(fixture.environment.projectDirectory)
     #expect {
       try SkillOperations.add(
@@ -200,7 +170,7 @@ struct ManifestLifecycleTests {
           source: "fixture", agents: [.codex], skillNames: ["other"], mode: .copy,
           environment: fixture.environment))
     } throws: { error in
-      (error as? ManifestFailure)?.diagnostics.first?.code == "manifest.edit.readOnly"
+      (error as? ManifestFailure)?.diagnostics.first?.code == "manifest.unsupported"
     }
     #expect(try snapshot(fixture.environment.projectDirectory) == before)
     #expect(try Data(contentsOf: store.declarationURL) == declaration)
@@ -216,17 +186,9 @@ struct ManifestLifecycleTests {
     try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
     let declaration = Data(
       """
-      // agents-tools-version: 1.0
-      import AgentsDescription
-
-      let agents = Agents(
-        sources: [.source(name: "fixture", path: "\(fixture.repo.path)")],
-        components: [
-          .skills(source: "fixture"),
-          .mcpServer(name: "tools", transport: .stdio("server")),
-        ]
-      )
-
+      version: 1
+      sources: {"fixture": {"path": "\(fixture.repo.path)"}}
+      components: [{"kind": "skills", "source": "fixture"}, {"kind": "mcpServer", "name": "tools", "transport": {"kind": "stdio", "executable": "server"}}]
       """.utf8)
     try declaration.write(to: store.declarationURL)
     let before = try snapshot(fixture.root)

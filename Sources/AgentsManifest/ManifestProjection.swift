@@ -39,7 +39,7 @@ package enum ManifestProjection {
         ComponentGroupDeclaration(
           name: record["name"]!.string!,
           components: try projection.records(record["components"]).map(projection.component),
-          uses: try projection.records(record["uses"]).map(projection.use),
+          uses: projection.records(record["uses"]).map(projection.use),
           condition: projection.condition(record["condition"]))
       }, uses: ir.uses.map(projection.use), exports: ir.exports,
       watch: ir.watch.isEmpty ? nil : ir.watch)
@@ -123,7 +123,7 @@ package enum ManifestProjection {
   }
 }
 
-/// Static evaluation checks vocabulary and field types before conversion, including in drafts.
+/// Schema validation checks field types before conversion, including private drafts.
 private struct Projection {
   let document: DeclarationDocument
 

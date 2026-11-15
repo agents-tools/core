@@ -158,13 +158,8 @@ struct OwnershipAndPlacementTests {
     try fixture.own("guide")
     try fixture.write(
       """
-      // agents-tools-version: 1.0
-      import AgentsDescription
-
-      let agents = Agents(
-        components: [.instructions(chatGPT: [.prompt(name: "weekly", sections: ["guide"])])]
-      )
-
+      version: 1
+      components: [{"kind": "instructions", "chatgpt": {"weekly": {"sections": [{"name": "guide"}]}}}]
       """, to: fixture.store().declarationURL)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(

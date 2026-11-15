@@ -1,9 +1,6 @@
 import Foundation
 
-/// A language 1.0 declaration document whose root `Agents(...)` call receives `arguments`
-/// verbatim, for fixtures that need declaration bytes without the declaration model.
-package func manifestText(_ arguments: String = "") -> Data {
-  let call = arguments.isEmpty ? "Agents()" : "Agents(\n  \(arguments)\n)"
-  let header = "// agents-tools-version: 1.0\nimport AgentsDescription\n\n"
-  return Data((header + "let agents = \(call)\n").utf8)
+/// YAML fields for transaction fixtures that need bytes without the declaration model.
+package func manifestText(_ fields: String = "") -> Data {
+  Data(("version: 1\n" + fields + (fields.hasSuffix("\n") || fields.isEmpty ? "" : "\n")).utf8)
 }

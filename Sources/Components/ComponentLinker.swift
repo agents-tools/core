@@ -90,7 +90,7 @@ final class Linking {
     session.register(root)
     let context = LinkingDocument(
       declaration: declaration, document: document, view: root,
-      manifestPath: store.scope == .user ? "Agents.swift" : ".agent/Agents.swift",
+      manifestPath: store.scope == .user ? "agents.yaml" : ".agent/agents.yaml",
       producer: false)
     try budget.manifest(root.snapshot, path: context.manifestPath, bytes: document.bytes.count)
     guard let result = try search(root: context, choices: pins) else {
@@ -271,7 +271,7 @@ final class Linking {
     if let existing = documents[key] { return existing }
     let root = try view.directory()
     let file = root.appendingPathComponent(
-      root.lastPathComponent == ".agent" ? "Agents.swift" : ".agent/Agents.swift")
+      root.lastPathComponent == ".agent" ? "agents.yaml" : ".agent/agents.yaml")
     let relative = try view.relativePath(file)
     let handle = try FileHandle(forReadingFrom: view.resource(relative))
     defer { try? handle.close() }

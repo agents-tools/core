@@ -1,5 +1,4 @@
 import AgentsCore
-import AgentsDescription
 import Foundation
 import Testing
 
@@ -15,13 +14,11 @@ struct DeclarationProgressTests {
       names.map { "\"\($0)\"" }.joined(separator: ", ")
     }
     let body = """
-      let agents = Agents(
-        sources: [.source(name: "a", path: "a"), .source(name: "b", path: "b")],
-        components: [
-          .skills(source: "a", select: [\(literals(old))]),
-          .skills(source: "b", select: [\(literals(keep))]),
-        ]
-      )
+      version: 1
+      sources: {a: {path: a}, b: {path: b}}
+      components:
+        - {kind: skills, source: a, select: [\(literals(old))]}
+        - {kind: skills, source: b, select: [\(literals(keep))]}
       """
     let previous = try projected(body)
     var next = previous
@@ -30,7 +27,7 @@ struct DeclarationProgressTests {
     let document = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
     #expect(
       document.declaration
-        == Lowering.declaration(try DeclarationConstruction.root(next).constructionValue))
+        == YAMLConstruction.root(next))
     let result = try ManifestProjection.declaration(
       of: document, environment: projectionEnvironment)
     #expect(try result.skills?["b"]?.select == .names(keep))
@@ -45,16 +42,11 @@ struct DeclarationProgressTests {
       names.map { "\"\($0)\"" }.joined(separator: ", ")
     }
     let body = """
-      let agents = Agents(
-        sources: [
-          .source(name: "b", path: "b"),
-          .source(name: "a", path: "a"),
-        ],
-        components: [
-          .skills(source: "a", select: [\(literals(old))]),
-          .skills(source: "b", select: [\(literals(keep))]),
-        ]
-      )
+      version: 1
+      sources: {b: {path: b}, a: {path: a}}
+      components:
+        - {kind: skills, source: a, select: [\(literals(old))]}
+        - {kind: skills, source: b, select: [\(literals(keep))]}
       """
     let previous = try projected(body)
     var next = previous
@@ -72,7 +64,7 @@ struct DeclarationProgressTests {
     let document = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
     #expect(
       document.declaration
-        == Lowering.declaration(try DeclarationConstruction.root(next).constructionValue))
+        == YAMLConstruction.root(next))
     let result = try ManifestProjection.declaration(
       of: document, environment: projectionEnvironment)
     #expect(try planned(result, next, in: String(decoding: bytes, as: UTF8.self)) == nil)

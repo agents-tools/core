@@ -1,5 +1,4 @@
 import AgentsCore
-import AgentsDescription
 import AgentsManifest
 import Foundation
 import ManifestTestSupport
@@ -73,7 +72,7 @@ if CommandLine.arguments.contains("--edit-oversized") {
   var preparationBaselinePeakBytes: UInt64?
   do {
     let document = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
-    let component = Component.ignore(
+    let component = ComponentDeclaration.ignore(
       name: "large", patterns: [String(repeating: "x", count: 20_000_000)])
     preparationBaselinePeakBytes = peakMemory()
     _ = try document.preparing([.insertComponent(component, into: .root, at: .first)])

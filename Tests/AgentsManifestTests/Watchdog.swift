@@ -1,8 +1,9 @@
 import AgentsCore
-import AgentsManifest
 import Foundation
 import ManifestTestSupport
 import Testing
+
+@testable import AgentsManifest
 
 struct ProbeResult: Codable {
   let name: String
@@ -30,7 +31,7 @@ func probe(
 ) throws
   -> ProbeResult
 {
-  let input = directory.appendingPathComponent("input.swift")
+  let input = directory.appendingPathComponent("input.yaml")
   let output = directory.appendingPathComponent("output.json")
   let errors = directory.appendingPathComponent("stderr.txt")
   try Data(bytes).write(to: input)
@@ -81,7 +82,7 @@ func probe(
   let report = try JSONDecoder().decode(ProbeReport.self, from: Data(contentsOf: output))
   #expect(report.configuration == probeConfiguration, "\(name): child build configuration")
   // A loose runaway-process guard, not a platform-specific memory promise. 512 MiB
-  // leaves room for the Swift runtime, Debug SwiftSyntax and bounded source/IR copies;
+  // leaves room for the Swift runtime, the YAML parsers and bounded source/IR copies;
   // it is well above the contract's 2 MiB input, 16 MiB values and 32 MiB encoding caps.
   #expect(
     report.peakMemoryBytes < 512 * 1_024 * 1_024, "\(name): peak memory \(report.peakMemoryBytes)")
@@ -91,7 +92,7 @@ func probe(
     #expect(report.operation == .frontEnd)
     #expect(report.stage == .teardown)
     #expect(report.metrics.parserCalls == 1)
-    #expect(report.metrics.syntaxNodes <= report.metrics.syntaxReservation)
+    #expect(report.metrics.syntaxNodes <= ManifestLimits.Syntax.nodes)
   }
   return ProbeResult(
     name: name, configuration: probeConfiguration, watchdogSeconds: probeWatchdogSeconds,

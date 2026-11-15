@@ -67,18 +67,8 @@ struct TargetLifecycleTests {
     let lockFile = fixture.store().resolvedURL
     #expect(
       String(decoding: try Data(contentsOf: declarationFile), as: UTF8.self) == """
-        // agents-tools-version: 1.0
-        import AgentsDescription
-
-        let agents = Agents(
-          components: [
-            .instructions(
-              sections: ["guide"],
-              agents: [.codex]
-            ),
-          ]
-        )
-
+        version: 1
+        components: [{"kind": "instructions", "sections": [{"name": "guide"}], "agents": ["codex"]}]
         """)
     let lockText = String(decoding: try Data(contentsOf: lockFile), as: UTF8.self)
     #expect(lockText.contains("\"chatgpt\": {}") && lockText.contains("\"skills\": {}"))
@@ -86,12 +76,8 @@ struct TargetLifecycleTests {
     // The same intent in another layout, with a comment, is not rewritten.
     let declaration = Data(
       """
-      // agents-tools-version: 1.0
-      import AgentsDescription
-
-      // Project instructions.
-      let agents = Agents(components: [.instructions(sections: ["guide"], agents: [.codex])])
-
+      version: 1
+      components: [{"kind": "instructions", "sections": [{"name": "guide"}], "agents": ["codex"]}]
       """.utf8)
     try declaration.write(to: declarationFile)
     let existingLockBytes = try StateStore.encode(fixture.store().loadResolved())

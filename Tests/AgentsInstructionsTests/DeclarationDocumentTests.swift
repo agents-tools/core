@@ -4,7 +4,7 @@ import AgentsManifest
 import Foundation
 import Testing
 
-/// Instruction writes through the scope's `Agents.swift` declaration document.
+/// Instruction writes through the scope's `agents.yaml` declaration document.
 @Suite("Instruction declaration documents")
 struct DeclarationDocumentTests {
   @Test func instructionEditsKeepCommentsAndUntouchedBytes() throws {
@@ -13,18 +13,15 @@ struct DeclarationDocumentTests {
     try fixture.own("style")
     let declaration = fixture.store().declarationURL
     let header = """
-      // agents-tools-version: 1.0
-      import AgentsDescription
-
-      // Project instructions.
-      let agents = Agents(
-        components: [
-          // Shared guidance first.
+      # Project instructions.
+      version: 1
+      components:
+        # Shared guidance first.
 
       """
-    let closing = "  ]\n)\n"
+    let closing = "\n"
     try fixture.write(
-      header + "    .instructions(sections: [\"guide\"], agents: [.codex]),\n" + closing,
+      header + "  - {kind: instructions, sections: [{name: guide}], agents: [codex]}" + closing,
       to: declaration)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     func text() throws -> String {
@@ -40,7 +37,8 @@ struct DeclarationDocumentTests {
       agents: [.claudeCode, .codex], environment: fixture.environment, apply: true)
     #expect(
       try text()
-        == header + "    .instructions(sections: [\"style\"], agents: [.claudeCode, .codex]),\n"
+        == header
+        + "  - {kind: instructions, sections: [{\"name\": \"style\"}], agents: [\"claude-code\", codex]}"
         + closing)
     #expect(try fixture.store().loadResolved().instructions.sections.map(\.name) == ["style"])
   }
@@ -52,7 +50,7 @@ struct DeclarationDocumentTests {
     try fixture.own("guide")
     let store = fixture.store()
     let external = Data(
-      "// agents-tools-version: 1.0\nimport AgentsDescription\n\nlet agents = Agents()\n".utf8)
+      "version: 1\n".utf8)
     #expect(throws: CoreError.self) {
       try InstructionOperations.add(
         InstructionAddOptions(source: ".", names: ["guide"], environment: fixture.environment),
@@ -65,22 +63,17 @@ struct DeclarationDocumentTests {
         atPath: fixture.project.appendingPathComponent("AGENTS.md").path))
   }
 
-  /// Sections held in a constant have no direct source range, so the add stops before the
-  /// callback and any write.
-  @Test func readOnlySectionsStopBeforeTheCallback() throws {
+  /// Unsupported shared aliases fail before the callback and any write.
+  @Test func unsupportedSectionsStopBeforeTheCallback() throws {
     let fixture = try InstructionFixture()
     try fixture.own("guide")
     try fixture.own("style")
+    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     try fixture.write(
       """
-      // agents-tools-version: 1.0
-      import AgentsDescription
-
-      let shared: [SectionReference] = ["guide"]
-      let agents = Agents(components: [.instructions(sections: shared, agents: [.codex])])
-
+      version: 1
+      components: [{kind: instructions, sections: &shared [{name: guide}], agents: [codex]}]
       """, to: fixture.store().declarationURL)
-    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     let before = try fixture.snapshot()
     var called = false
     #expect {
@@ -88,7 +81,7 @@ struct DeclarationDocumentTests {
         InstructionAddOptions(source: ".", names: ["style"], environment: fixture.environment),
         beforeApply: { _ in called = true })
     } throws: { error in
-      (error as? ManifestFailure)?.diagnostics.first?.code == "manifest.edit.readOnly"
+      (error as? ManifestFailure)?.diagnostics.first?.code == "manifest.unsupported"
     }
     #expect(!called)
     #expect(try fixture.snapshot() == before)

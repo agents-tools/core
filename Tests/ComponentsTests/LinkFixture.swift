@@ -34,16 +34,16 @@ final class LinkFixture {
   }
 
   func manifest(_ expression: String, at directory: URL) throws {
-    try write(Self.text(expression), to: ".agent/Agents.swift", base: directory)
+    try write(Self.text(expression), to: ".agent/agents.yaml", base: directory)
   }
 
   static func text(_ expression: String) -> String {
-    "// agents-tools-version: 1.0\nimport AgentsDescription\n" + expression + "\n"
+    expression + "\n"
   }
 
   func document(_ expression: String) throws -> DeclarationDocument {
     try DeclarationDocument(
-      bytes: Array(Self.text(expression).utf8), identity: DocumentIdentity("consumer/Agents.swift"))
+      bytes: Array(Self.text(expression).utf8), identity: DocumentIdentity("consumer/agents.yaml"))
   }
 
   func link(

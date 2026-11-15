@@ -390,7 +390,7 @@ struct PublicationTests {
     let directory = try #require(try fixture.store.openDirectoryIfPresent())
     let backup = directory.url.appendingPathComponent(".agents-\(id.uuidString)-0.old")
     try FileManager.default.moveItem(at: fixture.store.declarationURL, to: backup)
-    try manifestText("defaultAgents: [.codex]").write(to: fixture.store.declarationURL)
+    try manifestText("defaultAgents: [\"codex\"]\n").write(to: fixture.store.declarationURL)
     var old = try StateStore.encode(
       LegacyJournal(
         id: id, scope: directory.identity,

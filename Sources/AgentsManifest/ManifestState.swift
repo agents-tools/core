@@ -1,5 +1,4 @@
 import AgentsCore
-import AgentsDescription
 import Foundation
 
 /// Declaration access for scope state. Core owns the file, its captured bytes, the missing
@@ -58,8 +57,7 @@ extension StateStore {
       if change == nil, try declarationBytes(prepared: baseline) == nil {
         change = DeclarationChange(
           bytes: Data(
-            try CanonicalPrinter().manifest(
-              DeclarationConstruction.root(declaration).constructionValue)))
+            YAMLWriter.manifest(YAMLConstruction.root(declaration))))
       }
       let transaction = FileTransaction(store: self)
       transaction.requireUnchanged(since: baseline)
