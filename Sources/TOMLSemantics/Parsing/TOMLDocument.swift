@@ -70,6 +70,7 @@ struct InternalTOMLArray: Equatable {
     case value
     case array
     case table
+    case inlineTable
     case mixed
   }
 }

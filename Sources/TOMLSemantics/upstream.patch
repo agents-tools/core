@@ -1,5 +1,5 @@
 --- Sources/TOMLDecoder/Parsing/Parser.swift
-+++ Sources/TOMLSemantics/Parsing/Parser.swift
++++ Sources/TOMLDecoder/Parsing/Parser.swift
 @@ -2,31 +2,202 @@
 -    var token = Token.empty
 -    var cursor = 0
@@ -234,7 +234,7 @@
 +              {
 +                if i + 3 >= end || bytes[i + 3] != CodeUnits.singleQuote {
 +                  break
-@@ -34,2 +205,58 @@
+@@ -34,2 +205,65 @@
 -                if token.kind == .newline {
 -                    try eatToken(bytes: bytes, kind: .newline, isDotSpecial: true)
 +              }
@@ -290,19 +290,26 @@
 +                bytes[i + 2] == CodeUnits.doubleQuote
 +              {
 +                if i + 3 >= end || bytes[i + 3] != CodeUnits.doubleQuote {
-+                  if bytes[i - 1] == CodeUnits.backslash {
++                  var backslashStart = i
++                  while backslashStart > start + 3
++                    && bytes[backslashStart - 1] == CodeUnits.backslash
++                  {
++                    try budget.step()
++                    backslashStart -= 1
++                  }
++                  if (i - backslashStart) % 2 != 0 {
 +                    i += 1
 +                    continue
 +                  }
 +                  break
-@@ -37,4 +264,2 @@
+@@ -37,4 +271,2 @@
 -            case .lbracket:
 -                try parseSelect(bytes: bytes)
 -            default:
 -                throw TOMLError(.syntax(lineNumber: token.lineNumber, message: "syntax error"))
 +              }
 +              i += 1
-@@ -42,15 +267,362 @@
+@@ -42,15 +274,362 @@
 -        }
 -    }
 -
@@ -680,7 +687,7 @@
 +          }
 +        }
 +
-@@ -58,87 +630,39 @@
+@@ -58,87 +637,39 @@
 -            let ch = bytes[position]
 -            switch ch {
 -            case CodeUnits.pound:
@@ -807,9 +814,9 @@
 +            if c == CodeUnits.cr {
 +              if position + 1 < count, bytes[position + 1] == CodeUnits.lf {
 +                // CRLF ends comment
-@@ -145,0 +670 @@
+@@ -145,0 +677 @@
 +              }
-@@ -147,247 +672,4 @@
+@@ -147,247 +679,4 @@
 -
 -            func scanString(range: Range<Int>, lineNumber: Int) throws(TOMLError) {
 -                let start = range.lowerBound
@@ -1061,7 +1068,7 @@
 +            cursor = position
 +            currentLineNumber = lineNumber
 +            try nextToken(bytes: bytes, isDotSpecial: isDotSpecial)
-@@ -395,236 +677,5 @@
+@@ -395,236 +684,5 @@
 -        }
 -
 -        emitToken(kind: .eof, start: position, end: count)
@@ -1303,7 +1310,7 @@
 +        }
 +      default:
 +        // Found something else, stop skipping
-@@ -634,10 +685,1078 @@
+@@ -634,10 +692,1081 @@
 -    }
 -
 -    mutating func parseKeyedInlineTable(bytes: UnsafeBufferPointer<UInt8>, tableIndex: Int) throws(TOMLError) {
@@ -1441,8 +1448,8 @@
 +
 +      case .lbrace:  // Nested table
 +        if keyArrays[arrayIndex].array.kind == nil {
-+          keyArrays[arrayIndex].array.kind = .table
-+        } else if keyArrays[arrayIndex].array.kind != .table {
++          keyArrays[arrayIndex].array.kind = .inlineTable
++        } else if keyArrays[arrayIndex].array.kind != .inlineTable {
 +          keyArrays[arrayIndex].array.kind = .mixed
 +        }
 +
@@ -1519,8 +1526,8 @@
 +
 +      case .lbrace:  // Nested table
 +        if arrays[arrayIndex].kind == nil {
-+          arrays[arrayIndex].kind = .table
-+        } else if arrays[arrayIndex].kind != .table {
++          arrays[arrayIndex].kind = .inlineTable
++        } else if arrays[arrayIndex].kind != .inlineTable {
 +          arrays[arrayIndex].kind = .mixed
 +        }
 +
@@ -1561,6 +1568,9 @@
 +    try nextToken(bytes: bytes, isDotSpecial: true)
 +
 +    if token.kind == .dot {
++      try budget.enter(depth + 1)
++      depth += 1
++      defer { depth -= 1 }
 +      let (subTableKey, subTableHash) = try normalizeKeyAndHash(
 +        bytes: bytes,
 +        token: key
@@ -2392,7 +2402,7 @@
 +                .invalidDateTime3(context: context, lineNumber: lineNumber, reason: reason))
 +            default:
 +              throw tomlError
-@@ -645,198 +1764,184 @@
+@@ -645,198 +1774,184 @@
 -
 -            if token.kind != .string, token.kind != .bareKey {
 -                throw TOMLError(.syntax(lineNumber: token.lineNumber, message: "expect a string"))
@@ -2775,7 +2785,7 @@
 +              lineNumber: 0,
 +              message:
 +                "basic multiline strings cannot contain more than 2 consecutive double quotes"
-@@ -844,91 +1949,23 @@
+@@ -844,91 +1959,23 @@
 -            let subTableIndex: Int
 -
 -            if let existingTableIndex = lookupTable(in: tableIndex, keyed: isKeyed, key: subTableKey, keyHash: subTableHash) {
@@ -2890,7 +2900,7 @@
 +        try budget.step()
 +        if characters.contains(bytes[index]) {
 +          index += 1
-@@ -936,614 +1973,15 @@
+@@ -936,614 +1983,15 @@
 -            try eatToken(bytes: bytes, kind: .lbracket, isDotSpecial: true)
 -        }
 -
@@ -3520,7 +3530,7 @@
 +        index = try indexAfterSkippingCharacters(
 +          start: index, endIndex: endIndex,
 +          characters: [CodeUnits.space, CodeUnits.tab, CodeUnits.cr, CodeUnits.lf]
-@@ -1551,69 +1989,5 @@
+@@ -1551,69 +1999,5 @@
 -    }
 -
 -    func unpackAnyValue(bytes: UnsafeBufferPointer<UInt8>, context: TOMLKey) throws(TOMLError) -> Any {
@@ -3595,7 +3605,7 @@
 +    }
 +
 +    ch = bytes[index]
-@@ -1621,64 +1995,12 @@
+@@ -1621,64 +2005,12 @@
 -    consumedLength += 1
 -
 -    guard
@@ -3672,7 +3682,7 @@
 +      var ucs: UInt32 = 0
 +      for _ in 0..<hexCount {
 +        try budget.step()
-@@ -1686,74 +2008,2 @@
+@@ -1686,74 +2018,2 @@
 -            break
 -        }
 -
@@ -3749,7 +3759,7 @@
 -
 +          throw TOMLError(.expectedHexCharacters(ch, hexCount))
 +        }
-@@ -1762,53 +2012,40 @@
+@@ -1762,53 +2022,40 @@
 -
 -        if ch == CodeUnits.lowerU || ch == CodeUnits.upperU || ch == CodeUnits.lowerX {
 -            let hexCount = switch ch {
@@ -3843,7 +3853,7 @@
 +    resultCodeUnits.append(ch)
 +  }
 +  return String(decoding: resultCodeUnits, as: UTF8.self)
-@@ -1818,11 +2055,36 @@
+@@ -1818,11 +2065,36 @@
 -    guard let year = scanDigits(bytes: bytes, range: range, n: 4) else {
 -        return nil
 -    }
@@ -3891,7 +3901,7 @@
 +  var index = range.lowerBound
 +  while n > 0, index < range.upperBound, bytes[index].isDecimalDigit {
 +    result = 10 * result + Int(bytes[index]) - Int(CodeUnits.number0)
-@@ -1830,9 +2092,47 @@
+@@ -1830,9 +2102,47 @@
 -    guard let month = scanDigits(bytes: bytes, range: index ..< range.upperBound, n: 2) else {
 -        return nil
 -    }
@@ -3948,7 +3958,7 @@
 +  while index < range.upperBound, bytes[index].isDecimalDigit {
 +    try budget.step()
 +    result += Double(bytes[index] - CodeUnits.number0) * unit
-@@ -1840,6 +2140,4 @@
+@@ -1840,6 +2150,4 @@
 -    guard let day = scanDigits(bytes: bytes, range: index ..< range.upperBound, n: 2) else {
 -        return nil
 -    }
@@ -3959,7 +3969,7 @@
 +  }
 +  updatedIndex = index
 +  return UInt32(result)
-@@ -1848,56 +2145,0 @@
+@@ -1848,56 +2155,0 @@
 -func scanDigits(bytes: UnsafeBufferPointer<UInt8>, range: Range<Int>, n: Int) -> Int? {
 -    var result = 0
 -    var n = n
@@ -4016,7 +4026,7 @@
 -    return UInt32(result)
 -}
 -
-@@ -1905,21 +2147,22 @@
+@@ -1905,21 +2157,22 @@
 -    var index = range.lowerBound
 -    guard index < range.upperBound, bytes[index] == CodeUnits.plus || bytes[index] == CodeUnits.minus else {
 -        return nil
@@ -4060,7 +4070,7 @@
 +  }
 +  index += 2
 +  return index
-@@ -1930,12 +2173,12 @@
+@@ -1930,12 +2183,12 @@
 -    let ones: UInt64 = 0x0101_0101_0101_0101
 -    let highBits: UInt64 = 0x8080_8080_8080_8080
 -
@@ -4085,7 +4095,7 @@
 +  return hasByte(0x2222_2222_2222_2222)
 +    || hasByte(0x5C5C_5C5C_5C5C_5C5C)
 +    || hasByte(0x0A0A_0A0A_0A0A_0A0A)
-@@ -1944,52 +2187,48 @@
+@@ -1944,52 +2197,48 @@
 -func normalizeKeyAndHash(bytes: UnsafeBufferPointer<UInt8>, token: Token, keyTransform: (@Sendable (String) -> String)?) throws(TOMLError) -> (key: String, keyHash: Int) {
 -    var start = token.text.lowerBound
 -    var end = token.text.upperBound
@@ -4186,7 +4196,7 @@
 +
 +  let key = try makeString(budget: budget, bytes: bytes, range: start..<end)
 +  return (key, fastKeyHash(bytes: bytes, range: start..<end))
-@@ -2000,9 +2239,9 @@
+@@ -2000,9 +2249,9 @@
 -    let count = range.upperBound - range.lowerBound
 -    if count == 0 {
 -        return 0
@@ -4205,7 +4215,7 @@
 +    return Int(truncatingIfNeeded: packedKeyHash(UnsafeBufferPointer(start: start, count: count)))
 +  }
 +  return Int(truncatingIfNeeded: sampledKeyHash(start: start, count: count))
-@@ -2013,26 +2252,26 @@
+@@ -2013,26 +2262,26 @@
 -    if let hash = key.utf8.withContiguousStorageIfAvailable({ buffer -> UInt64 in
 -        if buffer.count <= 8 {
 -            return packedKeyHash(buffer)
@@ -4258,7 +4268,7 @@
 +    count += 1
 +  }
 +  return Int(truncatingIfNeeded: count <= 8 ? packed : hash)
-@@ -2043,4 +2282,4 @@
+@@ -2043,4 +2292,4 @@
 -    let prefix = packedKeyHash(UnsafeBufferPointer(start: start, count: 8))
 -    let suffix = packedKeyHash(UnsafeBufferPointer(start: start.advanced(by: count - 8), count: 8))
 -    let rotatedSuffix = (suffix << 1) | (suffix >> 63)
@@ -4267,7 +4277,7 @@
 +  let suffix = packedKeyHash(UnsafeBufferPointer(start: start.advanced(by: count - 8), count: 8))
 +  let rotatedSuffix = (suffix << 1) | (suffix >> 63)
 +  return prefix ^ rotatedSuffix ^ (UInt64(truncatingIfNeeded: count) &* 0x9E37_79B1_85EB_CA87)
-@@ -2051,25 +2290,342 @@
+@@ -2051,25 +2300,349 @@
 -    var packed: UInt64 = 0
 -    switch buffer.count {
 -    case 8:
@@ -4611,8 +4621,15 @@
 +    key: String,
 +    keyHash: Int
 +  ) throws {
++    if isKeyed ? keyTables[tableIndex].table.readOnly : tables[tableIndex].readOnly {
++      throw TOMLError(.syntax(lineNumber: token.lineNumber, message: "cannot add to inline table"))
++    }
 +    switch try tableValue(tableIndex: tableIndex, keyed: isKeyed, key: key, keyHash: keyHash) {
 +    case .table(let index):
++      guard !keyTables[index].table.readOnly else {
++        throw TOMLError(
++          .syntax(lineNumber: token.lineNumber, message: "cannot add to inline table"))
++      }
 +      tableIndex = index
 +      isKeyed = true
 +    case .array(let arrayIndex):
@@ -4635,7 +4652,7 @@
 +      isKeyed = false
 +    case .keyValue:
 +      throw TOMLError(.syntax(lineNumber: token.lineNumber, message: "key-value already exists"))
-@@ -2077,3 +2633,46 @@
+@@ -2077,3 +2650,46 @@
 -        break
 -    }
 -    return packed
@@ -4685,7 +4702,7 @@
 +    currentTable = tableIndex
 +    currentTableIsKeyed = isKeyed
 +  }
-@@ -2081,316 +2679,0 @@
+@@ -2081,316 +2696,0 @@
 -
 -@inline(__always)
 -private func makeString(bytes: UnsafeBufferPointer<UInt8>, range: Range<Int>) -> String {
@@ -5003,7 +5020,7 @@
 -    }
 -}
 --- Sources/TOMLDecoder/Parsing/Parser+Finish.swift
-+++ Sources/TOMLSemantics/Parsing/Parser+Finish.swift
++++ Sources/TOMLDecoder/Parsing/Parser+Finish.swift
 @@ -2,6 +2,6 @@
 -    consuming func finish(source: String) -> TOMLDocument {
 -        var tables: [InternalTOMLTable] = []
@@ -5048,7 +5065,7 @@
 +    )
 +  }
 --- Sources/TOMLDecoder/Parsing/Token.swift
-+++ Sources/TOMLSemantics/Parsing/Token.swift
++++ Sources/TOMLDecoder/Parsing/Token.swift
 @@ -2,13 +2,13 @@
 -    enum Kind: UInt8 {
 -        case dot
@@ -5183,7 +5200,7 @@
 -    }
 -}
 --- Sources/TOMLDecoder/Parsing/TOMLDocument.swift
-+++ Sources/TOMLSemantics/Parsing/TOMLDocument.swift
++++ Sources/TOMLDecoder/Parsing/TOMLDocument.swift
 @@ -3,6 +3,6 @@
 -struct TOMLDocument: Equatable, @unchecked Sendable {
 -    let tables: [InternalTOMLTable]
@@ -5273,7 +5290,7 @@
 +      }
 +    }
 +  }
-@@ -32,20 +69,6 @@
+@@ -32,20 +69,7 @@
 -        do {
 -            try source.utf8.withContiguousStorageIfAvailable {
 -                hasContinousStorage = true
@@ -5298,9 +5315,10 @@
 +    case value
 +    case array
 +    case table
++    case inlineTable
 +    case mixed
 +  }
-@@ -54,45 +77,5 @@
+@@ -54,45 +78,5 @@
 -struct InternalTOMLArray: Equatable, Sendable {
 -    var kind: Kind?
 -    var elements: [Element]
@@ -5351,7 +5369,7 @@
 +  let keyHash: Int
 +  let sourcePosition: Int
 +  var table: InternalTOMLTable
-@@ -101,4 +84,5 @@
+@@ -101,4 +85,5 @@
 -struct KeyTablePair: Equatable {
 -    let key: String
 -    let keyHash: Int
@@ -5361,7 +5379,7 @@
 +  let keyHash: Int
 +  let sourcePosition: Int
 +  var array: InternalTOMLArray
-@@ -107,4 +91,5 @@
+@@ -107,4 +92,5 @@
 -struct KeyArrayPair: Equatable {
 -    let key: String
 -    let keyHash: Int
@@ -5371,7 +5389,7 @@
 +  let keyHash: Int
 +  let sourcePosition: Int
 +  var value: Token
-@@ -113,5 +98,8 @@
+@@ -113,5 +99,8 @@
 -struct KeyValuePair: Equatable {
 -    let key: String
 -    let keyHash: Int
@@ -5385,7 +5403,7 @@
 +  var keyValues: [Int] = []
 +  var arrays: [Int] = []
 +  var tables: [Int] = []
-@@ -119,8 +107,4 @@
+@@ -119,8 +108,4 @@
 -struct InternalTOMLTable: Equatable, Sendable {
 -    var implicit: Bool = false
 -    var readOnly: Bool = false
@@ -5398,7 +5416,7 @@
 +  mutating func recordKeyHash(_ keyHash: Int) {
 +    keyHashBloom |= keyHashBloomMask(keyHash)
 +  }
-@@ -128,4 +112,5 @@
+@@ -128,4 +113,5 @@
 -    @inline(__always)
 -    mutating func recordKeyHash(_ keyHash: Int) {
 -        keyHashBloom |= keyHashBloomMask(keyHash)
@@ -5408,7 +5426,7 @@
 +    let mask = keyHashBloomMask(keyHash)
 +    return (keyHashBloom & mask) == mask
 +  }
-@@ -133,48 +118,5 @@
+@@ -133,48 +119,5 @@
 -    @inline(__always)
 -    func mightContainKeyHash(_ keyHash: Int) -> Bool {
 -        let mask = keyHashBloomMask(keyHash)
@@ -5462,7 +5480,7 @@
 +    case array(Int)
 +    case table(Int)
 +  }
-@@ -185,4 +127,4 @@
+@@ -185,4 +128,4 @@
 -    let raw = UInt(bitPattern: keyHash)
 -    let bit0 = UInt64(1) << UInt64(raw & 63)
 -    let bit1 = UInt64(1) << UInt64((raw >> 6) & 63)
@@ -5471,7 +5489,7 @@
 +  let bit0 = UInt64(1) << UInt64(raw & 63)
 +  let bit1 = UInt64(1) << UInt64((raw >> 6) & 63)
 +  return bit0 | bit1
-@@ -192,4 +134,4 @@
+@@ -192,4 +135,4 @@
 -    let date: LocalDate?
 -    let time: LocalTime?
 -    let offset: Int16?
@@ -5480,7 +5498,7 @@
 +  let time: LocalTime?
 +  let offset: Int16?
 +  let features: OffsetDateTime.Features
-@@ -197,10 +139,9 @@
+@@ -197,10 +140,9 @@
 -    @inline(__always)
 -    func localDate(exactMatch: Bool = true) -> LocalDate? {
 -        switch (date, time, offset) {
@@ -5500,9 +5518,9 @@
 +      date
 +    default:
 +      nil
-@@ -207,0 +149 @@
+@@ -207,0 +150 @@
 +  }
-@@ -209,10 +151,9 @@
+@@ -209,10 +152,9 @@
 -    @inline(__always)
 -    func localTime(exactMatch: Bool = true) -> LocalTime? {
 -        switch (date, time, offset) {
@@ -5522,9 +5540,9 @@
 +      time
 +    default:
 +      nil
-@@ -219,0 +161 @@
+@@ -219,0 +162 @@
 +  }
-@@ -221,10 +163,9 @@
+@@ -221,10 +164,9 @@
 -    @inline(__always)
 -    func localDateTime(exactMatch: Bool = true) -> LocalDateTime? {
 -        switch (date, time, offset) {
@@ -5544,7 +5562,7 @@
 +      LocalDateTime(date: date, time: time)
 +    default:
 +      nil
-@@ -232,41 +173 @@
+@@ -232,41 +174 @@
 -}
 -
 -extension InternalTOMLTable {
@@ -5587,7 +5605,7 @@
 -        return result
 -    }
 +  }
-@@ -276,4 +177,4 @@
+@@ -276,4 +178,4 @@
 -    @inline(__always)
 -    func table(at index: Int, keyed: Bool) -> InternalTOMLTable {
 -        keyed ? keyTables[index].table : tables[index]
@@ -5596,7 +5614,7 @@
 +  func table(at index: Int, keyed: Bool) -> InternalTOMLTable {
 +    keyed ? keyTables[index].table : tables[index]
 +  }
-@@ -281,4 +182,4 @@
+@@ -281,4 +183,4 @@
 -    @inline(__always)
 -    func array(at index: Int, keyed: Bool) -> InternalTOMLArray {
 -        keyed ? keyArrays[index].array : arrays[index]
@@ -5606,7 +5624,7 @@
 +    keyed ? keyArrays[index].array : arrays[index]
 +  }
 --- Sources/TOMLDecoder/Parsing/Constants.swift
-+++ Sources/TOMLSemantics/Parsing/Constants.swift
++++ Sources/TOMLDecoder/Parsing/Constants.swift
 @@ -2,22 +2,22 @@
 -    static let escape: UTF8.CodeUnit = 27
 -    static let equal: UTF8.CodeUnit = 61
@@ -5815,7 +5833,7 @@
 +      || CodeUnits.upperA <= self && self <= CodeUnits.upperF
 +  }
 --- Sources/TOMLDecoder/DateTime.swift
-+++ Sources/TOMLSemantics/DateTime.swift
++++ Sources/TOMLDecoder/DateTime.swift
 @@ -23,188 +23,183 @@
 -    /// The date component of the offset date-time.
 -    public var date: LocalDate
@@ -6640,7 +6658,7 @@
 -}
 -#endif
 --- Sources/TOMLDecoder/TOMLKey.swift
-+++ Sources/TOMLSemantics/TOMLKey.swift
++++ Sources/TOMLDecoder/TOMLKey.swift
 @@ -2,3 +2,3 @@
 -    case string(String)
 -    case int(Int)
@@ -6701,7 +6719,7 @@
 -    }
 +  }
 --- Sources/TOMLDecoder/TOMLError.swift
-+++ Sources/TOMLSemantics/TOMLError.swift
++++ Sources/TOMLDecoder/TOMLError.swift
 @@ -8 +8 @@
 -    let reason: Reason
 +  let reason: Reason

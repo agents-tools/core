@@ -127,7 +127,14 @@ package struct SemanticDocument {
         decoded = try token.unpackBool(bytes: bytes, context: .super) ? "true" : "false"
       } else if colon || (token.text.count > 4 && bytes[token.text.lowerBound + 4] == 45) {
         kind = .dateTime
-        _ = try token.unpackDateTime(bytes: bytes, context: .super)
+        let components = try token.unpackDateTime(bytes: bytes, context: .super)
+        switch (components.date, components.time, components.offset) {
+        case (.some, .some, .some), (.some, .some, .none), (.some, .none, .none),
+          (.none, .some, .none):
+          break
+        default:
+          throw TOMLError(.invalidValueInTable(context: .super, lineNumber: token.lineNumber))
+        }
         decoded = raw
       } else {
         // Base-prefixed integers can contain e/E hex digits. Classification precedes validation.

@@ -124,6 +124,11 @@ package struct NativeDocument {
         guard old != nil || desired != nil else {
           throw NativeDocumentError.ownershipMismatch(edit.region)
         }
+        if desired == nil, case .createdContainer = edit.expected {
+          guard let old, old.kind == .object, old.members.isEmpty else {
+            throw NativeDocumentError.ownershipMismatch(edit.region)
+          }
+        }
         if let old, desired == nil, old.kind == .object && old.members.isEmpty {
           guard case .createdContainer = edit.expected else {
             throw NativeDocumentError.ownershipMismatch(edit.region)

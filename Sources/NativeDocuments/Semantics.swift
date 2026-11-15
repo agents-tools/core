@@ -128,6 +128,20 @@ struct NativeRenderer {
     encoder.outputFormatting = [.withoutEscapingSlashes]
     let bytes = try encoder.encode(value)
     try budget.allocate(bytes.count, stage: "encoded string")
+    if toml {
+      try budget.allocate(bytes.count, stage: "TOML string escaping")
+      var escaped: [UInt8] = []
+      for byte in bytes {
+        try budget.step()
+        if byte == 127 {
+          try budget.allocate(6, stage: "TOML string escaping")
+          escaped.append(contentsOf: "\\u007F".utf8)
+        } else {
+          escaped.append(byte)
+        }
+      }
+      return String(decoding: escaped, as: UTF8.self)
+    }
     return String(decoding: bytes, as: UTF8.self)
   }
   func render(_ value: NativeValue, depth: Int = 0) throws -> String {

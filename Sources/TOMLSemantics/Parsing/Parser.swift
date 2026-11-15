@@ -255,7 +255,14 @@ struct Parser: ~Copyable {
                 bytes[i + 2] == CodeUnits.doubleQuote
               {
                 if i + 3 >= end || bytes[i + 3] != CodeUnits.doubleQuote {
-                  if bytes[i - 1] == CodeUnits.backslash {
+                  var backslashStart = i
+                  while backslashStart > start + 3
+                    && bytes[backslashStart - 1] == CodeUnits.backslash
+                  {
+                    try budget.step()
+                    backslashStart -= 1
+                  }
+                  if (i - backslashStart) % 2 != 0 {
                     i += 1
                     continue
                   }
@@ -809,8 +816,8 @@ struct Parser: ~Copyable {
 
       case .lbrace:  // Nested table
         if keyArrays[arrayIndex].array.kind == nil {
-          keyArrays[arrayIndex].array.kind = .table
-        } else if keyArrays[arrayIndex].array.kind != .table {
+          keyArrays[arrayIndex].array.kind = .inlineTable
+        } else if keyArrays[arrayIndex].array.kind != .inlineTable {
           keyArrays[arrayIndex].array.kind = .mixed
         }
 
@@ -887,8 +894,8 @@ struct Parser: ~Copyable {
 
       case .lbrace:  // Nested table
         if arrays[arrayIndex].kind == nil {
-          arrays[arrayIndex].kind = .table
-        } else if arrays[arrayIndex].kind != .table {
+          arrays[arrayIndex].kind = .inlineTable
+        } else if arrays[arrayIndex].kind != .inlineTable {
           arrays[arrayIndex].kind = .mixed
         }
 
@@ -929,6 +936,9 @@ struct Parser: ~Copyable {
     try nextToken(bytes: bytes, isDotSpecial: true)
 
     if token.kind == .dot {
+      try budget.enter(depth + 1)
+      depth += 1
+      defer { depth -= 1 }
       let (subTableKey, subTableHash) = try normalizeKeyAndHash(
         bytes: bytes,
         token: key
@@ -2605,8 +2615,15 @@ extension Parser {
     key: String,
     keyHash: Int
   ) throws {
+    if isKeyed ? keyTables[tableIndex].table.readOnly : tables[tableIndex].readOnly {
+      throw TOMLError(.syntax(lineNumber: token.lineNumber, message: "cannot add to inline table"))
+    }
     switch try tableValue(tableIndex: tableIndex, keyed: isKeyed, key: key, keyHash: keyHash) {
     case .table(let index):
+      guard !keyTables[index].table.readOnly else {
+        throw TOMLError(
+          .syntax(lineNumber: token.lineNumber, message: "cannot add to inline table"))
+      }
       tableIndex = index
       isKeyed = true
     case .array(let arrayIndex):

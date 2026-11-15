@@ -265,6 +265,17 @@ let t1 = #"""
   #expect(
     try doc.prepare([.remove(region: keyRegion("b"), expected: owned(doc, keyRegion("b")))]).bytes
       != doc.bytes)
+  let populated = try document(#"{"owned":{"client":true}}"#, .json)
+  let populatedEvidence = try #require(try populated.read(object))
+  do {
+    _ = try populated.prepare([
+      .remove(region: object, expected: .createdContainer(populatedEvidence))
+    ])
+    Issue.record("creation evidence removed later children")
+  } catch NativeDocumentError.ownershipMismatch {}
+  #expect(
+    text(try populated.prepare([.remove(region: object, expected: .owned(populatedEvidence))]))
+      == "{}")
   let empty = try document("{\"owned\":{}}", .json)
   let observed = try #require(try empty.read(object))
   #expect(throws: NativeDocumentError.self) {
@@ -671,4 +682,61 @@ let t1 = #"""
     _ = try doc.prepare([.put(region: keyRegion("a"), expected: .absent, value: .integer(1))])
     Issue.record("unowned value was adopted")
   } catch NativeDocumentError.ownershipMismatch {}
+}
+
+@Test(arguments: [false, true])
+func dottedInlineInsertionStaysWithinBraces(_ ownedParent: Bool) throws {
+  let source = "# keep\nx = { a.b = 1, z = 2 } # outside\n"
+  let doc = try document(source)
+  let region = keyRegion("x", "a", "c")
+  let edit: NativeRegionEdit
+  if ownedParent {
+    let parent = keyRegion("x", "a")
+    edit = .put(
+      region: parent, expected: try owned(doc, parent),
+      value: .object([
+        "b": .integer(1), "c": .object(["d": .integer(2)]),
+      ]))
+  } else {
+    edit = .put(region: region, expected: .absent, value: .object(["d": .integer(2)]))
+  }
+  let change = try doc.prepare([edit])
+  #expect(text(change) == "# keep\nx = { a.b = 1, z = 2, \"a\".\"c\" = {\"d\" = 2} } # outside\n")
+  let added = try NativeDocument(bytes: change.bytes, format: .toml, budget: generousBudget())
+  #expect(try added.read(region)?.value == .object(["d": .integer(2)]))
+  let child = keyRegion("x", "a", "c", "d")
+  let update = try added.prepare([
+    .put(region: child, expected: owned(added, child), value: .integer(3))
+  ])
+  #expect(text(update) == text(change).replacingOccurrences(of: "= 2}", with: "= 3}"))
+  let remove = try added.prepare([.remove(region: region, expected: owned(added, region))])
+  #expect(
+    try NativeDocument(bytes: remove.bytes, format: .toml, budget: generousBudget()).read(
+      keyRegion("x"))?.value == .object(["a": .object(["b": .integer(1)]), "z": .integer(2)]))
+  #expect(text(remove).contains("a.b = 1, z = 2"))
+  #expect(text(remove).hasSuffix(" # outside\n"))
+}
+
+@Test(arguments: invalidTOMLExtensionsAndTimes)
+func invalidTOMLCannotBecomeReadOnly(_ source: String) throws {
+  do {
+    _ = try document(source)
+    Issue.record("invalid TOML admitted as a document")
+  } catch NativeDocumentError.invalidDocument {}
+}
+
+@Test func tomlDELStringsAndKeysRoundTrip() throws {
+  let source = #"x="\u007F""#
+  let doc = try document(source)
+  let x = keyRegion("x")
+  #expect(
+    try doc.prepare([.put(region: x, expected: owned(doc, x), value: .string("\u{7f}"))]).bytes
+      == doc.bytes)
+  let key = "key\u{7f}"
+  let change = try doc.prepare([
+    .put(region: keyRegion(key), expected: .absent, value: .string("value\u{7f}"))
+  ])
+  #expect(!change.bytes.contains(127))
+  let result = try NativeDocument(bytes: change.bytes, format: .toml, budget: generousBudget())
+  #expect(try result.read(keyRegion(key))?.value == .string("value\u{7f}"))
 }

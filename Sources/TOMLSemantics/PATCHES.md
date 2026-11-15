@@ -18,19 +18,27 @@ Local changes are limited to:
   reservation, recursive descent, token/trivia scans, key comparisons, lazy
   scalar decoding and ordered traversal. Original typed throws become ordinary
   throwing calls so budget and cancellation errors propagate without casts.
+  Dotted-key descent admits depth before recursion, cumulatively with enclosing
+  inline tables and arrays.
 - Exact decoded UTF-8 key comparison, including sampled-hash collisions. Unused
   key-transform and String-key Dictionary/Any access paths are removed. Keyed
   model types do not synthesize String equality.
 - Stable entry source positions for ordered typed traversal. Scalar syntax is
   classified before invoking its standard validator. Overflowing integers do
   not retry as floating point. Raw numeric lexemes and native atoms remain
-  separate from Core projection; finite decimal projection removes only TOML
+  separate from Core projection. Date/time atoms require one of the four valid
+  date/time/offset combinations. Finite decimal projection removes only TOML
   separators and a leading plus, with no floating-point formatting.
 - Actual EOF guards after fractional-time scanning and before the month/day
-  delimiter. No source terminator, sentinel or synthetic newline is appended.
+  delimiter. Multiline basic-string closing delimiters use backslash parity
+  with cooperative scan checks. No source terminator, sentinel or synthetic
+  newline is appended.
 - Required string helper budget propagation and quoted-key validation through
   the same standard validators. Decoder-specific date initializers and unused
   Foundation date conversion extensions are omitted with the decoder product.
+- Inline-table closure is enforced while traversing ancestors. Static arrays
+  containing inline tables retain a distinct kind from declared arrays of
+  tables, so headers cannot extend them.
 - Repository Swift formatting.
 
 NativeDocuments owns the JSON syntax, source index, ownership expectations,

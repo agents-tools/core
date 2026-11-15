@@ -211,12 +211,20 @@ struct TOMLIndex {
     }
     let keys = try keyParts(nodes[0])
     var current = parent
+    let enclosingInline = parent.inline ? parent : parent.enclosingInline
+    var inlineKeyPath = parent.inline ? [] : parent.inlineKeyPath
     for key in keys.dropLast() {
       guard let m = try current.member(key, budget: budget) else {
         located = false
         return
       }
       current = current.members[m].node
+      if let enclosingInline {
+        try budget.allocate(key.utf8.count + inlineKeyPath.count + 1, stage: "inline key path")
+        inlineKeyPath.append(key)
+        current.enclosingInline = enclosingInline
+        current.inlineKeyPath = inlineKeyPath
+      }
     }
     guard let key = keys.last, let m = try current.member(key, budget: budget) else {
       located = false
@@ -251,8 +259,9 @@ struct TOMLIndex {
         try budget.step()
         return ($0.entry?.lowerBound ?? 0) < ($1.entry?.lowerBound ?? 0)
       }
-      for i in node.members.indices where i < node.commas.count {
-        node.members[i].comma = node.commas[i]
+      let entries = try node.inlineEntries(budget)
+      for (i, entry) in entries.enumerated() where i < node.commas.count {
+        entry.parent.members[entry.index].comma = node.commas[i]
       }
     } else if node.kind == .array {
       let all = try children(syntax)

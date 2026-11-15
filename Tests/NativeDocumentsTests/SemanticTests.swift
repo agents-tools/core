@@ -1,4 +1,5 @@
 import Foundation
+import NativeDocuments
 import Testing
 
 @testable import TOMLSemantics
@@ -67,4 +68,77 @@ func generousBudget() -> SemanticBudget {
   #expect(throws: SemanticBudget.Failure.self) {
     try SemanticDocument(source: "x={\na={\nb={\nc={\nd=1\n}\n}\n}\n}", budget: depth)
   }
+}
+
+let invalidTOMLExtensionsAndTimes = [
+  "x={a.b=1,z=2}\n[x.a.c]\nd=2",
+  "x={a.b=1,z=2}\nx.a.c=2",
+  "x={a.b=1}\n[[x.a.c]]",
+  "a=[{}]\n[[a]]",
+  "x.a=[{}]\n[[x.a]]",
+  "a=[{id=1}]\n[[a]]",
+  "x=12:13:14Z",
+  "x=12:13:14+01:00",
+]
+
+@Test(arguments: invalidTOMLExtensionsAndTimes)
+func semanticRejectsClosedInlineStaticArrayAndInvalidTime(_ source: String) throws {
+  #expect(throws: TOMLError.self) {
+    try SemanticDocument(source: source, budget: generousBudget())
+  }
+}
+
+@Test(arguments: ["", "x={", "x={a={"])
+func dottedDescentAdmitsDepthBeforeParsing(_ prefix: String) throws {
+  let source =
+    prefix + String(repeating: "a.", count: 256) + "leaf=1"
+    + String(repeating: "}", count: prefix.filter { $0 == "{" }.count)
+  let budget = SemanticBudget(
+    limits: .init(
+      storage: 20_000_000, work: 20_000_000, nodes: 100_000, depth: 3, uninterruptedBytes: 1_000_000
+    ))
+  var parser = Parser(budget: budget)
+  do {
+    try Array(source.utf8).withUnsafeBufferPointer { try parser.parse(bytes: $0) }
+    Issue.record("dotted descent bypassed caller depth before semantic traversal")
+  } catch SemanticBudget.Failure.exceeded(let stage) {
+    #expect(stage == "depth")
+  }
+}
+
+@Test(arguments: [2, 4, 3])
+func multilineEOFBackslashParity(_ backslashes: Int) throws {
+  let source =
+    "x = " + String(repeating: "\"", count: 3) + String(repeating: "\\", count: backslashes)
+    + String(repeating: "\"", count: backslashes.isMultiple(of: 2) ? 3 : 4)
+  let doc = try SemanticDocument(source: source, budget: generousBudget())
+  guard case .object(let entries) = doc.root,
+    case .scalar(kind: .string, let decoded, _, _) = entries[0].value
+  else {
+    Issue.record("missing decoded multiline value")
+    return
+  }
+  let expected =
+    String(repeating: "\\", count: backslashes / 2) + (backslashes.isMultiple(of: 2) ? "" : "\"")
+  #expect(decoded.utf8.elementsEqual(expected.utf8))
+  let native = try document(source)
+  let region = keyRegion("x")
+  #expect(try native.read(region)?.value == .string(expected))
+  #expect(
+    try native.prepare([
+      .put(region: region, expected: owned(native, region), value: .string(expected))
+    ]).bytes == native.bytes)
+}
+
+@Test(arguments: ["1979-05-27", "12:13:14.1", "1979-05-27T07:32:00", "1979-05-27T07:32:00Z"])
+func dateTimeComponentKindsRetainLexemes(_ raw: String) throws {
+  let doc = try SemanticDocument(source: "x=" + raw, budget: generousBudget())
+  guard case .object(let entries) = doc.root,
+    case .scalar(kind: .dateTime, let decoded, let lexeme, _) = entries[0].value
+  else {
+    Issue.record("missing native date/time atom")
+    return
+  }
+  #expect(decoded == raw)
+  #expect(lexeme == raw)
 }

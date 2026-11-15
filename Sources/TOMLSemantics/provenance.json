@@ -42,7 +42,7 @@
   "patches": {
     "description": "PATCHES.md",
     "diff": "upstream.patch",
-    "sha256": "985f698f5bd81b42c08c478cfe8bfc93dcd9e05afd409caaa4400fffb42cd16c",
+    "sha256": "b7522712c6d4879493b89f84596452a6e2b2a2b2cc3cac7fa4a13ca1bdc6c986",
     "context_lines": 0
   }
 }

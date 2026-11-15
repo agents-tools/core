@@ -61,7 +61,9 @@ struct PatchBuilder {
           try eraseMember(m, parent: old)
         }
       }
-      if old.inline && retained.count != old.members.count {
+      if toml, let container = old.inline ? old : old.enclosingInline {
+        try pruneInlineCommas(in: container)
+      } else if old.inline && retained.count != old.members.count {
         let keepCommas = Set(retained.dropLast().compactMap { old.members[$0].comma?.lowerBound })
         for m in old.members {
           if let comma = m.comma, !keepCommas.contains(comma.lowerBound) { try patch(comma) }
@@ -143,7 +145,9 @@ struct PatchBuilder {
         throw NativeDocumentError.ownershipMismatch(region)
       }
       try eraseMember(parent.members[i], parent: parent)
-      if parent.inline {
+      if toml, let container = parent.inline ? parent : parent.enclosingInline {
+        try pruneInlineCommas(in: container)
+      } else if parent.inline {
         if let comma = parent.members[i].comma {
           try patch(comma)
         } else if i > 0, let comma = parent.members[i - 1].comma {
@@ -168,6 +172,36 @@ struct PatchBuilder {
         } else if i > 0 && i - 1 < parent.commas.count {
           try patch(parent.commas[i - 1])
         }
+      }
+    }
+  }
+  private func entryRemoved(_ member: Member) throws -> Bool {
+    guard let entry = member.entry else { return false }
+    return try patches.contains {
+      try budget.step()
+      return $0.bytes.isEmpty && $0.range.lowerBound <= entry.lowerBound
+        && $0.range.upperBound >= entry.upperBound
+    }
+  }
+  private func survivingInlineMembers(in container: Node) throws -> [Member] {
+    var surviving: [Member] = []
+    for entry in try container.inlineEntries(budget) {
+      let member = entry.parent.members[entry.index]
+      if try !entryRemoved(member) {
+        try budget.allocate(1, stage: "inline survivors")
+        surviving.append(member)
+      }
+    }
+    return surviving
+  }
+  private mutating func pruneInlineCommas(in container: Node) throws {
+    let surviving = try survivingInlineMembers(in: container)
+    for entry in try container.inlineEntries(budget) {
+      let member = entry.parent.members[entry.index]
+      if let comma = member.comma,
+        try entryRemoved(member) || member.entry == surviving.last?.entry
+      {
+        try patch(comma)
       }
     }
   }
@@ -318,9 +352,13 @@ struct PatchBuilder {
 
   private func assignment(in parent: Node) throws -> String {
     let fallback = toml ? " = " : ": "
-    guard let first = parent.members.first(where: { $0.keyRange != nil }), let key = first.keyRange,
-      let value = first.node.range
-    else { return fallback }
+    let first: Member?
+    if toml && parent.inline {
+      first = try parent.inlineEntries(budget).first.map { $0.parent.members[$0.index] }
+    } else {
+      first = parent.members.first(where: { $0.keyRange != nil })
+    }
+    guard let first, let key = first.keyRange, let value = first.node.range else { return fallback }
     let gap = document.source[key.upperBound..<value.lowerBound]
     guard
       try gap.allSatisfy({
@@ -350,14 +388,32 @@ struct PatchBuilder {
   ) throws {
     guard parent.kind == .object else { throw NativeDocumentError.ownershipMismatch(region) }
     let renderer = NativeRenderer(format: document.format, budget: budget, region: region)
-    if parent.inline {
+    if let container = parent.inline ? parent : parent.enclosingInline {
+      let keyPath = parent.inline ? [] : parent.inlineKeyPath
+      let surviving = toml ? try survivingInlineMembers(in: container) : survivors ?? parent.members
+      let remaining = toml ? surviving.count : remaining
+      let parent = container
       guard let at = parent.insertion else {
         throw NativeDocumentError.unsupportedEdit(.syntaxNotLocated, region, [])
       }
-      let surviving = survivors ?? parent.members
       let assignment = try assignment(in: parent)
       var pieces: [String] = []
-      for m in members { pieces.append(try renderer.string(m.key) + assignment + encoded(m.node)) }
+      for m in members {
+        var keys: [String] = []
+        for key in keyPath {
+          try budget.allocate(1, stage: "inline rendered key")
+          keys.append(try renderer.string(key))
+        }
+        try budget.allocate(1, stage: "inline rendered key")
+        keys.append(try renderer.string(m.key))
+        pieces.append(
+          try nativeJoin(keys, prefix: "", suffix: "", separator: ".", budget: budget) + assignment
+            + encoded(m.node))
+      }
+      let first =
+        toml
+        ? try parent.inlineEntries(budget).first.map { $0.parent.members[$0.index] }
+        : parent.members.first
       let multiline = parent.range.map { document.source[$0].contains(10) } ?? false
       let last = surviving.last
       let commaRemoved =
@@ -371,8 +427,8 @@ struct PatchBuilder {
       if multiline, let closeIndent = try indentation(at: at) {
         let nl = try newline
         var indent = closeIndent + "  "
-        if let first = parent.members.first?.entry,
-          let local = try indentation(at: first.lowerBound)
+        if let entry = first?.entry,
+          let local = try indentation(at: entry.lowerBound)
         {
           indent = local
         }
@@ -386,7 +442,7 @@ struct PatchBuilder {
       } else {
         var separator = " "
         if let range = parent.range {
-          let end = parent.members.first?.entry?.lowerBound ?? at
+          let end = first?.entry?.lowerBound ?? at
           let gap = document.source[(range.lowerBound + 1)..<end]
           if try gap.allSatisfy({
             try budget.step()

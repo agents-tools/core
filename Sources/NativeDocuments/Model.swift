@@ -154,6 +154,9 @@ final class Node {
   var headers: [Range<Int>] = []
   var insertion: Int?
   var inline = false
+  // Dotted descendants own entries inside these braces, not a separately extensible table.
+  weak var enclosingInline: Node?
+  var inlineKeyPath: [String] = []
   var aot = false
   var syntaxLocated = false
   var commas: [Range<Int>] = []
@@ -169,6 +172,28 @@ final class Node {
       if try budget.equal(members[i].key, key) { return i }
     }
     return nil
+  }
+  func inlineEntries(_ budget: NativeDocumentBudget) throws -> [(parent: Node, index: Int)] {
+    var result: [(parent: Node, index: Int)] = []
+    func collect(_ node: Node, depth: Int) throws {
+      try budget.enter(depth)
+      for i in node.members.indices {
+        try budget.step()
+        if node.members[i].entry != nil {
+          try budget.allocate(1, stage: "inline entries")
+          result.append((node, i))
+        } else {
+          try collect(node.members[i].node, depth: depth + 1)
+        }
+      }
+    }
+    try collect(self, depth: 0)
+    try budget.allocate(result.count, stage: "inline entry order")
+    return try result.sorted {
+      try budget.step()
+      return $0.parent.members[$0.index].entry!.lowerBound
+        < $1.parent.members[$1.index].entry!.lowerBound
+    }
   }
   func copy(_ budget: NativeDocumentBudget, depth: Int = 0) throws -> Node {
     try budget.node(depth: depth)
