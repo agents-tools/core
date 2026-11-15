@@ -569,3 +569,106 @@ let t1 = #"""
     try NativeDocument(bytes: emptySet.bytes, format: .toml, budget: generousBudget()).read(
       keyRegion("checks"))?.value == .array([]))
 }
+
+@Test func completeJSONCObjectIntentPreservesUnselectedBytes() throws {
+  let source =
+    "{\n  \"owned\": {\"a\": 1, /* keep */ \"b\": 2, \"c\": 3},\n  \"outside\": { \"sentinel\": true }\n}"
+  let doc = try document(source, .jsonc(trailingCommas: false))
+  let region = keyRegion("owned")
+  let change = try doc.prepare([
+    .put(
+      region: region, expected: owned(doc, region),
+      value: .object(["a": .integer(1), "b": .integer(20), "new": .string("yes")]))
+  ])
+  let result = try NativeDocument(
+    bytes: change.bytes, format: .jsonc(trailingCommas: false), budget: generousBudget())
+  #expect(
+    try result.read(region)?.value
+      == .object([
+        "a": .integer(1), "b": .integer(20), "new": .string("yes"),
+      ]))
+  #expect(try result.read(keyRegion("owned", "c")) == nil)
+  #expect(text(change).contains("/* keep */"))
+  #expect(text(change).hasSuffix(",\n  \"outside\": { \"sentinel\": true }\n}"))
+}
+
+@Test func occurrenceEvidenceAcrossExternalChanges() throws {
+  let original = try document(#"{"items":[{"x":0},{"x":1},{"x":2}]}"#, .json)
+  let evidence = try #require(try original.read(keyRegion("items"))).occurrences[1]
+  let selected = NativeRegion([.key("items"), .occurrence(evidence), .key("x")])
+  let observation = try #require(try original.read(selected))
+  #expect(observation.value == .integer(1))
+  let changed = try document(#"{"items":[{"x":0},{"x":1},{"x":2},{"x":0},{"x":1},{"x":2}]}"#, .json)
+  do {
+    _ = try changed.prepare([
+      .put(region: selected, expected: .owned(observation), value: .integer(9))
+    ])
+    Issue.record("ambiguous occurrence was edited")
+  } catch NativeDocumentError.unsupportedEdit(.ambiguousOccurrence, _, _) {}
+
+  let first = try document(#"{"items":[{"id":"a","x":1},{"id":"b","x":2}]}"#, .json)
+  let stable = NativeRegion([.key("items"), .occurrence(.init(idKey: "id", id: "b")), .key("x")])
+  let prior = try #require(try first.read(stable))
+  let inserted = try document(
+    #"{"items":[{"id":"new","x":0},{"id":"a","x":1},{"id":"b","x":2}]}"#, .json)
+  let result = try inserted.prepare([
+    .put(region: stable, expected: .owned(prior), value: .integer(7))
+  ])
+  #expect(text(result) == #"{"items":[{"id":"new","x":0},{"id":"a","x":1},{"id":"b","x":7}]}"#)
+}
+
+@Test func sharedBudgetAcrossDocumentsAndDrafts() throws {
+  func budget(_ work: Int) -> NativeDocumentBudget {
+    NativeDocumentBudget(
+      limits: .init(
+        storage: 1_000_000, work: work, nodes: 10_000, depth: 30, uninterruptedBytes: 10_000))
+  }
+  func consume(_ budget: NativeDocumentBudget) throws {
+    let doc = try document(#"{"data":[1,2,3,4,5,6,7,8]}"#, .json, budget: budget)
+    _ = try doc.read(keyRegion("data"))
+  }
+  func setup(_ budget: NativeDocumentBudget) throws -> (NativeDocument, [NativeRegionEdit]) {
+    let doc = try document(#"{"a":1,"b":2}"#, .json, budget: budget)
+    let edits: [NativeRegionEdit] = try [
+      .put(region: keyRegion("a"), expected: owned(doc, keyRegion("a")), value: .integer(3)),
+      .put(region: keyRegion("b"), expected: owned(doc, keyRegion("b")), value: .integer(4)),
+    ]
+    return (doc, edits)
+  }
+  var demonstrated = false
+  for limit in stride(from: 100, through: 5000, by: 50) {
+    do {
+      try consume(budget(limit))
+      let (doc, edits) = try setup(budget(limit))
+      _ = try doc.prepare(edits)
+    } catch NativeDocumentError.budgetExceeded { continue }
+    let shared = budget(limit)
+    try consume(shared)
+    let doc: NativeDocument
+    let edits: [NativeRegionEdit]
+    do {
+      (doc, edits) = try setup(shared)
+    } catch NativeDocumentError.budgetExceeded { continue }
+    do {
+      _ = try doc.prepare(edits)
+    } catch NativeDocumentError.budgetExceeded {
+      demonstrated = true
+      break
+    }
+  }
+  #expect(demonstrated)
+}
+
+@Test func publicErrorsDistinguishInvalidDocumentsAndOwnership() throws {
+  for source in ["deep=[{bad=2023-02-30}]", #"deep=[{bad="\q"}]"#, "x=9223372036854775808"] {
+    do {
+      _ = try document(source)
+      Issue.record("invalid document was accepted")
+    } catch NativeDocumentError.invalidDocument {}
+  }
+  let doc = try document(#"{"a":1}"#, .json)
+  do {
+    _ = try doc.prepare([.put(region: keyRegion("a"), expected: .absent, value: .integer(1))])
+    Issue.record("unowned value was adopted")
+  } catch NativeDocumentError.ownershipMismatch {}
+}
