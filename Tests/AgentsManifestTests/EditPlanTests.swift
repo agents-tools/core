@@ -223,7 +223,7 @@ extension EditPlanTests {
   }
 
   @Test(arguments: ["", ",", ", # owned tail\n  "])
-  func flowAppendsReuseDelimitersAndKeepTrivia(_ tail: String) throws {
+  func flowSequenceAppendsReuseDelimitersAndKeepTrivia(_ tail: String) throws {
     let text =
       "# header\nversion: 1\ncomponents: [{kind: ignore, name: a, patterns: []}" + tail + "]\n"
     let doc = try document(text)
@@ -240,18 +240,47 @@ extension EditPlanTests {
     if tail.contains("#") { #expect(output.contains("# owned tail")) }
     #expect(try planned(projected(output), projected(output), in: output) == nil)
 
-    let mapping = try document(
-      "version: 1\ncomponents: [{kind: lspServer, name: l, run: {executable: unused}, languages: {}, initializationOptions: {old: 1"
-        + tail + "}}]\n")
-    let added = try mapping.preparing([
-      .setDictionaryEntry(
-        #require(mapping.node(at: "/components/0/initializationOptions")), key: "new",
-        value: .integer(2))
-    ])
-    let mapped = String(decoding: added.bytes, as: UTF8.self)
-    #expect(mapped.contains("initializationOptions: {old: 1"))
-    if tail.contains("#") { #expect(mapped.contains("# owned tail")) }
-    #expect(try document(mapped).declaration == added.expectedDeclaration)
+  }
+
+  @Test(arguments: [
+    "missing: 1", "missing: 1,", "missing: ", "missing: ,", "missing: # owned tail\n    ",
+    "\"missing\":",
+  ])
+  func flowDictionaryAppendsPreserveImplicitNullAndExistingTrivia(_ spelling: String) throws {
+    let prefix =
+      "# header\nversion: 1\ncomponents:\n  - kind: lspServer\n    name: l\n    run: {executable: unused}\n    languages: {}\n    initializationOptions: {"
+    let suffix = "} # mapping tail\n"
+    let input = prefix + spelling + suffix
+    let doc = try document(input)
+    let dictionary = try #require(doc.node(at: "/components/0/initializationOptions"))
+    let change = try doc.preparing([.setDictionaryEntry(dictionary, key: "new", value: .integer(2))]
+    )
+    let output = String(decoding: change.bytes, as: UTF8.self)
+    let before = try projected(input)
+    var next = before
+    next.components = [
+      .lspServer(
+        name: "l", run: ExecutableDeclaration(executable: "unused"), languages: [:],
+        initializationOptions: [
+          "missing": spelling.contains("1") ? .integer(1) : .null, "new": .integer(2),
+        ])
+    ]
+    #expect(try projected(output) == next)
+    #expect(try document(output).declaration == change.expectedDeclaration)
+    #expect(output.hasPrefix(prefix))
+    #expect(output.hasSuffix(suffix))
+    if spelling.contains("1") { #expect(output.contains("{missing: 1")) }
+    if spelling.hasPrefix("\"") { #expect(output.contains("{\"missing\":")) }
+    if spelling.contains("#") { #expect(output.contains("# owned tail\n")) }
+    #expect(try planned(before, next, in: input) == change.bytes)
+    #expect(try planned(next, next, in: output) == nil)
+    let updated = try document(output)
+    #expect(
+      try updated.preparing([
+        .setDictionaryEntry(
+          #require(updated.node(at: "/components/0/initializationOptions")), key: "new",
+          value: .integer(2))
+      ]).bytes == change.bytes)
   }
 
   @Test(arguments: ["", "\n", "\r\n"])
