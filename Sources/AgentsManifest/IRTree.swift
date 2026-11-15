@@ -27,7 +27,8 @@ enum IRTree {
       groups: records("groups"), uses: records("uses"), watch: strings("watch"))
   }
   static func segments(_ pointer: String) -> [String] {
-    pointer.split(separator: "/", omittingEmptySubsequences: true).map {
+    guard !pointer.isEmpty else { return [] }
+    return pointer.dropFirst().split(separator: "/", omittingEmptySubsequences: false).map {
       pointerUnescape(String($0))
     }
   }

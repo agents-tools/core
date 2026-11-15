@@ -159,3 +159,186 @@ extension EditPlanTests {
         .declaration == change.expectedDeclaration)
   }
 }
+
+extension EditPlanTests {
+  @Test func promptKindChangesOwnTheWrapperAndRetainResourceLocations() throws {
+    var text =
+      "version: 1\nsources: {s: {path: ./s}}\ncomponents: [{kind: subagent, name: a, description: d, prompt: {file: {path: p.md}}, model: keep}] # tail\n"
+    let original = try document(text)
+    let prompt = try #require(original.sourceMap.locations(at: "/components/0/prompt").first?.span)
+    let path = try #require(
+      original.sourceMap.locations(at: "/components/0/prompt/path").first?.span)
+    #expect(
+      String(decoding: original.bytes[prompt.start..<prompt.end], as: UTF8.self)
+        == "{file: {path: p.md}}")
+    #expect(String(decoding: original.bytes[path.start..<path.end], as: UTF8.self) == "p.md")
+    for body in [
+      PromptBody.literal("hello"), .file(ResourceDeclaration(path: "other.md")),
+      .file(ResourceDeclaration(path: "edited.md", source: "s")),
+      .file(ResourceDeclaration(path: "edited.md")),
+    ] {
+      let before = try projected(text)
+      var next = before
+      next.components = [.subagent(name: "a", description: "d", prompt: body, model: "keep")]
+      let bytes = try #require(try planned(before, next, in: text))
+      text = String(decoding: bytes, as: UTF8.self)
+      #expect(try projected(text) == next)
+      #expect(text.contains("model: keep}] # tail\n"))
+      #expect(try planned(next, next, in: text) == nil)
+    }
+  }
+
+  @Test func emptyAndEscapedNativeKeysSupportPublicEditsAndCompletePlans() throws {
+    var text =
+      "version: 1\ncomponents: [{kind: lspServer, name: l, run: {executable: unused}, languages: {}, initializationOptions: {'': 1, nested: {'': {'a/b~': 1}}}}] # tail\n"
+    let doc = try document(text)
+    let dictionary = try #require(doc.node(at: "/components/0/initializationOptions"))
+    let publicChange = try doc.preparing([
+      .setDictionaryEntry(dictionary, key: "", value: .integer(2))
+    ])
+    text = String(decoding: publicChange.bytes, as: UTF8.self)
+    #expect(text.contains("'': 2"))
+    let before = try projected(text)
+    var next = before
+    next.components = [
+      .lspServer(
+        name: "l", run: ExecutableDeclaration(executable: "unused"), languages: [:],
+        initializationOptions: [
+          "": .integer(3), "nested": .object(["": .object(["a/b~": .integer(2)])]),
+        ])
+    ]
+    let bytes = try #require(try planned(before, next, in: text))
+    text = String(decoding: bytes, as: UTF8.self)
+    #expect(try projected(text) == next)
+    #expect(text.hasSuffix(" # tail\n"))
+    #expect(try planned(next, next, in: text) == nil)
+    let updated = try document(text)
+    let removed = try updated.preparing([
+      .removeDictionaryEntry(
+        #require(updated.node(at: "/components/0/initializationOptions")), key: "")
+    ])
+    #expect(
+      try document(String(decoding: removed.bytes, as: UTF8.self)).node(
+        at: "/components/0/initializationOptions/") == nil)
+  }
+
+  @Test(arguments: ["", ",", ", # owned tail\n  "])
+  func flowSequenceAppendsReuseDelimitersAndKeepTrivia(_ tail: String) throws {
+    let text =
+      "# header\nversion: 1\ncomponents: [{kind: ignore, name: a, patterns: []}" + tail + "]\n"
+    let doc = try document(text)
+    let change = try doc.preparing([
+      .insertComponent(.ignore(name: "b", patterns: []), into: .root, at: .last)
+    ])
+    let output = String(decoding: change.bytes, as: UTF8.self)
+    #expect(
+      try projected(output).components == [
+        .ignore(name: "a", patterns: []), .ignore(name: "b", patterns: []),
+      ])
+    #expect(
+      output.hasPrefix("# header\nversion: 1\ncomponents: [{kind: ignore, name: a, patterns: []}"))
+    if tail.contains("#") { #expect(output.contains("# owned tail")) }
+    #expect(try planned(projected(output), projected(output), in: output) == nil)
+
+  }
+
+  @Test(arguments: [
+    "missing: 1", "missing: 1,", "missing: ", "missing: ,", "missing: # owned tail\n    ",
+    "\"missing\":",
+  ])
+  func flowDictionaryAppendsPreserveImplicitNullAndExistingTrivia(_ spelling: String) throws {
+    let prefix =
+      "# header\nversion: 1\ncomponents:\n  - kind: lspServer\n    name: l\n    run: {executable: unused}\n    languages: {}\n    initializationOptions: {"
+    let suffix = "} # mapping tail\n"
+    let input = prefix + spelling + suffix
+    let doc = try document(input)
+    let dictionary = try #require(doc.node(at: "/components/0/initializationOptions"))
+    let change = try doc.preparing([.setDictionaryEntry(dictionary, key: "new", value: .integer(2))]
+    )
+    let output = String(decoding: change.bytes, as: UTF8.self)
+    let before = try projected(input)
+    var next = before
+    next.components = [
+      .lspServer(
+        name: "l", run: ExecutableDeclaration(executable: "unused"), languages: [:],
+        initializationOptions: [
+          "missing": spelling.contains("1") ? .integer(1) : .null, "new": .integer(2),
+        ])
+    ]
+    #expect(try projected(output) == next)
+    #expect(try document(output).declaration == change.expectedDeclaration)
+    #expect(output.hasPrefix(prefix))
+    #expect(output.hasSuffix(suffix))
+    if spelling.contains("1") { #expect(output.contains("{missing: 1")) }
+    if spelling.hasPrefix("\"") { #expect(output.contains("{\"missing\":")) }
+    if spelling.contains("#") { #expect(output.contains("# owned tail\n")) }
+    #expect(try planned(before, next, in: input) == change.bytes)
+    #expect(try planned(next, next, in: output) == nil)
+    let updated = try document(output)
+    #expect(
+      try updated.preparing([
+        .setDictionaryEntry(
+          #require(updated.node(at: "/components/0/initializationOptions")), key: "new",
+          value: .integer(2))
+      ]).bytes == change.bytes)
+  }
+
+  @Test(arguments: ["", "\n", "\r\n"])
+  func blockAppendsKeepTheOriginalEOFNewlineState(_ ending: String) throws {
+    let text =
+      "# header\nversion: 1\ncomponents:\n  - {kind: ignore, name: a, patterns: []}" + ending
+    let before = try projected(text)
+    var next = before
+    next.components.append(.ignore(name: "b", patterns: []))
+    let bytes = try #require(try planned(before, next, in: text))
+    let output = String(decoding: bytes, as: UTF8.self)
+    #expect(output.hasPrefix(text))
+    #expect((bytes.last == 10) == !ending.isEmpty)
+    if !ending.isEmpty { #expect(output.hasSuffix(ending)) }
+    #expect(try projected(output) == next)
+    #expect(try planned(next, next, in: output) == nil)
+  }
+
+  @Test func implicitNativeNullsCanBeReadAndEditedWithoutWideningOrdinaryFields() throws {
+    for options in ["{missing: }", "\n      missing: # retained\n"] {
+      var text =
+        "version: 1\ncomponents:\n  - kind: lspServer\n    name: l\n    run: {executable: unused}\n    languages: {}\n    initializationOptions: "
+        + options
+      let doc = try document(text)
+      let location = try #require(
+        doc.sourceMap.locations(at: "/components/0/initializationOptions/missing").first?.span)
+      #expect(location.start == location.end)
+      let key = try #require(text.range(of: "missing:"))
+      #expect(location.start == text[..<key.upperBound].utf8.count)
+      #expect(try planned(projected(text), projected(text), in: text) == nil)
+      #expect(
+        try projected(text).components == [
+          .lspServer(
+            name: "l", run: ExecutableDeclaration(executable: "unused"), languages: [:],
+            initializationOptions: ["missing": .null])
+        ])
+      for value in [NativeValue.string("present"), .null] {
+        let current = try document(text)
+        let changed = try current.preparing([
+          .setDictionaryEntry(
+            #require(current.node(at: "/components/0/initializationOptions")), key: "missing",
+            value: value)
+        ])
+        text = String(decoding: changed.bytes, as: UTF8.self)
+        #expect(try document(text).declaration == changed.expectedDeclaration)
+        if options.contains("#") { #expect(text.contains("# retained")) }
+        let repeated = try document(text)
+        #expect(
+          try repeated.preparing([
+            .setDictionaryEntry(
+              #require(repeated.node(at: "/components/0/initializationOptions")), key: "missing",
+              value: value)
+          ]).bytes == changed.bytes)
+      }
+    }
+    expectManifestFailure("manifest.schema") {
+      try document(
+        "version: 1\ncomponents: [{kind: subagent, name: a, description: d, prompt: x, model: }]\n")
+    }
+  }
+}
