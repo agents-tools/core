@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft
+Historical design draft. Frontend examples are superseded by the accepted
+[YAML manifest decision](../Decisions/YAMLManifest.md); current lifecycle and
+state contracts live in `../Architecture/`.
 
 ## Problem
 

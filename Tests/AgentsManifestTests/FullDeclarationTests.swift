@@ -1,5 +1,4 @@
 import AgentsCore
-import AgentsDescription
 import Foundation
 import Testing
 
@@ -10,22 +9,20 @@ struct FullDeclarationTests {
   @Test(arguments: [0, 101])
   func renamingSourceAtSameIdentityRetargetsAllReferences(_ referenceCount: Int) throws {
     let references = (0..<referenceCount).map {
-      #"    .subagent(name: "agent\#($0)", description: "d", prompt: .file("x.md", source: "s")),"#
+      #"  - {kind: subagent, name: "agent\#($0)", description: d, prompt: {file: {path: x.md, source: s}}}"#
     }.joined(separator: "\n")
     let body = """
-      // Keep the header.
-      let agents = Agents(
-        sources: [.source(name: "s", path: "./missing")],
-        components: [
-          // Keep this unrelated component.
-          .ignore(name: "keep", patterns: ["private/**"]),
+      # Keep the header.
+      version: 1
+      sources: {s: {path: ./missing}}
+      components:
+        # Keep this unrelated component.
+        - {kind: ignore, name: keep, patterns: ["private/**"]}
       \(references)
-        ]
-      )
-      // Keep the tail.
+      # Keep the tail.
       """
-    let target = body.replacingOccurrences(of: #"name: "s", path:"#, with: #"name: "t", path:"#)
-      .replacingOccurrences(of: #"source: "s""#, with: #"source: "t""#)
+    let target = body.replacingOccurrences(of: "sources: {s:", with: "sources: {t:")
+      .replacingOccurrences(of: "source: s", with: "source: t")
     let previous = try projected(body)
     let next = try projected(target)
     try previous.validate(environment: projectionEnvironment)
@@ -33,16 +30,16 @@ struct FullDeclarationTests {
     #expect(next.components.count == referenceCount + 1)
     let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
     let output = String(decoding: bytes, as: UTF8.self)
-    #expect(output.hasPrefix(manifestHeader + "// Keep the header.\n"))
-    #expect(output.hasSuffix("\n// Keep the tail."))
+    #expect(output.hasPrefix(manifestHeader + "# Keep the header.\n"))
+    #expect(output.hasSuffix("\n# Keep the tail."))
     #expect(
       output.contains(
-        "// Keep this unrelated component.\n    .ignore(name: \"keep\", patterns: [\"private/**\"]),"
+        "# Keep this unrelated component.\n  - {kind: ignore, name: keep, patterns: [\"private/**\"]}"
       ))
     let document = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
     #expect(
       document.declaration
-        == Lowering.declaration(try DeclarationConstruction.root(next).constructionValue))
+        == YAMLConstruction.root(next))
     let result = try ManifestProjection.declaration(
       of: document, environment: projectionEnvironment)
     #expect(try planned(result, next, in: output) == nil)
@@ -50,40 +47,35 @@ struct FullDeclarationTests {
 
   @Test func changingLocalEditSourceToGitCopyKeepsCompleteIntent() throws {
     let body = """
-      // Keep the header.
-      let agents = Agents(
-        sources: [.source(name: "s", path: "missing")],
-        components: [
-          .skills(source: "s", mode: .edit),
-          // Keep this unrelated component.
-          .ignore(name: "keep", patterns: ["private/**"]),
-        ]
-      )
-      // Keep the tail.
+      # Keep the header.
+      version: 1
+      sources: {s: {path: missing}}
+      components:
+        - {kind: skills, source: s, mode: edit}
+        # Keep this unrelated component.
+        - {kind: ignore, name: keep, patterns: ["private/**"]}
+      # Keep the tail.
       """
-    let target =
-      body
-      .replacingOccurrences(
-        of: #".source(name: "s", path: "missing")"#,
-        with: #".source(name: "s", url: "https://example.invalid/repo.git")"#
-      )
-      .replacingOccurrences(of: "mode: .edit", with: "mode: .copy")
+    let target = body.replacingOccurrences(
+      of: "path: missing", with: "url: https://example.invalid/repo.git"
+    )
+    .replacingOccurrences(of: "mode: edit", with: "mode: copy")
     let previous = try projected(body)
     let next = try projected(target)
     try previous.validate(environment: projectionEnvironment)
     try next.validate(environment: projectionEnvironment)
     let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
     let output = String(decoding: bytes, as: UTF8.self)
-    #expect(output.hasPrefix(manifestHeader + "// Keep the header.\n"))
-    #expect(output.hasSuffix("\n// Keep the tail."))
+    #expect(output.hasPrefix(manifestHeader + "# Keep the header.\n"))
+    #expect(output.hasSuffix("\n# Keep the tail."))
     #expect(
       output.contains(
-        "// Keep this unrelated component.\n    .ignore(name: \"keep\", patterns: [\"private/**\"]),"
+        "# Keep this unrelated component.\n  - {kind: ignore, name: keep, patterns: [\"private/**\"]}"
       ))
     let document = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
     #expect(
       document.declaration
-        == Lowering.declaration(try DeclarationConstruction.root(next).constructionValue))
+        == YAMLConstruction.root(next))
     let result = try ManifestProjection.declaration(
       of: document, environment: projectionEnvironment)
     #expect(try planned(result, next, in: output) == nil)
@@ -92,25 +84,30 @@ struct FullDeclarationTests {
   @Test func publicEditRejectsGitSourceWithExistingEditMode() throws {
     let doc = try document(
       """
-      let agents = Agents(sources: [.source(name: "s", path: "missing")], components: [
-        .skills(source: "s", mode: .edit),
-        .ignore(name: "keep", patterns: []),
-      ])
+      version: 1
+      sources: {"s": {"path": "missing"}}
+      components: [{"kind": "skills", "source": "s", "mode": "edit"}, {"kind": "ignore", "name": "keep", "patterns": []}]
       """)
     expectManifestFailure("manifest.domain") {
-      try doc.preparing([.upsertSource(.source(name: "s", url: "https://example.invalid/repo.git"))]
+      try doc.preparing([
+        .upsertSource(
+          NamedSourceDeclaration(
+            name: "s",
+            source: SourceDeclaration(kind: .git, location: "https://example.invalid/repo.git")))
+      ]
       )
     }
   }
 
   @Test func removingReferencedSourceAcrossBatchesProducesEmptyDeclaration() throws {
     let components = (0..<100).map {
-      #"    .subagent(name: "agent\#($0)", description: "d", prompt: .file("x.md", source: "s")),"#
+      #"  - {kind: subagent, name: "agent\#($0)", description: d, prompt: {file: {path: x.md, source: s}}}"#
     }.joined(separator: "\n")
     let body = """
-      let agents = Agents(sources: [.source(name: "s", path: "missing")], components: [
+      version: 1
+      sources: {"s": {"path": "missing"}}
+      components:
       \(components)
-      ])
       """
     let previous = try projected(body)
     #expect(previous.components.count == 100)
@@ -126,16 +123,16 @@ struct FullDeclarationTests {
 
   @Test func reorderingPromptsMovesTheirCommentsAndRepeatsAsNoOp() throws {
     let body = """
-      // Keep this header.
-      let agents = Agents(components: [
-        .instructions(chatGPT: [
-          // Prompt a.
-          .prompt(name: "a", sections: ["first"]),
-          // Prompt b.
-          .prompt(name: "b", sections: ["second"]),
-        ]),
-      ])
-      // Keep this tail.
+      # Keep this header.
+      version: 1
+      components:
+        - kind: instructions
+          chatgpt:
+            # Prompt a.
+            a: {sections: [{name: first}]}
+            # Prompt b.
+            b: {sections: [{name: second}]}
+      # Keep this tail.
       """
     let previous = try projected(body)
     var next = previous
@@ -147,19 +144,18 @@ struct FullDeclarationTests {
     next.components[0] = .instructions(instructions)
     let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
     let output = String(decoding: bytes, as: UTF8.self)
-    let expected = body.replacingOccurrences(
-      of: """
-            // Prompt a.
-            .prompt(name: "a", sections: ["first"]),
-            // Prompt b.
-            .prompt(name: "b", sections: ["second"]),
-        """,
-      with: """
-            // Prompt b.
-            .prompt(name: "b", sections: ["second"]),
-            // Prompt a.
-            .prompt(name: "a", sections: ["first"]),
-        """)
+    let expected = """
+      # Keep this header.
+      version: 1
+      components:
+        - kind: instructions
+          chatgpt:
+            # Prompt b.
+            b: {sections: [{name: second}]}
+            # Prompt a.
+            a: {sections: [{name: first}]}
+      # Keep this tail.
+      """
     #expect(output == manifestHeader + expected)
     let result = try ManifestProjection.declaration(
       of: DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest")),
@@ -170,10 +166,12 @@ struct FullDeclarationTests {
 
   @Test func equivalentSourceSpellingSurvivesFullComponentEdit() throws {
     let body = """
-      let agents = Agents(
-        sources: [.source(name: "s", /* keep source comment */ path: "./s")],
-        components: [.ignore(name: "i", patterns: ["old"]) ]
-      )
+      version: 1
+      sources:
+        s:
+          # keep source comment
+          path: ./s
+      components: [{kind: ignore, name: i, patterns: [old]}]
       """
     let previous = try projected(body)
     var next = previous
@@ -182,7 +180,7 @@ struct FullDeclarationTests {
     next.components[0] = .ignore(name: "i", patterns: ["new"])
     let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
     let output = String(decoding: bytes, as: UTF8.self)
-    #expect(output.contains(#".source(name: "s", /* keep source comment */ path: "./s")"#))
+    #expect(output.contains("s:\n    # keep source comment\n    path: ./s"))
     let result = try ManifestProjection.declaration(
       of: DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest")),
       environment: projectionEnvironment)
@@ -192,13 +190,13 @@ struct FullDeclarationTests {
 
   @Test func projectionAndConstructionKeepDeclarationOrder() throws {
     let body = """
-      let agents = Agents(
-        exports: ["b", "a"],
-        sources: [.source(name: "web", url: "https://example.test/repo.git"), .source(name: "git", path: "missing")],
-        components: [.ignore(name: "b", patterns: []), .ignore(name: "a", patterns: [])],
-        groups: [.group(name: "b"), .group(name: "a")],
-        uses: ["b", "a"], watch: ["web", "git"]
-      )
+      version: 1
+      exports: ["b", "a"]
+      sources: {"web": {"url": "https://example.test/repo.git"}, "git": {"path": "missing"}}
+      components: [{"kind": "ignore", "name": "b", "patterns": []}, {"kind": "ignore", "name": "a", "patterns": []}]
+      groups: {"b": {}, "a": {}}
+      uses: [{"group": "b"}, {"group": "a"}]
+      watch: ["web", "git"]
       """
     let doc = try document(body)
     let declaration = try ManifestProjection.declaration(
@@ -212,19 +210,17 @@ struct FullDeclarationTests {
     #expect(declaration.uses.map(\.name) == ["b", "a"])
     #expect(declaration.exports == ["b", "a"])
     #expect(
-      Lowering.declaration(try DeclarationConstruction.root(declaration).constructionValue)
+      YAMLConstruction.root(declaration)
         == doc.declaration)
   }
 
   @Test func conditionsRecipientsAndPluginSelectionsKeepInheritanceAndExplicitEmpty() throws {
     let declaration = try projected(
       """
-      let agents = Agents(defaultAgents: [], sources: [.source(name: "s", path: "missing")], components: [
-        .subagent(name: "inherited", description: "d", prompt: "p"),
-        .subagent(name: "empty", description: "d", prompt: "p", tools: [], agents: [], condition: .when(agents: [], scopes: [], platforms: [])),
-        .plugin(name: "all", path: "plugins/p", source: "s"),
-        .plugin(name: "none", path: "plugins/p", source: "s", select: []),
-      ])
+      version: 1
+      defaultAgents: []
+      sources: {"s": {"path": "missing"}}
+      components: [{"kind": "subagent", "name": "inherited", "description": "d", "prompt": "p"}, {"kind": "subagent", "name": "empty", "description": "d", "prompt": "p", "tools": [], "agents": [], "condition": {"agents": [], "scopes": [], "platforms": []}}, {"kind": "plugin", "name": "all", "path": "plugins/p", "source": "s"}, {"kind": "plugin", "name": "none", "path": "plugins/p", "source": "s", "select": []}]
       """)
     #expect(declaration.agents == [])
     guard
@@ -253,30 +249,30 @@ struct FullDeclarationTests {
     ]
     let cases: [(String, ComponentDeclaration)] = [
       (
-        #".skills(source: "s", select: ["a" /* keep member */, "c"], condition: .when(scopes: []))"#,
+        "{\"kind\": \"skills\", \"source\": \"s\", \"select\": [\"a\", \"c\"], \"condition\": {\"scopes\": []}}",
         .skills(
           source: "s",
           SkillDeclaration(select: .names(["a", "b"]), condition: DeclarationCondition(scopes: [])))
       ),
       (
         #"""
-        .skills(source: "s", select: [
+        {kind: skills, source: s, select: [
           "a",
           "b",
-          /* keep member */
+          # keep member
           "c",
-        ], condition: .when(scopes: []))
+        ], condition: {scopes: []}}
         """#,
         .skills(
           source: "s",
           SkillDeclaration(select: .names(["c", "a"]), condition: DeclarationCondition(scopes: [])))
       ),
       (
-        #".instructions(sections: [.section(name: "a", condition: .when(agents: []))])"#,
+        "{\"kind\": \"instructions\", \"sections\": [{\"name\": \"a\", \"condition\": {\"agents\": []}}]}",
         .instructions(instructions)
       ),
       (
-        #".mcpServer(name: "m", transport: .stdio("unused"))"#,
+        "{\"kind\": \"mcpServer\", \"name\": \"m\", \"transport\": {\"kind\": \"stdio\", \"executable\": \"unused\"}}",
         .mcpServer(
           name: "m",
           transport: .streamableHTTP(
@@ -284,39 +280,39 @@ struct FullDeclarationTests {
             headers: ["Authorization": .environment("TOKEN")]))
       ),
       (
-        #".hook(name: "h", event: .afterTool, run: .executable("unused"))"#,
+        "{\"kind\": \"hook\", \"name\": \"h\", \"event\": \"afterTool\", \"run\": {\"executable\": \"unused\"}}",
         .hook(
           name: "h", event: .afterTool, run: ExecutableDeclaration(executable: "unused"),
           timeoutSeconds: 5)
       ),
       (
-        #".subagent(name: "a", description: "d", prompt: "p")"#,
+        "{\"kind\": \"subagent\", \"name\": \"a\", \"description\": \"d\", \"prompt\": \"p\"}",
         .subagent(name: "a", description: "d", prompt: .literal("p"), tools: [])
       ),
       (
-        #".command(name: "c", description: "d", prompt: "p", parameters: [.parameter(name: "x", description: "d", defaultValue: "old")])"#,
+        "{\"kind\": \"command\", \"name\": \"c\", \"description\": \"d\", \"prompt\": \"p\", \"parameters\": [{\"name\": \"x\", \"description\": \"d\", \"defaultValue\": \"old\"}]}",
         .command(
           name: "c", description: "d", prompt: .literal("p"),
           parameters: [PromptParameterDeclaration(name: "x", description: "d", defaultValue: "new")]
         )
       ),
       (
-        #".lspServer(name: "l", run: .executable("unused"), languages: [".swift": "swift"], initializationOptions: ["enabled": true])"#,
+        "{\"kind\": \"lspServer\", \"name\": \"l\", \"run\": {\"executable\": \"unused\"}, \"languages\": {\".swift\": \"swift\"}, \"initializationOptions\": {\"enabled\": true}}",
         .lspServer(
           name: "l", run: ExecutableDeclaration(executable: "unused"),
           languages: [".swift": "swift"],
           initializationOptions: ["enabled": .boolean(false), "number": .decimal("1.25")])
       ),
       (
-        #".permissions(name: "p", rules: [.allow(.read, "a/**")])"#,
+        "{\"kind\": \"permissions\", \"name\": \"p\", \"rules\": [{\"effect\": \"allow\", \"operation\": \"read\", \"pattern\": \"a/**\"}]}",
         .permissions(name: "p", rules: [.ask(.tool("lookup"), "*"), .deny(.write, "private/**")])
       ),
       (
-        #".ignore(name: "i", patterns: ["a"])"#,
+        "{\"kind\": \"ignore\", \"name\": \"i\", \"patterns\": [\"a\"]}",
         .ignore(name: "i", patterns: ["a"], purpose: .indexing)
       ),
       (
-        #".plugin(name: "p", path: "plugins/p", source: "s")"#,
+        "{\"kind\": \"plugin\", \"name\": \"p\", \"path\": \"plugins/p\", \"source\": \"s\"}",
         .plugin(
           name: "p", path: "plugins/p", source: "s", select: [],
           exclude: [.command(name: "obsolete")])
@@ -324,8 +320,7 @@ struct FullDeclarationTests {
     ]
     for (component, intended) in cases {
       let body =
-        #"let agents = Agents(sources: [.source(name: "s", path: "missing")], components: ["#
-        + component + "] )"
+        "version: 1\nsources: {s: {path: missing}}\ncomponents: [" + component + "]\n"
       let previous = try projected(body)
       var next = previous
       next.components[0] = intended
@@ -333,17 +328,17 @@ struct FullDeclarationTests {
       let actual = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
       #expect(
         actual.declaration
-          == Lowering.declaration(try DeclarationConstruction.root(next).constructionValue),
+          == YAMLConstruction.root(next),
         "\(intended.kind)")
-      if intended.kind == .skills {
-        #expect(String(decoding: bytes, as: UTF8.self).contains("/* keep member */"))
+      if component.contains("# keep member") {
+        #expect(String(decoding: bytes, as: UTF8.self).contains("# keep member"))
       }
     }
   }
 
   @Test func sourceAliasesRetainTheirDeclaringDirectories() throws {
     let declaration = try projected(
-      "let agents = Agents(sources: [.source(name: \"s\", path: \"~/rules\")])")
+      "version: 1\nsources: {\"s\": {\"path\": \"~/rules\"}}\n")
     let source = try #require(declaration.sources["s"])
     let importing = RuntimeEnvironment(
       projectDirectory: URL(fileURLWithPath: "/importer"),
@@ -358,11 +353,9 @@ struct FullDeclarationTests {
 
   @Test func repeatedOccurrencesRequireAnExplicitOccurrence() throws {
     let body = """
-      let agents = Agents(sources: [.source(name: "s", path: "missing")], components: [
-        .skills(source: "s", condition: .when(scopes: [.project])),
-        .skills(source: "s", condition: .when(scopes: [.user])),
-        .skills(source: "s", condition: .when(platforms: [])),
-      ])
+      version: 1
+      sources: {"s": {"path": "missing"}}
+      components: [{"kind": "skills", "source": "s", "condition": {"scopes": ["project"]}}, {"kind": "skills", "source": "s", "condition": {"scopes": ["user"]}}, {"kind": "skills", "source": "s", "condition": {"platforms": []}}]
       """
     let doc = try document(body)
     var declaration = try ManifestProjection.declaration(
@@ -390,17 +383,9 @@ struct FullDeclarationTests {
 
   @Test func fullEditsPreserveUnusedGroupsConditionsAndUnchangedBytes() throws {
     let body = """
-      // Header stays verbatim.
-      let agents = Agents(
-        components: [
-          .mcpServer(name: "tools", transport: .stdio("never-start-this", arguments: ["serve"])), // server
-        ],
-        groups: [
-          // This group is unused and must survive.
-          .group(name: "unused", components: [.ignore(name: "i", patterns: ["keep"], condition: .when(platforms: []))]),
-        ]
-      )
-      // Tail stays verbatim.
+      version: 1
+      components: [{"kind": "mcpServer", "name": "tools", "transport": {"kind": "stdio", "executable": "never-start-this", "arguments": ["serve"]}}]
+      groups: {"unused": {"components": [{"kind": "ignore", "name": "i", "patterns": ["keep"], "condition": {"platforms": []}}]}}
       """
     let previous = try projected(body)
     var next = previous
@@ -418,9 +403,10 @@ struct FullDeclarationTests {
 
   @Test func groupUsesStaySymbolicAndOrderedDuringEdits() throws {
     let body = """
-      let agents = Agents(sources: [.source(name: "s", path: "unavailable")], groups: [
-        .group(name: "local", components: [.ignore(name: "i", patterns: [])]),
-      ], uses: ["local", .group(name: "remote", source: "s", condition: .when(agents: [])), "local"])
+      version: 1
+      sources: {"s": {"path": "unavailable"}}
+      groups: {"local": {"components": [{"kind": "ignore", "name": "i", "patterns": []}]}}
+      uses: [{"group": "local"}, {"source": "s", "condition": {"agents": []}, "group": "remote"}, {"group": "local"}]
       """
     let previous = try projected(body)
     var next = previous
@@ -438,11 +424,10 @@ struct FullDeclarationTests {
 
   @Test func groupReferencesWithDifferentSourceAliasesRemainDistinct() throws {
     let body = """
-      let agents = Agents(sources: [.source(name: "a", path: "missing-a"), .source(name: "b", path: "missing-b")],
-        groups: [.group(name: "local")], uses: [
-          .group(name: "review", source: "a", condition: .when(agents: [])),
-          .group(name: "review", source: "b", condition: .when(platforms: [])),
-        ])
+      version: 1
+      sources: {"a": {"path": "missing-a"}, "b": {"path": "missing-b"}}
+      groups: {"local": {}}
+      uses: [{"source": "a", "condition": {"agents": []}, "group": "review"}, {"source": "b", "condition": {"platforms": []}, "group": "review"}]
       """
     let previous = try projected(body)
     var next = previous
@@ -451,27 +436,24 @@ struct FullDeclarationTests {
     let actual = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
     #expect(
       actual.declaration
-        == Lowering.declaration(try DeclarationConstruction.root(next).constructionValue))
+        == YAMLConstruction.root(next))
   }
 
   @Test func reorderingFullCollectionsCarriesOwnedComments() throws {
     let body = """
-      let agents = Agents(
-        sources: [
-          // Source a.
-          .source(name: "a", path: "missing-a"),
-          // Source b.
-          .source(name: "b", path: "missing-b"),
-        ],
-        components: [
-          // Server a.
-          .mcpServer(name: "a", transport: .stdio("unused-a")),
-          // Server b.
-          .mcpServer(name: "b", transport: .stdio("unused-b")),
-        ],
-        groups: [.group(name: "a"), .group(name: "b")],
-        uses: ["a", "b"]
-      )
+      version: 1
+      sources:
+        # Source a.
+        a: {path: missing-a}
+        # Source b.
+        b: {path: missing-b}
+      components:
+        # Server a.
+        - {kind: mcpServer, name: a, transport: {kind: stdio, executable: unused-a}}
+        # Server b.
+        - {kind: mcpServer, name: b, transport: {kind: stdio, executable: unused-b}}
+      groups: {a: {}, b: {}}
+      uses: [{group: a}, {group: b}]
       """
     let previous = try projected(body)
     var next = previous
@@ -481,21 +463,25 @@ struct FullDeclarationTests {
     next.uses.reverse()
     let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
     let output = String(decoding: bytes, as: UTF8.self)
-    #expect(output.contains("// Source a.\n    .source(name: \"a\", path: \"missing-a\")"))
-    #expect(output.contains("// Source b.\n    .source(name: \"b\", path: \"missing-b\")"))
+    #expect(output.contains("# Source a.\n  a: {path: missing-a}"))
+    #expect(output.contains("# Source b.\n  b: {path: missing-b}"))
     #expect(
-      output.contains("// Server a.\n    .mcpServer(name: \"a\", transport: .stdio(\"unused-a\"))"))
+      output.contains(
+        "# Server a.\n  - {kind: mcpServer, name: a, transport: {kind: stdio, executable: unused-a}}"
+      ))
     #expect(
-      output.contains("// Server b.\n    .mcpServer(name: \"b\", transport: .stdio(\"unused-b\"))"))
+      output.contains(
+        "# Server b.\n  - {kind: mcpServer, name: b, transport: {kind: stdio, executable: unused-b}}"
+      ))
     let actual = try DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest"))
     #expect(
       actual.declaration
-        == Lowering.declaration(try DeclarationConstruction.root(next).constructionValue))
+        == YAMLConstruction.root(next))
   }
 
   @Test func fullBaselineAndFinalGuardsIncludeUnusedStructures() throws {
     let body =
-      "let agents = Agents(groups: [.group(name: \"g\", components: [.ignore(name: \"i\", patterns: [\"old\"])])])"
+      "version: 1\ngroups: {\"g\": {\"components\": [{\"kind\": \"ignore\", \"name\": \"i\", \"patterns\": [\"old\"]}]}}\n"
     let previous = try projected(body)
     var stale = previous
     stale.groups = []
@@ -505,50 +491,24 @@ struct FullDeclarationTests {
     var next = previous
     next.groups[0].components[0] = .ignore(name: "i", patterns: ["new"])
     expectManifestFailure("manifest.edit.mismatch") {
-      try DeclarationEditPlan.bytes(
-        replacing: previous, with: next, in: Array((manifestHeader + body).utf8),
-        identity: DocumentIdentity("manifest"), environment: projectionEnvironment,
-        planning: { _ in [] })
+      try DeclarationEditPlan.compose(
+        [], original: document(body), intended: IRTree.root(YAMLConstruction.root(next)),
+        next: next, environment: projectionEnvironment)
     }
   }
 
-  @Test func sharedConstantChangesAccountForUnusedGroupImpact() throws {
-    let doc = try document(
-      """
-      let recipients: [Agent] = [.codex]
-      let agents = Agents(components: [.instructions(agents: recipients)], groups: [
-        .group(name: "unused", components: [.ignore(name: "i", patterns: [], agents: recipients)]),
-      ])
-      """)
-    let constant = try #require(doc.constant(named: "recipients"))
-    let uses = doc.uses(ofConstant: "recipients")
-    #expect(uses.count == 2)
-    expectManifestFailure("manifest.edit.impact") {
-      try doc.preparing([
-        .replaceConstant(constant, with: .array([]), acceptingUses: Array(uses.prefix(1)))
-      ])
+  @Test func sharedAliasesCannotChangeUnusedGroupIntent() {
+    #expect(throws: ManifestFailure.self) {
+      try document("version: 1\ncomponents: &shared []\ngroups: {unused: {components: *shared}}\n")
     }
-    let change = try doc.preparing([
-      .replaceConstant(constant, with: .array([]), acceptingUses: uses)
-    ])
-    let typed = try ManifestProjection.declaration(
-      of: DeclarationDocument(bytes: change.bytes, identity: DocumentIdentity("manifest")),
-      environment: projectionEnvironment)
-    #expect((try typed.instructions)?.agents == [])
-    #expect(
-      change.expectedDeclaration.groups[0]["components"]?.elements?[0].record?["agents"]
-        == .array([]))
-    #expect(typed.groups.count == 1 && typed.components.count == 1)
   }
 
   @Test func readingAndConstructingNeverReadsSourcesResourcesOrRunsPrograms() throws {
     let declaration = try projected(
       """
-      let agents = Agents(sources: [.source(name: "remote", url: "https://does-not-exist.invalid/repo.git")], components: [
-        .mcpServer(name: "tools", transport: .stdio("program-does-not-exist", environment: ["KEY": .secret("unbound")])),
-        .hook(name: "run", event: .sessionStart, run: .executable("program-does-not-exist")),
-        .subagent(name: "agent", description: "d", prompt: .file("missing.md", source: "remote")),
-      ])
+      version: 1
+      sources: {"remote": {"url": "https://does-not-exist.invalid/repo.git"}}
+      components: [{"kind": "mcpServer", "name": "tools", "transport": {"kind": "stdio", "executable": "program-does-not-exist", "environment": {"KEY": {"secret": "unbound"}}}}, {"kind": "hook", "name": "run", "event": "sessionStart", "run": {"executable": "program-does-not-exist"}}, {"kind": "subagent", "name": "agent", "description": "d", "prompt": {"file": {"path": "missing.md", "source": "remote"}}}]
       """)
     let bytes = try #require(try planned(Declaration(), declaration, in: nil))
     #expect(

@@ -18,15 +18,9 @@ struct WatchStateTests {
       ))
     try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
     let text = """
-      // agents-tools-version: 1.0
-      import AgentsDescription
-
-      // Preserve this layout.
-      let agents = Agents(sources: [
-        .source(name: "web", url: "https://example.test/repo.git"),
-        .source(name: "git", path: "missing"),
-      ], watch: ["web", "git"])
-
+      version: 1
+      sources: {"web": {"url": "https://example.test/repo.git"}, "git": {"path": "missing"}}
+      watch: ["web", "git"]
       """
     let bytes = Data(text.utf8)
     try bytes.write(to: store.declarationURL)

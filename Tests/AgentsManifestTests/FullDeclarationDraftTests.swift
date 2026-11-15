@@ -1,5 +1,4 @@
 import AgentsCore
-import AgentsDescription
 import Foundation
 import Testing
 
@@ -8,149 +7,117 @@ import Testing
 extension FullDeclarationTests {
   @Test(arguments: [false, true])
   func flatSourceTransitionsComposeWithoutOtherComponents(_ rename: Bool) throws {
-    let body = """
-      let agents = Agents(sources: [.source(name: "s", path: "missing")], components: [
-        .skills(source: "s", mode: .edit),
-      ])
-      """
+    let body =
+      "version: 1\nsources: {s: {path: missing}}\ncomponents: [{kind: skills, source: s, mode: edit}]\n"
     let target =
       rename
-      ? body.replacingOccurrences(of: #""s""#, with: #""t""#)
+      ? body.replacingOccurrences(of: "{s:", with: "{t:").replacingOccurrences(
+        of: "source: s", with: "source: t")
       : body.replacingOccurrences(
-        of: #"path: "missing""#, with: #"url: "https://example.invalid/repo.git""#
-      ).replacingOccurrences(of: "mode: .edit", with: "mode: .copy")
+        of: "path: missing", with: "url: https://example.invalid/repo.git"
+      ).replacingOccurrences(of: "mode: edit", with: "mode: copy")
     let previous = try projected(body)
     let next = try projected(target)
-    let bytes = try #require(try planned(previous, next, in: manifestHeader + body))
-    let result = try ManifestProjection.declaration(
-      of: DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest")),
-      environment: projectionEnvironment)
+    let bytes = try #require(try planned(previous, next, in: body))
+    let result = try projected(String(decoding: bytes, as: UTF8.self))
     #expect(ManifestProjection.equivalent(result, next, environment: projectionEnvironment))
     #expect(try planned(result, next, in: String(decoding: bytes, as: UTF8.self)) == nil)
   }
 
   @Test func aliasRenameComposesRootAndUnusedGroupResourceReferencesAcrossBatches() throws {
     let components = (0..<101).map {
-      #"        .subagent(name: "a\#($0)", description: "d", prompt: .file("x.md", source: "s"))"#
-    }.joined(separator: ",\n")
+      "      - {kind: subagent, name: a\($0), description: d, prompt: {file: {path: x.md, source: s}}}"
+    }.joined(separator: "\n")
     let body = """
-      // Keep this header.
-      let agents = Agents(
-        sources: [.source(name: "s", path: "missing")],
-        components: [
-          .instructions(sections: [.section(name: "guide", source: "s")]),
-          .plugin(name: "bundle", path: "plugins/bundle", source: "s"),
-          .hook(name: "run", event: .sessionStart,
-            run: .executable("tool", workingDirectory: .path("dir", source: "s"))),
-        ],
-        groups: [
-          .group(
-            name: "unused",
-            components: [
+      # Keep this header.
+      version: 1
+      sources: {s: {path: missing}}
+      components:
+        - {kind: instructions, sections: [{name: guide, source: s}]}
+        - {kind: plugin, name: bundle, path: plugins/bundle, source: s}
+        - {kind: hook, name: run, event: sessionStart, run: {executable: tool, workingDirectory: {path: dir, source: s}}}
+      groups:
+        unused:
+          components:
       \(components)
-            ],
-            uses: [.group(name: "remote", source: "s")]
-          ),
-        ]
-      )
-      // Keep this tail.
+          uses: [{group: remote, source: s}]
+      # Keep this tail.
       """
-    let next = try projected(body.replacingOccurrences(of: #""s""#, with: #""t""#))
-    let bytes = try #require(try planned(try projected(body), next, in: manifestHeader + body))
+    let next = try projected(
+      body.replacingOccurrences(of: "{s:", with: "{t:").replacingOccurrences(
+        of: "source: s", with: "source: t"))
+    let bytes = try #require(try planned(try projected(body), next, in: body))
     let output = String(decoding: bytes, as: UTF8.self)
-    #expect(output.hasPrefix(manifestHeader + "// Keep this header.\n"))
-    #expect(output.hasSuffix("// Keep this tail."))
-    let result = try ManifestProjection.declaration(
-      of: DeclarationDocument(bytes: bytes, identity: DocumentIdentity("manifest")),
-      environment: projectionEnvironment)
-    #expect(result == next)
+    #expect(output.hasPrefix("# Keep this header.\n"))
+    #expect(output.hasSuffix("# Keep this tail."))
+    #expect(try projected(output) == next)
   }
 
   @Test func draftBatchesRejectExpectedIRMismatchAndRetainTheirLimits() throws {
-    let doc = try document("let agents = Agents()")
-    for operations: [DocumentOperation] in [
-      [], [.edit(.insertComponent(.instructions(), into: .root, at: .last))],
-    ] {
-      let editor = DocumentEditor(document: doc)
-      editor.expected = Agents(defaultAgents: [.codex]).constructionValue
-      expectManifestFailure("manifest.edit.mismatch") {
-        try editor.prepareDraft(operations: operations)
-      }
+    let doc = try document(
+      "version: 1\ncomponents: [{kind: ignore, name: i, patterns: [], native: {schema: {key: text}}}]\n"
+    )
+    expectManifestFailure("manifest.edit.mismatch") {
+      // Integer YAML cannot represent an integer payload inside a string-kind IR record.
+      try DocumentEditor.draft(
+        [.set("/components/0/native/schema/key/value", .integer(1))], in: doc)
     }
     expectManifestFailure("manifest.limit") {
-      try DocumentEditor(document: doc).prepareDraft(
-        operations: Array(repeating: .edit(.setWatch([])), count: 101))
+      try DocumentEditor.draft(Array(repeating: .set("/watch", .array([])), count: 101), in: doc)
     }
-    let exhausted = DocumentEditor(document: doc)
-    exhausted.steps = ManifestLimits.Editing.steps
-    expectManifestFailure("manifest.limit") { try exhausted.prepareDraft(operations: []) }
+    expectManifestFailure("manifest.limit") {
+      try doc.preparing(Array(repeating: .setWatch([]), count: 101))
+    }
   }
 
   @Test func publicPreparedChangesValidateDraftDomainEvenForNoOps() throws {
     let doc = try document(
-      "let agents = Agents(sources: [.source(name: \"s\", path: \"missing\")], components: [.skills(source: \"s\", mode: .edit)])"
+      "version: 1\nsources: {s: {path: missing}}\ncomponents: [{kind: skills, source: s, mode: edit}]\n"
     )
-    let draft = try DocumentEditor(document: doc).prepareDraft(operations: [
-      .edit(.upsertSource(.source(name: "s", url: "https://example.invalid/repo.git")))
-    ])
-    expectManifestFailure("manifest.domain") {
-      try DeclarationDocument(bytes: draft.document.bytes, identity: DocumentIdentity("manifest"))
-    }
-    expectManifestFailure("manifest.domain") { try draft.document.preparing([]) }
-    expectManifestFailure("manifest.domain") { try draft.document.preparing(operations: []) }
-    #expect(throws: CoreError.self) {
-      try ManifestProjection.declaration(of: draft.document, environment: projectionEnvironment)
-    }
+    let source = YAMLConstruction.source(
+      NamedSourceDeclaration(
+        name: "s",
+        source: SourceDeclaration(kind: .git, location: "https://example.invalid/repo.git")))
+    let draft = try DocumentEditor.draft([.set("/sources/0", .record(source))], in: doc).document
+    expectManifestFailure("manifest.domain") { try draft.preparing([]) }
+    expectManifestFailure("manifest.domain") { try draft.preparing([.setWatch([])]) }
+    #expect(
+      doc.bytes
+        == Array(
+          "version: 1\nsources: {s: {path: missing}}\ncomponents: [{kind: skills, source: s, mode: edit}]\n"
+            .utf8))
   }
 
   @Test func compositionRejectsNoProgressAndExcessOperationWork() throws {
-    let doc = try document("let agents = Agents()")
+    let doc = try document("version: 1\n")
     let next = Declaration(agents: [.codex])
+    let intended = IRTree.root(YAMLConstruction.root(next))
     expectManifestFailure("manifest.edit.mismatch") {
-      try DeclarationEditPlan.bytes(
-        replacing: Declaration(), with: next, in: doc.bytes,
-        identity: DocumentIdentity("manifest"), environment: projectionEnvironment,
-        planning: { _ in [.edit(.setWatch([]))] })
+      try DeclarationEditPlan.compose(
+        [.set("/watch", .array([]))], original: doc, intended: intended, next: next,
+        environment: projectionEnvironment)
     }
     expectManifestFailure("manifest.limit") {
-      try DeclarationEditPlan.bytes(
-        replacing: Declaration(), with: next, in: doc.bytes,
-        identity: DocumentIdentity("manifest"), environment: projectionEnvironment,
-        planning: { _ in Array(repeating: .edit(.setDefaultAgents([.codex])), count: 100) })
+      try DeclarationEditPlan.compose(
+        Array(repeating: .set("/defaultAgents", .array([.string("codex")])), count: 100),
+        original: doc, intended: intended, next: next, environment: projectionEnvironment)
     }
   }
 
-  @Test func draftReplanningDiagnosesDuplicateSourceAliases() throws {
-    let doc = try document("let agents = Agents()")
-    let root = try #require(doc.node(at: ""))
-    let next = Declaration(sources: ["s": SourceDeclaration(kind: .local, location: "s")])
-    var injected = false
-    expectManifestFailure("manifest.ambiguous") {
-      try DeclarationEditPlan.bytes(
-        replacing: Declaration(), with: next, in: doc.bytes,
-        identity: DocumentIdentity("manifest"), environment: projectionEnvironment,
-        planning: { operations in
-          if injected { return operations }
-          injected = true
-          return [
-            .setArgument(
-              root, field: "sources",
-              value: .array([
-                Source.source(name: "s", path: "s").constructionValue,
-                Source.source(name: "s", path: "t").constructionValue,
-              ]))
-          ]
-        })
+  @Test func duplicateSourceAliasesCannotBeAdmittedAsDrafts() throws {
+    let doc = try document("version: 1\n")
+    let source = YAMLConstruction.source(
+      NamedSourceDeclaration(name: "s", source: SourceDeclaration(kind: .local, location: "s")))
+    #expect(throws: ManifestFailure.self) {
+      try DocumentEditor.draft(
+        [.set("/sources", .array([.record(source), .record(source)]))], in: doc)
     }
   }
 
   @Test func composedFinalProjectionPerformsEnvironmentValidation() throws {
     let doc = try document(
-      "let agents = Agents(sources: [.source(name: \"a\", path: \"~/rules\"), .source(name: \"b\", path: \"/work/home/rules\")])"
-    )
+      "version: 1\nsources: {a: {path: '~/rules'}, b: {path: /work/home/rules}}\n")
     let next = try ManifestProjection.draftDeclaration(of: doc, environment: projectionEnvironment)
-    #expect(throws: CoreError.self) {
-      try planned(Declaration(), next, in: manifestHeader + "let agents = Agents()")
-    }
+    #expect(throws: CoreError.self) { try planned(Declaration(), next, in: "version: 1\n") }
   }
 }

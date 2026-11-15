@@ -20,7 +20,7 @@ public struct StateStore: Sendable {
   public var watchURL: URL { directory.appendingPathComponent(Self.watchFileName) }
   public var cacheDirectory: URL { directory.appendingPathComponent("cache") }
 
-  package static let declarationFileName = "Agents.swift"
+  package static let declarationFileName = "agents.yaml"
   package static let resolvedFileName = "agents.resolved"
   package static let watchFileName = "agents.watch"
   /// The scope files a state transaction may replace.

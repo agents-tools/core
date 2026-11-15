@@ -4,8 +4,8 @@
 
 | Scope | Declaration | Lock | Watch state | Cache |
 | --- | --- | --- | --- | --- |
-| Project | `.agent/Agents.swift` | `.agent/agents.resolved` | `.agent/agents.watch` | `.agent/cache/` |
-| User | `~/.agents/Agents.swift` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | `~/.agents/cache/` |
+| Project | `.agent/agents.yaml` | `.agent/agents.resolved` | `.agent/agents.watch` | `.agent/cache/` |
+| User | `~/.agents/agents.yaml` | `~/.agents/agents.resolved` | `~/.agents/agents.watch` | `~/.agents/cache/` |
 
 User paths are relative to `RuntimeEnvironment.homeDirectory`. State files
 belong to their scope. A project may commit its declaration and lock; the cache,
@@ -15,9 +15,9 @@ operations.
 
 ## Declaration
 
-`Agents.swift` records user intent in the [manifest
+`agents.yaml` records user intent in the [manifest
 language](../Reference/Manifest.md). The document is the declaration's only
-truth. `AgentsManifest` parses and evaluates its bytes and projects them onto
+truth. `AgentsManifest` parses and validates its bytes and projects them onto
 `AgentsCore.Declaration`, the complete typed symbolic intent with no serialized
 form. Ordered sources, components, groups, uses, exports, prompt sections and
 parameters retain their occurrences. Conditions, native values, runtime bindings
@@ -27,30 +27,25 @@ extends `StateStore` with declaration reading, planning and loading. Parse, edit
 and deployment-boundary failures are `ManifestFailure` diagnostics located in the declaration
 file.
 
-```swift
-// agents-tools-version: 1.0
-import AgentsDescription
-
-let agents = Agents(
-  sources: [
-    .source(name: "drafts", path: "~/Developer/skills"),
-    .source(
-      name: "team", url: "https://github.com/example/skills", from: "1.0.0"
-    ),
-  ],
-  components: [
-    .skills(
-      source: "drafts", select: ["release-notes"], mode: .edit,
-      overrides: [.skill(name: "release-notes", agents: [.codex])]
-    ),
-    .skills(source: "team", exclude: ["retired"]),
-  ]
-)
+```yaml
+version: 1
+sources:
+  drafts: {path: ~/Developer/skills}
+  team:
+    url: https://github.com/example/skills
+    requirement: {from: "1.0.0"}
+components:
+  - kind: skills
+    source: drafts
+    select: [release-notes]
+    mode: edit
+    overrides: {release-notes: {agents: [codex]}}
+  - {kind: skills, source: team, exclude: [retired]}
 ```
 
 ### Deployable subset
 
-`loadDeclaration()` projects every language 1.0 component family, including MCP,
+`loadDeclaration()` projects every declared component family, including MCP,
 hooks, subagents, commands, LSP, permissions, ignores and plugins. It preserves
 unused groups and inactive structures and never resolves sources, reads resources
 or runs component programs. `Declaration.sourceDeclarations` and `components`
@@ -60,7 +55,7 @@ directories so importing code cannot reinterpret their relative paths.
 
 The current skill/instruction deployment paths use
 `readDeploymentDeclaration(prepared:)`. This explicit boundary accepts root
-`defaultAgents`, `sources` and `watch`, and root `.skills` and `.instructions`
+`defaultAgents`, `sources` and `watch`, and root `skills` and `instructions`
 components: at most one skills occurrence per alias and one instructions
 occurrence, with no condition on a component, section or prompt and empty native
 configuration. Unused groups and exports remain preserved. Active group uses,
@@ -84,7 +79,7 @@ declaring it, or receives its location's last path component; while another
 source holds that name, preceding components are prefixed (`anthropics-skills`),
 then a number is appended.
 
-A skill selection is all members, when `select` is omitted or `.all`, or an
+A skill selection is all members, when `select` is omitted or `all`, or an
 explicit name array, with optional exclusions, recipients, mode and per-skill
 overrides. An all-member selection follows discovery membership on an unnamed
 update. Removing a member adds an exclusion. Explicitly named updates resolve
@@ -92,7 +87,7 @@ only those members and fail if a requested member is missing. Skill filesystem
 identities are unique within a scope across sources.
 
 Requirements are `branch:`, `revision:`, `exact:`, `from:` (up to the next
-major version), `.upToNextMinor(from:)` or a half-open range. Ranges include
+major version), `upToNextMinor:` or `{from:, to:}`. Ranges include
 their lower bound and exclude their upper bound. A prerelease requires a
 prerelease bound with the same major, minor and patch. With no requirement,
 resolution chooses the latest semantic-version tag, then the source's default
@@ -112,7 +107,7 @@ preserve both and existing watch-state bytes.
 
 | Declaration | Lock or watch state | Behavior |
 | --- | --- | --- |
-| Absent | Absent | An empty declaration. Reads return empty results; the first write that declares something creates `Agents.swift` with no-replace publication. A write whose declaration and resulting lock are both empty creates neither file. |
+| Absent | Absent | An empty declaration. Reads return empty results; the first write that declares something creates `agents.yaml` with no-replace publication. A write whose declaration and resulting lock are both empty creates neither file. |
 | Present | Any | Normal. An absent lock is an empty resolved state: `update` creates it and `install` has nothing to restore. |
 | Absent | Present | The state cannot be used. Throwing APIs report `CoreError.missingDeclaration` with the declaration path; export returns `.unavailable`, and batch doctor reports a `.stateUnavailable` diagnostic for the affected scope. Nothing is written, and no `.agents.lock` is created. |
 
@@ -161,37 +156,24 @@ Semantic equality decides whether anything changes:
   in order; conditions, symbolic references, runtime bindings and native values
   all participate.
 
-Planning edits direct fields, dictionary members and ordered occurrences. Existing
-skill/instruction workflows keep their established insertion order. Explicit
-changes to full ordered collections retain matching occurrences where possible;
-a length change with repeated matching names is ambiguous and requires an
-occurrence-addressed `ManifestEdit`. The skill/instruction plan appends new
-sources, replaces changed sources in place and removes sources after their
-references. A new skills
-component is inserted before the instructions component, or last; a new
-instructions component is last. Selections, exclusions, recipients, mode,
-overrides, sections, prompts, watch aliases and default recipients change at
-argument or element granularity: existing arrays gain and lose elements in
-place, an ordered array gains them in order, and sections use a
-longest-common-subsequence edit that keeps repetitions. Edits replace only their
-target ranges; bytes outside them, comments included, stay unchanged. Constructs
-the editor cannot address exactly, such as shared constants, concatenations and
-ambiguous comments, fail with `manifest.edit.readOnly`. A batch holds at most
-100 requests, and the document is rebuilt from the new bytes before the
-remaining difference is planned. The projection of the final document must equal
-the intended declaration, or planning fails with `manifest.edit.mismatch`.
-Complete edits compose private static drafts across batches. Each batch retains
-the front end's static limits and compares its complete IR with the expected
-batch result. Domain validation waits until composition finishes, so related
-source and reference changes can cross a batch boundary. The final bytes must
-pass normal domain validation, environment-aware typed validation and the full
-intended-declaration comparison before they can leave planning. Public prepared
-changes always validate their final domain, including no-ops.
-Composition has an operation budget of twice the combined current and target
-value-node counts, and each replan must reduce the remaining direct difference.
+Planning edits direct fields, dictionary members and ordered occurrences. Core's
+skill/instruction convenience mutations retain their insertion order. Repeated
+ambiguous selections require an occurrence-addressed `ManifestEdit`. The editor
+changes owned ranges and retains comments, while unrelated bytes stay exact.
+
+Complete changes use one direct IR edit script throughout composition. Each array
+step fixes the next target position or removes a surplus occurrence; each field is
+visited once. Its finite operation bound is twice the combined current/target
+value-node counts. Batches contain at most 100 operations and are sized against
+actual editing work. Private drafts refresh the CST/source map and compare the
+complete expected IR after every operation. Domain references can transition
+across internal batches. Final normal domain validation, environment-aware typed
+projection and full intended-IR comparison precede returning bytes. Public
+prepared changes always validate final domain, including no-ops. No draft enters
+state storage or a public change.
 
 Without declaration bytes, planning prints the complete typed declaration with the
-[canonical printer](../Reference/Manifest.md#canonical-printing), retaining its
+[YAML writer](../Reference/Manifest.md#edits-and-source-maps), retaining its
 ordered collections and symbolic group uses. Dictionary-based convenience
 initializers and domain mutations choose deterministic order for new entries.
 First state-declaration creation sorts only the set-like watch aliases; pure
@@ -451,7 +433,7 @@ ownership denials are reported rather than bypassed.
 Every mutating state operation first checks for an abandoned journal under the
 scope lock, validates watch state and finishes pending reference cleanup before
 proceeding. Recovery never reads the declaration: journal and watch-reference
-recovery complete even when `Agents.swift` does not parse, and orphaned mirror
+recovery complete even when `agents.yaml` does not parse, and orphaned mirror
 locations come from watch state and the lock, then from the mirror's origin.
 Journal recovery selects and syncs a consistent generation before watch
 reconciliation can release any ref. Pending watch-reference recovery also
@@ -524,7 +506,7 @@ lock or recovery marker before returning either its result or its error. A
 writer causes that attempt to be discarded and retried under the shared lock.
 Writers create the scope lock before mutation and never remove it. The scope
 lock exists before the declaration is parsed, so a first writer that meets an
-invalid `Agents.swift` reports its `ManifestFailure` after creating
+invalid `agents.yaml` reports its `ManifestFailure` after creating
 `.agents.lock`; invalid lock or watch state stops the writer before the lock
 exists.
 

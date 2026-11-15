@@ -9,9 +9,8 @@ struct ExpansionBudgetTests {
     let document = try DeclarationDocument(
       bytes: Array(
         """
-        // agents-tools-version: 1.0
-        import AgentsDescription
-        let agents = Agents(components: [.command(name: "review", description: "Review", prompt: "p")])
+        version: 1
+        components: [{"kind": "command", "name": "review", "description": "Review", "prompt": "p"}]
         """.utf8), identity: DocumentIdentity("producer"))
     let record = try #require(document.declaration.components.first)
     let locations = document.sourceMap.entries.filter {
@@ -33,9 +32,8 @@ struct ExpansionBudgetTests {
     let document = try DeclarationDocument(
       bytes: Array(
         """
-        // agents-tools-version: 1.0
-        import AgentsDescription
-        let agents = Agents(components: [.command(name: "review", description: "Review", prompt: "p")])
+        version: 1
+        components: [{"kind": "command", "name": "review", "description": "Review", "prompt": "p"}]
         """.utf8), identity: DocumentIdentity(String(repeating: "source", count: 5_000)))
     let record = try #require(document.declaration.components.first)
     let locations = document.sourceMap.entries.filter {

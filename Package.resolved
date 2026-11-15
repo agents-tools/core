@@ -1,5 +1,5 @@
 {
-  "originHash" : "2c053518874423b9cbd21ad05cd15590e43cf4686b80c1421255af9007ac3963",
+  "originHash" : "ab09bed54f5aab76864fb60822b02f0a35a5f6a7d8c83569ee7317a964deef44",
   "pins" : [
     {
       "identity" : "swift-asn1",
@@ -38,12 +38,12 @@
       }
     },
     {
-      "identity" : "swift-syntax",
+      "identity" : "tree-sitter",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "location" : "https://github.com/tree-sitter/tree-sitter",
       "state" : {
-        "revision" : "050f1a346fbbac0ca2cfb15a95274f7bd1cf0ccf",
-        "version" : "604.0.0"
+        "revision" : "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
+        "version" : "0.25.10"
       }
     },
     {

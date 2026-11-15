@@ -1,7 +1,7 @@
 # Watch Subscriptions
 
 `AgentsCore.WatchOperations` manages subscriptions independently of installation
-intent and pins. `Agents.swift` lists subscribed source aliases in the `watch:`
+intent and pins. `agents.yaml` lists subscribed source aliases in the `watch:`
 argument of `Agents(...)`; `agents.watch` records a seen baseline per normalized
 source ID. Subscribing
 installs nothing, and removing a subscription preserves source declarations,
@@ -119,7 +119,7 @@ revisions or digests are errors. Subscriptions cannot repeat an alias.
 Add, seen and remove hold the scope writer lock and recover interrupted
 transactions and pending ref cleanup before proceeding. They capture declaration,
 lock and watch evidence before contacting Git. Add and remove plan the
-`Agents.swift` change at that point, so a declaration the editor cannot change
+`agents.yaml` change at that point, so a declaration the editor cannot change
 fails before any fetch; seen leaves the declaration unchanged. Add and seen
 prepare cached content before publishing its baseline. Declaration and watch
 replacements and cache pruning commit through the existing scope transaction

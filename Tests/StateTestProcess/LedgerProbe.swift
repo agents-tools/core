@@ -40,7 +40,7 @@ func ledgerProbe(_ action: String, store: StateStore) throws {
   if action == "ledger-freeze" {
     let document = try DeclarationDocument(
       bytes: Array(Data(contentsOf: store.declarationURL)),
-      identity: DocumentIdentity("probe/Agents.swift"))
+      identity: DocumentIdentity("probe/agents.yaml"))
     let ledger = try ComponentLinker.withLinkedComponents(
       document: document, store: store,
       platform: {

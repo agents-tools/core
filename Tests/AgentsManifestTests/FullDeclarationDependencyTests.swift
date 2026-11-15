@@ -13,12 +13,12 @@ extension FullDeclarationTests {
     let populated = Declaration(
       sourceDeclarations: [], groups: groups, uses: [GroupUseDeclaration(name: "g0")],
       exports: ["g0"])
-    let empty = try projected("let agents = Agents()")
+    let empty = try projected("version: 1\n")
     let previous = removing ? populated : empty
     let next = removing ? empty : populated
     let initial =
       try planned(Declaration(), previous, in: nil)
-      ?? Array((manifestHeader + "let agents = Agents()").utf8)
+      ?? Array((manifestHeader + "version: 1\n").utf8)
     let bytes = try #require(
       try planned(previous, next, in: String(decoding: initial, as: UTF8.self)))
     let result = try ManifestProjection.declaration(

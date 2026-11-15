@@ -1,5 +1,4 @@
 import AgentsCore
-import AgentsDescription
 
 struct ValueCost: Sendable {
   var nodes = 1
@@ -75,18 +74,35 @@ struct SourceMapBudget {
   }
 }
 
-func constructionCost(_ value: ConstructionValue) -> ValueCost {
-  switch value {
-  case .text(let text): return .scalar(text)
-  case .version(let version): return .scalar(version.normalized)
-  case .range(let range):
-    return .container([.scalar(range.lowerBound.normalized), .scalar(range.upperBound.normalized)])
-  case .array(let values): return .container(values.map(constructionCost))
-  case .object(let fields):
-    return .container(fields.values.map(constructionCost), keys: Array(fields.keys))
-  case .node(let type, let member, let fields):
-    return .container(
-      fields.values.map(constructionCost), keys: [type, member] + Array(fields.keys))
-  case .none, .integer, .boolean: return ValueCost()
+func validateIRBudget(_ value: DeclarationValue, source: SourceText) throws {
+  var work = 0
+  func cost(_ value: DeclarationValue, depth: Int) throws -> ValueCost {
+    work += 1
+    guard depth <= ManifestLimits.Values.depth, work <= ManifestLimits.Values.nodes else {
+      throw source.failure("manifest.limit", "domain value depth/node limit", 0)
+    }
+    let result: ValueCost
+    switch value {
+    case .string(let value): result = .scalar(value)
+    case .array(let values):
+      guard values.count <= ManifestLimits.Values.entries else {
+        throw source.failure("manifest.limit", "container entry limit", 0)
+      }
+      result = try .container(values.map { try cost($0, depth: depth + 1) })
+    case .dictionary(let fields):
+      guard fields.count <= ManifestLimits.Values.entries else {
+        throw source.failure("manifest.limit", "container entry limit", 0)
+      }
+      result = try .container(
+        fields.values.map { try cost($0, depth: depth + 1) }, keys: Array(fields.keys))
+    case .record(let record):
+      result = try cost(.dictionary(record.fields), depth: depth)
+    case .requirement(let value):
+      result = .container([.scalar(value.value)] + (value.upperBound.map { [.scalar($0)] } ?? []))
+    default: result = ValueCost()
+    }
+    guard result.fits else { throw source.failure("manifest.limit", "domain value budget", 0) }
+    return result
   }
+  _ = try cost(value, depth: 1)
 }

@@ -77,7 +77,7 @@ struct DeclarationStateTests {
     #expect(try store.loadWatch() == WatchState())
     #expect(try FileHash.folderHash(fixture.root) == before)
 
-    let bytes = manifestText("defaultAgents: [.cursor]")
+    let bytes = manifestText("defaultAgents: [\"cursor\"]\n")
     try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
     try bytes.write(to: store.declarationURL)
     let declared = try FileHash.folderHash(fixture.root)
@@ -94,13 +94,9 @@ struct DeclarationStateTests {
     try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
     let bytes = manifestText(
       """
-      sources: [.source(name: "remote", url: "https://does-not-exist.invalid/repo.git")],
-      components: [
-        .mcpServer(name: "tools", transport: .stdio("program-does-not-exist")),
-        .hook(name: "hook", event: .sessionStart, run: .executable("program-does-not-exist")),
-        .subagent(name: "agent", description: "d", prompt: .file("missing.md", source: "remote")),
-      ],
-      groups: [.group(name: "unused", components: [.ignore(name: "i", patterns: [], condition: .when(agents: []))])]
+      sources: {"remote": {"url": "https://does-not-exist.invalid/repo.git"}}
+      components: [{"kind": "mcpServer", "name": "tools", "transport": {"kind": "stdio", "executable": "program-does-not-exist"}}, {"kind": "hook", "name": "hook", "event": "sessionStart", "run": {"executable": "program-does-not-exist"}}, {"kind": "subagent", "name": "agent", "description": "d", "prompt": {"file": {"path": "missing.md", "source": "remote"}}}]
+      groups: {"unused": {"components": [{"kind": "ignore", "name": "i", "patterns": [], "condition": {"agents": []}}]}}
       """)
     try bytes.write(to: store.declarationURL)
     let before = try FileHash.folderHash(fixture.root)
@@ -200,7 +196,7 @@ struct DeclarationStateTests {
     try fixture.mirrorGit(["update-ref", "refs/agents-watch/" + stale, stale])
     let marker = fixture.store.directory.appendingPathComponent("watch-refs.pending")
     try Data().write(to: marker)
-    let unreadable = Data("let agents = \n".utf8)
+    let unreadable = Data("version: [\n".utf8)
     try unreadable.write(to: fixture.store.declarationURL)
 
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
@@ -215,11 +211,11 @@ struct DeclarationStateTests {
   @Test func stateTransactionsAcceptOnlyTheCurrentStateFiles() throws {
     let fixture = try ScopeFixture()
     let paths = TransactionPaths(store: fixture.store)
-    #expect(try paths.path(for: fixture.store.declarationURL) == "state/Agents.swift")
-    for name in ["Agents.swift", "agents.resolved", "agents.watch"] {
+    #expect(try paths.path(for: fixture.store.declarationURL) == "state/agents.yaml")
+    for name in ["agents.yaml", "agents.resolved", "agents.watch"] {
       #expect(try paths.components("state/" + name).descendants == [name])
     }
-    for name in ["other.json", "agents.swift", "Agents.swift.new"] {
+    for name in ["other.json", "agents.swift", "agents.yaml.new"] {
       #expect(throws: CoreError.unsafePath("unmanaged state transaction path")) {
         try paths.components("state/" + name)
       }

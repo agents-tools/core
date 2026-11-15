@@ -40,7 +40,7 @@ revision, path and original-byte hash. A container of a local source declared
 in the same scope cannot hold a target.
 
 A project's own files live in `.agent/instructions/` and are referenced by bare
-name; `.section(name:source:)` in `Agents.swift`, or `alias:name` in operation
+name; `.section(name:source:)` in `agents.yaml`, or `alias:name` in operation
 arguments, references a declared source. Own files are read from the
 working tree as it is. Their lock records have source `.`, the project-relative
 path and the hash, and no revision. Resolution and restore read only the named
