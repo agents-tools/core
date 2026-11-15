@@ -116,33 +116,12 @@ extension ResolvedLedger {
           else {
             throw CoreError.invalidState("invalid resource link")
           }
-          let base = URL(fileURLWithPath: "/ledger").appendingPathComponent(entry.path)
-            .deletingLastPathComponent()
-          let target = base.appendingPathComponent(link).standardizedFileURL
-          guard PathSafety.isContained(target, in: URL(fileURLWithPath: "/ledger")) else {
-            throw CoreError.invalidState("resource link escapes tree")
-          }
         }
       }
       if resource.kind != .liveEdit, !resource.entries.contains(where: { $0.path == "." }) {
         throw CoreError.invalidState("missing resource root entry")
       }
-      let resourceParents = resource.path.split(separator: "/").dropLast()
-      for count in 1...max(1, resourceParents.count) where count <= resourceParents.count {
-        let parent = resourceParents.prefix(count).joined(separator: "/")
-        if entries[parent] == nil {
-          entries[parent] = .init(path: parent, kind: .directory, executable: false)
-        }
-      }
-      for path in entries.keys where path != "." {
-        let parts = path.split(separator: "/")
-        for count in 1..<parts.count {
-          let ancestor = parts.prefix(count).joined(separator: "/")
-          guard entries[ancestor]?.kind == .directory else {
-            throw CoreError.invalidState("resource ancestor is not a directory")
-          }
-        }
-      }
+      _ = try LedgerResources.validatedEntries(resource)
       if let root = resource.entries.first(where: { $0.path == "." }), root.kind != .directory,
         resource.entries.count != 1
       {
@@ -167,6 +146,13 @@ extension ResolvedLedger {
     else {
       throw CoreError.invalidState("duplicate ledger occurrence")
     }
+    var children: [Int: [Int]] = [:]
+    for group in groups {
+      if let parent = group.parent { children[parent, default: []].append(group.id) }
+    }
+    for occurrence in occurrences {
+      if let parent = occurrence.reference { children[parent, default: []].append(occurrence.id) }
+    }
     for group in groups {
       try requireSource(group.source)
       try ledgerPath(group.root)
@@ -178,10 +164,7 @@ extension ResolvedLedger {
       else {
         throw CoreError.invalidState("invalid group closure")
       }
-      let actual =
-        groups.filter { $0.parent == group.id }.map(\.id)
-        + occurrences.filter { $0.reference == group.id }.map(\.id)
-      guard group.children == actual.sorted() else {
+      guard group.children == (children[group.id] ?? []).sorted() else {
         throw CoreError.invalidState("incomplete group child closure")
       }
     }

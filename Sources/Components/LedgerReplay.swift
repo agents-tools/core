@@ -67,15 +67,21 @@ package enum LedgerReplay {
   /// Only formats with implemented production semantics are registered here. Tests explicitly
   /// supply their own renderer table; a format is never selected by agent or current version.
   package static var compatibilityRenderers: [String: LedgerRenderer] {
+    compatibilityRenderers(outputBytes: LedgerLimits.standard.resourceBytes)
+  }
+
+  private static func compatibilityRenderers(outputBytes: Int) -> [String: LedgerRenderer] {
     [
-      "agents/skill@1": skill, "agents/instructions@1": instructions,
-      "agents/claude-import@1": forwarding, "agents/chatgpt@1": chatGPT,
+      "agents/skill@1": skill,
+      "agents/instructions@1": { try instructions($0, $1, $2, outputBytes: outputBytes) },
+      "agents/claude-import@1": { try forwarding($0, $1, $2, outputBytes: outputBytes) },
+      "agents/chatgpt@1": { try chatGPT($0, $1, $2, outputBytes: outputBytes) },
     ]
   }
 
   package static func withReplay<T>(
     _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
-    renderers: [String: LedgerRenderer] = compatibilityRenderers,
+    renderers: [String: LedgerRenderer]? = nil,
     _ body: ([ReplayedArtifact]) throws -> T
   ) throws -> T {
     try run(
@@ -87,7 +93,7 @@ package enum LedgerReplay {
   /// Seals renderer output identities into a candidate before encoding or publication.
   package static func prepareLowerings(
     _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
-    renderers: [String: LedgerRenderer] = compatibilityRenderers
+    renderers: [String: LedgerRenderer]? = nil
   ) throws -> ResolvedLedger {
     try run(
       ledger, store: store, roots: roots, limits: limits, renderers: renderers,
@@ -102,7 +108,7 @@ package enum LedgerReplay {
 
   private static func run<T>(
     _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
-    renderers: [String: LedgerRenderer], recording: Bool,
+    renderers: [String: LedgerRenderer]?, recording: Bool,
     _ body: ([ReplayedArtifact], [LockedLowering]) throws -> T
   ) throws -> T {
     try ResolvedLedgerCodec.checkModel(ledger, limits: limits)
@@ -115,11 +121,24 @@ package enum LedgerReplay {
       let current = "linux"
     #endif
     for lowering in ledger.lowerings {
-      guard renderers[lowering.format] != nil else {
+      guard (renderers ?? compatibilityRenderers)[lowering.format] != nil else {
         throw CoreError.invalidState("unknown renderer format")
       }
       guard lowering.platform == current else {
         throw CoreError.invalidState("locked lowering is incompatible with platform: " + platform)
+      }
+    }
+    // Charge every occurrence, not only unique stored resources. Reserve this before reads;
+    // the same Core expansion limit also bounds all outputs retained by this replay.
+    let sizes = ledger.resources.mapValues { resource in
+      (resource.entries + resource.support).reduce(0) { $0 + ($1.byteCount ?? 0) }
+    }
+    var remaining = limits.resourceBytes
+    for lowering in ledger.lowerings {
+      for id in lowering.resources {
+        let size = sizes[id]!
+        guard size <= remaining else { throw CoreError.invalidState("replay input byte budget") }
+        remaining -= size
       }
     }
     let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -187,7 +206,27 @@ package enum LedgerReplay {
       var names = Set<String>()
       for lowering in ledger.lowerings {
         try Task.checkCancellation()
-        let rendered = try renderers[lowering.format]!(lowering, ledger, acquired)
+        let table = renderers ?? compatibilityRenderers(outputBytes: remaining)
+        let rendered = try table[lowering.format]!(lowering, ledger, acquired)
+        for artifact in rendered {
+          let count: Int
+          if let bytes = artifact.bytes {
+            count = bytes.count
+          } else if let tree = artifact.tree {
+            let captured = try LedgerResources.capture(tree, embed: false, limits: limits)
+            count = (captured.entries + captured.support).reduce(0) { $0 + ($1.byteCount ?? 0) }
+          } else if let values = artifact.values {
+            count = try ResolvedLedgerCodec.bytes(values).count
+          } else if let location = artifact.location {
+            count = try ResolvedLedgerCodec.bytes(location).count
+          } else {
+            throw CoreError.invalidState("missing rendered output")
+          }
+          guard count <= remaining else {
+            throw CoreError.invalidState("replay output byte budget")
+          }
+          remaining -= count
+        }
         let digests = try rendered.map { try $0.digest(limits: limits) }
         guard recording || digests == lowering.artifacts else {
           throw CoreError.invalidState("locked renderer output hash mismatch")
@@ -221,7 +260,8 @@ package enum LedgerReplay {
   }
 
   private static func instructions(
-    _ lowering: LockedLowering, _ ledger: ResolvedLedger, _ resources: [String: URL]
+    _ lowering: LockedLowering, _ ledger: ResolvedLedger, _ resources: [String: URL],
+    outputBytes: Int
   ) throws -> [ReplayedArtifact] {
     let bytes = try lowering.resources.map { id in
       guard let resource = resources[id] else {
@@ -237,12 +277,14 @@ package enum LedgerReplay {
     return [
       .init(
         name: name, kind: .file,
-        bytes: try InstructionCompatibility.renderSections(bytes, ids: lowering.resources))
+        bytes: try InstructionCompatibility.renderSections(
+          bytes, ids: lowering.resources, byteLimit: outputBytes))
     ]
   }
 
   private static func chatGPT(
-    _ lowering: LockedLowering, _ ledger: ResolvedLedger, _ resources: [String: URL]
+    _ lowering: LockedLowering, _ ledger: ResolvedLedger, _ resources: [String: URL],
+    outputBytes: Int
   ) throws -> [ReplayedArtifact] {
     guard let count = lowering.layout.object?["sectionCount"]?.integer, count > 0,
       count <= lowering.resources.count, lowering.resources.count <= count + 1,
@@ -260,18 +302,22 @@ package enum LedgerReplay {
       .init(
         name: name, kind: .file,
         bytes: try InstructionCompatibility.renderPrompt(
-          sections, ids: Array(lowering.resources.prefix(count)), append: append))
+          sections, ids: Array(lowering.resources.prefix(count)), append: append,
+          byteLimit: outputBytes))
     ]
   }
 
   private static func forwarding(
-    _ lowering: LockedLowering, _ ledger: ResolvedLedger, _ resources: [String: URL]
+    _ lowering: LockedLowering, _ ledger: ResolvedLedger, _ resources: [String: URL],
+    outputBytes: Int
   ) throws -> [ReplayedArtifact] {
     guard let name = lowering.layout.object?["name"]?.text,
       let path = ClaudeInstructionPath(rawValue: name)
     else { throw CoreError.invalidState("invalid forwarding layout") }
-    return [
-      .init(name: name, kind: .file, bytes: Data(ClaudeForwarding.renderBlock(for: path).utf8))
-    ]
+    let block = ClaudeForwarding.renderBlock(for: path)
+    guard block.utf8.count <= outputBytes else {
+      throw CoreError.invalidState("replay output byte budget")
+    }
+    return [.init(name: name, kind: .file, bytes: Data(block.utf8))]
   }
 }

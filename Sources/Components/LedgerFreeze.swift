@@ -41,8 +41,9 @@ package enum LedgerFreeze {
       return id
     }
     for item in allSnapshots { _ = try sourceID(item.snapshot) }
+    let snapshotsBySource = Dictionary(grouping: allSnapshots, by: { $0.snapshot.source })
     for use in linked.sourceUses {
-      for snapshot in allSnapshots where snapshot.snapshot.source == use.source {
+      for snapshot in snapshotsBySource[use.source] ?? [] {
         ledger.sourceUses.append(
           .init(
             source: try sourceID(snapshot.snapshot), root: use.root,
@@ -142,14 +143,22 @@ package enum LedgerFreeze {
       }
     }
     ledger.occurrences.sort { $0.id < $1.id }
+    var children: [Int: [Int]] = [:]
+    for reference in linked.references {
+      if let parent = reference.parent {
+        children[parent, default: []].append(reference.occurrence)
+      }
+    }
+    for occurrence in ledger.occurrences {
+      if let parent = occurrence.reference { children[parent, default: []].append(occurrence.id) }
+    }
     ledger.groups = try linked.references.map { reference in
       LedgerGroup(
         id: reference.occurrence, parent: reference.parent,
         source: try sourceID(reference.snapshot), root: reference.root, name: reference.group,
         requirement: reference.constraint?.requirement?.canonical,
         manifestHash: reference.manifestHash,
-        children: (linked.references.filter { $0.parent == reference.occurrence }.map(\.occurrence)
-          + ledger.occurrences.filter { $0.reference == reference.occurrence }.map(\.id)).sorted())
+        children: (children[reference.occurrence] ?? []).sorted())
     }
     try ledger.validate()
     return ledger

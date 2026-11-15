@@ -396,14 +396,26 @@ package struct SourceCache {
       return try cache.withResolvedSnapshot(source, body)
     }
     if case .revision(let object) = source.requirement, Self.isObjectID(object) {
+      let id = try source.identity(environment: store.environment)
+      var mirror = mirrorURL(sourceID: id)
+      // An immutable object may be an annotated tag. Peel it without selecting mutable refs.
+      if (try? git(
+        mirror, ["cat-file", "-e", object + "^{commit}"],
+        operation: .resolveRevision(revision: object), source: source.location)) == nil
+      {
+        mirror = try fetch(source, id: id)
+      }
+      let revision = try git(
+        mirror, ["rev-parse", "--verify", object + "^{commit}"],
+        operation: .resolveRevision(revision: object), source: source.location)
       let locked = LockedSource(
         kind: source.kind, url: source.kind == .git ? source.gitURL : nil,
         requirement: .revision(object), path: source.path)
-      return try withSnapshot(
-        sourceID: source.identity(environment: store.environment), source: locked,
-        revision: object
-      ) { try body(SourceRevision(revision: object), $0) }
+      return try withSnapshot(sourceID: id, source: locked, revision: revision) {
+        try body(SourceRevision(revision: revision), $0)
+      }
     }
+
     let pin = try resolve(source)
     let locked = LockedSource(
       kind: source.kind, url: source.kind == .git ? source.gitURL : nil,

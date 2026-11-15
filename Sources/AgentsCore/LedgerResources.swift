@@ -19,7 +19,16 @@ package enum LedgerResources {
       throw CoreError.notFound("locked resource")
     }
     func collect(_ file: URL, path: String, supporting: Bool = false) throws {
-      if supporting, !visiting.insert(path).inserted { return }
+      if supporting {
+        if !visiting.insert(path).inserted { return }
+        let parts = path.split(separator: "/")
+        for count in 1..<parts.count {
+          let ancestor = parts.prefix(count).joined(separator: "/")
+          if support[ancestor] == nil {
+            support[ancestor] = .init(path: ancestor, kind: .directory, executable: false)
+          }
+        }
+      }
       func append(_ entry: LedgerEntry) {
         if supporting { support[entry.path] = entry } else { entries.append(entry) }
       }
@@ -39,23 +48,60 @@ package enum LedgerResources {
       } else if type == .typeSymbolicLink {
         let link = try FileManager.default.destinationOfSymbolicLink(atPath: file.path)
         append(.init(path: path, kind: .symlink, link: link, executable: false))
-        if embed, let sourceRoot {
-          let target = file.deletingLastPathComponent().appendingPathComponent(link)
-            .standardizedFileURL
-          guard !link.hasPrefix("/"), PathSafety.isContained(target, in: sourceRoot),
-            PathSafety.isContained(
-              target.resolvingSymlinksInPath(), in: sourceRoot.resolvingSymlinksInPath())
-          else {
-            throw CoreError.unsafePath("resource link escapes source snapshot")
+        if let sourceRoot {
+          // Resolve components in filesystem order: an intermediate link changes the meaning
+          // of a following "..". Freeze every supporting link as well as the final target.
+          var resolved = file.deletingLastPathComponent()
+          enum Step {
+            case part(String)
+            case finish(String)
           }
-          if !PathSafety.isContained(target, in: url) {
-            let relative = PathSafety.relativePath(target.path, to: sourceRoot.path)
+          var pending: [Step] = link.split(separator: "/").reversed().map { .part(String($0)) }
+          var followed: Set<String> = [file.path]
+          guard !link.hasPrefix("/") else { throw CoreError.unsafePath("absolute resource link") }
+          while let step = pending.popLast() {
+            guard case .part(let part) = step else {
+              if case .finish(let path) = step { followed.remove(path) }
+              continue
+            }
+            if part == "." { continue }
+            if part == ".." {
+              resolved.deleteLastPathComponent()
+            } else {
+              resolved.appendPathComponent(part)
+            }
+            guard PathSafety.isContained(resolved, in: sourceRoot) else {
+              throw CoreError.unsafePath("resource link escapes source snapshot")
+            }
+            let info = try FileManager.default.attributesOfItem(atPath: resolved.path)
+            if info[.type] as? FileAttributeType == .typeSymbolicLink {
+              guard followed.insert(resolved.path).inserted else {
+                throw CoreError.unsafePath("resource link cycle")
+              }
+              if !PathSafety.isContained(resolved, in: url) {
+                try collect(
+                  resolved, path: PathSafety.relativePath(resolved.path, to: sourceRoot.path),
+                  supporting: true)
+              }
+              let next = try FileManager.default.destinationOfSymbolicLink(atPath: resolved.path)
+              guard !next.hasPrefix("/") else {
+                throw CoreError.unsafePath("absolute resource link")
+              }
+              pending.append(.finish(resolved.path))
+              resolved.deleteLastPathComponent()
+              pending += next.split(separator: "/").reversed().map { .part(String($0)) }
+            }
+          }
+          if !PathSafety.isContained(resolved, in: url) {
+            let relative = PathSafety.relativePath(resolved.path, to: sourceRoot.path)
             let parts = relative.split(separator: "/")
             for count in 1..<parts.count {
               let ancestor = parts.prefix(count).joined(separator: "/")
-              support[ancestor] = .init(path: ancestor, kind: .directory, executable: false)
+              if support[ancestor] == nil {
+                support[ancestor] = .init(path: ancestor, kind: .directory, executable: false)
+              }
             }
-            try collect(target, path: relative, supporting: true)
+            try collect(resolved, path: relative, supporting: true)
           }
         }
       } else if type == .typeRegular {
@@ -117,28 +163,7 @@ package enum LedgerResources {
     guard resource.kind == .embedded else {
       throw CoreError.invalidState("resource is not embedded")
     }
-    var all = resource.support
-    let hasSupport = !all.isEmpty
-    let selected =
-      hasSupport
-      ? try PathSafety.resolvedChild(base: destination, subpath: resource.path) : destination
-    if hasSupport {
-      try FileSystem.createDirectory(at: selected.deletingLastPathComponent())
-      all += resource.entries.map { original in
-        var entry = original
-        entry.path = original.path == "." ? resource.path : resource.path + "/" + original.path
-        return entry
-      }
-    } else {
-      all = resource.entries
-    }
-    var unique: [String: LedgerEntry] = [:]
-    for entry in all {
-      guard unique[entry.path] == nil || unique[entry.path] == entry else {
-        throw CoreError.invalidState("conflicting resource support")
-      }
-      unique[entry.path] = entry
-    }
+    let unique = try validatedEntries(resource)
     for entry in unique.values.sorted(by: { $0.path < $1.path }) {
       try Task.checkCancellation()
       let file =
@@ -158,6 +183,7 @@ package enum LedgerResources {
         try FileManager.default.setAttributes(
           [.posixPermissions: entry.executable ? 0o755 : 0o644], ofItemAtPath: file.path)
       case .symlink:
+        try FileSystem.createDirectory(at: file.deletingLastPathComponent())
         guard let link = entry.link else { throw CoreError.invalidState("missing link") }
         try FileManager.default.createSymbolicLink(atPath: file.path, withDestinationPath: link)
       }
