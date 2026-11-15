@@ -50,4 +50,4 @@ or enabled the component.
 
 - [Agent Components and Adapters](AgentComponents.md)
 - [Swift Manifest](SwiftManifest.md)
-- [Agents Manifest Contract](../Proposals/AgentsManifest.md)
+- [Agents Manifest Contract](../Archive/AgentsManifest.md)

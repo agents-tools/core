@@ -3,7 +3,8 @@
 This directory holds retired or superseded material that remains useful for
 historical reference.
 
-There is no archived material yet.
+- [Agents Manifest Contract](AgentsManifest.md) — original frontend and
+  component-management design proposal.
 
 ## Placement
 
