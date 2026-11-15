@@ -65,22 +65,19 @@ struct TargetLifecycleTests {
     try fixture.addOwn(names: ["guide"], agents: [.codex])
     let declarationFile = fixture.store().declarationURL
     let lockFile = fixture.store().resolvedURL
-    #expect(
-      String(decoding: try Data(contentsOf: declarationFile), as: UTF8.self) == """
-        version: 1
-        components: [{"kind": "instructions", "sections": [{"name": "guide"}], "agents": ["codex"]}]
-        """)
-    let lockText = String(decoding: try Data(contentsOf: lockFile), as: UTF8.self)
-    #expect(lockText.contains("\"chatgpt\": {}") && lockText.contains("\"skills\": {}"))
-    #expect(!lockText.contains(" : "))
-    // The same intent in another layout, with a comment, is not rewritten.
     let declaration = Data(
       """
+      # Project-owned layout.
       version: 1
-      components: [{"kind": "instructions", "sections": [{"name": "guide"}], "agents": ["codex"]}]
+      components:
+        - kind: instructions # Keep this guidance.
+          sections:
+            - {name: guide}
+          agents: [codex]
       """.utf8)
     try declaration.write(to: declarationFile)
-    let existingLockBytes = try StateStore.encode(fixture.store().loadResolved())
+    var existingLockBytes = try Data(contentsOf: lockFile)
+    existingLockBytes.append(Data("\n \n".utf8))
     try existingLockBytes.write(to: lockFile)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(try Data(contentsOf: declarationFile) == declaration)

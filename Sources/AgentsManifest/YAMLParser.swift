@@ -82,7 +82,7 @@ enum YAMLParser {
       guard let text = String(bytes: source.bytes, encoding: .utf8) else {
         throw source.failure("manifest.encoding", "expected UTF-8", 0)
       }
-      var offset = 0
+      var offset = source.bytes.count - text.utf8.count
       for scalar in text.unicodeScalars {
         let value = scalar.value
         if value == 0 || value == 0x85 || value == 0x2028 || value == 0x2029
@@ -204,7 +204,9 @@ enum YAMLParser {
           throw source.failure("manifest.schema", "expected a declaration mapping", 0)
         }
         decoded = value
-      } catch let failure as ManifestFailure { throw failure } catch {
+      } catch let failure as ManifestFailure { throw failure } catch let error as Yams.YamlError {
+        throw decodingFailure(error, source: source, text: text)
+      } catch {
         throw source.failure("manifest.syntax", "YAML decoding failed: \(error)", 0)
       }
       let value = try pair(root, decoded, source: source)
@@ -215,6 +217,37 @@ enum YAMLParser {
         metrics: metrics)
     } catch let failure as ManifestFailure {
       throw ManifestFailure(failure.diagnostics[0], metrics: metrics, stage: stage)
+    }
+  }
+
+  private static func decodingFailure(_ error: Yams.YamlError, source: SourceText, text: String)
+    -> ManifestFailure
+  {
+    switch error {
+    case .scanner(_, let problem, let mark, _), .parser(_, let problem, let mark, _),
+      .composer(_, let problem, let mark, _):
+      return source.failure(
+        "manifest.syntax", "YAML decoding failed: \(problem)",
+        source.decoderOffset(line: mark.line, scalarColumn: mark.column))
+    case .duplicatedKeysInMapping(let duplicates, let context):
+      // Yams supplies one key's mark, not the positions of every conflicting occurrence.
+      return source.failure(
+        "manifest.key.duplicate",
+        "duplicate decoded mapping key(s): \(duplicates.joined(separator: ", "))",
+        source.decoderOffset(line: context.mark.line, scalarColumn: context.mark.column))
+    case .reader(let problem, let offset, _, _):
+      let index = offset.flatMap { offset in
+        offset >= 0 ? text.index(text.startIndex, offsetBy: offset, limitedBy: text.endIndex) : nil
+      }
+      // UTF-8 String decoding consumes a leading BOM; reader offsets index that decoded string.
+      let byteOffset =
+        index.map {
+          source.bytes.count - text.utf8.count
+            + text.utf8.distance(from: text.utf8.startIndex, to: $0)
+        } ?? 0
+      return source.failure("manifest.syntax", "YAML decoding failed: \(problem)", byteOffset)
+    default:
+      return source.failure("manifest.syntax", "YAML decoding failed: \(error)", 0)
     }
   }
 
@@ -267,9 +300,9 @@ enum YAMLParser {
       for (syntaxPair, semanticPair) in zip(syntaxPairs, mapping) {
         let key = field(syntaxPair, "key")
         let value = field(syntaxPair, "value")
-        guard !ts_node_is_null(key), !ts_node_is_null(value) else {
+        guard !ts_node_is_null(key) else {
           throw source.failure(
-            "manifest.schema", "mapping entries require explicit keys and values",
+            "manifest.schema", "mapping entries require explicit keys",
             Int(ts_node_start_byte(syntaxPair)))
         }
         let keyNode = try pair(key, semanticPair.key, source: source)
@@ -284,7 +317,12 @@ enum YAMLParser {
             "manifest.key.duplicate", "duplicate decoded mapping key: \(name)",
             keyNode.range.lowerBound)
         }
-        let node = try pair(value, semanticPair.value, source: source)
+        let node: YAMLNode
+        if ts_node_is_null(value) {
+          node = try emptyScalar(syntaxPair, semanticPair.value, source: source)
+        } else {
+          node = try pair(value, semanticPair.value, source: source)
+        }
         pairs.append(
           (
             keyNode,
@@ -305,6 +343,9 @@ enum YAMLParser {
         data: .sequence(try zip(children, sequence).map { try pair($0, $1, source: source) }),
         range: range, entryRange: range, flow: kind == "flow_sequence")
     }
+    if kind == "block_sequence_item", content.isEmpty {
+      return try emptyScalar(syntax, semantic, source: source)
+    }
     if let scalar = semantic.scalar,
       ["plain_scalar", "single_quote_scalar", "double_quote_scalar", "block_scalar"].contains(kind)
     {
@@ -314,6 +355,23 @@ enum YAMLParser {
     }
     throw source.failure(
       "manifest.parser.mismatch", "YAML parsers disagree on structure", range.lowerBound)
+  }
+
+  private static func emptyScalar(_ syntax: TSNode, _ semantic: Yams.Node, source: SourceText)
+    throws -> YAMLNode
+  {
+    guard semantic.scalar?.string == "",
+      let delimiter = (0..<ts_node_child_count(syntax)).map({ ts_node_child(syntax, $0) }).first(
+        where: { [":", "-"].contains(String(cString: ts_node_type($0))) })
+    else {
+      throw source.failure(
+        "manifest.parser.mismatch", "YAML parsers disagree on empty scalar",
+        Int(ts_node_start_byte(syntax)))
+    }
+    let offset = Int(ts_node_end_byte(delimiter))
+    return YAMLNode(
+      data: .scalar("", quoted: false, decimalTag: false), range: offset..<offset,
+      entryRange: nodeRange(syntax), flow: true)
   }
 
   private static func field(_ node: TSNode, _ name: String) -> TSNode {

@@ -277,6 +277,7 @@ final class YAMLProjection {
       return .record(DeclarationRecord(kind: "literal", fields: ["value": .string(text)]))
     }
     let resource = try record(fields(node)["file"]!, at: pointer, role: "resource")
+    try mark(node, pointer)
     try mark(node.pairs!.first!.key, pointer + "/kind")
     return .record(DeclarationRecord(kind: "file", fields: resource.fields))
   }

@@ -42,6 +42,24 @@ struct SourceText: Sendable {
       ManifestDiagnostic(code: code, message: message, span: span(offset..<(end ?? offset))))
   }
 
+  /// Decoder columns count Unicode scalars, excluding a stream-initial UTF-8 BOM.
+  /// Source spans retain the original bytes and count CRLF as one line break.
+  func decoderOffset(line: Int, scalarColumn: Int) -> Int {
+    guard line > 0, scalarColumn > 0 else { return 0 }
+    guard line <= lines.count else { return bytes.count }
+    var offset = lines[line - 1]
+    if line == 1, bytes.starts(with: [0xEF, 0xBB, 0xBF]) { offset = 3 }
+    var column = 1
+    while offset < bytes.count, bytes[offset] != 10, bytes[offset] != 13,
+      column < scalarColumn
+    {
+      offset += 1
+      while offset < bytes.count, bytes[offset] & 0xC0 == 0x80 { offset += 1 }
+      column += 1
+    }
+    return offset
+  }
+
   func spelling(_ range: Range<Int>) -> String {
     String(decoding: bytes[range], as: UTF8.self)
   }

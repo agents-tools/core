@@ -24,6 +24,17 @@ struct FrontEndTests {
   @Test(arguments: ["\u{85}", "\u{2028}", "\u{2029}"])
   func rawSeparatorsAreRejectedBeforeParsing(_ separator: String) {
     expectManifestFailure("manifest.character") { try document("# \(separator)\nversion: 1\n") }
+    let prefix = "\u{FEFF}# 🙂 "
+    do {
+      _ = try document(prefix + separator + "\r\nversion: 1\r\n")
+      Issue.record("expected a raw separator failure")
+    } catch let failure as ManifestFailure {
+      #expect(failure.diagnostics[0].code == "manifest.character")
+      #expect(failure.diagnostics[0].span.start == prefix.utf8.count)
+      #expect(failure.diagnostics[0].span.column == prefix.utf8.count + 1)
+    } catch {
+      Issue.record(error)
+    }
   }
   @Test func escapedSeparatorsAndDecimalPayloadsRoundTrip() throws {
     let body = #"""
@@ -62,6 +73,34 @@ struct FrontEndTests {
       "version: 1.0\n",
     ] {
       #expect(throws: ManifestFailure.self) { try document(body) }
+    }
+  }
+
+  @Test func decodedDuplicateKeysRetainOriginalByteCoordinates() throws {
+    let mappingPrefix = "sources: {'🙂e\u{301}': {path: .}, "
+    let firstLinePrefix = "\u{FEFF}{version: 1, " + mappingPrefix
+    for (prefix, line, column, suffix) in [
+      ("version: 1\n# comment\n" + mappingPrefix, 3, mappingPrefix.utf8.count + 1, "}\n"),
+      (
+        "\u{FEFF}version: 1\r\n# comment\r\n" + mappingPrefix, 3, mappingPrefix.utf8.count + 1,
+        "}\r\n"
+      ),
+      (firstLinePrefix, 1, firstLinePrefix.utf8.count + 1, "}}\r\n"),
+    ] {
+      let body = prefix + #"same: {path: .}, "\u0073ame": {path: .}"# + suffix
+      do {
+        _ = try document(body)
+        Issue.record("expected a decoded duplicate key failure")
+      } catch let failure as ManifestFailure {
+        let diagnostic = try #require(failure.diagnostics.first)
+        #expect(failure.stage == .decoding)
+        #expect(diagnostic.code == "manifest.key.duplicate")
+        #expect(diagnostic.message.contains("same"))
+        #expect(diagnostic.span.start == prefix.utf8.count)
+        #expect(diagnostic.span.line == line)
+        #expect(diagnostic.span.column == column)
+        #expect(diagnostic.related.isEmpty)
+      }
     }
   }
 
