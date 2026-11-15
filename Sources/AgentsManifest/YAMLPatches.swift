@@ -281,9 +281,12 @@ struct YAMLPatches {
     let last = container.items?.last ?? container.pairs?.last?.value
     let start = last?.entryRange.upperBound ?? container.range.lowerBound + 1
     let end = container.range.upperBound - 1
+    // An implicit value ends at its colon; a plain key still needs whitespace before the comma.
+    let separator = last?.range.isEmpty == true ? " ," : ","
     if start == end {
       return [
-        SourcePatch(range: end..<end, replacement: Array(((last == nil ? "" : ", ") + text).utf8))
+        SourcePatch(
+          range: end..<end, replacement: Array(((last == nil ? "" : separator + " ") + text).utf8))
       ]
     }
     var cursor = start
@@ -307,7 +310,7 @@ struct YAMLPatches {
     }
     var patches = [SourcePatch(range: end..<end, replacement: Array(addition.utf8))]
     if last != nil && !trailingComma {
-      patches.append(SourcePatch(range: start..<start, replacement: Array(",".utf8)))
+      patches.append(SourcePatch(range: start..<start, replacement: Array(separator.utf8)))
     }
     return patches
   }
