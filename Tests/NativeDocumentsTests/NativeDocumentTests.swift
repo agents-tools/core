@@ -276,8 +276,29 @@ let t1 = #"""
   #expect(
     text(try populated.prepare([.remove(region: object, expected: .owned(populatedEvidence))]))
       == "{}")
+  for value: NativeValue in [
+    .object([:]), .string("replacement"), .object(["client": .boolean(true)]),
+  ] {
+    do {
+      _ = try populated.prepare([
+        .put(region: object, expected: .createdContainer(populatedEvidence), value: value)
+      ])
+      Issue.record("creation-only evidence authorized a put")
+    } catch NativeDocumentError.ownershipMismatch {}
+  }
+  #expect(
+    text(
+      try populated.prepare([
+        .put(region: object, expected: .owned(populatedEvidence), value: .object([:]))
+      ])) == #"{"owned":{}}"#)
   let empty = try document("{\"owned\":{}}", .json)
   let observed = try #require(try empty.read(object))
+  do {
+    _ = try empty.prepare([
+      .put(region: object, expected: .createdContainer(observed), value: .object([:]))
+    ])
+    Issue.record("creation-only evidence authorized an empty-container no-op put")
+  } catch NativeDocumentError.ownershipMismatch {}
   #expect(throws: NativeDocumentError.self) {
     try empty.prepare([.remove(region: object, expected: .owned(observed))])
   }

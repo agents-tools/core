@@ -107,7 +107,7 @@ package struct NativeObservation {
 package enum NativeExpectedRegion {
   case absent
   case owned(NativeObservation)
-  /// The caller supplies creation evidence; only an empty, trivia-free container can be removed.
+  /// Creation evidence authorizes only empty, comment-safe pruning, never a put.
   case createdContainer(NativeObservation)
 }
 
