@@ -72,17 +72,30 @@ package struct NativeDocument {
           throw NativeDocumentError.unsupportedEdit(.wouldRewriteUnownedStructure, edit.region, [])
         }
         let address = try address(edit.region)
-        for previous in addresses {
+        for (index, previous) in addresses.enumerated() {
           try budget.step(address.reduce(0) { $0 + $1.work } + previous.reduce(0) { $0 + $1.work })
-          if address.starts(with: previous) || previous.starts(with: address) {
+          let conditionalAncestor =
+            (edit.isConditionalPrune && previous.count > address.count
+              && previous.starts(with: address))
+            || (edits[index].isConditionalPrune && address.count > previous.count
+              && address.starts(with: previous))
+          if !conditionalAncestor
+            && (address.starts(with: previous) || previous.starts(with: address))
+          {
             throw NativeDocumentError.unsupportedEdit(.overlappingEdits, edit.region, [])
           }
         }
         let existing = try resolve(edit.region, on: root)
         if case .createdContainer = edit.expected {
-          guard case .remove = edit, let existing, existing.kind == .object,
-            existing.members.isEmpty
-          else { throw NativeDocumentError.ownershipMismatch(edit.region) }
+          if edit.isConditionalPrune {
+            guard let existing, existing.kind == .object || existing.kind == .array else {
+              throw NativeDocumentError.ownershipMismatch(edit.region)
+            }
+          } else {
+            guard case .remove = edit, let existing, existing.kind == .object,
+              existing.members.isEmpty
+            else { throw NativeDocumentError.ownershipMismatch(edit.region) }
+          }
         }
         switch edit.expected {
         case .absent:
@@ -103,9 +116,37 @@ package struct NativeDocument {
       var created: [NativeRegion] = []
       var observed: [Int] = []
       var removed: [([AddressStep], Int)] = []
-      for (editIndex, edit) in edits.enumerated() {
+      try budget.allocate(edits.count, stage: "native edit order")
+      var prunes: [Int] = []
+      var order: [Int] = []
+      for index in edits.indices {
+        try budget.step()
+        if edits[index].isConditionalPrune { prunes.append(index) } else { order.append(index) }
+      }
+      try prunes.sort {
+        try budget.step()
+        return addresses[$0].count == addresses[$1].count
+          ? $0 < $1 : addresses[$0].count > addresses[$1].count
+      }
+      try budget.allocate(prunes.count, stage: "conditional prune order")
+      order.append(contentsOf: prunes)
+      for editIndex in order {
+        let edit = edits[editIndex]
+        try budget.step()
         let effective = try current.region(edit.region, at: addresses[editIndex], removed: removed)
         let old = try current.resolve(effective, on: current.root)
+        if edit.isConditionalPrune {
+          guard let old else {
+            // Dotted TOML parents can disappear with their last owned entry.
+            changed.append(edit.region)
+            continue
+          }
+          guard
+            (old.kind == .object && old.members.isEmpty)
+              || (old.kind == .array && old.elements.isEmpty)
+          else { continue }
+          if try current.hasComments(old) { continue }
+        }
         let desired: Node?
         switch edit {
         case .put(_, _, let value):
@@ -119,7 +160,7 @@ package struct NativeDocument {
             let parsed = try NativeDocument(bytes: Data(text.utf8), format: .json, budget: budget)
             desired = parsed.root
           }
-        case .remove:
+        case .remove, .pruneCreatedContainer:
           desired = nil
         }
         if let old, let desired, try old.equal(to: desired, budget: budget) {
@@ -143,31 +184,45 @@ package struct NativeDocument {
           expected, steps: effective.steps[...], desired: desired, region: effective,
           created: &created)
         var editor = PatchBuilder(document: current, region: effective)
-        if let old, let desired {
-          try editor.diff(old, desired: desired, path: effective.steps)
-        } else if let old {
-          try editor.remove(old, path: effective.steps)
-        } else if let desired {
-          try editor.insert(
-            path: effective.steps, value: desired, root: current.root)
-        }
-        let candidate = try editor.apply()
         let checked: NativeDocument
         do {
+          if let old, let desired {
+            try editor.diff(old, desired: desired, path: effective.steps)
+          } else if let old {
+            try editor.remove(old, path: effective.steps)
+          } else if let desired {
+            try editor.insert(path: effective.steps, value: desired, root: current.root)
+          }
+          let candidate = try editor.apply()
           checked = try NativeDocument(bytes: candidate, format: format, budget: budget)
         } catch NativeDocumentError.invalidDocument {
+          if edit.isConditionalPrune { continue }
           throw NativeDocumentError.unsupportedEdit(
             .wouldRewriteUnownedStructure, edit.region, editor.patches.map(\.range))
+        } catch NativeDocumentError.unsupportedEdit(let reason, _, _)
+          where edit.isConditionalPrune
+          && [.ambiguousTrivia, .syntaxNotLocated, .wouldRewriteUnownedStructure].contains(reason)
+        {
+          continue
         }
+        var nextRemoved = removed
+        if desired == nil, case .element(let ordinal) = addresses[editIndex].last {
+          try budget.allocate(removed.count + 1, stage: "removed occurrence addresses")
+          try budget.allocate(addresses[editIndex].count, stage: "removed occurrence path")
+          nextRemoved.append((Array(addresses[editIndex].dropLast()), ordinal))
+        }
+        try current.removeVanishedContainers(
+          expected, checked: checked, edits: edits, prunes: prunes, addresses: addresses,
+          removed: nextRemoved)
         guard try checked.root.equal(to: expected, budget: budget) else {
+          if edit.isConditionalPrune { continue }
           throw NativeDocumentError.unsupportedEdit(
             .wouldRewriteUnownedStructure, edit.region, editor.patches.map(\.range))
         }
         if desired != nil {
           observed.append(editIndex)
-        } else if case .element(let ordinal) = addresses[editIndex].last {
-          removed.append((Array(addresses[editIndex].dropLast()), ordinal))
         }
+        removed = nextRemoved
         current = checked
         changed.append(edit.region)
       }
@@ -181,6 +236,47 @@ package struct NativeDocument {
       return PreparedNativeChange(
         bytes: current.bytes, changedRegions: changed, observations: observations,
         createdContainers: created)
+    }
+  }
+
+  /// A dotted TOML object has no independent syntax to retain after its last entry goes away.
+  /// Only explicitly authorized conditional containers may disappear from the expected tree.
+  private func removeVanishedContainers(
+    _ expected: Node, checked: NativeDocument, edits: [NativeRegionEdit], prunes: [Int],
+    addresses: [[AddressStep]], removed: [([AddressStep], Int)]
+  ) throws {
+    guard format == .toml else { return }
+    for index in prunes {
+      try budget.step()
+      var deleted = false
+      for (parent, ordinal) in removed {
+        try budget.step(
+          parent.reduce(0) { $0 + $1.work } + addresses[index].reduce(0) { $0 + $1.work })
+        if addresses[index].count > parent.count,
+          addresses[index].prefix(parent.count).elementsEqual(parent),
+          addresses[index][parent.count] == .element(ordinal)
+        {
+          deleted = true
+          break
+        }
+      }
+      if deleted { continue }
+      let original = edits[index].region
+      let region: NativeRegion
+      do {
+        region = try self.region(original, at: addresses[index], removed: removed, on: expected)
+      } catch NativeDocumentError.ownershipMismatch {
+        // An earlier conditional prune may already have removed an enclosing occurrence.
+        continue
+      }
+      guard let node = try resolve(region, on: expected), node.kind == .object,
+        node.members.isEmpty, node.range == nil, node.headers.isEmpty, node.entry == nil
+      else { continue }
+      let actual = try checked.region(original, at: addresses[index], removed: removed)
+      guard try checked.resolve(actual, on: checked.root) == nil else { continue }
+      var created: [NativeRegion] = []
+      try change(
+        expected, steps: region.steps[...], desired: nil, region: region, created: &created)
     }
   }
 
@@ -253,9 +349,10 @@ package struct NativeDocument {
 
   /// Addresses refer to the original snapshot. Only removals can shift other owned occurrences.
   private func region(
-    _ original: NativeRegion, at address: [AddressStep], removed: [([AddressStep], Int)]
+    _ original: NativeRegion, at address: [AddressStep], removed: [([AddressStep], Int)],
+    on startingRoot: Node? = nil
   ) throws -> NativeRegion {
-    var node: Node? = root
+    var node: Node? = startingRoot ?? root
     var steps: [NativePathStep] = []
     for (index, step) in original.steps.enumerated() {
       try budget.step()
