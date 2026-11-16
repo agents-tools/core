@@ -25,7 +25,7 @@ public struct StateStore: Sendable {
   package static let watchFileName = "agents.watch"
   /// The scope files a state transaction may replace.
   package static let stateFileNames: Set<String> = [
-    declarationFileName, resolvedFileName, watchFileName,
+    declarationFileName, resolvedFileName, watchFileName, MaterializationReceipts.fileName,
   ]
 
   /// The declaration's bytes, or nil when the scope has no declaration and no lock or watch
@@ -83,10 +83,24 @@ public struct StateStore: Sendable {
 
   package func withLock<T>(
     createIfMissing: Bool = true, checkpoint: @escaping (String) throws -> Void = { _ in },
+    outcome: TransactionOutcome? = nil, footprint: Set<NativeTargetRoute> = [],
+    _ body: () throws -> T
+  ) throws -> T {
+    try withCoordination(routes: footprint, writable: true, checkpoint: checkpoint) {
+      try withScopeLock(
+        createIfMissing: createIfMissing, checkpoint: checkpoint, outcome: outcome, body)
+    }
+  }
+
+  private func withScopeLock<T>(
+    createIfMissing: Bool = true, checkpoint: @escaping (String) throws -> Void = { _ in },
     outcome: TransactionOutcome? = nil,
     _ body: () throws -> T
   ) throws -> T {
     if try openDirectoryIfPresent() == nil, !createIfMissing {
+      guard TransactionLockContext.current(self)?.resources.isEmpty != false else {
+        throw CoreError.invalidState("shared mutation requires a scope journal directory")
+      }
       return try body()
     }
     // Without a scope lock, journal or ref-cleanup marker, invalid or orphaned state stops the
@@ -101,32 +115,42 @@ public struct StateStore: Sendable {
     let base = scope == .project ? environment.projectDirectory : environment.homeDirectory
     let physicalDirectory = base.resolvingSymlinksInPath().appendingPathComponent(
       directory.lastPathComponent)
-    return try FileLock.withLock(at: physicalDirectory.appendingPathComponent(".agents.lock")) {
-      let recovered = try FileTransaction.recover(
-        store: self, outcome: outcome, checkpoint: checkpoint)
-      _ = try readWatch()
-      let cache = SourceCache(store: self, checkpoint: checkpoint)
-      let referencesRecovered = try cache.recoverWatchReferences()
-      if recovered || referencesRecovered {
-        throw CoreError.transactionRecovered(directory.path)
-      }
-      let result: T
-      do {
-        result = try body()
-      } catch {
-        // A handled failure can finish rollback now. A killed process leaves the marker
-        // for the next access, which must recover the journal before releasing any ref.
-        do {
-          _ = try FileTransaction.recover(store: self, outcome: outcome)
-          _ = try SourceCache(store: self).recoverWatchReferences()
-        } catch {
-          outcome?.disposition = .recoveryRequired
+    return try FileLock.withDescriptor(
+      at: physicalDirectory.appendingPathComponent(".agents.lock"),
+      checkpoint: { try checkpoint("scope." + $0) },
+      { descriptor in
+        guard let context = TransactionLockContext.current(self),
+          let scopeDirectory = try openDirectoryIfPresent()
+        else {
+          throw CoreError.invalidState("missing scope lock admission")
         }
-        throw error
-      }
-      _ = try cache.recoverWatchReferences()
-      return result
-    }
+        try context.bindScope(scopeDirectory, descriptor: descriptor)
+        try verifyCoordinationAdmission()
+        let recovered = try FileTransaction.recover(
+          store: self, outcome: outcome, checkpoint: checkpoint)
+        _ = try readWatch()
+        let cache = SourceCache(store: self, checkpoint: checkpoint)
+        let referencesRecovered = try cache.recoverWatchReferences()
+        if recovered || referencesRecovered {
+          throw CoreError.transactionRecovered(directory.path)
+        }
+        let result: T
+        do {
+          result = try body()
+        } catch {
+          // A handled failure can finish rollback now. A killed process leaves the marker
+          // for the next access, which must recover the journal before releasing any ref.
+          do {
+            _ = try FileTransaction.recover(store: self, outcome: outcome)
+            _ = try SourceCache(store: self).recoverWatchReferences()
+          } catch {
+            outcome?.disposition = .recoveryRequired
+          }
+          throw error
+        }
+        _ = try cache.recoverWatchReferences()
+        return result
+      })
   }
 
   /// Only the supplied scope root may resolve through links; state and cache ancestry may not.

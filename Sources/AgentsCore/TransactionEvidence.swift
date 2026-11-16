@@ -185,3 +185,61 @@ struct FileSnapshot: Codable, Equatable, Sendable {
     return remaining.allSatisfy { name, value in children[name]?.containsRemaining(value) == true }
   }
 }
+
+/// Required journal classification. Optional metadata is required by validation whenever
+/// its corresponding object exists in a security-bearing operation.
+struct TransactionSecurity: Codable {
+  enum Classification: String, Codable { case ordinary, privateMaterialization }
+  var preimage: Classification = .ordinary
+  var replacement: Classification = .ordinary
+  var permissionChange = false
+  var ancestry: DirectoryAccessEvidence?
+  var preimageAccess: FileAccessEvidence?
+  var stagedAccess: FileAccessEvidence?
+
+  var isPrivate: Bool {
+    preimage == .privateMaterialization || replacement == .privateMaterialization
+  }
+
+  func validate(entry: TransactionJournal.Entry) throws {
+    guard !isPrivate || ancestry != nil,
+      !permissionChange || (replacement == .privateMaterialization && entry.preimage != nil),
+      !isPrivate || (entry.preimage == nil) == (preimageAccess == nil),
+      replacement != .privateMaterialization || (entry.staged == nil) == (stagedAccess == nil),
+      !isPrivate || entry.preimage == nil || entry.preimage?.isRegular == true,
+      preimage != .privateMaterialization || entry.preimage?.isRegular == true,
+      replacement != .privateMaterialization || entry.staged == nil
+        || entry.staged?.isRegular == true,
+      replacement != .privateMaterialization || entry.action == .install
+    else { throw CoreError.invalidState("missing or contradictory transaction security evidence") }
+    for (snapshot, access) in [(entry.preimage, preimageAccess), (entry.staged, stagedAccess)] {
+      if let access {
+        guard access.identity == snapshot?.identity, access.mode == snapshot?.mode else {
+          throw CoreError.invalidState("transaction access evidence belongs to another object")
+        }
+      }
+    }
+  }
+
+  func validateObject(_ snapshot: FileSnapshot, named name: String, in parent: DirectoryHandle)
+    throws
+  {
+    let access: FileAccessEvidence?
+    let classification: Classification
+    if snapshot.identity == preimageAccess?.identity {
+      access = preimageAccess
+      classification = preimage
+    } else if snapshot.identity == stagedAccess?.identity {
+      access = stagedAccess
+      classification = replacement
+    } else {
+      return
+    }
+    guard let access else { return }
+    if classification == .privateMaterialization {
+      _ = try parent.requirePrivateAccess(name, matching: access)
+    } else if try parent.accessEvidence(name) != access {
+      throw CoreError.invalidState("transaction object access changed")
+    }
+  }
+}

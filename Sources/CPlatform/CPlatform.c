@@ -2,6 +2,7 @@
 #include "CPlatform.h"
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <spawn.h>
 
@@ -230,6 +231,182 @@ int platform_copy_link_metadata(int sourceDirectory, const char *source,
   const struct timespec times[2] = {info.st_atim, info.st_mtim};
   return utimensat(destinationDirectory, destination, times, AT_SYMLINK_NOFOLLOW);
 #endif
+}
+
+void platform_dispose_file_access(struct platform_file_access *value) {
+  free(value->acl);
+  free(value->default_acl);
+  memset(value, 0, sizeof(*value));
+}
+
+static unsigned int access_permissions(unsigned int permissions) {
+  return ((permissions & 4) ? PLATFORM_ACCESS_EXTERNAL_READ : 0) |
+    ((permissions & 2) ? PLATFORM_ACCESS_EXTERNAL_WRITE : 0) |
+    ((permissions & 1) ? PLATFORM_ACCESS_EXTERNAL_SEARCH : 0);
+}
+
+#if defined(__APPLE__)
+static int read_access_acl(int descriptor, struct platform_file_access *value) {
+  acl_t acl = acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED);
+  // Darwin reports ENOENT for an absent extended ACL even on a valid open fd.
+  // fstat brackets this read; unsupported/denied ACL queries still fail closed.
+  if (!acl) return errno == ENOENT ? 0 : -1;
+  int result = -1;
+  ssize_t size = acl_size(acl);
+  if (size < 0) goto done;
+  // acl_copy_ext uses the portable external representation, including ordered
+  // qualifiers, permissions and inheritance flags, without resolving UUIDs.
+  value->acl = calloc(size ? (size_t)size : 1, 1);
+  if (!value->acl) { errno = ENOMEM; goto done; }
+  ssize_t count = acl_copy_ext(value->acl, acl, size);
+  if (count < 0) goto done;
+  value->acl_size = (size_t)count;
+  acl_entry_t entry;
+  int status = acl_get_entry(acl, ACL_FIRST_ENTRY, &entry);
+  while (status == 0) {
+    acl_tag_t tag;
+    acl_flagset_t flags;
+    acl_permset_mask_t permissions;
+    if (acl_get_tag_type(entry, &tag) < 0 || acl_get_flagset_np(entry, &flags) < 0 ||
+        acl_get_permset_mask_np(entry, &permissions) < 0) goto done;
+    if (tag != ACL_EXTENDED_ALLOW && tag != ACL_EXTENDED_DENY) { errno = ENOTSUP; goto done; }
+    const acl_permset_mask_t known = ACL_READ_DATA | ACL_WRITE_DATA | ACL_EXECUTE |
+      ACL_DELETE | ACL_APPEND_DATA | ACL_DELETE_CHILD | ACL_READ_ATTRIBUTES |
+      ACL_WRITE_ATTRIBUTES | ACL_READ_EXTATTRIBUTES | ACL_WRITE_EXTATTRIBUTES |
+      ACL_READ_SECURITY | ACL_WRITE_SECURITY | ACL_CHANGE_OWNER | ACL_SYNCHRONIZE;
+    if (permissions & ~known) { errno = ENOTSUP; goto done; }
+    int inheritOnly = acl_get_flag_np(flags, ACL_ENTRY_ONLY_INHERIT);
+    if (inheritOnly < 0) goto done;
+    if (!inheritOnly) {
+      const acl_permset_mask_t read = ACL_READ_DATA;
+      const acl_permset_mask_t write = ACL_WRITE_DATA | ACL_APPEND_DATA;
+      const acl_permset_mask_t control = ACL_DELETE | ACL_DELETE_CHILD |
+        ACL_WRITE_SECURITY | ACL_CHANGE_OWNER | ACL_WRITE_ATTRIBUTES | ACL_WRITE_EXTATTRIBUTES;
+      const acl_permset_mask_t required = read | write | control |
+        (S_ISDIR(value->info.st_mode) ? ACL_SEARCH : 0);
+      // Without identity-directory resolution a deny may apply to the owner.
+      // Reject that unprovable layout; do not reorder ACEs or guess membership.
+      if (tag == ACL_EXTENDED_DENY && (permissions & required)) {
+        value->assessment |= PLATFORM_ACCESS_OWNER_DENIED;
+      }
+      if (tag == ACL_EXTENDED_ALLOW) {
+        if (permissions & read) value->assessment |= PLATFORM_ACCESS_EXTERNAL_READ;
+        if (permissions & write) value->assessment |= PLATFORM_ACCESS_EXTERNAL_WRITE;
+        if (permissions & ACL_SEARCH) value->assessment |= PLATFORM_ACCESS_EXTERNAL_SEARCH;
+        if (permissions & control) value->assessment |= PLATFORM_ACCESS_EXTERNAL_CONTROL;
+      }
+    }
+    status = acl_get_entry(acl, ACL_NEXT_ENTRY, &entry);
+  }
+  // Darwin returns -1/EINVAL at the end of iteration, unlike the POSIX API.
+  if (errno != EINVAL) goto done;
+  result = 0;
+done:;
+  int error = errno;
+  acl_free(acl);
+  errno = error;
+  return result;
+}
+#else
+static int read_acl_xattr(int descriptor, const char *name, void **bytes, size_t *length) {
+  ssize_t size = fgetxattr(descriptor, name, NULL, 0);
+  if (size < 0) return errno == ENODATA ? 0 : -1;
+  *bytes = malloc(size ? (size_t)size : 1);
+  if (!*bytes) { errno = ENOMEM; return -1; }
+  ssize_t count = fgetxattr(descriptor, name, *bytes, (size_t)size);
+  if (count < 0) return -1;
+  if (count != size) { errno = EAGAIN; return -1; }
+  *length = (size_t)count;
+  return 0;
+}
+
+static unsigned int acl_u16(const unsigned char *p) {
+  return (unsigned int)p[0] | ((unsigned int)p[1] << 8);
+}
+
+static uint32_t acl_u32(const unsigned char *p) {
+  return (uint32_t)acl_u16(p) | ((uint32_t)acl_u16(p + 2) << 16);
+}
+
+// The kernel validates installed ACLs. Validate the representation as well so an
+// unrecognized format never becomes an empty/permissive guessed assessment.
+static int posix_acl_permissions(const void *bytes, size_t size, uid_t owner,
+                                  unsigned int *ownerPermissions, unsigned int *external) {
+  const unsigned char *p = bytes;
+  if (size < 4 || (size - 4) % 8 != 0 || acl_u32(p) != 2) { errno = ENOTSUP; return -1; }
+  unsigned int seen = 0, group = 0, named = 0, other = 0, mask = 7;
+  bool hasNamed = false;
+  for (size_t offset = 4; offset < size; offset += 8) {
+    unsigned int tag = acl_u16(p + offset), permissions = acl_u16(p + offset + 2);
+    uint32_t identifier = acl_u32(p + offset + 4);
+    if (permissions > 7) { errno = ENOTSUP; return -1; }
+    if (tag == 2 || tag == 8) {
+      if (identifier == UINT32_MAX) { errno = ENOTSUP; return -1; }
+      hasNamed = true;
+      // The owning user's class always wins over a named entry for that uid.
+      if (tag == 8 || identifier != owner) named |= permissions;
+      continue;
+    }
+    if (identifier != UINT32_MAX || (seen & tag)) { errno = ENOTSUP; return -1; }
+    seen |= tag;
+    switch (tag) {
+      case 1: *ownerPermissions = permissions; break;
+      case 4: group = permissions; break;
+      case 16: mask = permissions; break;
+      case 32: other = permissions; break;
+      default: errno = ENOTSUP; return -1;
+    }
+  }
+  if ((seen & 37) != 37 || (hasNamed && !(seen & 16))) { errno = ENOTSUP; return -1; }
+  *external = ((group | named) & mask) | other;
+  return 0;
+}
+
+static int read_access_acl(int descriptor, struct platform_file_access *value) {
+  if (read_acl_xattr(descriptor, "system.posix_acl_access", &value->acl, &value->acl_size) < 0) return -1;
+  unsigned int owner = (value->info.st_mode >> 6) & 7;
+  unsigned int external = (value->info.st_mode & 7) | ((value->info.st_mode >> 3) & 7);
+  if (value->acl && posix_acl_permissions(value->acl, value->acl_size, value->info.st_uid,
+                                         &owner, &external) < 0) return -1;
+  value->assessment = access_permissions(external);
+  unsigned int required = S_ISDIR(value->info.st_mode) ? 7 : 6;
+  if ((owner & required) != required) value->assessment |= PLATFORM_ACCESS_OWNER_DENIED;
+  if (S_ISDIR(value->info.st_mode)) {
+    if (read_acl_xattr(descriptor, "system.posix_acl_default", &value->default_acl,
+                       &value->default_acl_size) < 0) return -1;
+    if (value->default_acl) {
+      unsigned int ignoredOwner, ignoredExternal;
+      if (posix_acl_permissions(value->default_acl, value->default_acl_size, value->info.st_uid,
+                                &ignoredOwner, &ignoredExternal) < 0) return -1;
+    }
+  }
+  return 0;
+}
+#endif
+
+int platform_read_file_access(int descriptor, struct platform_file_access *result) {
+  memset(result, 0, sizeof(*result));
+  if (fstat(descriptor, &result->info) < 0) return -1;
+  if (!S_ISREG(result->info.st_mode) && !S_ISDIR(result->info.st_mode)) {
+    errno = EINVAL;
+    return -1;
+  }
+  unsigned int owner = (result->info.st_mode >> 6) & 7;
+  unsigned int required = S_ISDIR(result->info.st_mode) ? 7 : 6;
+  result->assessment = access_permissions((result->info.st_mode & 7) | ((result->info.st_mode >> 3) & 7));
+  if ((owner & required) != required) result->assessment |= PLATFORM_ACCESS_OWNER_DENIED;
+  if (read_access_acl(descriptor, result) < 0) goto failed;
+  struct stat after;
+  if (fstat(descriptor, &after) < 0) goto failed;
+  if (!platform_same_generation(&result->info, &after) ||
+      result->info.st_uid != after.st_uid || result->info.st_gid != after.st_gid ||
+      result->info.st_nlink != after.st_nlink) { errno = EAGAIN; goto failed; }
+  return 0;
+failed:;
+  int error = errno;
+  platform_dispose_file_access(result);
+  errno = error;
+  return -1;
 }
 
 int platform_spawn(pid_t *pid, const char *executable, char *const argv[],

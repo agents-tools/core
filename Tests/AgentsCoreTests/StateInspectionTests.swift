@@ -1,5 +1,6 @@
 import AgentsManifest
 import Foundation
+import Synchronization
 import Testing
 
 @testable import AgentsCore
@@ -22,10 +23,24 @@ struct StateInspectionTests {
     let result = try store.withReadLock(
       onPendingRecovery: {
         diagnostics += 1
-        #expect(throws: CoreError.transactionRecovered(store.directory.path)) {
-          try store.save(declaration: Declaration(agents: [.cursor]), resolved: ResolvedState())
+        let finished = DispatchSemaphore(value: 0)
+        let writer = Mutex<(recovery: Result<Void, any Error>, save: Result<Void, any Error>)?>(nil)
+        Thread.detachNewThread {
+          let recovery = Result {
+            try store.save(declaration: Declaration(agents: [.cursor]), resolved: ResolvedState())
+          }
+          let save = Result {
+            try store.save(declaration: Declaration(agents: [.cursor]), resolved: ResolvedState())
+          }
+          writer.withLock { $0 = (recovery, save) }
+          finished.signal()
         }
-        try store.save(declaration: Declaration(agents: [.cursor]), resolved: ResolvedState())
+        finished.wait()
+        let outcome = try #require(writer.withLock { $0 })
+        #expect(throws: CoreError.transactionRecovered(store.directory.path)) {
+          try outcome.recovery.get()
+        }
+        try outcome.save.get()
         if callbackThrows { throw CoreError.invalidState("pending inspection") }
         return "pending"
       },

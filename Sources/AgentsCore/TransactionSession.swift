@@ -6,18 +6,20 @@ final class TransactionSession {
   let directory: DirectoryHandle
   let parents: [DirectoryHandle]
   let checkpoint: (String) throws -> Void
+  let resources: [SharedResource]
   /// Devices whose atomic renames passed a probe during this session only; `st_dev` values
   /// can be reused by another filesystem after an unmount.
   var capableDevices: Set<UInt64> = []
 
   init(
     journal: TransactionJournal, directory: DirectoryHandle, parents: [DirectoryHandle],
-    checkpoint: @escaping (String) throws -> Void
+    checkpoint: @escaping (String) throws -> Void, resources: [SharedResource] = []
   ) {
     self.journal = journal
     self.directory = directory
     self.parents = parents
     self.checkpoint = checkpoint
+    self.resources = resources
   }
 
   func emit(_ point: TransactionCheckpoint) throws { try checkpoint(point.name) }
@@ -73,12 +75,16 @@ final class TransactionSession {
   }
 
   func requireScope() throws {
+    try TransactionLockContext.validateHeldScope(journal.scope)
+    for resource in resources { try resource.validate() }
     guard try DirectoryHandle(at: directory.url).identity == journal.scope else {
       throw CoreError.invalidState("transaction scope identity changed")
     }
   }
 
   func requireParent(_ index: Int) throws {
+    if !resources.isEmpty { try requireScope() }
+    try journal.entries[index].security.ancestry?.validate(at: parents[index].url)
     guard
       try DirectoryHandle(at: parents[index].url).identity == journal.entries[index].parentIdentity
     else {
@@ -117,11 +123,25 @@ final class TransactionSession {
     guard try handle.objectIdentity == expected else {
       throw conflict(record.entry, "private container changed while opening")
     }
+    if journal.entries.contains(where: { $0.container == index && $0.security.isPrivate }) {
+      guard let access = record.access else {
+        throw conflict(record.entry, "missing private container access")
+      }
+      _ = try FileAccessEvidence.requirePrivate(descriptor: handle.descriptor)
+      try access.validate(descriptor: handle.descriptor)
+    }
     return handle
   }
 
   func validateRecords(store: StateStore) throws {
     try requireScope()
+    try journal.validateCoordination()
+    if !journal.footprint.isEmpty {
+      guard let context = TransactionLockContext.current(store) else {
+        throw CoreError.invalidState("shared transaction is outside its held writer context")
+      }
+      try context.validate(journal, scope: directory)
+    }
     let paths = TransactionPaths(store: store)
     let keys = try Set(journal.entries.map { try paths.components($0.path).root })
     guard keys == Set(journal.roots.keys), !journal.entries.isEmpty else {
@@ -130,6 +150,7 @@ final class TransactionSession {
     var targets: [URL] = []
     for (index, entry) in journal.entries.enumerated() {
       try requireParent(index)
+      try entry.security.validate(entry: entry)
       let target = parents[index].url.appendingPathComponent(entry.name)
       guard
         !targets.contains(where: {
@@ -170,6 +191,11 @@ final class TransactionSession {
       guard entry.progress == .queued || record.identity != nil else {
         throw CoreError.invalidState("sealed operation is missing private container identity")
       }
+    }
+    let needsPrivate = journal.entries.contains { $0.container == index && $0.security.isPrivate }
+    guard !needsPrivate || record.identity == nil || record.access?.identity == record.identity
+    else {
+      throw CoreError.invalidState("private container is missing access evidence")
     }
     try record.disposal?.validate()
     if let disposal = record.disposal {
@@ -214,11 +240,17 @@ final class TransactionSession {
     let entry = journal.entries[index]
     try requireParent(index)
     let layouts = TransactionLayout.expected(entry)
-    if entry.progress == .queued { return layouts[0] }
+    if entry.progress == .queued {
+      if entry.security.preimage == .privateMaterialization, let original = entry.preimage {
+        try entry.security.validateObject(original, named: entry.name, in: parents[index])
+      }
+      return layouts[0]
+    }
     let container = try self.container(entry.container)
     var objects: [TransactionSlot: FileSnapshot] = [:]
     for slot in TransactionSlot.objectSlots {
       if let value = try FileSnapshot.read(slot.name(index), from: container) {
+        try entry.security.validateObject(value, named: slot.name(index), in: container)
         objects[slot] = value
       }
     }
@@ -230,6 +262,14 @@ final class TransactionSession {
           return expected.matches(actual, permittingDirectoryWrite: permitsWrite)
         })
       else { continue }
+      if layout.kind == .prepared, let original = entry.preimage {
+        try entry.security.validateObject(original, named: entry.name, in: parents[index])
+      }
+      if case .object(let expected) = layout.target,
+        try parents[index].info(entry.name).map(FileObjectIdentity.init) == expected.identity
+      {
+        try entry.security.validateObject(expected, named: entry.name, in: parents[index])
+      }
       if try layout.target.matches(
         entry.name, from: parents[index], permittingDirectoryWrite: permitsWrite)
       {
@@ -241,5 +281,23 @@ final class TransactionSession {
       index,
       "missing or changed expected target or recovery slot object; expected slots: "
         + (expected.isEmpty ? "none" : expected.joined(separator: ", ")))
+  }
+}
+
+extension TransactionSession {
+  func createReservations(owner: String) throws {
+    guard !journal.footprint.isEmpty else { return }
+    for (index, resource) in resources.enumerated() {
+      try resource.reserve(journal, owner: owner) { try checkpoint("shared.\(index)." + $0) }
+    }
+    journal.reservationsReady = true
+    try persist(.reservationsReady)
+    try checkpoint("shared.ready")
+  }
+
+  func releaseReservations() throws {
+    for (index, resource) in resources.enumerated() {
+      try resource.release(journal) { try checkpoint("shared.\(index)." + $0) }
+    }
   }
 }

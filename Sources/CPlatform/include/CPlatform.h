@@ -34,6 +34,28 @@ int platform_copy_metadata(int source, int destination, mode_t mode);
 int platform_copy_link_metadata(int sourceDirectory, const char *source,
                                 int destinationDirectory, const char *destination);
 
+// ACL bytes are descriptor-derived, ordered, and platform-specific: Darwin's
+// external ACL representation or Linux's POSIX ACL xattr format. No names or
+// directory-service lookups participate in capture or evaluation.
+enum {
+  PLATFORM_ACCESS_OWNER_DENIED = 1,
+  PLATFORM_ACCESS_EXTERNAL_READ = 2,
+  PLATFORM_ACCESS_EXTERNAL_WRITE = 4,
+  PLATFORM_ACCESS_EXTERNAL_SEARCH = 8,
+  PLATFORM_ACCESS_EXTERNAL_CONTROL = 16
+};
+struct platform_file_access {
+  struct stat info;
+  void *acl;
+  size_t acl_size;
+  void *default_acl;
+  size_t default_acl_size;
+  unsigned int assessment;
+};
+// Failure never changes the object. Success owns allocations released by dispose.
+int platform_read_file_access(int descriptor, struct platform_file_access *result);
+void platform_dispose_file_access(struct platform_file_access *value);
+
 // Returns a POSIX error number, as posix_spawn does. The caller owns all fds.
 // In the child only stdin, stdout, stderr and the specified lock survive exec.
 int platform_spawn(pid_t *pid, const char *executable, char *const argv[],

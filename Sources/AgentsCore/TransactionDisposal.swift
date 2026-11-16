@@ -88,6 +88,10 @@ extension TransactionSession {
     }
     for index in journal.containers.indices { try disposeContainer(index) }
     try requireScope()
+    journal.finalized = true
+    try persist(.finalized)
+    try checkpoint("journal.finalized")
+    try releaseReservations()
     try directory.removeFiles(
       [TransactionJournal.incompleteFileName, TransactionJournal.fileName]
     ) { name in
@@ -99,6 +103,9 @@ extension TransactionSession {
   func verifyTarget(_ index: Int) throws {
     let entry = journal.entries[index]
     try requireParent(index)
+    if case .object(let expected) = TransactionLayout.expected(entry)[0].target {
+      try entry.security.validateObject(expected, named: entry.name, in: parents[index])
+    }
     // Terminal phases have a single distribution; disposal may have removed its slots.
     guard try TransactionLayout.expected(entry)[0].target.matches(entry.name, from: parents[index])
     else {
@@ -128,6 +135,25 @@ extension TransactionSession {
     guard FileObjectIdentity(actual) == identity else {
       throw conflict(record.entry, "private container identity changed")
     }
+    if journal.entries.contains(where: { $0.container == index && $0.security.isPrivate }) {
+      let handle = try container(index)
+      for (entryIndex, entry) in journal.entries.enumerated() where entry.container == index {
+        for slot in TransactionSlot.objectSlots {
+          let name = slot.name(entryIndex)
+          guard let info = try handle.info(name) else { continue }
+          if let expected = [entry.preimage, entry.staged].compactMap({ $0 }).first(where: {
+            $0.identity == FileObjectIdentity(info)
+          }) {
+            try entry.security.validateObject(expected, named: name, in: handle)
+          } else if entry.progress == .queued
+            && entry.security.replacement == .privateMaterialization
+            && slot == TransactionSlot.staging(for: entry)
+          {
+            _ = try handle.requirePrivateAccess(name)
+          }
+        }
+      }
+    }
     if let expected = record.disposal {
       let current = try FileSnapshot.read(record.name, from: parent)
       let matches =
@@ -142,6 +168,7 @@ extension TransactionSession {
     let parent = parents[record.entry]
     try requireScope()
     try requireParent(record.entry)
+    try validateContainerForDisposal(index)
     if let identity = record.identity {
       try parent.remove(record.name, expecting: record.disposal, identity: identity) { point in
         try emit(

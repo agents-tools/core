@@ -6,7 +6,7 @@ enum TransactionCheckpoint {
   enum Change {
     case created, containers
     case entry(Int, TransactionJournal.Progress)
-    case terminal, disposing
+    case terminal, disposing, reservationsReady, finalized
     case conflict(Int, TransactionJournal.Progress)
     var name: String {
       switch self {
@@ -15,6 +15,8 @@ enum TransactionCheckpoint {
       case .entry(let index, let progress): "entry.\(index).\(progress.rawValue)"
       case .terminal: "terminal"
       case .disposing: "disposing"
+      case .reservationsReady: "reservationsReady"
+      case .finalized: "finalized"
       case .conflict(let index, let progress): "entry.\(index).\(progress.rawValue).conflict"
       }
     }

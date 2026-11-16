@@ -2,7 +2,7 @@ import Foundation
 
 /// The version is independent of declaration, resolved and watch formats.
 struct TransactionJournal: Codable {
-  static let currentVersion = 1
+  static let currentVersion = 3
   static let fileName = "transaction.json"
   /// The next journal generation before it replaces `fileName`.
   static let incompleteFileName = "transaction.new"
@@ -15,6 +15,38 @@ struct TransactionJournal: Codable {
   var containers: [Container]
   /// Only this durable intent permits absent or partially removed disposal objects.
   var disposing = false
+  /// Durable intents exist before any reservation slot is created.
+  var footprint: [SharedResourceIdentity] = []
+  var reservationsReady = false
+  /// Disposal is synced; terminal phase retains the committed/rolledBack result.
+  var finalized = false
+
+  func validateCoordination() throws {
+    // The closed routes currently share exactly one possible physical file per runtime.
+    guard footprint.count <= 1 else {
+      throw CoreError.invalidState("unregistered shared transaction footprint")
+    }
+    for identity in footprint { try identity.validate() }
+    guard !finalized || (disposing && (phase == .committed || phase == .rolledBack)),
+      footprint.isEmpty || reservationsReady || phase == .preparing || phase == .rolledBack
+    else { throw CoreError.invalidState("invalid transaction coordination evidence") }
+    if finalized {
+      let terminalProgress: Set<Progress> =
+        phase == .committed
+        ? [.applied] : [.queued, .ready, .restored, .cancelled]
+      guard entries.allSatisfy({ terminalProgress.contains($0.progress) }) else {
+        throw CoreError.invalidState("finalized transaction contradicts its terminal outcome")
+      }
+    }
+    if !finalized {
+      let sharedRoots =
+        roots.keys.contains(NativeTargetRoute.globalRoot)
+        || roots.keys.contains(NativeTargetRoute.metadataRoot)
+      guard sharedRoots == !footprint.isEmpty else {
+        throw CoreError.invalidState("journal roots contradict shared footprint")
+      }
+    }
+  }
 
   enum Phase: String, Codable { case preparing, applying, committed, rolledBack }
   enum Action: String, Codable { case install, delete }
@@ -54,6 +86,7 @@ struct TransactionJournal: Codable {
     var staged: FileSnapshot?
     var progress: Progress = .queued
     var conflict: Conflict?
+    var security = TransactionSecurity()
     var name: String { String(path.split(separator: "/").last!) }
   }
 
@@ -67,6 +100,7 @@ struct TransactionJournal: Codable {
     /// entries are admitted only after `disposing` is durable; private unfinished construction
     /// needs no tree evidence.
     var disposal: FileSnapshot?
+    var access: FileAccessEvidence?
   }
 
   static func containerName(id: UUID, index: Int) -> String { ".agents-\(id.uuidString)-\(index)" }
@@ -87,9 +121,17 @@ struct TransactionJournal: Codable {
     try directory.info(fileName) != nil || directory.info(incompleteFileName) != nil
   }
 
-  /// Without an identified container or sealed operation, the journal owns no object.
+  var isReservationOnly: Bool {
+    !footprint.isEmpty && !reservationsReady && !finalized && phase == .preparing
+      && containers.allSatisfy { $0.identity == nil }
+      && entries.allSatisfy { $0.progress == .queued }
+  }
+
+  /// Only journals without reservation intents, identified containers or sealed operations
+  /// can be discarded without examining owned metadata.
   var isUnstarted: Bool {
-    phase == .preparing && containers.allSatisfy { $0.identity == nil }
+    footprint.isEmpty && !reservationsReady && !finalized && phase == .preparing
+      && containers.allSatisfy { $0.identity == nil }
       && entries.allSatisfy { $0.progress == .queued }
   }
 }

@@ -315,16 +315,17 @@ the denial. Existing user content and metadata are preserved.
 
 ### Journal records
 
-Journal format version 1 is independent of the manifest language, lock and watch
+Journal format version 3 is independent of the manifest language, lock and watch
 versions.
 The root records its version, transaction UUID, scope identity, registered root
-identities, transaction phase, operations, private containers and disposal
-intent. A journal without this version, or with another version, is retained
+identities, transaction phase, operations, private containers, disposal
+intent, shared physical footprint, reservation readiness and terminal finalization. A journal without this version, or with another version, is retained
 unchanged. Recovery reports that it was written by another version and must be
 recovered with the version that wrote it; it does not guess a compatible replay.
 
 Paths are relative to named roots: scope state, registered agent installation
-directories and registered instruction destinations. The journal binds the state
+directories, registered instruction destinations and closed native routes.
+Shared metadata destinations are derived by Core and cannot be requested as ordinary targets. The journal binds the state
 directory, each root and every destination parent to its physical location and
 identity. Registry boundaries resolve configured containers; descendants open
 without following links. Symlinked journals or descendants, overlapping targets,
@@ -335,8 +336,9 @@ Each operation records its path, install/delete action, expected preimage or
 absence, parent identity, private container, sealed staged object, progress and
 any conflict reason and retained locations. Object evidence contains device,
 inode, type, SHA-256 digest, permission bits and executable status. Directory
-evidence includes child identities and digests. Data replacements inherit the
-existing regular file's metadata. Undo restores the original object and its
+evidence includes child identities and digests. Ordinary data replacements inherit the
+existing regular file's metadata. Known sensitive files use private construction
+for replacements, including ordinary byte edits. Undo restores the original object and its
 metadata.
 
 Each used target parent has one private container with a UUID-derived name and
@@ -431,7 +433,7 @@ ownership denials are reported rather than bypassed.
 ### Recovery outcomes
 
 Every mutating state operation first checks for an abandoned journal under the
-scope lock, validates watch state and finishes pending reference cleanup before
+scope lock, after taking any journal/request shared physical locks, validates watch state and finishes pending reference cleanup before
 proceeding. Recovery never reads the declaration: journal and watch-reference
 recovery complete even when `agents.yaml` does not parse, and orphaned mirror
 locations come from watch state and the lock, then from the mirror's origin.
@@ -477,6 +479,15 @@ verified container identity. Links are never followed during deletion. Owner
 access may be granted to directories being disposed of without changing
 installed or restored metadata. Absent entries still receive a parent barrier.
 
+After every container disposal barrier, the terminal journal durably records
+`finalized = true`, retaining its `committed` or `rolledBack` phase. Only then
+may it remove its reservations, sync their parents and remove the scope journal.
+Recovery and diagnosis dispatch finalized records before constructing data roots
+or parents: they validate scope and required coordination metadata only. Recovery
+removes only that journal's metadata; diagnosis reports the terminal result and
+pending cleanup without writes. A later writer's target, receipt and reservation
+are left untouched, even when old data parents no longer exist.
+
 Conflicts retain `transaction.json`, the available target objects and private
 containers holding user data in their slots. Each conflicting entry records the
 reason and scope-relative recovery locations. Doctor lists those reasons and
@@ -496,6 +507,142 @@ described below; the latter two require `import AgentsManifest`.
 `loadDeclaration()` returns the complete typed symbolic declaration; `loadManifest()`
 returns the complete `DeclarationDocument`, or `nil` for a
 scope without state. Both can also throw the declaration's `ManifestFailure`.
+
+### Private runtime materialization
+
+Package callers obtain a `MaterializationTarget` from `StateStore` and prepare it
+with `preparePrivateMaterialization`. Core admits only its registered file paths;
+source-authoring and arbitrary external paths are refused. Current registrations
+cover existing instruction-file destinations and the verified Claude MCP project,
+local and user physical routes. `nativeTarget(for:)` accepts a closed
+`NativeTargetRoute`; it grants no arbitrary external destination or regional
+ownership. Native adapters still own regional editing and capability validation.
+
+Callers pass the complete `footprint: Set<NativeTargetRoute>` to the existing
+`withLock` or `withReadLock` boundary and retain that context around preparation.
+Pending journal footprints are independently included before taking the scope lock. Preparation captures the target's physical identity, UID/GID, mode and ordered
+ACL evidence, together with every existing physical ancestor. It does not call a
+binding provider or renderer. A permissive existing file requires the caller's
+explicit `changingAccess` intent, as does an existing owner-only mode that differs
+from the intended 0600 (for example, owner execute). The prepared `accessChange` exposes its before
+access and intended owner-only mode for the caller's report. This is part of the
+prepared mutation, without a separate approval record. Missing ancestors may be
+created by the transaction; their final identities and access are sealed before
+staging. Existing ancestry, ACL, ownership or permission drift invalidates the
+preparation. The prepared `accessFingerprint()` is a non-secret segment for the
+complete displayed candidate fingerprint: it covers registered target, intended
+owner, access/ancestry evidence, effective permission-change intent and local
+receipt generation, and excludes binding values and materialized content digests.
+It does not replace the enclosing candidate fingerprint or apply-handle lifecycle.
+
+`FileTransaction.replacePrivate` queues a cold renderer and explicitly injected
+`RuntimeBindingProvider` using the store's runtime environment. Binding names are
+data, never commands supplied by a source. The same scope lock and sole journal
+cover ordinary targets, private targets, declaration/lock updates and the local
+receipt. Ordinary non-sensitive requests preserve their metadata behavior. A private
+replacement uses its own independently sealed access rather than copying the
+live target's metadata. Core verifies its private construction directory and an
+empty owner-readable/writable file before resolving bindings or writing payload
+bytes. It rechecks access before writing and publication. Arbitrary path-based
+prepared producers are not a private materialization interface. Provider and
+renderer failures have fixed diagnostics; returned values have no encoding and
+redacted diagnostic/reflection representations.
+
+The private `materializations.json` file in the scope directory stores only
+registered target coordinates, materialization generation, registered-root
+identity, materialized digest and access evidence. It contains no binding values,
+source closure or declaration model. It is updated in the same transaction as
+the target. A later ordinary byte replacement keeps both preimage and replacement
+sensitive, constructs the replacement privately before its first byte and updates
+the receipt from the sealed generation without invoking a provider. Region deletion
+retains whole-file sensitivity while a file remains; whole-file deletion removes
+the record in the same journal. Copy, link and arbitrary prepared producers cannot
+replace a known sensitive file. Direct caller writes to the receipt
+are refused. Corrupt, permissive or stale receipts stop mutation rather than
+silently downgrading a known sensitive object. `materializationReceipt(for:)`
+returns only the local generation and access metadata. A caller that knows from
+its prior symbolic deployment that an existing target was materialized must set
+`requiringReceiptForExistingTarget`; a missing receipt then stops preparation.
+`expecting:` also binds a known local receipt generation. These expectations stay
+local; host materialization data does not enter the portable declaration or
+ledger. A freshly observed absent target has no sensitive preimage and can be
+restored or removed while its stale receipt record is reconciled atomically.
+
+Journal entries require preimage/replacement security classifications and the
+necessary sealed access/ancestry evidence. Private container identity and access
+are durable before payload construction. Missing security fields or older
+journal versions require recovery with the writing version; there is no implicit
+ordinary default or migration. Recovery consumes physical evidence only and
+never invokes binding providers or renderers. Before restoring a sensitive
+preimage, it verifies the destination ancestry, private container and preimage
+access again, including after the restoration checkpoint. Unsafe or stale
+access retains the journal and available private objects as a conflict.
+Ordinary preimages keep their recorded metadata on rollback, including when a
+private replacement had an explicit permission-change intent. Disposal validates
+sensitive evidence before erasing retained objects.
+
+Linux assessment applies POSIX ACL masks to named and owning-group entries;
+default ACLs are captured and inherited access is checked on the actual created
+inode. macOS assessment preserves ACE order/inheritance, ignores inherit-only
+ACEs for the current inode, and refuses active content/control grants or relevant
+denials whose principal membership cannot be proved without directory-service
+lookups. Unprovable layouts fail without repairing host permissions. Traversable
+ordinary ancestors are allowed when trusted ownership and effective replacement
+protection hold; sticky protection is bound to the child owner. Root and same-UID
+adversaries are outside this boundary. Snapshot capture may retry a transient
+stat/ACL generation race; retries never refresh prepared or sealed evidence.
+
+### Shared physical native targets
+
+Claude project MCP uses project `.mcp.json` and remains scope-local. Claude local
+and user MCP use the same `.claude.json`: a nonempty supplied `CLAUDE_CONFIG_DIR`
+selects its parent, otherwise the supplied HOME does. Overrides must be absolute
+filesystem directories; ambiguous relative roots are refused. This global configuration
+root is distinct from the ordinary Claude skills/settings directory.
+
+The opened parent's device, inode and kind plus the registered basename define
+the coordination identity and total lock order. Pathname authorization and
+freshness remain separate. HOME, route and path aliases do not split a physical
+resource; replacing the file does not change its coordination identity. Private
+metadata under that parent lives in `.agents-native/<physical-key>/`, containing
+a persistent `lock`, authoritative private `receipt` and transient `reservation`.
+The receipt records one physical file's generation, digest, root identity and
+access evidence. Shared files have no second authoritative scope receipt.
+Metadata, lock, receipt and reservation access are verified through opened
+nofollow descriptors. A conflicting or unprovable domain stops publication.
+
+Admission takes the union of requested routes and a bounded read of the pending
+scope journal, deduplicates and locks shared resources in physical order, then
+locks the scope. It rereads scope and footprint before any preparation callback.
+An expanded footprint releases all locks and re-admits before callback delivery.
+The thread-confined context spans preparation, apply, synchronous failure recovery
+and disposal. Nested scope acquisition or upgrades are refused. Skill,
+instruction, combined update and watch mutations use this same boundary even
+when only a pending journal requires shared coordination. Unrelated read-only
+scope data does not acquire an absent shared footprint.
+
+The sole scope journal durably records reservation intents before creating any
+reservation slot. A journal-UUID-derived private temporary file is written and
+synced, then published with no-replace rename and a parent barrier. All
+reservations become durable before readiness and any target publication. A
+half-written temporary slot is recognized by its exact durable intent and
+verified private file metadata; cleanup does not decode partial bytes. Before
+readiness, reservation-only recovery has no constructed data objects and disposes
+only its intent-owned metadata. Unknown slots and malformed final reservations
+are retained. Another scope reports the owner locator and journal UUID; it never
+runs cross-project recovery or steals by PID, time or missing owner journal.
+Ready non-finalized journals require their reservations to remain present.
+
+The kernel locks last through finalization and metadata cleanup. A finalized
+owner may encounter a newer reservation and leaves it untouched. Read-only paths
+use existing locks and create no coordination directories, lock files, receipts
+or reservations. They diagnose pending recovery without replay. External native
+clients do not participate in these locks: preimage, digest, identity and access
+changes cause freshness conflicts rather than overwriting client siblings.
+
+E supplies the complete new/old deployment footprint and redacted composition;
+F supplies exact owned-region edits and route semantics. These Core registrations
+do not claim native parser, adapter or real-client acceptance.
 
 ### Read-only access
 

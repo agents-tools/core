@@ -19,13 +19,13 @@ extension InstructionOperations {
         message: recovery.message,
         path: store.directory)
     }
-    let otherSections: [LockedSection]? = try other.withReadLock(
-      onPendingRecovery: { nil },
-      {
-        _ = try other.readDeploymentDeclaration()
-        return try other.readResolved().instructions.sections
-      })
-    let otherDiagnostics = otherSections == nil ? [pendingRecovery(other)] : []
+    let (otherSections, otherDiagnostics): ([LockedSection]?, [InstructionDiagnostic]) =
+      try other.withReadLock(
+        onPendingRecovery: { (nil, [pendingRecovery(other)]) },
+        {
+          _ = try other.readDeploymentDeclaration()
+          return (try other.readResolved().instructions.sections, [])
+        })
     let root = scope == .project ? environment.projectDirectory : environment.homeDirectory
     return try store.withReadLock(
       onPendingRecovery: {
