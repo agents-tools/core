@@ -85,5 +85,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
 server.daemon_threads=True
-(root/'port').write_text(str(server.server_port))
+endpoint='http://127.0.0.1:%d/mcp'%server.server_port
+(root/'endpoint.pending').write_text(endpoint)
+os.replace(root/'endpoint.pending',root/'endpoint')
 server.serve_forever()

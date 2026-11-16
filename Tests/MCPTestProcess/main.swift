@@ -58,12 +58,15 @@ if scenario == "descendant" {
   for pointer in argv + environment { free(pointer) }
   try? String(pid).write(
     to: root.appendingPathComponent("descendant-pid"), atomically: true, encoding: .utf8)
+  var descendantReady = false
   for _ in 0..<2000 {
     if FileManager.default.fileExists(atPath: root.appendingPathComponent("holder-ready").path) {
+      descendantReady = true
       break
     }
     usleep(1000)
   }
+  if !descendantReady || getpgid(pid) != getpgrp() { exit(2) }
 }
 let fd = Int32(ProcessInfo.processInfo.environment["FD_CHECK"] ?? "-1") ?? -1
 record([

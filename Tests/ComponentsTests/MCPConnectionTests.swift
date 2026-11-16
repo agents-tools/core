@@ -69,10 +69,13 @@ private final class MCPFixture {
     process.standardError = FileHandle.nullDevice
     try process.run()
     server = process
-    guard await waitFor({ self.text("port") != nil }), let port = text("port") else {
+    guard await waitFor({ self.text("endpoint") != nil }),
+      let endpoint = text("endpoint"), let url = URL(string: endpoint),
+      url.host == "127.0.0.1", let port = url.port, (1...65535).contains(port)
+    else {
       throw MCPConnectionIssue.connectionFailed
     }
-    return URL(string: "http://127.0.0.1:" + port + "/mcp")!
+    return url
   }
   func stopHTTP() {
     if let server, server.isRunning {

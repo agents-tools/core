@@ -171,7 +171,7 @@ package final class OwnedDuplexProcess: @unchecked Sendable {
     }
   }
 
-  private func reapIfExited() -> Bool {
+  private func reapIfExited(requireQuiescence: Bool = true) -> Bool {
     lock.withLock {
       if reaped { return true }
       guard owned else { return false }
@@ -181,6 +181,12 @@ package final class OwnedDuplexProcess: @unchecked Sendable {
         return false
       }
       guard exited else { return false }
+      if requireQuiescence {
+        var quiescent = false
+        guard platform_duplex_group_quiescent(identifier, &quiescent) == 0, quiescent else {
+          return false
+        }
+      }
       var status: Int32 = 0
       let result = waitpid(identifier, &status, WNOHANG)
       if result == identifier {
@@ -194,8 +200,8 @@ package final class OwnedDuplexProcess: @unchecked Sendable {
   }
 
   /// Cleanup has its own finite grace/TERM/KILL budgets in addition to the
-  /// protocol deadline. The leader is not reaped until group signals finish,
-  /// including descendants that closed their inherited pipes. False means the
+  /// protocol deadline. Keep the leader's identity reserved until no live group
+  /// members remain or the cleanup deadline fails. False means the
   /// kernel did not confirm cleanup; callers must not report complete success.
   package func finish(grace: Duration, terminate: Duration, killWait: Duration) async -> Bool {
     closeInput()
@@ -206,9 +212,11 @@ package final class OwnedDuplexProcess: @unchecked Sendable {
     closeOutput()
     let deadline = ContinuousClock.now + killWait
     repeat {
-      if reapIfExited() { return term && killed }
+      if reapIfExited() { return ContinuousClock.now <= deadline && term && killed }
       try? await Task.sleep(for: .milliseconds(2))
     } while ContinuousClock.now < deadline
+    // No further group signals follow release of the reserved identity.
+    _ = reapIfExited(requireQuiescence: false)
     return false
   }
 
