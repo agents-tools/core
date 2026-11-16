@@ -2,10 +2,10 @@ import AgentsCore
 import Foundation
 
 /// YAML 1.2 Core resolution. Number conversion never passes through floating-point formatting.
-enum YAMLScalar: Equatable {
+package enum YAMLScalar: Equatable, Sendable {
   case string, integer, decimal, boolean, null
 
-  static func classify(_ text: String) -> Self {
+  package static func classify(_ text: String) -> Self {
     if ["", "~", "null", "Null", "NULL"].contains(text) { return .null }
     if ["true", "True", "TRUE", "false", "False", "FALSE"].contains(text) { return .boolean }
     if matches(text, #"^[-+]?(0o[0-7]+|0x[0-9a-fA-F]+|[0-9]+)$"#) { return .integer }
@@ -17,7 +17,7 @@ enum YAMLScalar: Equatable {
     return .string
   }
 
-  static func integer(_ text: String) -> Int? {
+  package static func integer(_ text: String) -> Int? {
     var digits = text
     let negative = digits.hasPrefix("-")
     if digits.hasPrefix("-") || digits.hasPrefix("+") { digits.removeFirst() }

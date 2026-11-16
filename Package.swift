@@ -16,6 +16,9 @@ let package = Package(
     .library(name: "AgentsUpdates", targets: ["AgentsUpdates"]),
   ],
   dependencies: [
+    .package(
+      url: "https://github.com/modelcontextprotocol/swift-sdk.git",
+      revision: "a0ae212ebf6eab5f754c3129608bc5557637e605"),
     .package(url: "https://github.com/apple/swift-crypto.git", from: "5.0.0"),
     .package(url: "https://github.com/jpsim/Yams", exact: "6.2.2"),
     .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.9.0"),
@@ -48,7 +51,7 @@ let package = Package(
       dependencies: [
         "AgentsCore", "TreeSitterYAML", "Yams",
         .product(name: "TreeSitter", package: "tree-sitter"),
-      ], resources: [.copy("Resources/agents.schema.json")]),
+      ], exclude: ["Resources/agents.schema.json"]),
     .target(
       name: "AgentsCore",
       dependencies: ["CPlatform", .product(name: "Crypto", package: "swift-crypto")]
@@ -64,18 +67,22 @@ let package = Package(
       name: "AgentsUpdates",
       dependencies: [
         "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "CPlatform",
+        "Components",
       ]),
     .target(
       name: "Components",
       dependencies: [
         "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "NativeDocuments",
+        .product(name: "MCP", package: "swift-sdk"),
       ]),
     .testTarget(
       name: "ComponentsTests",
       dependencies: [
         "Components", "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions",
-        "StateTestProcess", "StateTestSupport",
-      ]),
+        "StateTestProcess", "StateTestSupport", "MCPTestProcess",
+      ], resources: [.copy("Fixtures")]),
+    .executableTarget(
+      name: "MCPTestProcess", dependencies: ["CPlatform"], path: "Tests/MCPTestProcess"),
     .target(name: "StateTestSupport", path: "Tests/StateTestSupport"),
     .executableTarget(
       name: "StateTestProcess",
@@ -108,6 +115,7 @@ let package = Package(
       name: "AgentsUpdatesTests",
       dependencies: [
         "AgentsUpdates", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
+        "MCPTestProcess",
       ]),
     .testTarget(
       name: "AgentsSkillsTests",

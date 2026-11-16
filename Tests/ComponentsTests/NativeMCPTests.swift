@@ -1,9 +1,9 @@
-import AgentsCore
 import AgentsManifest
 import Foundation
 import NativeDocuments
 import Testing
 
+@testable import AgentsCore
 @testable import Components
 
 @Suite("Native MCP mapping and replay")
@@ -550,6 +550,25 @@ struct NativeMCPTests {
       request: .init(surface: .codexCLI, scope: .project))
     #expect(contribution.resourcePlacements.map(\.path) == [[.key("command")], [.key("cwd")]])
     #expect(contribution.resourcePlacements.map(\.resource) == contribution.resources)
+    let final = try contribution.stagedValue(
+      bindings: RuntimeBindingValues([:]),
+      environment: fixture.environment,
+      resourcePaths: [
+        contribution.resources[0]: "/registered/bin/server",
+        contribution.resources[1]: "/registered/data",
+      ],
+      budget: budget())
+    #expect(
+      final
+        == .object([
+          "command": .string("/registered/bin/server"), "args": .array([]),
+          "cwd": .string("/registered/data"),
+        ]))
+    #expect(throws: NativeAdapterIssue.self) {
+      try contribution.stagedValue(
+        bindings: RuntimeBindingValues([:]), environment: fixture.environment,
+        resourcePaths: [:], budget: budget())
+    }
     #expect(throws: NativeAdapterIssue.self) { try contribution.referenceValue() }
     var candidate = frozen.ledger
     candidate.lowerings = [
@@ -689,6 +708,91 @@ struct NativeMCPTests {
     #expect(throws: NativeAdapterIssue.self) {
       try NativeMCPLowering.lower(
         component, frozen: changed, request: .init(surface: .claudeCode, scope: .project))
+    }
+  }
+
+  @Test func stagedMCPUsesSuppliedValuesAndKeepsReferencesSymbolic() throws {
+    try withMCP(
+      [
+        server(
+          "staged",
+          transport: stdio(environment: [
+            "INHERITED": ["env": "INHERITED"], "RENAMED": ["env": "SOURCE"],
+            "TOKEN": ["secret": "fixture/token"],
+          ]), agents: ["codex"])
+      ],
+      request: .init(surface: .codexCLI, scope: .project)
+    ) { contribution, ledger, fixture in
+      let before = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+      let environment = RuntimeEnvironment(
+        projectDirectory: fixture.project, homeDirectory: fixture.home,
+        environment: ["SOURCE": "exact environment fixture"])
+      let supplied = RuntimeBindingValues(["fixture/token": Data("private fixture value".utf8)])
+      let native = try contribution.stagedValue(
+        bindings: supplied, environment: environment,
+        resourcePaths: [:], budget: budget())
+      guard case .object(let fields) = native else {
+        Issue.record("missing native object")
+        return
+      }
+      #expect(
+        fields["env"]
+          == .object([
+            "RENAMED": .string("exact environment fixture"),
+            "TOKEN": .string("private fixture value"),
+          ]))
+      #expect(fields["env_vars"] == .array([.string("INHERITED")]))
+      #expect(try ResolvedLedgerCodec.encode(ledger, limits: .standard) == before)
+      #expect(!String(describing: contribution.value).contains("private fixture value"))
+      for data in [Data([0xff]), Data([0])] {
+        do {
+          _ = try contribution.stagedValue(
+            bindings: RuntimeBindingValues(["fixture/token": data]),
+            environment: environment, resourcePaths: [:], budget: budget())
+          Issue.record("invalid native binding accepted")
+        } catch let issue as NativeAdapterIssue {
+          #expect(issue.reason == .invalid)
+          #expect(issue.field == ["env", "TOKEN"])
+          #expect(!issue.description.contains("fixture/token"))
+        }
+      }
+    }
+  }
+
+  @Test func stagedOpenCodeRejectsInterpolationAndHeaderInjection() throws {
+    try withMCP(
+      [
+        server(
+          "staged",
+          transport: [
+            "kind": "streamableHTTP", "url": "https://example.invalid/mcp",
+            "headers": ["X-Token": ["secret": "fixture/token"]],
+          ], agents: ["opencode"])
+      ],
+      request: .init(surface: .openCodeCLI, scope: .project)
+    ) { contribution, _, fixture in
+      for value in ["{file:private.txt}", "{env:TOKEN}", "line\r\nInjected: value", "nul\0"] {
+        do {
+          _ = try contribution.stagedValue(
+            bindings: RuntimeBindingValues(["fixture/token": Data(value.utf8)]),
+            environment: fixture.environment, resourcePaths: [:], budget: budget())
+          Issue.record("unrepresentable staged literal accepted")
+        } catch let issue as NativeAdapterIssue {
+          #expect(issue.field == ["headers", "X-Token"])
+          #expect(!issue.description.contains(value))
+        }
+      }
+      let value = #"C:\new"#
+      let native = try contribution.stagedValue(
+        bindings: RuntimeBindingValues(["fixture/token": Data(value.utf8)]),
+        environment: fixture.environment, resourcePaths: [:], budget: budget())
+      let region = try contribution.descriptor.region(server: contribution.name)
+      let doc = try document("{}", contribution)
+      let prepared = try doc.prepare([.put(region: region, expected: .absent, value: native)])
+      let reread = try NativeDocument(bytes: prepared.bytes, format: .json, budget: budget())
+      #expect(
+        try reread.read(.init(keys: ["mcp", "servers", "staged", "headers", "X-Token"]))?.value
+          == .string(value))
     }
   }
 

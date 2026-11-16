@@ -54,10 +54,14 @@ package enum NativePathStep: Equatable {
 package struct NativeOccurrenceEvidence: Equatable {
   package let idKey: String?
   package let id: String?
-  let snapshot: Data?
-  let ordinal: Int?
-  let previous: Data?
-  let next: Data?
+  /// Versioned format owners may retain these semantic fingerprints and neighbor evidence.
+  /// They contain no byte offsets and do not authorize adoption of an observed occurrence.
+  /// Fingerprints contain value bytes: secret-bearing matches stay in E/D's private plan,
+  /// while only non-secret semantic evidence may enter a versioned locked layout.
+  package let snapshot: Data?
+  package let ordinal: Int?
+  package let previous: Data?
+  package let next: Data?
   package init(idKey: String, id: String) {
     self.idKey = idKey
     self.id = id
@@ -66,7 +70,7 @@ package struct NativeOccurrenceEvidence: Equatable {
     previous = nil
     next = nil
   }
-  init(snapshot: Data, ordinal: Int, previous: Data?, next: Data?) {
+  package init(snapshot: Data, ordinal: Int, previous: Data?, next: Data?) {
     idKey = nil
     id = nil
     self.snapshot = snapshot
@@ -114,15 +118,23 @@ package enum NativeExpectedRegion {
 package enum NativeRegionEdit {
   case put(region: NativeRegion, expected: NativeExpectedRegion, value: NativeValue)
   case remove(region: NativeRegion, expected: NativeExpectedRegion)
+  /// The caller must hold durable creation authority for this object or array. The observation
+  /// must match the preimage; removal is conditional on emptiness after all descendant edits.
+  /// Unowned comments or ambiguous removal syntax retain the container.
+  case pruneCreatedContainer(region: NativeRegion, observed: NativeObservation)
   var region: NativeRegion {
     switch self {
-    case .put(let r, _, _), .remove(let r, _): r
+    case .put(let r, _, _), .remove(let r, _), .pruneCreatedContainer(let r, _): r
     }
   }
   var expected: NativeExpectedRegion {
     switch self {
     case .put(_, let e, _), .remove(_, let e): e
+    case .pruneCreatedContainer(_, let observation): .createdContainer(observation)
     }
+  }
+  var isConditionalPrune: Bool {
+    if case .pruneCreatedContainer = self { true } else { false }
   }
 }
 

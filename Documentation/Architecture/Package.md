@@ -13,8 +13,8 @@ terminal/UI presentation and executable distribution.
 AgentsManifest → AgentsCore, TreeSitterYAML, TreeSitter, Yams
 AgentsSkills → AgentsCore, AgentsManifest, Yams
 AgentsInstructions → AgentsCore, AgentsManifest, Markdown
-Components → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, NativeDocuments
-AgentsUpdates → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions
+Components → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, NativeDocuments, MCP
+AgentsUpdates → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, Components
 NativeDocuments → AgentsCore, TOMLSemantics, TreeSitterTOML, TreeSitter
 TOMLSemantics → Foundation
 TreeSitterTOML → (vendored C grammar)
@@ -42,7 +42,7 @@ The frontend reads `.agent/agents.yaml` or the user scope’s `agents.yaml` and
 produces complete syntax-independent IR and typed declarations. Admission checks
 UTF-8 and unsupported raw line separators before parsing. Tree-sitter supplies
 concrete byte ranges under an enforced parser work policy; bounded CST admission
-precedes public Yams ordered-node composition. The bundled schema owns field
+precedes public Yams ordered-node composition. The source schema owns field
 shapes and generates finite runtime constraints and reference help. Core scalar
 resolution preserves string values, integer kind and exact decimal payloads.
 
@@ -109,7 +109,9 @@ and the existing state, linking, lifecycle and recovery guarantees.
   domain planners during one update. `StatePrecondition`, `TargetPrecondition`
   and `PathIdentity` validate the rendered generation before application.
   `TransactionOutcome` follows its owning journal through commit and recovery.
-  `ProcessRunner` executes subprocesses.
+  `ProcessRunner` executes synchronous subprocesses. `OwnedDuplexProcess` is a
+  separate package-only, nonblocking pipe/process-group owner for bidirectional
+  connection tests.
 - `WatchOperations` owns source subscriptions, seen baselines, branch tracking
   and file comparisons. `WatchState` defines version 1 of `agents.watch`.
   Skill discovery and artifact loading are injected by `AgentsSkills` through
@@ -154,6 +156,17 @@ status; both are for debugging only. Consumers must not classify failures by
 inspecting arguments, exit codes, or diagnostic text. Non-Git process failures
 continue to use `CoreError.commandFailed`; process launch errors retain their
 underlying platform error.
+
+`OwnedDuplexProcess` takes explicit argv, cwd, environment and PATH. Its CPlatform
+spawn closes nonstandard child descriptors and creates a separate process group;
+it never inherits transaction locks. The owner closes stdin, waits a finite grace,
+signals TERM/KILL while the unreaped leader reserves its identity, and confirms
+reap with nonblocking waits. It refuses auto-reaping SIGCHLD configurations and
+reports ownership loss or unconfirmed cleanup. Darwin inspects only the reserved
+group, under a finite byte bound, to distinguish a zombie-only group before
+signalling. It does not operate on unrelated processes or promise ownership of
+children that detach into another session/group. `ProcessRunner` owns synchronous
+Git/one-shot execution; transaction publication owns filesystem state.
 
 ## AgentsSkills
 
@@ -309,8 +322,10 @@ retaining their origins. Logical conflicts are checked before artifact lowering.
 Core owns frozen Git candidate evidence, exact snapshots, source containment and
 the scoped temporary-read session. Export constraints share one version variable
 per normalized source; discovery roots remain distinct namespaces. Direct skill
-and section pins are independent. The session reuses existing exact cached
-objects only under existing locks; other mirrors, refs, locks and content remain
+and section pins are independent. Exact annotated Git objects are peeled to commits
+before conjunction, candidate selection and snapshot identity. Acquiring a known
+object does not enumerate mutable refs or refresh the frozen reference mirror.
+The session reuses existing exact cached objects only under existing locks; other mirrors, refs, locks and content remain
 temporary. The caller consumes borrowed resources within the linking closure;
 cleanup runs on success, error and cooperative cancellation. The synchronous Git
 runner completes owned in-flight work before cancellation returns.
@@ -323,9 +338,20 @@ remain subject to lexical and real symlink containment.
 
 `SkillSnapshotReader` and `InstructionSnapshotReader` consume already selected
 views without independently resolving or retaining sources. Actual local edit
-skills preserve their live paths. Remote-contained local sources inherit the
-producer snapshot. Existing skill-index formats supply skill artifacts, and do
-not define an export-package format.
+skills preserve their live paths. Skill keys, exclusions and overrides use canonical
+semantic names while resource paths and display names retain their source spelling.
+An all-selection includes members from their effective override views, admits live-only
+members only when that view is selected, and omits missing effective-view members;
+named selections still require their members. Named own-instruction reads validate only
+the selected path and its ancestors, while full enumeration remains strict.
+Remote-contained local sources inherit the producer snapshot. Existing skill-index
+formats supply skill artifacts, and do not define an export-package format. Indexed
+members have independent artifact-digest pins. A scoped link can retain an admitted
+ledger alongside its direct pins: protected members borrow their exact resource trees
+and content objects, while selected members download only their requested artifacts.
+The recorded index transport and artifact digest must both match; a missing closure
+fails rather than refreshing that member. Nested artifact files and executable flags
+are materialized only inside the source session's disposable workspace.
 
 The linked result records relative resource evidence, source requirements,
 reference and contribution occurrences, provenance and exact dependency pins.
@@ -342,8 +368,43 @@ The existing public lifecycle operations still enforce their deployment subset.
 Root package resources use the project directory in project scope and the
 user-state directory in user scope. Explicit sources retain their declaring
 environment. Root user instructions require named sources, while imported
-producer groups retain their own sections. User prompt append content is
-read relative to the runtime home.
+producer groups retain their own sections. Consumer-owned prompt append references
+are metadata anchored to the project or, for root user declarations, runtime home.
+Linking and freezing do not open these export-only inputs. Public export reads their
+current bytes with lexical and real containment checks; missing or unreadable content
+fails export without a frozen-byte fallback. Producer-owned append content remains
+anchored to the selected immutable source and is a frozen replay resource. Installation
+replay reads only its recorded resources and does not open consumer append references.
+
+The package-only `MCPConnectionRunner` performs one explicit connection test on
+already-bound ephemeral values. Only Components links the exact official MCP SDK;
+SDK models do not enter public APIs. The SDK Client owns automatic initialization
+and typed tools/list requests. A bounded receive admission gate validates the
+negotiated version before initialized is sent, and discovery runs only when the
+server declares tools. There are no business tool, resource, prompt, sampling or
+elicitation handlers; SDK logging is no-op.
+
+The selected transport is stdio, Streamable HTTP, or legacy SSE. Stdio frames
+nonblocking owned pipes and discards counted stderr. HTTP uses one ephemeral
+Foundation/FoundationNetworking data-delegate session with incremental JSON/SSE
+admission, owned session/version headers and bounded SSE resumption without POST
+replay. Legacy SSE waits for its same-origin endpoint event before posting. No
+cookie/cache/credential store or OAuth flow is used; redirects and legacy
+endpoints cannot transfer headers to another origin or downgrade transport.
+
+A monotonic total deadline includes preparation and all requests; a request
+budget cannot extend it. Input, frame, cumulative input/output, stderr, queued
+payload, discovery pages/tools/text and redirect/resume bounds are finite and
+validated before I/O. Overflow is a structured failure or incomplete discovery,
+not a successful dropped message. Cancellation and every terminal path abort I/O,
+disconnect Client and join the owned work. Finite process/URLSession cleanup
+budgets are additional to the protocol deadline. Unconfirmed cleanup prevents
+complete success. Internal outcomes contain bounded private text values for the
+caller to redact; they have no automatic serialized representation.
+
+`MCPTestProcess` and the owned loopback HTTP fixture exercise real wire, process,
+origin, deadline and resource-cleanup behavior in ComponentsTests. They do not
+use external services or execute configured third-party clients.
 
 ## AgentsUpdates
 
