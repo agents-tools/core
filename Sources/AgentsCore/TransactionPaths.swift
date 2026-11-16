@@ -10,25 +10,6 @@ struct TransactionPaths {
       store.scope == .project ? store.environment.projectDirectory : store.environment.homeDirectory
     let physicalState = base.resolvingSymlinksInPath().appendingPathComponent(
       store.directory.lastPathComponent)
-    if store.scope == .project {
-      let relative = PathSafety.relativePath(
-        destination.path, to: base.resolvingSymlinksInPath().path)
-      if InstructionLocations.isProjectTarget(relative) {
-        return "instructions-project/" + relative
-      }
-      if isAuthoringFile(relative.split(separator: "/").map(String.init)) {
-        return "instructions-authoring/" + relative
-      }
-    } else {
-      for agent in AgentID.allCases {
-        if let file = InstructionLocations.file(
-          for: agent, scope: .user, environment: store.environment),
-          InstructionLocations.physical(file) == destination.standardizedFileURL
-        {
-          return "instructions-" + agent.rawValue + "/" + file.lastPathComponent
-        }
-      }
-    }
     let admitted =
       Array(TransactionLockContext.current(store)?.requestedRoutes ?? [])
       + (TransactionLockContext.current(store)?.admissions.map(\.route) ?? [])
@@ -55,7 +36,28 @@ struct TransactionPaths {
           }
           _ = try context.targetDirectory(for: route)
         }
+        if !route.shared { try store.requireProjectNativeAuthority(at: target.url) }
         return target.path
+      }
+    }
+    try store.requireProjectNativeAuthority(at: destination)
+    if store.scope == .project {
+      let relative = PathSafety.relativePath(
+        destination.path, to: base.resolvingSymlinksInPath().path)
+      if InstructionLocations.isProjectTarget(relative) {
+        return "instructions-project/" + relative
+      }
+      if isAuthoringFile(relative.split(separator: "/").map(String.init)) {
+        return "instructions-authoring/" + relative
+      }
+    } else {
+      for agent in AgentID.allCases {
+        if let file = InstructionLocations.file(
+          for: agent, scope: .user, environment: store.environment),
+          InstructionLocations.physical(file) == destination.standardizedFileURL
+        {
+          return "instructions-" + agent.rawValue + "/" + file.lastPathComponent
+        }
       }
     }
     var matchingInstallation = false
@@ -145,11 +147,11 @@ struct TransactionPaths {
     return url
   }
 
-  func nativeRootAuthorities(_ keys: Set<String>) throws -> [String: URL] {
-    var result: [String: URL] = [:]
+  func nativeRootAuthorities(_ keys: Set<String>) throws -> [String: NativeRootAuthority] {
+    var result: [String: NativeRootAuthority] = [:]
     for key in keys {
       if let route = NativeTargetRoute.targetRoute(key), !route.shared {
-        result[key] = try route.logicalDirectory(store.environment)
+        result[key] = try route.rootAuthority(store.environment)
       }
     }
     return result

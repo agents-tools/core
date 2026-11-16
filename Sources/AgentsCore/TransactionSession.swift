@@ -8,7 +8,7 @@ final class TransactionSession {
   let checkpoint: (String) throws -> Void
   let resources: [SharedResource]
   /// Logical project-root authorization is checked separately from opened physical parents.
-  private let nativeRoots: [String: URL]
+  private let nativeRoots: [String: NativeRootAuthority]
   /// Devices whose atomic renames passed a probe during this session only; `st_dev` values
   /// can be reused by another filesystem after an unmount.
   var capableDevices: Set<UInt64> = []
@@ -16,7 +16,7 @@ final class TransactionSession {
   init(
     journal: TransactionJournal, directory: DirectoryHandle, parents: [DirectoryHandle],
     checkpoint: @escaping (String) throws -> Void, resources: [SharedResource] = [],
-    nativeRoots: [String: URL] = [:]
+    nativeRoots: [String: NativeRootAuthority] = [:]
   ) {
     self.journal = journal
     self.directory = directory
@@ -90,7 +90,7 @@ final class TransactionSession {
     if !resources.isEmpty { try requireScope() }
     if let route = NativeTargetRoute.targetRoute(journal.entries[index].path), !route.shared {
       guard let logical = nativeRoots[route.root],
-        try DirectoryHandle(at: logical.resolvingSymlinksInPath()).identity
+        try DirectoryHandle(at: logical.physicalDirectory()).identity
           == journal.roots[route.root]
       else {
         throw conflict(index, "registered native root changed after preparation")

@@ -84,7 +84,9 @@ enum FixedNativeTargetRoute: String, Codable, Sendable, CaseIterable {
     return sharedRoutes.first { $0.metadata == key }
   }
 
-  func logicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+  func logicalDirectory(_ environment: RuntimeEnvironment, validateExistingOverride: Bool = true)
+    throws -> URL
+  {
     func home() throws -> URL { try Self.absoluteDirectory(environment.homeDirectory) }
     func override(_ key: String) throws -> URL? {
       guard let value = environment.environment[key], !value.isEmpty else { return nil }
@@ -100,7 +102,9 @@ enum FixedNativeTargetRoute: String, Codable, Sendable, CaseIterable {
     case .claudeSettingsUser:
       return try override("CLAUDE_CONFIG_DIR") ?? home().appendingPathComponent(".claude")
     case .codexHooksProject: return try Self.codexMCPProject.logicalDirectory(environment)
-    case .codexHooksUser: return try Self.codexMCPUser.logicalDirectory(environment)
+    case .codexHooksUser:
+      return try Self.codexMCPUser.logicalDirectory(
+        environment, validateExistingOverride: validateExistingOverride)
     case .cursorHooksProject: return try Self.cursorMCPProject.logicalDirectory(environment)
     case .cursorHooksUser: return try Self.cursorMCPUser.logicalDirectory(environment)
     case .geminiIgnoreProject, .cursorIgnoreProject:
@@ -114,7 +118,7 @@ enum FixedNativeTargetRoute: String, Codable, Sendable, CaseIterable {
         ".codex")
     case .codexMCPUser:
       if let root = try override("CODEX_HOME") {
-        _ = try DirectoryHandle(at: root.resolvingSymlinksInPath())
+        if validateExistingOverride { _ = try DirectoryHandle(at: root.resolvingSymlinksInPath()) }
         return root
       }
       return try home().appendingPathComponent(".codex")
@@ -157,7 +161,7 @@ enum FixedNativeTargetRoute: String, Codable, Sendable, CaseIterable {
 /// A closed loader recipe. Named routes carry only validated native member names;
 /// runtime directories remain owned by the recipe and explicit environment.
 package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable {
-  package enum Member: String, Codable, Sendable {
+  package enum Member: String, Codable, Sendable, CaseIterable {
     case claudeCommand, claudeAgent, claudeSkillPlugin
     case codexAgent, geminiCommand, geminiAgent, geminiExtension
     case cursorCommand, cursorAgent, cursorLocalPlugin
@@ -339,38 +343,117 @@ package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable 
     else { return nil }
     return route
   }
-  func logicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
-    if let fixed { return try fixed.logicalDirectory(environment) }
-    let base: URL
+  func rootAuthority(_ environment: RuntimeEnvironment, validateExistingOverride: Bool = true)
+    throws -> NativeRootAuthority
+  {
+    if let fixed {
+      return NativeRootAuthority(
+        loader: try fixed.logicalDirectory(
+          environment, validateExistingOverride: validateExistingOverride), descendants: [])
+    }
+    let base: FixedNativeTargetRoute
     switch member! {
     case .claudeCommand, .claudeAgent, .claudeSkillPlugin:
-      base = try (memberScope == .project ? Self.claudeSettingsProject : .claudeSettingsUser)
-        .logicalDirectory(environment)
+      base = memberScope == .project ? .claudeSettingsProject : .claudeSettingsUser
     case .codexAgent:
-      base = try (memberScope == .project ? Self.codexMCPProject : .codexMCPUser).logicalDirectory(
-        environment)
+      base = memberScope == .project ? .codexMCPProject : .codexMCPUser
     case .geminiCommand, .geminiAgent, .geminiExtension:
-      base = try (memberScope == .project ? Self.geminiMCPProject : .geminiMCPUser)
-        .logicalDirectory(environment)
+      base = memberScope == .project ? .geminiMCPProject : .geminiMCPUser
     case .cursorCommand, .cursorAgent, .cursorLocalPlugin:
-      base = try (memberScope == .project ? Self.cursorMCPProject : .cursorMCPUser)
-        .logicalDirectory(environment)
+      base = memberScope == .project ? .cursorMCPProject : .cursorMCPUser
     }
-    let container: String
+    let container: [String]
     switch member! {
-    case .claudeCommand, .geminiCommand, .cursorCommand: container = "commands"
-    case .claudeAgent, .codexAgent, .geminiAgent, .cursorAgent: container = "agents"
-    case .claudeSkillPlugin: container = "skills"
-    case .cursorLocalPlugin: container = "plugins/local"
-    case .geminiExtension: container = "extensions"
+    case .claudeCommand, .geminiCommand, .cursorCommand: container = ["commands"]
+    case .claudeAgent, .codexAgent, .geminiAgent, .cursorAgent: container = ["agents"]
+    case .claudeSkillPlugin: container = ["skills"]
+    case .cursorLocalPlugin: container = ["plugins", "local"]
+    case .geminiExtension: container = ["extensions"]
     }
-    let nested = name!.split(separator: "/").dropLast().map(String.init)
-    var result = base.resolvingSymlinksInPath()
+    return NativeRootAuthority(
+      loader: try base.logicalDirectory(
+        environment, validateExistingOverride: validateExistingOverride),
+      descendants: container + name!.split(separator: "/").dropLast().map(String.init))
+  }
+  func logicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+    try rootAuthority(environment).logicalDirectory
+  }
+  func physicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+    try rootAuthority(environment).physicalDirectory()
+  }
+
+  /// Detect closed user slots without creating a root or granting publication authority.
+  static func userRoute(at destination: URL, environment: RuntimeEnvironment) throws -> Self? {
+    let target = destination.deletingLastPathComponent().resolvingSymlinksInPath()
+      .appendingPathComponent(destination.lastPathComponent)
+    func matches(_ route: Self) throws -> Bool {
+      guard route.basename.utf8.elementsEqual(target.lastPathComponent.utf8) else { return false }
+      let authority = try route.rootAuthority(environment, validateExistingOverride: false)
+      let planned = authority.plannedPhysicalDirectory
+      let targetParent = target.deletingLastPathComponent()
+      if planned.path.utf8.elementsEqual(targetParent.path.utf8) {
+        _ = try authority.physicalDirectory()
+        return true
+      }
+      if planned.resolvingSymlinksInPath().path.utf8.elementsEqual(targetParent.path.utf8) {
+        _ = try authority.physicalDirectory()
+        return true
+      }
+      // Unselected, disjoint roots do not impose access requirements on this target.
+      // Openable aliases still compare by descriptor identity, including bind aliases.
+      guard let candidate = try? DirectoryHandle(at: planned),
+        let parent = try? DirectoryHandle(at: targetParent),
+        try candidate.objectIdentity == parent.objectIdentity
+      else { return false }
+      _ = try authority.physicalDirectory()
+      return true
+    }
+    for route in allCases
+    where route.shared && route.basename.utf8.elementsEqual(target.lastPathComponent.utf8) {
+      if try matches(route) { return route }
+    }
+    for member in Member.allCases {
+      guard let probe = try? named(member, scope: .user, name: "probe") else { continue }
+      let suffix = String(probe.basename.dropFirst("probe".count))
+      guard target.lastPathComponent.hasSuffix(suffix) else { continue }
+      let authority = try probe.rootAuthority(environment, validateExistingOverride: false)
+      let prefix = authority.plannedPhysicalDirectory.path + "/"
+      let bytes = Array(target.path.utf8)
+      let relative =
+        bytes.starts(with: prefix.utf8)
+        ? String(decoding: bytes.dropFirst(prefix.utf8.count), as: UTF8.self)
+        : target.lastPathComponent
+      let candidate =
+        probe.isContainer
+        ? try? named(member, scope: .user, name: relative)
+        : try? file(member, scope: .user, relativePath: relative)
+      if let candidate, try matches(candidate) { return candidate }
+    }
+    return nil
+  }
+  static func globalLogicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+    try claudeMCPLocal.logicalDirectory(environment)
+  }
+  static func globalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+    try globalLogicalDirectory(environment).resolvingSymlinksInPath()
+  }
+}
+
+/// The configured loader boundary may be an admitted alias. Every descendant is no-follow.
+struct NativeRootAuthority {
+  let loader: URL
+  let descendants: [String]
+  var logicalDirectory: URL { descendants.reduce(loader) { $0.appendingPathComponent($1) } }
+  var plannedPhysicalDirectory: URL {
+    descendants.reduce(loader.resolvingSymlinksInPath()) { $0.appendingPathComponent($1) }
+  }
+  func physicalDirectory() throws -> URL {
+    var result = loader.resolvingSymlinksInPath()
     let ancestry = try DirectoryAccessEvidence.capture(at: result)
     var opened =
       ancestry.directories.count == result.pathComponents.count
       ? try DirectoryHandle(at: result) : nil
-    for part in container.split(separator: "/").map(String.init) + nested {
+    for part in descendants {
       result.appendPathComponent(part)
       if let parent = opened, try parent.info(part) != nil {
         opened = try parent.child(part)
@@ -379,20 +462,6 @@ package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable 
       }
     }
     return result
-  }
-  fileprivate func userCounterpart() throws -> Self? {
-    guard memberScope == .project, let member, member != .cursorCommand else { return nil }
-    return try Self.named(member, scope: .user, name: name!)
-  }
-  func physicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
-    let logical = try logicalDirectory(environment)
-    return isNamed ? logical : logical.resolvingSymlinksInPath()
-  }
-  static func globalLogicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
-    try claudeMCPLocal.logicalDirectory(environment)
-  }
-  static func globalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
-    try globalLogicalDirectory(environment).resolvingSymlinksInPath()
   }
 }
 
@@ -440,15 +509,15 @@ final class SharedResource {
   let ancestry: DirectoryAccessEvidence
   let metadataAccess: FileAccessEvidence?
   let metadataAncestry: DirectoryAccessEvidence?
-  let authorizedRoot: URL
+  let authority: NativeRootAuthority
   private var lockDescriptor: Int32?
   private var lockAccess: FileAccessEvidence?
 
   init(store: StateStore, route: NativeTargetRoute = .claudeMCPLocal, create: Bool) throws {
     guard route.shared else { throw CoreError.invalidState("project route has no shared resource") }
     self.route = NativeTargetRoute.targetRoute(route.root)!
-    authorizedRoot = try route.logicalDirectory(store.environment)
-    let url = try route.physicalDirectory(store.environment)
+    authority = try route.rootAuthority(store.environment)
+    let url = try authority.physicalDirectory()
     parent = try DirectoryHandle(at: url, create: create)
     ancestry = try DirectoryAccessEvidence.capture(at: url)
     identity = SharedResourceIdentity(parent: try parent.objectIdentity, basename: route.basename)
@@ -488,7 +557,7 @@ final class SharedResource {
     }
     try ancestry.validate(at: parent.url)
     guard
-      try DirectoryHandle(at: authorizedRoot.resolvingSymlinksInPath()).objectIdentity
+      try DirectoryHandle(at: authority.physicalDirectory()).objectIdentity
         == identity.parent,
       try DirectoryHandle(at: parent.url).objectIdentity == identity.parent
     else {
@@ -617,20 +686,20 @@ final class SharedResource {
 /// a writer must create and open the real parent before deriving its coordination domain.
 struct AbsentSharedRoot {
   let route: NativeTargetRoute
-  let logical: URL
+  let authority: NativeRootAuthority
   let physical: URL
   let ancestry: DirectoryAccessEvidence
 
   init?(store: StateStore, route: NativeTargetRoute) throws {
-    logical = try route.logicalDirectory(store.environment)
-    physical = try route.physicalDirectory(store.environment)
+    authority = try route.rootAuthority(store.environment)
+    physical = try authority.physicalDirectory()
     ancestry = try DirectoryAccessEvidence.capture(at: physical)
     guard ancestry.directories.count < physical.pathComponents.count else { return nil }
     self.route = route
   }
 
   func remainsAbsent() throws -> Bool {
-    guard logical.resolvingSymlinksInPath().path == physical.path else {
+    guard try authority.physicalDirectory().path.utf8.elementsEqual(physical.path.utf8) else {
       throw CoreError.invalidState("registered native root changed during inspection")
     }
     let current = try DirectoryAccessEvidence.capture(at: physical)
@@ -769,15 +838,21 @@ final class TransactionLockContext {
 }
 
 extension StateStore {
+  func requireProjectNativeAuthority(at destination: URL) throws {
+    if scope == .project,
+      try NativeTargetRoute.userRoute(at: destination, environment: environment) != nil
+    {
+      throw CoreError.unsafePath("project target coincides with a registered shared user target")
+    }
+  }
+
   package func nativeTarget(for route: NativeTargetRoute) throws -> MaterializationTarget {
     guard route.permits(scope) else {
       throw CoreError.unsafePath("project native targets require their project scope")
     }
-    if let counterpart = try route.userCounterpart(),
-      try route.physicalDirectory(environment).path.utf8.elementsEqual(
-        counterpart.physicalDirectory(environment).path.utf8)
-    {
-      throw CoreError.unsafePath("project native target coincides with a registered user target")
+    if !route.shared, route.isNamed {
+      let target = try route.physicalDirectory(environment).appendingPathComponent(route.basename)
+      try requireProjectNativeAuthority(at: target)
     }
     var canonical = route
     let parent: URL
@@ -817,6 +892,7 @@ extension StateStore {
     guard routes.allSatisfy({ $0.permits(scope) }) else {
       throw CoreError.unsafePath("registered native request belongs to another scope")
     }
+    for route in routes where !route.shared && route.isNamed { _ = try nativeTarget(for: route) }
     while true {
       let before = try pendingCoordinationJournal(diagnosing: !writable)
       var resources: [SharedResource] = []
