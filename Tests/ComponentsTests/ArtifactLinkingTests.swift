@@ -73,7 +73,7 @@ struct ArtifactLinkingTests {
       kind: .skills, name: "beta")
     let newAlpha = try archive("alpha", body: "new alpha", fixture: fixture, web: web)
     // The protected member disappears from the index and its exact download is unavailable.
-    try FileManager.default.removeItem(at: web.appendingPathComponent("beta.zip"))
+    try FileManager.default.removeItem(at: web.appendingPathComponent("beta.tar.gz"))
     try index([("alpha", newAlpha)], fixture: fixture, web: web)
     let next = try freeze(pins: [key: .init(revision: oldBeta)], previous: previous)
     let retained = try #require(next.components.values.first { $0.name == "beta" })
@@ -208,8 +208,8 @@ struct ArtifactLinkingTests {
       key("alpha"): .init(revision: alphaDigest), key("beta"): .init(revision: betaDigest),
     ]
     // Membership comes from each pin's recorded index, even after its download disappears.
-    try FileManager.default.removeItem(at: webA.appendingPathComponent("alpha.zip"))
-    try FileManager.default.removeItem(at: webB.appendingPathComponent("beta.zip"))
+    try FileManager.default.removeItem(at: webA.appendingPathComponent("alpha.tar.gz"))
+    try FileManager.default.removeItem(at: webB.appendingPathComponent("beta.tar.gz"))
     try index([], fixture: fixture, web: webA)
     try index([], fixture: fixture, web: webB)
     let retained = try freeze(pins: pins, previous: previous)
@@ -243,19 +243,19 @@ struct ArtifactLinkingTests {
     try fixture.write("fixture script", to: "scripts/run", base: root)
     try FileManager.default.setAttributes(
       [.posixPermissions: 0o755], ofItemAtPath: root.appendingPathComponent("scripts/run").path)
-    let zip = web.appendingPathComponent(name + ".zip")
-    if FileManager.default.fileExists(atPath: zip.path) {
-      try FileManager.default.removeItem(at: zip)
+    let archive = web.appendingPathComponent(name + ".tar.gz")
+    if FileManager.default.fileExists(atPath: archive.path) {
+      try FileManager.default.removeItem(at: archive)
     }
     try ProcessRunner.run(
-      "/usr/bin/env", arguments: ["zip", "-qr", zip.path, "."], workingDirectory: root)
-    return "sha256:" + (try FileHash.sha256Hex(file: zip))
+      "/usr/bin/env", arguments: ["tar", "-czf", archive.path, "."], workingDirectory: root)
+    return "sha256:" + (try FileHash.sha256Hex(file: archive))
   }
 
   private func index(_ members: [(String, String)], fixture: LinkFixture, web: URL) throws {
     let entries = members.map { name, digest in
       [
-        "name": name, "description": "Fixture", "type": "archive", "url": "/\(name).zip",
+        "name": name, "description": "Fixture", "type": "archive", "url": "/\(name).tar.gz",
         "digest": digest,
       ]
     }
