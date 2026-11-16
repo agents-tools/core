@@ -220,6 +220,44 @@ private func runConnection(_ input: MCPConnectionInput, limits: MCPConnectionLim
     #endif
   }
 
+  #if os(Linux)
+    @Test func zombieDescendantLeaderDoesNotHideItsLiveWorker() async throws {
+      let fixture = try MCPFixture()
+      let process = try OwnedDuplexProcess(fixture.configuration("thread-descendant"))
+      func state(_ pid: Int32) -> (state: String, threads: Int)? {
+        guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+          let delimiter = stat.lastIndex(of: ")")
+        else { return nil }
+        let fields = stat[stat.index(after: delimiter)...].split(separator: " ")
+        guard fields.count > 17, let threads = Int(fields[17]) else { return nil }
+        return (String(fields[0]), threads)
+      }
+      let ready = await fixture.waitFor {
+        var exited = false
+        guard platform_duplex_observe(process.identifier, &exited) == 0, exited,
+          let child = fixture.text("descendant-pid").flatMap({ Int32($0) }),
+          let childState = state(child)
+        else { return false }
+        return childState.state == "Z" && childState.threads > 1
+      }
+      #expect(ready)
+      var quiescent = true
+      let observation = platform_duplex_group_quiescent(process.identifier, &quiescent)
+      #expect(observation == 0)
+      #expect(!quiescent)
+      let cleaned = await process.finish(
+        grace: .milliseconds(5), terminate: .milliseconds(5), killWait: .seconds(1))
+      #expect(cleaned)
+      #expect(kill(process.identifier, 0) == -1 && errno == ESRCH)
+      if let child = fixture.text("descendant-pid").flatMap({ Int32($0) }) {
+        let final = state(child)
+        #expect(final == nil || (final!.state == "Z" && final!.threads == 1))
+      } else {
+        Issue.record("Missing owned multithreaded descendant")
+      }
+    }
+  #endif
+
   @Test func blockedKernelPipeWriteIsNonblockingAndCleanupIsFinite() async throws {
     let fixture = try MCPFixture()
     let process = try OwnedDuplexProcess(fixture.configuration("ignore-input"))
@@ -284,6 +322,16 @@ private func runConnection(_ input: MCPConnectionInput, limits: MCPConnectionLim
     if mode == "eof-tools" { #expect(result.tools.count == 1000) }
   }
 
+  @Test func finalToolsResponseCannotMaskSameBurstAdmissionFailure() async throws {
+    let fixture = try MCPFixture()
+    var limits = MCPConnectionLimits()
+    limits.frameBytes = 1024
+    let result = await runConnection(fixture.input("final-response-limit"), limits: limits)
+    #expect(result.status == .incomplete(.messageLimit))
+    #expect(result.cleanupComplete)
+    #expect(fixture.methods() == ["initialize", "notifications/initialized", "tools/list"])
+  }
+
   @Test(arguments: ["json", "sse", "legacy", "resume"])
   func actualHTTPModesDiscoverAndCleanUp(_ mode: String) async throws {
     let fixture = try MCPFixture()
@@ -307,7 +355,7 @@ private func runConnection(_ input: MCPConnectionInput, limits: MCPConnectionLim
     if mode == "resume" {
       #expect(
         fixture.records().contains {
-          $0["http"] as? String == "GET" && $0["lastEventID"] as? String == "first-event"
+          $0["http"] as? String == "GET" && $0["lastEventID"] as? String == "1"
         })
     }
   }

@@ -61,8 +61,35 @@ if scenario == "holder" || scenario == "ignore-input" || scenario == "blocked-in
   }
   while true { _ = sleep(1) }
 }
-if scenario == "descendant" {
-  let argv = [arguments[0], "holder", root.path].map { strdup($0) } + [nil]
+#if os(Linux)
+  if scenario == "thread-holder" {
+    alarm(10)
+    _ = signal(SIGTERM, SIG_IGN)
+    var worker: pthread_t = 0
+    let context = UnsafeMutableRawPointer(strdup(root.path))
+    let created = pthread_create(
+      &worker, nil,
+      { context in
+        guard let context else { return nil }
+        let path = String(cString: context.assumingMemoryBound(to: CChar.self))
+        free(context)
+        try? "ready".write(
+          to: URL(fileURLWithPath: path).appendingPathComponent("holder-ready"),
+          atomically: true, encoding: .utf8)
+        while true { _ = sleep(1) }
+      }, context)
+    if created != 0 {
+      free(context)
+      exit(2)
+    }
+    pthread_exit(nil)
+  }
+#endif
+if scenario == "descendant" || scenario == "thread-descendant" {
+  let argv =
+    [arguments[0], scenario == "descendant" ? "holder" : "thread-holder", root.path].map {
+      strdup($0)
+    } + [nil]
   let environment =
     ProcessInfo.processInfo.environment.map { strdup($0.key + "=" + $0.value) } + [nil]
   var pid: pid_t = 0
@@ -79,6 +106,7 @@ if scenario == "descendant" {
     usleep(1000)
   }
   if !descendantReady || getpgid(pid) != getpgrp() { exit(2) }
+  if scenario == "thread-descendant" { exit(0) }
 }
 let fd = Int32(ProcessInfo.processInfo.environment["FD_CHECK"] ?? "-1") ?? -1
 record([
@@ -125,6 +153,22 @@ while true {
         "capabilities": capabilities, "serverInfo": ["name": "local-fixture", "version": "1"],
       ])
   } else if method == "tools/list" {
+    if scenario == "final-response-limit" {
+      let tools: [[String: Any]] = (0..<4).map { index in
+        [
+          "name": "tool-" + String(index), "description": String(repeating: "x", count: 100),
+          "inputSchema": ["type": "object"],
+        ]
+      }
+      let response = try! JSONSerialization.data(withJSONObject: [
+        "jsonrpc": "2.0", "id": id, "result": ["tools": tools],
+      ])
+      precondition(response.count <= 1024)
+      let burst = response + Data([10]) + Data(repeating: 120, count: 1025)
+      precondition(burst.count < 4096)
+      output(burst)
+      continue
+    }
     if scenario == "eof-tools" {
       let tools: [[String: Any]] = (0..<1000).map { index in
         [

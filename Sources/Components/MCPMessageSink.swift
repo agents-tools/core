@@ -35,6 +35,16 @@ final class MCPMessageSink: @unchecked Sendable {
   var version: String? { lock.withLock { negotiated } }
   var responsesAdmitted: Bool { lock.withLock { pendingResponses.isEmpty } }
 
+  /// Seal admission and capture its preexisting failure in one locked step.
+  /// The runner's intentional close must not replace an already-latched limit.
+  func closeAdmission() -> MCPConnectionIssue? {
+    lock.withLock {
+      let terminal = issue
+      finishLocked(.connectionClosed)
+      return terminal
+    }
+  }
+
   func fail(_ error: MCPConnectionIssue) {
     lock.withLock { finishLocked(error) }
   }
@@ -147,6 +157,7 @@ struct MCPSSEParser {
   private var line = Data()
   private var data = Data()
   private var name = ""
+  private var eventID: String?
   private(set) var lastID: String?
   private(set) var retry: TimeInterval?
   private var afterCR = false
@@ -157,6 +168,7 @@ struct MCPSSEParser {
     line.removeAll(keepingCapacity: true)
     data.removeAll(keepingCapacity: true)
     name = ""
+    eventID = nil
     afterCR = false
     firstLine = true
   }
@@ -186,8 +198,10 @@ struct MCPSSEParser {
     if line.isEmpty {
       if !data.isEmpty {
         data.removeLast()  // SSE removes the final data-field newline.
-        try emit(Event(name: name, data: data, id: lastID, retry: retry))
+        try emit(Event(name: name, data: data, id: eventID ?? lastID, retry: retry))
       }
+      if let eventID { lastID = eventID }
+      eventID = nil
       data.removeAll(keepingCapacity: true)
       name = ""
       return
@@ -204,7 +218,7 @@ struct MCPSSEParser {
       data.append(10)
     case "event": name = String(decoding: value, as: UTF8.self)
     case "id":
-      if !value.contains(0) { lastID = String(decoding: value, as: UTF8.self) }
+      if !value.contains(0) { eventID = String(decoding: value, as: UTF8.self) }
     case "retry":
       if !value.isEmpty && value.allSatisfy({ $0 >= 48 && $0 <= 57 }),
         let milliseconds = UInt64(String(decoding: value, as: UTF8.self))

@@ -132,7 +132,10 @@ package enum MCPConnectionRunner {
           // its queue. The existing request/total timer still bounds this join.
           event = await group.next() ?? event
         }
-        let transportIssue = transport.sink.failure
+        let transportIssue = transport.sink.closeAdmission()
+        if let transportIssue, transportIssue != .connectionClosed {
+          event = .failed(transportIssue)
+        }
         // A separate cleanup task is deliberately joined and is not cancelled
         // with the caller: cancelling sleep must not skip EOF/TERM/KILL budgets.
         let cleanup = Task {

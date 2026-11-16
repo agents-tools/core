@@ -58,7 +58,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 while True:self.wfile.write(b':'+b'x'*255+b'\n');self.wfile.flush()
             elif mode=='resume' and message['method']=='initialize':
                 resume_reply=reply
-                self.wfile.write(b'id: first-event\nretry: 1\ndata: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"probe","progress":1}}\n\n')
+                self.wfile.write(b'id: 1\nretry: 1\ndata: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"probe","progress":1}}\n\n')
+                self.wfile.write(b'id: 2\ndata: {\"jsonrpc\":')
                 self.wfile.flush()
             else:
                 # Split a multiline data event inside its field name and use CRLF.
@@ -70,10 +71,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.close_connection=True
     def do_GET(self):
         self.log_request_data(None)
+        if mode=='resume' and self.headers.get('Last-Event-ID')!='1':self.empty(409);return
         self.send_response(200);self.send_header('Content-Type','text/event-stream');self.send_header('Connection','close');self.end_headers()
         try:
             if mode=='resume':
-                self.wfile.write(b'event: message\ndata: '+resume_reply+b'\n\n');self.wfile.flush();self.close_connection=True;return
+                self.wfile.write(b'event: message\nid: 2\ndata: '+resume_reply+b'\n\n');self.wfile.flush();self.close_connection=True;return
             endpoint=('/messages' if mode!='legacy-cross' else 'http://localhost:%d/messages'%self.server.server_port).encode()
             self.wfile.write(b'event: endpoint\ndata: '+endpoint+b'\n\n');self.wfile.flush()
             while True:
