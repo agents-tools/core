@@ -42,7 +42,7 @@ The frontend reads `.agent/agents.yaml` or the user scope’s `agents.yaml` and
 produces complete syntax-independent IR and typed declarations. Admission checks
 UTF-8 and unsupported raw line separators before parsing. Tree-sitter supplies
 concrete byte ranges under an enforced parser work policy; bounded CST admission
-precedes public Yams ordered-node composition. The bundled schema owns field
+precedes public Yams ordered-node composition. The source schema owns field
 shapes and generates finite runtime constraints and reference help. Core scalar
 resolution preserves string values, integer kind and exact decimal payloads.
 
