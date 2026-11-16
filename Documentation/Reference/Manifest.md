@@ -22,7 +22,7 @@ uses: [{group: checks}]
 exports: [checks]
 ```
 
-The distributed [JSON schema](../../Sources/AgentsManifest/Resources/agents.schema.json)
+The source [JSON schema](../../Sources/AgentsManifest/Resources/agents.schema.json)
 is the field-shape owner. [Generated field help](ManifestSchema.md) lists supported
 shapes, field descriptions, examples and schema-owned collection bounds. The finite compiler
 rejects unsupported validation keywords, values and combinations; its generated
@@ -35,31 +35,6 @@ resolve sources, access resources or execute component programs.
 
 Git requirements also apply to local Git repositories declared with `path`;
 their local source identity and declaring environment remain unchanged.
-
-## Public Schema Resource
-
-Consumers importing `AgentsManifest` can obtain the bundled schema for offline
-editor association or export:
-
-```swift
-import AgentsManifest
-
-let bytes: [UInt8] = try ManifestSchemaResource.encodedJSON()
-```
-
-The API returns the exact resource bytes, including descriptions, examples and
-`x-agents-*` scalar annotations. It reads no declaration or scope state and uses
-no network. All schema references are bundled; the schema identifier is not a
-download requirement. Executable distributions must include the Swift package's
-resource bundle. A missing or unreadable schema file throws an I/O error;
-consumers do not need a checkout or a build-directory path.
-
-The schema supplies completion, field help and structural validation. Core
-diagnostics remain authoritative for YAML admission, scalar kinds, numeric
-identity and domain relationships. General JSON Schema treats `1.0` as a
-mathematical integer and cannot preserve decimal lexical identity. Saving a
-manifest must preserve its YAML text rather than convert it through JSON numbers
-or enable schema-driven format conversion.
 
 ## Values and Ordering
 
@@ -78,6 +53,10 @@ Every decimal is written as `!!float "<exact JSON-number text>"`; integer-shaped
 payloads, negative zero, exponent spelling and trailing zeroes retain identity.
 This tag is permitted only on NativeValue scalars. `<<` is an ordinary data key.
 
+Core diagnostics are authoritative for YAML admission, scalar kinds, numeric
+identity and domain relationships. General JSON Schema treats `1.0` as a
+mathematical integer and cannot preserve decimal lexical identity.
+
 UTF-8, a leading BOM, LF/CRLF, block and flow collections and all ordinary scalar
 styles are supported. Raw NEL, line separator and paragraph separator characters
 are rejected before either parser; use double-quoted escapes `\u0085`,
@@ -90,6 +69,8 @@ directives, complex keys, multiple documents and other tags are rejected.
 `sources.team` maps to `/sources/0`, its key to `/sources/0/name`, and nested
 group components to `/groups/0/components/...`. Handles belong to one digest.
 `ManifestEdit` accepts Core domain values and prepares bytes without writing.
+Agents App uses these document and edit APIs for configuration editing. Save
+operations preserve YAML text and scalar identity through the prepared edits.
 
 No-op changes return exact bytes. Changed fields and collection entries preserve
 unrelated bytes. Adjacent leading comments and same-line trailing comments belong

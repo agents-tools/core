@@ -51,7 +51,7 @@ let package = Package(
       dependencies: [
         "AgentsCore", "TreeSitterYAML", "Yams",
         .product(name: "TreeSitter", package: "tree-sitter"),
-      ], resources: [.copy("Resources/agents.schema.json")]),
+      ], exclude: ["Resources/agents.schema.json"]),
     .target(
       name: "AgentsCore",
       dependencies: ["CPlatform", .product(name: "Crypto", package: "swift-crypto")]
