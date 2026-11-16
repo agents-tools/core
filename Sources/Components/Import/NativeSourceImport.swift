@@ -112,13 +112,32 @@ enum NativeSourceImport {
     }
   }
 
+  /// A full parsed map is classified even when only a subset contributes canonical members.
+  static func classifyMembers(
+    _ value: NativeValue, parsed: NativeImportDocument, keys: [String],
+    into diagnostics: inout ImportDiagnostics
+  ) throws {
+    guard let members = value.importObject else { throw ImportReadFailure.invalid }
+    for name in members.keys.sorted() {
+      try Task.checkCancellation()
+      let origin = try parsed.memberLocation(keys, name: name)
+      if let fields = members[name]?.importObject {
+        NativeImportInput.preservationBindings(
+          fields, at: origin, profile: parsed.input.profile, into: &diagnostics)
+      } else {
+        _ = NativeImportInput.sensitive(members[name]!, at: origin, into: &diagnostics)
+      }
+    }
+  }
+
   static func mcp(
     _ value: NativeValue, parsed: NativeImportDocument, keys: [String],
     container: String, limits: SourceImportLimits, into diagnostics: inout ImportDiagnostics
   ) throws {
     guard case .object(let servers) = value else { throw ImportReadFailure.invalid }
+    try classifyMembers(value, parsed: parsed, keys: keys, into: &diagnostics)
     let agent = NativeImportInput.agent(parsed.input.profile)
-    for (index, name) in servers.keys.sorted().enumerated() {
+    for name in servers.keys.sorted() {
       try Task.checkCancellation()
       if ![SourceImportProfile.claudePluginV1, .cursorPluginV1, .geminiExtensionV1].contains(
         parsed.input.profile),
@@ -126,12 +145,7 @@ enum NativeSourceImport {
       {
         continue
       }
-      let originalNames =
-        (try parsed.document.read(.init(keys: keys)))?.value?.importObject?.keys.sorted()
-        ?? servers.keys.sorted()
-      let originalIndex = originalNames.firstIndex(of: name) ?? index
-      let location = parsed.location(
-        keys + [name], display: keys.map { "/" + $0 }.joined() + "/member[\(originalIndex)]")
+      let location = try parsed.memberLocation(keys, name: name)
       guard NativeImportInput.name(name), case .object(let fields) = servers[name] else {
         NativeImportInput.unconverted(servers[name]!, at: location, into: &diagnostics)
         continue
@@ -169,9 +183,13 @@ enum NativeSourceImport {
           guard case .boolean = fields["codemode"]! else { throw ImportReadFailure.invalid }
           native[agent.rawValue, default: [:]]["codemode"] = fields["codemode"]
         }
-        if agent == .opencode, let oauth = fields["oauth"], oauth != .boolean(false) {
-          NativeImportInput.unconverted(oauth, at: location.appending("oauth"), into: &diagnostics)
-          continue
+        if agent == .opencode, let oauth = fields["oauth"] {
+          guard oauth == .boolean(false) else {
+            NativeImportInput.unconverted(
+              oauth, at: location.appending("oauth"), into: &diagnostics)
+            continue
+          }
+          native[agent.rawValue, default: [:]]["oauth"] = oauth
         }
         if let url = fields["url"]?.importString ?? fields["httpUrl"]?.importString {
           guard fields["command"] == nil, ImportInput.safeLocator(url),
@@ -318,7 +336,7 @@ enum NativeSourceImport {
             try NativeImportInput.resource(
               path, root: container, input: parsed.input, origin: location.appending("command"),
               limits: limits, into: &diagnostics, admission: parsed.admission)
-            executable = path
+            executable = path.contains("/") ? path : "./" + path
           } else if executable.contains("/") {
             diagnostics.add(
               .unconverted, location.appending("command"),
@@ -375,7 +393,9 @@ enum NativeSourceImport {
     parsed: NativeImportDocument, key: String, into diagnostics: inout ImportDiagnostics
   ) throws {
     guard case .object(let entries) = value else { throw ImportReadFailure.invalid }
+    try classifyMembers(value, parsed: parsed, keys: [key], into: &diagnostics)
     for (index, name) in entries.keys.sorted().enumerated() {
+      guard parsed.input.selection?.contains(name) ?? true else { continue }
       let origin = parsed.location([key, name], display: "/\(key)/member[\(index)]")
       guard NativeImportInput.name(name), let fields = entries[name]?.importObject else {
         NativeImportInput.unconverted(entries[name]!, at: origin, into: &diagnostics)
@@ -448,7 +468,9 @@ enum NativeSourceImport {
     limits: SourceImportLimits, into diagnostics: inout ImportDiagnostics
   ) throws {
     guard case .object(let agents) = value else { throw ImportReadFailure.invalid }
+    try classifyMembers(value, parsed: parsed, keys: ["agents"], into: &diagnostics)
     for (index, name) in agents.keys.sorted().enumerated() {
+      guard parsed.input.selection?.contains(name) ?? true else { continue }
       let origin = parsed.location(["agents", name], display: "/agents/member[\(index)]")
       guard NativeImportInput.name(name), let fields = agents[name]?.importObject,
         Set(fields.keys).isSubset(of: ["description", "config_file"]),

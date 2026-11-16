@@ -25,7 +25,8 @@ extension CursorAdapter {
           ["tools"], .unverified,
           "the documented subagent schema does not establish a tool allowlist")
       }
-      var fields = try input.checkedNative(["readonly": .boolean, "is_background": .boolean])
+      var fields = try input.checkedNative(
+        NativeComponentFieldsV1.markdownRules(.cursorEditor, kind: "subagent"))
       let name = try input.filename()
       fields["name"] = .init(name)
       fields["description"] = .init(try input.text("description"))

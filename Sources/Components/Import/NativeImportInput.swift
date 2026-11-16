@@ -38,6 +38,15 @@ struct NativeImportDocument {
     }
   }
 
+  /// Winner subsets retain coordinates from the complete original producer map.
+  func memberLocation(_ keys: [String], name: String) throws -> ImportLocation {
+    guard let fields = (try document.read(.init(keys: keys)))?.value?.importObject,
+      let index = fields.keys.sorted().firstIndex(of: name)
+    else { throw ImportReadFailure.invalid }
+    return location(
+      keys + [name], display: keys.map { "/" + $0 }.joined() + "/member[\(index)]")
+  }
+
   func location(_ keys: [String] = [], display: String? = nil) -> ImportLocation {
     let observation = try? document.read(.init(keys: keys))
     var range = observation?.valueRange ?? observation?.entryRanges.first
@@ -149,6 +158,7 @@ enum NativeImportInput {
 
   static func bindings(
     _ value: NativeValue?, at location: ImportLocation, symbolic: Bool = false,
+    literalsOnly: Bool = false,
     into diagnostics: inout ImportDiagnostics, profile: SourceImportProfile? = nil
   ) throws -> [String: RuntimeBinding] {
     guard let value else { return [:] }
@@ -160,7 +170,8 @@ enum NativeImportInput {
       if symbolic {
         guard MCPReferenceSyntax.isName(text)
         else { throw ImportReadFailure.invalid }
-        result[key] = binding(item, environment: text, into: &diagnostics)
+        result[key] =
+          literalsOnly ? .environment(text) : binding(item, environment: text, into: &diagnostics)
       } else {
         var reference: String?
         if let profile {
@@ -174,7 +185,9 @@ enum NativeImportInput {
         if let reference,
           MCPReferenceSyntax.isName(reference)
         {
-          result[key] = binding(item, environment: reference, into: &diagnostics)
+          result[key] =
+            literalsOnly
+            ? .environment(reference) : binding(item, environment: reference, into: &diagnostics)
         } else if text.contains("${") || text.contains("{env:") || text.contains("{file:") {
           diagnostics.binding(item)
           diagnostics.add(
@@ -187,6 +200,44 @@ enum NativeImportInput {
       }
     }
     return result
+  }
+
+  /// Classifies native credential slots before selection/precedence. No member is emitted and
+  /// no referenced resource is read. Explicit symbolic references do not contain literal secrets.
+  static func preservationBindings(
+    _ fields: [String: NativeValue], at location: ImportLocation,
+    profile: SourceImportProfile, into diagnostics: inout ImportDiagnostics
+  ) {
+    let maps: Set<String> = ["env", "environment", "headers", "http_headers", "env_http_headers"]
+    for field in maps.sorted() where fields[field] != nil {
+      do {
+        _ = try bindings(
+          fields[field], at: location.appending(field),
+          symbolic: field == "env_http_headers" && agent(profile) == .codex,
+          literalsOnly: true, into: &diagnostics,
+          profile: field == "env_http_headers" && agent(profile) != .codex ? nil : profile)
+      } catch {
+        diagnostics.binding(location.appending(field))
+        diagnostics.add(
+          .invalidInput, location.appending(field),
+          "Native binding values cannot be admitted for preservation.")
+      }
+    }
+    _ = sensitive(
+      .object(fields.filter { !maps.contains($0.key) }), at: location, into: &diagnostics)
+    let argv =
+      fields["args"]?.importStrings ?? fields["command"]?.importStrings.map {
+        Array($0.dropFirst())
+      } ?? []
+    for (index, argument) in argv.enumerated() {
+      let flag = String(argument.split(separator: "=", maxSplits: 1).first ?? "")
+      if ImportInput.credentialField(flag)
+        || (argument.contains("://") && !ImportInput.safeLocator(argument))
+      {
+        let coordinate = fields["args"] != nil ? "args/\(index)" : "command/\(index + 1)"
+        diagnostics.binding(location.appending(coordinate))
+      }
+    }
   }
 
   static func source(

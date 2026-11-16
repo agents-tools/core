@@ -298,6 +298,187 @@ struct ImportNativeTests {
     #expect(!defaults.diagnostics.contains { $0.code == .missingResource })
   }
 
+  @Test func preservedMCPDocumentsClassifyExcludedAndReplacedBindings() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write(
+      "settings.json",
+      #"{"mcpServers":{"clean":{"command":"tool"},"private":{"command":"tool","env":{"CUSTOM":"EXCLUDED_SECRET"}}}}"#
+    )
+    var input = fixture.input(.claudeSettingsV1, "settings.json")
+    input.selection = ["clean"]
+    let before = try fixture.hash()
+    let selected = try SourceImport.preview(input)
+    #expect(selected.components.count == 1)
+    #expect(selected.bindings.contains { $0.location.pointer.contains("member[1]/env") })
+    #expect(selected.resources.allSatisfy { $0.requiresBindingRewrite && $0.observedHash == nil })
+    #expect(!String(reflecting: selected).contains("EXCLUDED_SECRET"))
+    #expect(try fixture.hash() == before)
+    #expect(selected.components.first?.member?.selector == .mcpServer(name: "clean"))
+    try fixture.write(
+      "settings.json",
+      #"{"mcpServers":{"clean":{"command":"tool","env":{}},"private":{"command":"tool","env":{"CUSTOM":"${OPTIONAL_TOKEN}"}}}}"#
+    )
+    let symbolic = try SourceImport.preview(input)
+    #expect(symbolic.components.count == 1)
+    #expect(symbolic.bindings.isEmpty)
+    #expect(symbolic.resources.allSatisfy { !$0.requiresBindingRewrite && $0.observedHash != nil })
+    try fixture.write(
+      "settings.json",
+      #"{"mcpServers":{"clean":{"command":"tool"},"private":{"command":"tool","env_http_headers":{"CUSTOM":"EXCLUDED_HEADER_SECRET"}}}}"#
+    )
+    let foreignField = try SourceImport.preview(input)
+    #expect(!foreignField.bindings.isEmpty)
+    #expect(
+      foreignField.resources.allSatisfy { $0.requiresBindingRewrite && $0.observedHash == nil })
+    #expect(!String(reflecting: foreignField).contains("EXCLUDED_HEADER_SECRET"))
+
+    try fixture.write(
+      "bundle/.claude-plugin/plugin.json",
+      #"{"name":"bundle","mcpServers":{"same":{"command":"winning-tool"}}}"#)
+    try fixture.write(
+      "bundle/.mcp.json",
+      #"{"mcpServers":{"same":{"command":"old-tool","env":{"CUSTOM":"REPLACED_SECRET"}}}}"#)
+    let bundleBefore = try fixture.hash()
+    let replaced = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json"))
+    #expect(replaced.components.count == 1)
+    #expect(replaced.bindings.contains { $0.location.document == "bundle/.mcp.json" })
+    #expect(
+      replaced.resources.contains {
+        $0.path == ".mcp.json" && $0.requiresBindingRewrite && $0.observedHash == nil
+      })
+    #expect(!String(reflecting: replaced).contains("REPLACED_SECRET"))
+    #expect(try fixture.hash() == bundleBefore)
+  }
+
+  @Test func rootRelativeExecutablesRemainResourcesAcrossNativeKinds() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write(
+      ".claude-plugin/plugin.json",
+      #"{"name":"bundle","mcpServers":{"mcp":{"command":"./server"}},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"./server"}]}]}}"#
+    )
+    try fixture.write(
+      ".lsp.json", #"{"lsp":{"command":"./server","extensionToLanguage":{".x":"x"}}}"#)
+    try fixture.write("server", "#!/bin/sh\nexit 0\n", executable: true)
+    let before = try fixture.hash()
+    let result = try SourceImport.preview(
+      fixture.input(.claudePluginV1, ".claude-plugin/plugin.json"))
+    var executables: [String] = []
+    for item in result.components {
+      switch item.declaration {
+      case .mcpServer(_, .stdio(let run), _, _, _), .hook(_, _, let run, _, _, _, _, _),
+        .lspServer(_, let run, _, _, _, _, _):
+        executables.append(run.executable)
+      default: Issue.record("Unexpected member")
+      }
+    }
+    #expect(executables == ["./server", "./server", "./server"])
+    #expect(result.resources.contains { $0.path == "server" && $0.executableFlags["."] == true })
+    #expect(try fixture.hash() == before)
+  }
+
+  @Test func lspBindingsKeepOriginalMapCoordinatesThroughPrecedence() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write("bundle/.claude-plugin/plugin.json", #"{"name":"bundle"}"#)
+    try fixture.write(
+      "bundle/.lsp.json",
+      """
+      {"a":{"command":"a-lsp","extensionToLanguage":{".a":"a"},"env":{"CUSTOM":"LSP_A_SECRET"}},
+      "b":{"command":"b-lsp","extensionToLanguage":{".b":"b"},"env":{"CUSTOM":"LSP_B_SECRET"}}}
+      """)
+    func keys(_ result: SourceImportProposal) -> [String] {
+      result.components.compactMap {
+        if case .lspServer(_, let run, _, _, _, _, _) = $0.declaration,
+          case .secret(let key) = run.environment["CUSTOM"]
+        {
+          return key
+        }
+        return nil
+      }
+    }
+    let original = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json"))
+    #expect(Set(keys(original)).count == 2)
+    #expect(Set(original.components.map(\.origin.pointer)) == ["/member[0]", "/member[1]"])
+    #expect(Set(original.components.compactMap { $0.origin.span?.line }) == [1, 2])
+    try fixture.write(
+      "bundle/.claude-plugin/plugin.json", #"{"name":"bundle","lspServers":"./override.json"}"#)
+    try fixture.write(
+      "bundle/override.json",
+      #"{"a":{"command":"new-lsp","extensionToLanguage":{".a":"a"},"env":{"CUSTOM":"NEW_LSP_SECRET"}}}"#
+    )
+    let replaced = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json"))
+    #expect(Set(keys(replaced)).count == 2)
+    #expect(Set(replaced.bindings.compactMap(\.key)).count == 3)
+    #expect(
+      replaced.components.contains {
+        $0.origin.document == "bundle/.lsp.json" && $0.origin.pointer == "/member[1]"
+      })
+    #expect(
+      replaced.components.contains {
+        $0.origin.document == "bundle/override.json" && $0.origin.pointer == "/member[0]"
+          && $0.origin.span != nil
+      })
+    #expect(
+      replaced.resources.filter { $0.path == ".lsp.json" || $0.path == "override.json" }.allSatisfy
+      { $0.requiresBindingRewrite && $0.observedHash == nil })
+    #expect(!String(reflecting: replaced).contains("LSP_B_SECRET"))
+  }
+
+  @Test func openCodeExplicitOAuthDisableSurvivesTypedImport() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write(
+      "opencode.jsonc",
+      #"{"mcp":{"servers":{"review":{"type":"remote","url":"https://example.test/mcp","oauth":false}}}}"#
+    )
+    let result = try SourceImport.preview(fixture.input(.openCodeConfigV2, "opencode.jsonc"))
+    guard
+      case .mcpServer(_, .streamableHTTP, _, _, let native) = result.components.first?.declaration
+    else {
+      Issue.record("Expected remote MCP")
+      return
+    }
+    #expect(native[AgentID.opencode.rawValue]?["oauth"] == .boolean(false))
+    #expect(result.diagnostics.isEmpty)
+  }
+
+  @Test func nativeConfigurationMemberSelectionHonorsEmptyAndNarrowNames() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write(
+      "opencode.jsonc",
+      #"{"commands":{"other":{"template":"Other"},"selected":{"template":"Selected"}},"agents":{"other":{"system":"Other","mode":"subagent"},"selected":{"system":"Selected","mode":"subagent"}}}"#
+    )
+    try fixture.write(
+      "config.toml",
+      "[agents.other]\ndescription='Other'\nconfig_file='other.toml'\n[agents.selected]\ndescription='Selected'\nconfig_file='selected.toml'\n"
+    )
+    try fixture.write("other.toml", "developer_instructions='Other'\n")
+    try fixture.write("selected.toml", "developer_instructions='Selected'\n")
+    let selections: [Set<String>?] = [nil, [], ["selected"]]
+    for selection in selections {
+      var openCode = fixture.input(.openCodeConfigV2, "opencode.jsonc")
+      var codex = fixture.input(.codexConfigV1, "config.toml")
+      openCode.selection = selection
+      codex.selection = selection
+      let a = try SourceImport.preview(openCode)
+      let b = try SourceImport.preview(codex)
+      #expect(a.components.count == (selection == nil ? 4 : selection!.isEmpty ? 0 : 2))
+      #expect(b.components.count == (selection == nil ? 2 : selection!.isEmpty ? 0 : 1))
+      if selection == ["selected"] {
+        #expect(
+          a.components.compactMap { $0.member?.selector } == [
+            .command(name: "selected"), .subagent(name: "selected"),
+          ])
+        #expect(b.components.first?.member?.selector == .subagent(name: "selected"))
+      }
+    }
+    try FileManager.default.removeItem(at: fixture.root.appendingPathComponent("other.toml"))
+    var narrow = fixture.input(.codexConfigV1, "config.toml")
+    narrow.selection = ["selected"]
+    #expect(try SourceImport.preview(narrow).components.count == 1)
+  }
+
   @Test func typedMembersStayStableWhenCallerMovesTheInputRoot() throws {
     let one = try NativeImportFixture()
     let two = try NativeImportFixture()

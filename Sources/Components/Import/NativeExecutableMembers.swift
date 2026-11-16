@@ -90,9 +90,10 @@ extension NativeSourceImport {
           }
           var executable = command
           if command.hasPrefix("./") {
-            executable = try nativePath(command, container: container)
+            let path = try nativePath(command, container: container)
+            executable = path.contains("/") ? path : "./" + path
             try NativeImportInput.resource(
-              executable, root: container, input: parsed.input, origin: origin,
+              path, root: container, input: parsed.input, origin: origin,
               limits: limits, into: &diagnostics, admission: parsed.admission)
           } else if command.contains("/") {
             diagnostics.add(
@@ -126,9 +127,9 @@ extension NativeSourceImport {
       NativeImportInput.unconverted(value, at: parsed.location(keys), into: &diagnostics)
       return
     }
-    for (index, name) in servers.keys.sorted().enumerated() {
-      let origin = parsed.location(
-        keys + [name], display: keys.map { "/" + $0 }.joined() + "/member[\(index)]")
+    try classifyMembers(value, parsed: parsed, keys: keys, into: &diagnostics)
+    for name in servers.keys.sorted() {
+      let origin = try parsed.memberLocation(keys, name: name)
       guard NativeImportInput.name(name), let fields = servers[name]?.importObject else {
         NativeImportInput.unconverted(servers[name]!, at: origin, into: &diagnostics)
         continue
@@ -216,9 +217,10 @@ extension NativeSourceImport {
         profile: parsed.input.profile)
       var program = executable
       if executable.hasPrefix("./") {
-        program = try nativePath(executable, container: container)
+        let path = try nativePath(executable, container: container)
+        program = path.contains("/") ? path : "./" + path
         try NativeImportInput.resource(
-          program, root: container, input: parsed.input, origin: origin,
+          path, root: container, input: parsed.input, origin: origin,
           limits: limits, into: &diagnostics, admission: parsed.admission)
       } else if executable.contains("/") {
         diagnostics.add(
