@@ -109,15 +109,18 @@ struct ImportSourceTests {
     #expect(proposal.diagnostics.contains { $0.code == .incompletePin })
   }
 
-  @Test func vercelProjectCapturesActualContentWithoutInventingGitCommit() throws {
+  @Test(arguments: ["github", "node_modules"])
+  func vercelProjectCapturesActualContentWithoutInventingGitCommit(_ sourceType: String) throws {
     let fixture = try ImportSourceFixture()
     try fixture.skill()
     try fixture.write("first\r\nsecond\r\n", at: "installed/review/guide.txt")
     try Data([0, 13, 10]).write(to: fixture.root.appendingPathComponent("installed/review/binary"))
     try fixture.write("{}", at: "installed/review/metadata.json/ignored.txt")
+    let source = sourceType == "node_modules" ? "@acme/pkg" : "acme/repo"
+    let metadata = sourceType == "node_modules" ? #""version":"1.2.3","# : #""ref":"main","#
     try fixture.write(
       """
-      {"version":2,"skills":{"review":{"source":"acme/repo","sourceType":"github","ref":"main",
+      {"version":2,"skills":{"review":{"source":"\(source)","sourceType":"\(sourceType)",\(metadata)
       "skillPath":"skills/review/SKILL.md","computedHash":"8ab07122fdd17957fa92a18c05f175744b26f661c87f3f479ad6279e200713e3"}}}
       """)
     var input = fixture.input(.vercelProjectV2)
@@ -127,7 +130,8 @@ struct ImportSourceTests {
     #expect(try FileHash.folderHash(fixture.root) == before)
     #expect(proposal.sources.first?.pin.commit == nil)
     #expect(proposal.sources.first?.pin.integrity?.kind == .vercelInstalledSHA256)
-    #expect(proposal.sources.first?.declaration?.path == "skills/review")
+    #expect(
+      proposal.sources.first?.declaration?.path == (sourceType == "github" ? "skills/review" : nil))
     #expect(proposal.sources.last?.declaration?.kind == .local)
     #expect(proposal.sources.last?.declaration?.location == "installed/review")
     #expect(
@@ -136,7 +140,13 @@ struct ImportSourceTests {
     #expect(proposal.resources.first?.requiresStandaloneSource == true)
     #expect(proposal.resources.first?.path == ".")
     #expect(proposal.components.count == 1)
-    #expect(proposal.diagnostics.map(\.code) == [.incompletePin])
+    #expect(proposal.sources.first?.producerIdentity == source)
+    #expect(proposal.sources.first?.pin.version == (sourceType == "node_modules" ? "1.2.3" : nil))
+    #expect(proposal.sources.allSatisfy { $0.pin.commit == nil })
+    #expect(proposal.bindings.isEmpty)
+    #expect(
+      proposal.diagnostics.map(\.code)
+        == (sourceType == "node_modules" ? [.incompletePin, .unconverted] : [.incompletePin]))
   }
 
   @Test func vercelChangedContentCannotBePresentedAsLockedContent() throws {
@@ -185,12 +195,15 @@ struct ImportSourceTests {
     #expect(!String(describing: proposal).contains("SECRET_LITERAL"))
   }
 
-  @Test func credentialSourceDoesNotEscapeThroughProvenanceOrDiagnostics() throws {
+  @Test(arguments: ["github", "node_modules"])
+  func credentialSourceDoesNotEscapeThroughProvenanceOrDiagnostics(_ sourceType: String) throws {
     let fixture = try ImportSourceFixture()
+    let source =
+      sourceType == "node_modules" ? "@acme/pkg" : "https://SECRET_LITERAL@github.com/acme/repo"
     try fixture.write(
       """
-      {"version":2,"skills":{"review":{"source":"https://SECRET_LITERAL@github.com/acme/repo",
-      "sourceType":"github","sourceUrl":"https://github.com/acme/repo?token=SECRET_LITERAL","computedHash":""}}}
+      {"version":2,"skills":{"review":{"source":"\(source)",
+      "sourceType":"\(sourceType)","sourceUrl":"https://github.com/acme/repo?token=SECRET_LITERAL","computedHash":""}}}
       """)
     let before = try FileHash.folderHash(fixture.root)
     let proposal = try SourceImport.preview(fixture.input(.vercelProjectV2))

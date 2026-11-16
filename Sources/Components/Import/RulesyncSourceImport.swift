@@ -77,7 +77,9 @@ enum RulesyncSourceImport {
         diagnostics.add(.invalidInput, location, "Expected an npm package name as source key.")
         continue
       }
-      if !npm, !ImportInput.safeLocator(repository) {
+      if !npm, !ImportInput.safeLocator(repository),
+        RulesyncConfigImport.githubLocator(repository) == nil
+      {
         diagnostics.binding(location)
         continue
       }

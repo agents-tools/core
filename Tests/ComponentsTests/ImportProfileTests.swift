@@ -382,11 +382,50 @@ struct ImportProfileTests {
       !result.diagnostics.contains { $0.code == .ambiguousSource || $0.code == .incompletePin })
   }
 
-  @Test func staleLockAndExplicitEmptySelectionsCannotBroadenCurrentSourceIntent() throws {
+  @Test func embeddedRulesyncSelectorPreservesExplicitSourceAndLockedResources() throws {
     let fixture = try ImportProfileFixture()
     try fixture.directory(".rulesync")
     try fixture.write(
-      "config.jsonc", "{\"sources\":[{\"source\":\"acme/repo\",\"ref\":\"new\",\"skills\":[]}]}")
+      "config.jsonc", #"{"sources":[{"source":"acme/repo@main:skills"}]}"#)
+    let commit = String(repeating: "a", count: 40)
+    try fixture.write(
+      "lock.json",
+      """
+      {"lockfileVersion":1,"sources":{"acme/repo@main:skills":{
+        "requestedRef":"main","resolvedRef":"\(commit)","skillsPath":"skills",
+        "skillSelection":["*"],"skills":{"review":{"integrity":"sha256-\(String(repeating: "b", count: 64))"}}}}}
+      """)
+    let before = try fixture.hash()
+    var lock = fixture.input(.rulesyncSourcesV1, "lock.json")
+    lock.sourceDeclarations = [
+      "acme/repo@main:skills": .init(kind: .git, location: "https://github.com/acme/repo")
+    ]
+    let standalone = try SourceImport.preview(lock)
+    let ordered = try SourceImport.previewRulesync(
+      configs: [fixture.input(.rulesyncConfig, "config.jsonc")], locks: [lock])
+    for result in [standalone, ordered] {
+      #expect(result.bindings.isEmpty)
+      #expect(result.sources.first?.producerIdentity == "acme/repo@main:skills")
+      #expect(result.sources.first?.pin.commit == commit)
+      #expect(result.sources.first?.requestedRef == "main")
+      #expect(result.sources.last?.declaration?.location == "https://github.com/acme/repo")
+      #expect(result.sources.last?.declaration?.requirement == .revision(commit))
+      #expect(result.resources.map(\.path) == ["skills/review"])
+      #expect(
+        result.resources.first?.producerIntegrity?.value == "sha256-"
+          + String(repeating: "b", count: 64))
+      #expect(result.components.count == 1)
+      #expect(
+        !result.diagnostics.contains { $0.code == .ambiguousSource || $0.code == .incompletePin })
+    }
+    #expect(try fixture.hash() == before)
+  }
+
+  @Test func staleLockCannotBroadenCurrentSourceIntent() throws {
+    let fixture = try ImportProfileFixture()
+    try fixture.directory(".rulesync")
+    try fixture.write(
+      "config.jsonc", #"{"sources":[{"source":"acme/repo","ref":"new","skills":["*"]}]}"#)
     try fixture.write(
       "lock.json",
       "{\"lockfileVersion\":1,\"sources\":{\"acme/repo\":{\"requestedRef\":\"old\",\"resolvedRef\":\"\(String(repeating: "a", count: 40))\",\"skillsPath\":\"skills\",\"skillSelection\":[\"*\"],\"skills\":{\"review\":{\"integrity\":\"sha256-\(String(repeating: "b", count: 64))\"}}}}}"
@@ -398,15 +437,62 @@ struct ImportProfileTests {
     #expect(stale.resources.isEmpty)
     #expect(stale.components.isEmpty)
     #expect(stale.diagnostics.contains { $0.code == .ambiguousSource })
+  }
+
+  @Test(arguments: [
+    #""skills":[]"#, #""rules":[]"#, #""skills":[],"rules":[]"#,
+    #""skills":["*"],"rules":[]"#, #""skills":[],"rules":["*"]"#,
+  ])
+  func emptySelectionInvalidatesWholeRemoteSource(_ fields: String) throws {
+    let fixture = try ImportProfileFixture()
+    try fixture.directory(".rulesync")
+    try fixture.write("config.jsonc", "{\"sources\":[{\"source\":\"acme/repo\",\(fields)}]}")
     try fixture.write(
-      "config.jsonc", "{\"sources\":[{\"source\":\"acme/repo\",\"ref\":\"old\",\"skills\":[]}]}")
-    let empty = try SourceImport.previewRulesync(
+      "lock.json",
+      """
+      {"lockfileVersion":1,"sources":{"acme/repo":{"resolvedRef":"\(String(repeating: "a", count: 40))",
+        "skillsPath":"skills","skillSelection":["*"],"skills":{"review":{"integrity":"sha256-\(String(repeating: "b", count: 64))"}},
+        "rulesPath":"rules","rules":{"overview":{"integrity":"sha256-\(String(repeating: "c", count: 64))"}}}}}
+      """)
+    let before = try fixture.hash()
+    let result = try SourceImport.previewRulesync(
       configs: [fixture.input(.rulesyncConfig, "config.jsonc")],
       locks: [fixture.input(.rulesyncSourcesV1, "lock.json")])
-    #expect(empty.sources.first?.pin.commit == String(repeating: "a", count: 40))
-    #expect(empty.resources.isEmpty)
-    #expect(empty.components.isEmpty)
-    #expect(empty.orderedSources.first?.skills == [])
+    #expect(result.sources.isEmpty)
+    #expect(result.orderedSources.isEmpty)
+    #expect(result.resources.isEmpty)
+    #expect(result.components.isEmpty)
+    #expect(
+      result.diagnostics.contains {
+        $0.code == .invalidInput && $0.location.document == "config.jsonc"
+          && ["/sources/0/skills", "/sources/0/rules"].contains($0.location.pointer)
+      })
+    #expect(try fixture.hash() == before)
+  }
+
+  @Test func defaultGitHubCredentialsAndUnknownTokenRequireBindingsWithoutLiterals() throws {
+    let fixture = try ImportProfileFixture()
+    try fixture.directory(".rulesync")
+    try fixture.write(
+      "config.jsonc",
+      #"{"sources":[{"source":"https://user:SECRET_LOCATOR@github.com/acme/repo"},{"source":"acme/repo","token":"SECRET_FIELD"}]}"#
+    )
+    let before = try fixture.hash()
+    let result = try SourceImport.preview(fixture.input(.rulesyncConfig, "config.jsonc"))
+    #expect(
+      result.bindings.map(\.location.pointer) == ["/sources/0/source", "/sources/1/member[1]"])
+    #expect(result.bindings.allSatisfy { $0.environmentVariable == nil })
+    #expect(
+      result.diagnostics.contains { $0.code == .unconverted && $0.location.pointer == "/sources/0" }
+    )
+    #expect(
+      result.diagnostics.contains {
+        $0.code == .unconverted && $0.location.pointer == "/sources/1/member[1]"
+      })
+    #expect(result.sources.map(\.producerIdentity) == ["acme/repo"])
+    #expect(!String(reflecting: result).contains("SECRET_LOCATOR"))
+    #expect(!String(reflecting: result).contains("SECRET_FIELD"))
+    #expect(try fixture.hash() == before)
   }
 
   @Test func nativeInputConflictsAndYAMLCredentialLocatorsStayExplicit() throws {

@@ -151,8 +151,9 @@ enum RulesyncConfigImport {
           "source", "skills", "rules", "transport", "ref", "path", "rulesPath", "registry",
           "tokenEnv",
         ].contains(key) {
-          unconverted(
-            object[key]!, at: location.appending("member[\(ordinal)]"), into: &diagnostics)
+          let member = location.appending("member[\(ordinal)]")
+          if ImportInput.credentialField(key) { diagnostics.binding(member) }
+          unconverted(object[key]!, at: member, into: &diagnostics)
         }
         guard
           ["transport", "ref", "path", "rulesPath", "registry", "tokenEnv"].allSatisfy({
@@ -171,6 +172,16 @@ enum RulesyncConfigImport {
           object["ref"] == nil || object["ref"]?.importString != nil
         else {
           diagnostics.add(.invalidInput, location, "Invalid source transport or selection.")
+          continue
+        }
+        let emptySelections = ["skills", "rules"].filter { object[$0]?.importStrings == [] }
+        if !emptySelections.isEmpty {
+          for field in emptySelections {
+            diagnostics.add(
+              .invalidInput, location.appending(field),
+              "An empty producer selection invalidates the whole source; omit the feature or remove the source."
+            )
+          }
           continue
         }
         if object["registry"] != nil || object["tokenEnv"] != nil {
@@ -208,6 +219,9 @@ enum RulesyncConfigImport {
         var declaration: SourceDeclaration?
         var identity = raw
         if transport == "github" {
+          if raw.contains("://"), !ImportInput.safeLocator(raw) {
+            diagnostics.binding(location.appending("source"))
+          }
           guard let github = githubLocator(raw) else {
             diagnostics.add(
               .unconverted, location, "Unsupported or ambiguous GitHub source selector.")
@@ -438,7 +452,7 @@ enum RulesyncConfigImport {
     }
   }
 
-  private static func githubLocator(_ raw: String) -> (
+  static func githubLocator(_ raw: String) -> (
     location: String, ref: String?, path: String?
   )? {
     guard !raw.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),

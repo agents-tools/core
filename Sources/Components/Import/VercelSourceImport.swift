@@ -72,7 +72,14 @@ enum VercelSourceImport {
           arrays: project ? ["subagents"] : [], at: location)
       else { continue }
       let sourceURL = ImportInput.string(entry["sourceUrl"])
-      guard ImportInput.safeLocator(source), sourceURL.map(ImportInput.safeLocator) ?? project,
+      // node_modules locks store an npm package identifier, not a credentialed URL.
+      let packageIdentifier =
+        sourceType == "node_modules"
+        && source.range(
+          of: #"^(@[a-z0-9~][a-z0-9._~-]*/)?[a-z0-9~][a-z0-9._~-]*$"#,
+          options: .regularExpression) != nil
+      guard packageIdentifier || ImportInput.safeLocator(source),
+        sourceURL.map(ImportInput.safeLocator) ?? project,
         ImportInput.string(entry["sourceBaseUrl"]).map(ImportInput.safeLocator) ?? true
       else {
         diagnostics.binding(location.appending("sourceUrl"))
