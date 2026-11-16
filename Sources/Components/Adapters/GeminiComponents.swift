@@ -18,9 +18,8 @@ extension GeminiAdapter {
           route: .geminiCommand,
           path: name + ".toml", selection: "file", value: .init(file)))
     case "subagent":
-      let native = try input.checkedNative([
-        "max_turns": .positiveInteger, "timeout_mins": .positiveInteger,
-      ])
+      let native = try input.checkedNative(
+        NativeComponentFieldsV1.markdownRules(.geminiCLI, kind: "subagent"))
       let name = try input.filename()
       guard name.range(of: #"^[a-z0-9_-]+$"#, options: .regularExpression) != nil else {
         throw input.issue(["name"], .invalid, "Gemini agent names must be lowercase slugs")
@@ -69,7 +68,7 @@ extension GeminiAdapter {
 }
 
 extension GeminiAdapter {
-  private static func validAgentTool(_ name: String) -> Bool {
+  static func validAgentTool(_ name: String) -> Bool {
     let builtins: Set<String> = [
       "activate_skill",
       "ask_user",
