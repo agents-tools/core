@@ -139,6 +139,38 @@ def describe(value):
     return kind
 
 
+def table_text(text):
+    return text.replace('&', '&amp;').replace('|', '&#124;').replace('`', '&#96;').replace('\n', '<br>')
+
+
+def examples(value):
+    return ', '.join('<code>' + table_text(json.dumps(example, ensure_ascii=False)).replace('<', '&lt;')
+                     .replace('>', '&gt;') + '</code>' for example in value.get('examples', []))
+
+
+def field_help(value, level=3):
+    text = value.get('description', '')
+    text = text + '\n\n' if text else ''
+    if value.get('examples'):
+        text += 'Examples: ' + examples(value) + '\n\n'
+    if 'properties' in value:
+        if 'maxProperties' in value:
+            text += describe(value) + '\n\n'
+        text += '| Field | Required | Shape | Description |\n| --- | --- | --- | --- |\n'
+        for key, field in value['properties'].items():
+            details = table_text(field.get('description', ''))
+            if field.get('examples'):
+                details += ('<br>' if details else '') + 'Examples: ' + examples(field)
+            text += ('| `' + key + '` | ' + ('yes' if key in value.get('required', []) else '')
+                     + ' | ' + describe(field) + ' | ' + details + ' |\n')
+    elif 'oneOf' not in value:
+        text += describe(value) + '\n'
+    for index, branch in enumerate(value.get('oneOf', []), 1):
+        text = text.rstrip('\n') + '\n\n' + '#' * level + ' Alternative ' + str(index) + '\n\n'
+        text += field_help(branch, level + 1)
+    return text
+
+
 def compile_schema(schema):
     if not isinstance(schema, dict) or not isinstance(schema.get('$defs'), dict):
         raise ValueError('the bundled schema requires named definitions')
@@ -156,15 +188,7 @@ def compile_schema(schema):
                  'Generated from `Sources/AgentsManifest/Resources/agents.schema.json`.\n')
     for name, definition in [('Declaration', schema)] + list(definitions.items()):
         help_text += '\n## ' + name + '\n\n'
-        if 'properties' in definition:
-            if 'maxProperties' in definition:
-                help_text += describe(definition) + '\n\n'
-            help_text += '| Field | Required | Shape |\n| --- | --- | --- |\n'
-            for key, value in definition['properties'].items():
-                help_text += ('| `' + key + '` | ' + ('yes' if key in definition.get('required', []) else '')
-                              + ' | ' + describe(value) + ' |\n')
-        else:
-            help_text += describe(definition) + '\n'
+        help_text += field_help(definition)
     return text, help_text
 
 
