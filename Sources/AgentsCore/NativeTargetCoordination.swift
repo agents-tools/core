@@ -417,12 +417,30 @@ package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable 
       let suffix = String(probe.basename.dropFirst("probe".count))
       guard target.lastPathComponent.hasSuffix(suffix) else { continue }
       let authority = try probe.rootAuthority(environment, validateExistingOverride: false)
-      let prefix = authority.plannedPhysicalDirectory.path + "/"
-      let bytes = Array(target.path.utf8)
-      let relative =
-        bytes.starts(with: prefix.utf8)
-        ? String(decoding: bytes.dropFirst(prefix.utf8.count), as: UTF8.self)
-        : target.lastPathComponent
+      let container = authority.plannedPhysicalDirectory
+      var ancestor = target.deletingLastPathComponent()
+      var relativeParts = [target.lastPathComponent]
+      let containerIdentity = try? DirectoryHandle(at: container).objectIdentity
+      while ancestor.path != "/" {
+        if let containerIdentity,
+          let opened = try? DirectoryHandle(at: ancestor),
+          try opened.objectIdentity == containerIdentity
+        {
+          break
+        }
+        relativeParts.insert(ancestor.lastPathComponent, at: 0)
+        ancestor.deleteLastPathComponent()
+      }
+      let relative: String
+      if ancestor.path != "/" {
+        // Descriptor-equivalent container aliases retain the entire validated nested name.
+        relative = relativeParts.joined(separator: "/")
+      } else {
+        let prefix = container.path + "/"
+        let bytes = Array(target.path.utf8)
+        guard bytes.starts(with: prefix.utf8) else { continue }
+        relative = String(decoding: bytes.dropFirst(prefix.utf8.count), as: UTF8.self)
+      }
       let candidate =
         probe.isContainer
         ? try? named(member, scope: .user, name: relative)
@@ -513,12 +531,21 @@ final class SharedResource {
   private var lockDescriptor: Int32?
   private var lockAccess: FileAccessEvidence?
 
-  init(store: StateStore, route: NativeTargetRoute = .claudeMCPLocal, create: Bool) throws {
+  init(
+    store: StateStore, route: NativeTargetRoute = .claudeMCPLocal, create: Bool,
+    existingRoot: ExistingProjectRoot? = nil, projectRoot: DirectoryHandle? = nil
+  ) throws {
     guard route.shared else { throw CoreError.invalidState("project route has no shared resource") }
     self.route = NativeTargetRoute.targetRoute(route.root)!
     authority = try route.rootAuthority(store.environment)
     let url = try authority.physicalDirectory()
-    parent = try DirectoryHandle(at: url, create: create)
+    if let existingRoot, let projectRoot,
+      let anchored = try existingRoot.descendant(at: url, from: projectRoot, create: create)
+    {
+      parent = anchored
+    } else {
+      parent = try DirectoryHandle(at: url, create: create)
+    }
     ancestry = try DirectoryAccessEvidence.capture(at: url)
     identity = SharedResourceIdentity(parent: try parent.objectIdentity, basename: route.basename)
     func child(_ parent: DirectoryHandle, _ name: String) throws -> DirectoryHandle? {
@@ -720,6 +747,8 @@ final class TransactionLockContext {
   let writable: Bool
   let requestedShared: Bool
   let absentRoots: [AbsentSharedRoot]
+  var existingProjectRoot: ExistingProjectRoot?
+  var projectRootDirectory: DirectoryHandle?
   private var scopeDirectory: DirectoryHandle?
   private var scopeDescriptor: Int32?
   private var scopeLockIdentity: FileObjectIdentity?
@@ -776,6 +805,7 @@ final class TransactionLockContext {
   }
 
   func validateScope() throws {
+    try existingProjectRoot?.validate()
     guard let directory = scopeDirectory else { return }
     var info = stat()
     guard let descriptor = scopeDescriptor, let identity = scopeLockIdentity,
@@ -884,8 +914,11 @@ extension StateStore {
   /// Acquire the union before the scope lock. Re-admission never replays a delivered callback.
   func withCoordination<T>(
     routes: Set<NativeTargetRoute>, writable: Bool,
-    checkpoint: (String) throws -> Void = { _ in }, _ body: () throws -> T
+    checkpoint: (String) throws -> Void = { _ in },
+    existingRoot: ExistingProjectRoot? = nil, projectRoot: DirectoryHandle? = nil,
+    _ body: () throws -> T
   ) throws -> T {
+    try existingRoot?.validate()
     if TransactionLockContext.isHeld {
       throw CoreError.invalidState("nested scope lock acquisition")
     }
@@ -918,7 +951,9 @@ extension StateStore {
         }
         let resource: SharedResource
         do {
-          resource = try SharedResource(store: self, route: route, create: writable && !recovering)
+          resource = try SharedResource(
+            store: self, route: route, create: writable && !recovering,
+            existingRoot: existingRoot, projectRoot: projectRoot)
         } catch {
           if recovering {
             throw CoreError.invalidState(
@@ -948,6 +983,8 @@ extension StateStore {
         store: self, resources: resources.sorted { $0.identity < $1.identity }, writable: writable,
         requestedShared: routes.contains(where: \.shared), absentRoots: absentRoots,
         admissions: admissions, requestedRoutes: routes)
+      context.existingProjectRoot = existingRoot
+      context.projectRootDirectory = projectRoot
       func locked(_ index: Int) throws -> T? {
         if index < context.resources.count {
           let resource = context.resources[index]

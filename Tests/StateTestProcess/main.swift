@@ -393,10 +393,9 @@ if arguments[2].hasPrefix("ledger-") {
         .appendingPathComponent("target"), with: .copy(root.appendingPathComponent("new")))
       try transaction.replace(
         store.declarationURL, with: .data(manifestText("defaultAgents: [\"codex\"]\n")))
-      try transaction.replace(
-        store.resolvedURL,
-        with: .data(
-          StateStore.encode(ResolvedState(sources: ["local:/new": LockedSource(kind: .local)]))))
+      var ledger = ResolvedLedger()
+      ledger.sources["local:/new"] = LedgerSource(kind: .local, revision: "live")
+      try transaction.replace(store.resolvedURL, with: .data(StateStore.encode(ledger)))
       try transaction.delete(store.cacheDirectory.appendingPathComponent("artifact-content/pruned"))
       try transaction.replace(
         AgentRegistry.installSkillsDirectory(

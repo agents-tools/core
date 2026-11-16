@@ -5,7 +5,9 @@ import Foundation
 struct TransactionPaths {
   let store: StateStore
 
-  func path(for destination: URL) throws -> String {
+  func path(for destination: URL, skillInitialization: SkillInitializationTarget? = nil) throws
+    -> String
+  {
     let base =
       store.scope == .project ? store.environment.projectDirectory : store.environment.homeDirectory
     let physicalState = base.resolvingSymlinksInPath().appendingPathComponent(
@@ -41,6 +43,14 @@ struct TransactionPaths {
       }
     }
     try store.requireProjectNativeAuthority(at: destination)
+    if let initialization = skillInitialization,
+      initialization.scope.path.utf8.elementsEqual(store.directory.path.utf8),
+      initialization.file.path.utf8.elementsEqual(destination.standardizedFileURL.path.utf8)
+    {
+      let path = "skill-authoring/" + initialization.descendants.joined(separator: "/")
+      _ = try components(path)
+      return path
+    }
     if store.scope == .project {
       let relative = PathSafety.relativePath(
         destination.path, to: base.resolvingSymlinksInPath().path)
@@ -97,7 +107,15 @@ struct TransactionPaths {
     _ key: String, create: Bool = false,
     checkpoint: (DirectoryHandle.AncestryStep) throws -> Void = { _ in }
   ) throws -> DirectoryHandle {
-    try DirectoryHandle(at: rootURL(key), create: create, checkpoint: checkpoint)
+    let url = try rootURL(key)
+    if let context = TransactionLockContext.current(store), let root = context.projectRootDirectory,
+      let observation = context.existingProjectRoot,
+      let anchored = try observation.descendant(
+        at: url, from: root, create: create, checkpoint: checkpoint)
+    {
+      return anchored
+    }
+    return try DirectoryHandle(at: url, create: create, checkpoint: checkpoint)
   }
 
   func rootURL(_ key: String) throws -> URL {
@@ -126,6 +144,8 @@ struct TransactionPaths {
         throw CoreError.invalidState("shared metadata directory is missing")
       }
       url = metadata.url
+    } else if key == "skill-authoring", store.scope == .project {
+      url = store.environment.projectDirectory.resolvingSymlinksInPath()
     } else if key == "instructions-project" || key == "instructions-authoring",
       store.scope == .project
     {
@@ -211,6 +231,9 @@ struct TransactionPaths {
       guard descendants == ["receipt"] else {
         throw CoreError.unsafePath("unregistered shared transaction metadata")
       }
+    } else if key == "skill-authoring", store.scope == .project {
+      guard (1...2).contains(descendants.count), descendants.last == "SKILL.md"
+      else { throw CoreError.unsafePath("invalid local skill authoring path") }
     } else if key == "instructions-project", store.scope == .project {
       guard InstructionLocations.isProjectTarget(descendants.joined(separator: "/")) else {
         throw CoreError.unsafePath("unmanaged project instruction path")

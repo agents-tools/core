@@ -36,6 +36,7 @@ package final class FileTransaction {
   private let checkpoint: (String) throws -> Void
   private let outcome: TransactionOutcome
   private var requests: [Request] = []
+  private var skillInitialization: SkillInitializationTarget?
   private var receiptStates: [String: MaterializationReceiptState] = [:]
   private var receiptIndices: [Int: MaterializationReceiptState] = [:]
   private var unchanged: [any PreparedEvidence] = []
@@ -95,6 +96,20 @@ package final class FileTransaction {
           path: path, evidence: evidence, source: source, expectation: expectation,
           security: security, privateData: nil))
     }
+  }
+
+  /// Admits only this explicit, absent local authoring file to the ordinary journal.
+  package func initializeSkill(_ target: SkillInitializationTarget, bytes: Data) throws {
+    guard target.scope.path.utf8.elementsEqual(store.directory.path.utf8),
+      let context = TransactionLockContext.current(store), context.projectRootDirectory != nil
+    else {
+      throw CoreError.invalidState("skill initialization requires its observed existing parent")
+    }
+    try context.requireWriterScope()
+    try target.evidence.validate()
+    skillInitialization = target
+    defer { skillInitialization = nil }
+    try replace(target.file, with: .data(bytes), expecting: target.evidence)
   }
 
   package func delete(_ destination: URL, expecting: TargetPrecondition? = nil) throws {
@@ -194,7 +209,8 @@ package final class FileTransaction {
   private func request(_ destination: URL, expecting: TargetPrecondition?) throws -> (
     path: String, evidence: TargetPrecondition, security: TransactionSecurity
   ) {
-    let path = try TransactionPaths(store: store).path(for: destination)
+    let path = try TransactionPaths(store: store).path(
+      for: destination, skillInitialization: skillInitialization)
     guard path != "state/" + MaterializationReceipts.fileName else {
       throw CoreError.unsafePath("materialization receipts are transaction-owned")
     }
@@ -317,15 +333,16 @@ package final class FileTransaction {
       try session.emit(.preconditions)
       try validateUnchanged()
       try session.validatePreimages()
-      outcome.disposition = .recoveryRequired
+      outcome.requireRecovery()
       for index in session.journal.entries.indices { try session.publish(index) }
       try validateUnchanged()
       try session.sealDisposal()
       try session.emit(.commitValidated)
       try session.finish(.committed)
-      outcome.disposition = .committed
+      outcome.recordTerminal(.committed)
       try session.emit(.phase(.committed))
       try session.dispose()
+      outcome.recoveryPending = false
     } catch {
       // Recovery names its checkpoints under `recovery.`, apart from the failed commit's.
       do {
@@ -333,7 +350,7 @@ package final class FileTransaction {
           try self.checkpoint("recovery." + $0)
         }
       } catch {
-        outcome.disposition = .recoveryRequired
+        outcome.requireRecovery()
       }
       throw error
     }
@@ -422,7 +439,7 @@ package final class FileTransaction {
     let session = TransactionSession(
       journal: journal, directory: directory, parents: parents,
       checkpoint: checkpoint, resources: resources,
-      nativeRoots: try paths.nativeRootAuthorities(Set(journal.roots.keys)))
+      nativeRoots: try paths.nativeRootAuthorities(Set(journal.roots.keys)), outcome: outcome)
     try session.validateRecords(store: store)
     return session
   }

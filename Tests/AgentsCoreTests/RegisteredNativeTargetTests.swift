@@ -892,6 +892,47 @@ extension RegisteredNativeTargetTests {
     }
   }
 
+  @Test func nestedProjectAliasCannotBypassPrivateUserCommand() throws {
+    let fixture = try NativeRouteFixture()
+    let user = StateStore(scope: .user, environment: fixture.store.environment)
+    let userRoute = try NativeTargetRoute.named(.claudeCommand, scope: .user, name: "team/example")
+    var targetURL: URL!
+    var receiptURL: URL!
+    try user.withLock(footprint: [userRoute]) {
+      let target = try user.nativeTarget(for: userRoute)
+      targetURL = target.url
+      let transaction = FileTransaction(store: user)
+      try transaction.replacePrivate(
+        user.preparePrivateMaterialization(target), provider: NativeRouteBindings()
+      ) {
+        _ in Data("private user agent".utf8)
+      }
+      try transaction.commit()
+      receiptURL = try user.materializationReceipts(for: target.path).url
+    }
+    let receipt = try Data(contentsOf: receiptURL)
+    try FileManager.default.createSymbolicLink(
+      at: fixture.root.appendingPathComponent(".claude"),
+      withDestinationURL: user.environment.homeDirectory.appendingPathComponent(".claude"))
+    let projectRoute = try NativeTargetRoute.named(
+      .claudeCommand, scope: .project, name: "team/example")
+    #expect(throws: CoreError.self) {
+      try fixture.store.withLock(footprint: [projectRoute]) {
+        let target = try fixture.store.nativeTarget(for: projectRoute)
+        let transaction = FileTransaction(store: fixture.store)
+        try transaction.replace(target.url, with: .data(Data("ordinary project edit".utf8)))
+        try transaction.commit()
+      }
+    }
+    #expect(try Data(contentsOf: targetURL) == Data("private user agent".utf8))
+    #expect(try Data(contentsOf: receiptURL) == receipt)
+    try user.withReadLock(footprint: [userRoute]) {
+      let target = try user.nativeTarget(for: userRoute)
+      let privateReceipt = try user.materializationReceipt(for: target)
+      #expect(privateReceipt != nil)
+    }
+  }
+
   @Test(arguments: [InstallScope.project, .user])
   func namedLoaderAliasRedirectStopsPublication(_ scope: InstallScope) throws {
     let fixture = try NativeRouteFixture()

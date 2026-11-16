@@ -215,7 +215,7 @@ extension TransactionSession {
     try advance(index, to: .publishing)
     try requirePreimage(index)
     try emit(.publication(index, .validated))
-    if entry.security.isPrivate { try requirePreimage(index) }
+    try requirePreimage(index)
     try grantDirectoryPermissions(index, layout: layout, purpose: .publicationGrant)
     if entry.action == .install {
       let exchange = entry.preimage != nil

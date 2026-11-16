@@ -169,3 +169,114 @@ struct TargetAccessPrecondition: Equatable {
     }
   }
 }
+
+/// An existing selected project, captured without creating lock or state ancestry.
+/// Passing this observation never grants authority outside registered transaction targets.
+public struct ExistingProjectRoot: Sendable {
+  public let directory: URL
+  private let identity: FileObjectIdentity
+
+  fileprivate init(directory: URL) throws {
+    self.directory = directory.standardizedFileURL
+    identity = try DirectoryHandle(at: directory.resolvingSymlinksInPath()).objectIdentity
+  }
+
+  func validate() throws {
+    guard try DirectoryHandle(at: directory.resolvingSymlinksInPath()).objectIdentity == identity
+    else { throw CoreError.invalidState("selected project root changed") }
+  }
+
+  /// Returns nil for a separately registered external loader; selected-root descendants
+  /// are opened from the pinned descriptor and never recreate the selected pathname.
+  func descendant(
+    at url: URL, from root: DirectoryHandle, create: Bool,
+    checkpoint: (DirectoryHandle.AncestryStep) throws -> Void = { _ in }
+  ) throws -> DirectoryHandle? {
+    try validate()
+    let prefix = Array(root.url.path.utf8)
+    let bytes = Array(url.path.utf8)
+    guard bytes == prefix || bytes.starts(with: prefix + [47]) else { return nil }
+    let relative = String(
+      decoding: bytes.dropFirst(min(prefix.count + 1, bytes.count)), as: UTF8.self)
+    let parts = relative.split(separator: "/").map(String.init)
+    var current = root
+    for (index, name) in parts.enumerated() {
+      if create {
+        let depth = parts.count - index - 1
+        if try current.info(name) == nil {
+          try current.makeDirectory(name) { try checkpoint(.created(depth: depth)) }
+          try checkpoint(.synced(depth: depth))
+        } else {
+          try current.sync()
+        }
+      }
+      current = try current.child(name)
+      try validate()
+    }
+    return current
+  }
+
+  func open(for store: StateStore) throws -> DirectoryHandle {
+    guard store.scope == .project,
+      directory.path.utf8.elementsEqual(
+        store.environment.projectDirectory.standardizedFileURL.path.utf8)
+    else { throw CoreError.invalidState("project observation belongs to another scope") }
+    try validate()
+    let opened = try DirectoryHandle(at: directory.resolvingSymlinksInPath())
+    guard try opened.objectIdentity == identity else {
+      throw CoreError.invalidState("selected project root changed during admission")
+    }
+    return opened
+  }
+}
+
+extension StateStore {
+  public func captureExistingProjectRoot() throws -> ExistingProjectRoot {
+    guard scope == .project else {
+      throw CoreError.invalidState("existing project root requires project scope")
+    }
+    return try ExistingProjectRoot(directory: environment.projectDirectory)
+  }
+}
+
+/// Exact, absent authoring file owned by one explicit local skill initialization.
+package struct SkillInitializationTarget {
+  package let file: URL
+  let scope: URL
+  let descendants: [String]
+  let evidence: TargetPrecondition
+
+  fileprivate init(store: StateStore, name: String?, selectedDirectory: String? = nil) throws {
+    guard store.scope == .project,
+      name == nil || (name == PathSafety.sanitizeName(name!) && !name!.contains("/")),
+      selectedDirectory.map({
+        !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/")
+          && !$0.contains("\\") && !$0.contains("\0")
+      }) ?? true
+    else { throw CoreError.unsafePath("invalid local skill initialization target") }
+    scope = store.directory
+    descendants = ((selectedDirectory ?? name).map { [$0] } ?? []) + ["SKILL.md"]
+    file = descendants.reduce(store.environment.projectDirectory.resolvingSymlinksInPath()) {
+      $0.appendingPathComponent($1)
+    }
+    evidence = try TargetPrecondition(file)
+    guard evidence.snapshot == nil else {
+      throw CoreError.invalidSkill("skill file already exists")
+    }
+  }
+}
+
+extension StateStore {
+  package func skillInitializationTarget(named name: String? = nil) throws
+    -> SkillInitializationTarget
+  {
+    try SkillInitializationTarget(store: self, name: name)
+  }
+
+  /// Preserves an explicitly selected directory spelling below the observed existing parent.
+  package func skillInitializationTarget(inChildDirectory directory: String) throws
+    -> SkillInitializationTarget
+  {
+    try SkillInitializationTarget(store: self, name: nil, selectedDirectory: directory)
+  }
+}
