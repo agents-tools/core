@@ -114,15 +114,23 @@ package enum NativeExpectedRegion {
 package enum NativeRegionEdit {
   case put(region: NativeRegion, expected: NativeExpectedRegion, value: NativeValue)
   case remove(region: NativeRegion, expected: NativeExpectedRegion)
+  /// The caller must hold durable creation authority for this object or array. The observation
+  /// must match the preimage; removal is conditional on emptiness after all descendant edits.
+  /// Unowned comments or ambiguous removal syntax retain the container.
+  case pruneCreatedContainer(region: NativeRegion, observed: NativeObservation)
   var region: NativeRegion {
     switch self {
-    case .put(let r, _, _), .remove(let r, _): r
+    case .put(let r, _, _), .remove(let r, _), .pruneCreatedContainer(let r, _): r
     }
   }
   var expected: NativeExpectedRegion {
     switch self {
     case .put(_, let e, _), .remove(_, let e): e
+    case .pruneCreatedContainer(_, let observation): .createdContainer(observation)
     }
+  }
+  var isConditionalPrune: Bool {
+    if case .pruneCreatedContainer = self { true } else { false }
   }
 }
 
