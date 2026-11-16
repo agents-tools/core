@@ -67,6 +67,7 @@ let package = Package(
       name: "AgentsUpdates",
       dependencies: [
         "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "CPlatform",
+        "Components",
       ]),
     .target(
       name: "Components",
@@ -114,6 +115,7 @@ let package = Package(
       name: "AgentsUpdatesTests",
       dependencies: [
         "AgentsUpdates", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
+        "MCPTestProcess",
       ]),
     .testTarget(
       name: "AgentsSkillsTests",

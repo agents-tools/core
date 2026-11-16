@@ -14,7 +14,7 @@ AgentsManifest → AgentsCore, TreeSitterYAML, TreeSitter, Yams
 AgentsSkills → AgentsCore, AgentsManifest, Yams
 AgentsInstructions → AgentsCore, AgentsManifest, Markdown
 Components → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, NativeDocuments, MCP
-AgentsUpdates → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions
+AgentsUpdates → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, Components
 NativeDocuments → AgentsCore, TOMLSemantics, TreeSitterTOML, TreeSitter
 TOMLSemantics → Foundation
 TreeSitterTOML → (vendored C grammar)
