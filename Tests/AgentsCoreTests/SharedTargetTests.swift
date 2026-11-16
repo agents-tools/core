@@ -319,6 +319,93 @@ struct SharedTargetTests {
     }
   }
 
+  @Test func pendingFootprintReadmitsBeforeCallbackOrProvider() throws {
+    let fixture = try SharedFixture()
+    try fixture.install()
+    let original = try Data(contentsOf: fixture.target)
+    let receipt = try Data(contentsOf: fixture.receiptURL())
+    let marker = fixture.root.appendingPathComponent("ready")
+    let nextStop = fixture.root.appendingPathComponent("stop-at")
+    let journal = fixture.a.directory.appendingPathComponent("transaction.json")
+    let holder = try stateTestProcess(
+      root: fixture.root, arguments: ["shared-readmission-writer", "shared.beforeJournal"])
+    defer { terminateProcess(holder) }
+    try ProcessWait.marker(marker, child: holder, root: fixture.root)
+    try ProcessWait.stopped(holder, root: fixture.root)
+    #expect(!FileManager.default.fileExists(atPath: journal.path))
+    try FileManager.default.removeItem(at: marker)
+    let waiter = try stateTestProcess(
+      root: fixture.root, arguments: ["shared-admission-wait", "scope-contention"])
+    defer { terminateProcess(waiter) }
+    try ProcessWait.marker(marker, child: waiter, root: fixture.root)
+    try ProcessWait.stopped(waiter, root: fixture.root)
+    let contention = try String(contentsOf: marker, encoding: .utf8)
+    #expect(contention.hasPrefix("scope.lock.") && contention.hasSuffix(".contended"))
+    #expect(!FileManager.default.fileExists(atPath: journal.path))
+    try FileManager.default.removeItem(at: marker)
+    try Data("entry.0.applied".utf8).write(to: nextStop)
+    try #require(kill(holder.processIdentifier, SIGCONT) == 0)
+    try ProcessWait.marker(marker, child: holder, root: fixture.root)
+    try ProcessWait.stopped(holder, root: fixture.root)
+    #expect(FileManager.default.fileExists(atPath: journal.path))
+    #expect(try Data(contentsOf: fixture.target) != original)
+    terminateProcess(holder)
+
+    let other = fixture.b.environment.projectDirectory
+    let lock = try fixture.receiptURL().deletingLastPathComponent().appendingPathComponent("lock")
+    let blocker = try stateTestProcess(
+      root: other, arguments: ["shared-hold-lock", "shared.rawLocked", "--lock-path", lock.path])
+    defer { terminateProcess(blocker) }
+    try ProcessWait.marker(other.appendingPathComponent("ready"), child: blocker, root: other)
+    try ProcessWait.stopped(blocker, root: other)
+    try FileManager.default.removeItem(at: marker)
+    try Data("shared.0.lock.contended".utf8).write(to: nextStop)
+    try #require(kill(waiter.processIdentifier, SIGCONT) == 0)
+    try ProcessWait.marker(marker, child: waiter, root: fixture.root)
+    try ProcessWait.stopped(waiter, root: fixture.root)
+    #expect(try String(contentsOf: marker, encoding: .utf8) == "shared.0.lock.contended")
+    #expect(FileManager.default.fileExists(atPath: journal.path))
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: fixture.root.appendingPathComponent("admission-body").path))
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: fixture.root.appendingPathComponent("provider-called").path))
+    try #require(kill(blocker.processIdentifier, SIGCONT) == 0)
+    try ProcessWait.exit(blocker, root: other)
+    #expect(blocker.terminationStatus == 0)
+    try #require(kill(waiter.processIdentifier, SIGCONT) == 0)
+    try ProcessWait.exit(waiter, root: fixture.root)
+    #expect(waiter.terminationStatus == 0)
+    #expect(
+      FileManager.default.fileExists(
+        atPath: fixture.root.appendingPathComponent("admission-recovered").path))
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: fixture.root.appendingPathComponent("admission-body").path))
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: fixture.root.appendingPathComponent("provider-called").path))
+    #expect(!FileManager.default.fileExists(atPath: journal.path))
+    #expect(try Data(contentsOf: fixture.target) == original)
+    #expect(try Data(contentsOf: fixture.receiptURL()) == receipt)
+
+    let provider = SharedBindings()
+    var callbacks = 0
+    try fixture.a.withLock(footprint: [.claudeMCPLocal]) {
+      callbacks += 1
+      let target = try fixture.a.nativeTarget(for: .claudeMCPLocal)
+      let prepared = try fixture.a.preparePrivateMaterialization(
+        target, requiringReceiptForExistingTarget: true)
+      let transaction = FileTransaction(store: fixture.a)
+      try transaction.replacePrivate(prepared, bindings: ["secret"], provider: provider) {
+        try $0.value(for: "secret")
+      }
+      try transaction.commit()
+    }
+    #expect(callbacks == 1 && provider.calls == 1)
+  }
+
   @Test(arguments: ["shared-skill-recover", "shared-watch-recover", "shared-instruction-recover"])
   func ordinaryMutationEntrypointsRecoverPendingSharedFootprints(_ command: String) throws {
     let fixture = try SharedFixture()

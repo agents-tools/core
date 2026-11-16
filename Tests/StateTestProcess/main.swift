@@ -33,7 +33,12 @@ let trace = try FileHandle(forWritingTo: traceURL)
 /// point ambiguous, so the recorder fails the run. Each command runs one recorded operation.
 func stop(_ point: String, marker: String = "ready") throws {
   let (repeated, shouldStop) = checkpointState.withLock { state in
-    (!state.seen.insert(point).inserted, point == state.requested)
+    (
+      !state.seen.insert(point).inserted,
+      point == state.requested
+        || (state.requested == "scope-contention" && point.hasPrefix("scope.")
+          && FileLock.isContentionCheckpoint(point))
+    )
   }
   try trace.write(contentsOf: Data((point + "\n").utf8))
   if repeated { fatalError("repeated checkpoint: \(point)") }
