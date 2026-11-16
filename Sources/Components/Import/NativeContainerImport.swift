@@ -100,6 +100,8 @@ enum NativeContainerImport {
     // The producer loads defaults then declarations; later duplicate names replace earlier ones.
     var winners: [String: (NativeValue, NativeImportDocument, [String])] = [:]
     for (value, document, keys) in mcpSources {
+      try NativeSourceImport.classifyMembers(
+        value, parsed: document, keys: keys, into: &diagnostics)
       guard let fields = value.importObject else { throw ImportReadFailure.invalid }
       for (name, entry) in fields {
         if let previous = winners[name] {
@@ -145,6 +147,8 @@ enum NativeContainerImport {
     }
     var lspWinners: [String: (NativeValue, NativeImportDocument, [String])] = [:]
     for (value, document, keys) in lspSources {
+      try NativeSourceImport.classifyMembers(
+        value, parsed: document, keys: keys, into: &diagnostics)
       for (name, entry) in value.importObject ?? [:] { lspWinners[name] = (entry, document, keys) }
     }
     for name in lspWinners.keys.sorted() {
@@ -240,7 +244,7 @@ enum NativeContainerImport {
           document.fields, allowed: [field],
           at: document.location(), into: &diagnostics)
       }
-      sources.append((fields, document, [field]))
+      sources.append((fields, document, field == "lspServers" ? [] : [field]))
     } else if case .array(let entries) = value {
       for entry in entries {
         try configurations(
