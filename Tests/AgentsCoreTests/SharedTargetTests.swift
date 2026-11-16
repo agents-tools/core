@@ -109,6 +109,36 @@ struct SharedTargetTests {
     #expect(try Data(contentsOf: fixture.target) == Data("external trust change".utf8))
   }
 
+  @Test(arguments: ["target", "ancestor"])
+  func sharedPreparedWriteRejectsChangedAccess(_ changed: String) throws {
+    let fixture = try SharedFixture()
+    try fixture.install()
+    let targetBytes = try Data(contentsOf: fixture.target)
+    let receiptURL = try fixture.receiptURL()
+    let receipt = try Data(contentsOf: receiptURL)
+    let changedURL = changed == "target" ? fixture.target : fixture.config
+    var original = stat()
+    try #require(stat(changedURL.path, &original) == 0)
+    defer { _ = chmod(changedURL.path, original.st_mode & 0o7777) }
+    try fixture.b.withLock(footprint: [.claudeMCPLocal]) {
+      let target = try fixture.b.nativeTarget(for: .claudeMCPLocal)
+      let prepared = try fixture.b.preparePrivateMaterialization(
+        target, requiringReceiptForExistingTarget: true)
+      let transaction = FileTransaction(store: fixture.b)
+      try transaction.replace(
+        target.url, with: .data(Data("secret sibling; changed region".utf8)),
+        expecting: prepared.evidence)
+      let externalMode: mode_t = changed == "target" ? 0o644 : 0o777
+      try #require(chmod(changedURL.path, externalMode) == 0)
+      #expect(throws: CoreError.self) { try transaction.commit() }
+      var actual = stat()
+      try #require(stat(changedURL.path, &actual) == 0)
+      #expect(actual.st_mode & 0o7777 == externalMode)
+      #expect(try Data(contentsOf: fixture.target) == targetBytes)
+      #expect(try Data(contentsOf: receiptURL) == receipt)
+    }
+  }
+
   @Test(arguments: [
     "journal.preparing.created.written", "journal.preparing.created.renamed",
     "shared.0.reservation.created",
@@ -236,6 +266,56 @@ struct SharedTargetTests {
       let user = try fixture.b.nativeTarget(for: .claudeMCPUser)
       #expect(local.path == user.path)
       #expect(local.url == user.url)
+    }
+  }
+
+  @Test(arguments: [false, true])
+  func aliasedWritersSerializeAcrossReplacementAndBothMakeProgress(_ reverse: Bool) throws {
+    let fixture = try SharedFixture()
+    try fixture.install()
+    let other = fixture.b.environment.projectDirectory
+    try FileManager.default.createDirectory(
+      at: other.appendingPathComponent("old-data"), withIntermediateDirectories: true)
+    try Data("ordinary before".utf8).write(to: other.appendingPathComponent("old-data/AGENTS.md"))
+    let firstRoot = reverse ? other : fixture.root
+    let secondRoot = reverse ? fixture.root : other
+    let firstConfig = reverse ? fixture.root.appendingPathComponent("config-alias") : fixture.config
+    let secondConfig =
+      reverse ? fixture.config : fixture.root.appendingPathComponent("config-alias")
+    let holder = try stateTestProcess(
+      root: firstRoot,
+      arguments: ["shared-edit", "publish.0.exchanged", "--shared-config", firstConfig.path])
+    defer { terminateProcess(holder) }
+    try ProcessWait.marker(
+      firstRoot.appendingPathComponent("ready"), child: holder, root: firstRoot)
+    try ProcessWait.stopped(holder, root: firstRoot)
+    let published = try Data(contentsOf: fixture.target)
+    #expect(published == Data("secret sibling; edited region".utf8))
+    let waiter = try stateTestProcess(
+      root: secondRoot,
+      arguments: ["shared-edit", "shared.0.lock.contended", "--shared-config", secondConfig.path])
+    defer { terminateProcess(waiter) }
+    try ProcessWait.marker(
+      secondRoot.appendingPathComponent("ready"), child: waiter, root: secondRoot)
+    try ProcessWait.stopped(waiter, root: secondRoot)
+    #expect(try Data(contentsOf: fixture.target) == published)
+    try #require(kill(holder.processIdentifier, SIGCONT) == 0)
+    try ProcessWait.exit(holder, root: firstRoot)
+    #expect(holder.terminationStatus == 0)
+    let firstGeneration = try fixture.a.withReadLock(footprint: [.claudeMCPLocal]) {
+      let target = try fixture.a.nativeTarget(for: .claudeMCPLocal)
+      let receipt = try fixture.a.materializationReceipt(for: target)
+      return try #require(receipt).generation
+    }
+    try #require(kill(waiter.processIdentifier, SIGCONT) == 0)
+    try ProcessWait.exit(waiter, root: secondRoot)
+    #expect(waiter.terminationStatus == 0)
+    try fixture.a.withLock(footprint: [.claudeMCPLocal]) {
+      let target = try fixture.a.nativeTarget(for: .claudeMCPLocal)
+      let after = try fixture.a.preparePrivateMaterialization(
+        target, requiringReceiptForExistingTarget: true)
+      #expect(after.receiptGeneration != firstGeneration)
+      #expect(try Data(contentsOf: target.url) == published)
     }
   }
 
@@ -531,6 +611,37 @@ struct SharedTargetTests {
     #expect(message.contains(journal.id.uuidString))
     #expect(!message.contains("secret sibling"))
     #expect(try fixture.journal(fixture.a).id == journal.id)
+  }
+
+  @Test func orphanedForeignReservationRemainsPending() throws {
+    let fixture = try SharedFixture()
+    try fixture.install()
+    let child = try stateTestProcess(
+      root: fixture.root, arguments: ["shared-edit", "shared.ready"])
+    defer { terminateProcess(child) }
+    try ProcessWait.marker(
+      fixture.root.appendingPathComponent("ready"), child: child, root: fixture.root)
+    terminateProcess(child)
+    let journal = try fixture.journal(fixture.a)
+    let journalURL = fixture.a.directory.appendingPathComponent("transaction.json")
+    let reservationURL = try fixture.receiptURL().deletingLastPathComponent()
+      .appendingPathComponent("reservation")
+    let reservation = try Data(contentsOf: reservationURL)
+    let target = try FileSnapshot.read(at: fixture.target)
+    try FileManager.default.removeItem(at: journalURL)
+    var calls = 0
+    var message = ""
+    do {
+      try fixture.b.withLock(footprint: [.claudeMCPLocal]) { calls += 1 }
+    } catch CoreError.recoveryPending(let value) {
+      message = value
+    }
+    #expect(message.contains(fixture.a.directory.path))
+    #expect(message.contains(journal.id.uuidString))
+    #expect(calls == 0)
+    #expect(try Data(contentsOf: reservationURL) == reservation)
+    #expect(try FileSnapshot.read(at: fixture.target) == target)
+    #expect(!FileManager.default.fileExists(atPath: journalURL.path))
   }
 
   @Test(arguments: [false, true], [false, true])
