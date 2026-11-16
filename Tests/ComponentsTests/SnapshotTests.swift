@@ -7,6 +7,74 @@ import Testing
 
 @Suite("Exact component snapshots", .serialized)
 struct SnapshotTests {
+  @Test func localDirectoryBeneathRepositoryKeepsItsOwnContent() throws {
+    let fixture = try LinkFixture()
+    try fixture.initialize(fixture.project)
+    try fixture.write("Parent repository", to: "README.md", base: fixture.project)
+    try fixture.commit(fixture.project)
+    let content = fixture.project.appendingPathComponent("content")
+    try fixture.skill("demo", at: content)
+    let source = SourceDeclaration(kind: .local, location: "./content")
+    let before = try FileHash.folderHash(fixture.project)
+    try SourceResolutionSession.withTemporaryRead(store: fixture.store) { session in
+      #expect(try !session.isGitSource(source))
+      let view = try session.localSnapshot(source)
+      #expect(view.pin == nil)
+      #expect(try SkillSnapshotReader.read(view).map(\.name) == ["demo"])
+    }
+    let graph = try fixture.link(
+      """
+      version: 1
+      sources: {local: {path: ./content}}
+      components: [{kind: skills, source: local, select: all}]
+      """)
+    #expect(graph.components.map(\.key.name) == ["demo"])
+    #expect(try FileHash.folderHash(fixture.project) == before)
+    #expect(!FileManager.default.fileExists(atPath: fixture.store.cacheDirectory.path))
+  }
+
+  @Test(arguments: ["repository", "worktree", "bare"])
+  func localRepositoryKindsPreserveExplicitDiscoveryRoot(_ kind: String) throws {
+    let fixture = try LinkFixture()
+    let repository = fixture.root.appendingPathComponent("repository")
+    try fixture.initialize(repository)
+    try fixture.skill("selected", at: repository.appendingPathComponent("packages/content"))
+    try fixture.skill("root-only", at: repository)
+    let revision = try fixture.commit(repository)
+    let location: URL
+    switch kind {
+    case "worktree":
+      location = fixture.root.appendingPathComponent("worktree")
+      try fixture.git(repository, ["worktree", "add", "--detach", location.path])
+    case "bare":
+      location = fixture.root.appendingPathComponent("bare")
+      try fixture.git(
+        repository, ["clone", "--bare", "--no-local", repository.path, location.path])
+      try fixture.git(location, ["config", "maintenance.auto", "false"])
+      try fixture.git(location, ["config", "gc.auto", "0"])
+    default: location = repository
+    }
+    let source = SourceDeclaration(
+      kind: .local, location: location.path, path: "packages/content")
+    var borrowed: URL?
+    try SourceResolutionSession.withTemporaryRead(store: fixture.store) { session in
+      #expect(try session.isGitSource(source))
+      if kind == "bare" {
+        #expect(
+          try !session.isGitSource(
+            SourceDeclaration(
+              kind: .local, location: location.appendingPathComponent("objects").path)))
+      }
+      let pin = try #require(session.candidates(for: source, requirements: [nil]).first)
+      #expect(pin.revision == revision)
+      let view = try session.snapshot(source, at: pin)
+      borrowed = view.root
+      #expect(try SkillSnapshotReader.read(view).map(\.name) == ["selected"])
+    }
+    #expect(!FileManager.default.fileExists(atPath: try #require(borrowed).path))
+    #expect(!FileManager.default.fileExists(atPath: fixture.store.cacheDirectory.path))
+  }
+
   @Test func frozenCatalogAndScopedLifetime() throws {
     let fixture = try LinkFixture()
     let repository = fixture.root.appendingPathComponent("repository")

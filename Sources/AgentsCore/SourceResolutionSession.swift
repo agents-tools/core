@@ -352,10 +352,16 @@ package final class SourceResolutionSession {
   package func isGitSource(_ source: SourceDeclaration) throws -> Bool {
     guard source.kind == .local else { return source.kind == .git }
     let local = source.localURL(environment: store.environment)
-    return
-      (try? ProcessRunner.git(
-        ["-C", local.path, "rev-parse", "--git-dir"],
+    // Validate this directory's metadata, including worktree gitfiles, without ancestor discovery.
+    for path in [".git", "."] {
+      if (try? ProcessRunner.git(
+        ["--no-optional-locks", "-C", local.path, "rev-parse", "--resolve-git-dir", path],
         operation: .findRepositoryRoot, source: source.location)) != nil
+      {
+        return true
+      }
+    }
+    return false
   }
 
   private func localEnvironment(for source: SourceDeclaration) -> SourceEnvironment? {
