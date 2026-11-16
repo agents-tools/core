@@ -186,7 +186,7 @@ struct RegisteredNativeTargetTests {
     }
   #endif
 
-  @Test(arguments: NativeTargetRoute.allCases)
+  @Test(arguments: NativeTargetRoute.mcpRoutes)
   func registeredFilesPublishPrivatelyAndRetainTheirReceipt(_ route: NativeTargetRoute) throws {
     let fixture = try NativeRouteFixture()
     let expected: [NativeTargetRoute: String] = [
@@ -578,5 +578,275 @@ private final class NativeRouteFixture {
 extension Optional where Wrapped == TransactionLockContext {
   fileprivate func requiredResourceForRoute(_ route: NativeTargetRoute) throws -> SharedResource {
     try #require(self).resource(for: route)
+  }
+}
+
+extension RegisteredNativeTargetTests {
+  private static var componentFiles: [NativeTargetRoute] {
+    var result: [NativeTargetRoute] = [
+      .claudeSettingsProject, .claudeSettingsUser,
+      .codexHooksProject, .codexHooksUser, .cursorHooksProject, .cursorHooksUser,
+      .geminiIgnoreProject, .cursorIgnoreProject,
+    ]
+    for member in [
+      NativeTargetRoute.Member.claudeCommand, .claudeAgent, .codexAgent,
+      .geminiCommand, .geminiAgent, .cursorCommand, .cursorAgent,
+    ] {
+      for scope in [InstallScope.project, .user] {
+        if let route = try? NativeTargetRoute.named(member, scope: scope, name: "example") {
+          result.append(route)
+        }
+      }
+    }
+    return result
+  }
+
+  @Test(arguments: componentFiles)
+  func componentFilesRetainPrivateGenerationOnOrdinarySiblingEdit(_ route: NativeTargetRoute) throws
+  {
+    let fixture = try NativeRouteFixture()
+    let store = StateStore(
+      scope: route.shared ? .user : .project, environment: fixture.store.environment)
+    try store.withLock(footprint: [route]) {
+      let target = try store.nativeTarget(for: route)
+      let transaction = FileTransaction(store: store)
+      try transaction.replacePrivate(
+        store.preparePrivateMaterialization(target), provider: NativeRouteBindings()
+      ) {
+        _ in Data("bound region; unmanaged sibling".utf8)
+      }
+      try transaction.commit()
+      let before = try #require(try store.materializationReceipt(for: target))
+      let ordinary = FileTransaction(store: store)
+      try ordinary.replace(target.url, with: .data(Data("bound region; edited sibling".utf8)))
+      try ordinary.commit()
+      let after = try #require(try store.materializationReceipt(for: target))
+      #expect(before.generation != after.generation)
+      _ = try DirectoryHandle(at: target.url.deletingLastPathComponent()).requirePrivateAccess(
+        target.url.lastPathComponent)
+    }
+    try store.withReadLock(footprint: [route]) {
+      let target = try store.nativeTarget(for: route)
+      let receipt = try store.materializationReceipt(for: target)
+      #expect(receipt != nil)
+    }
+  }
+
+  @Test func componentRouteBoundariesAndPureFreshHomePreview() throws {
+    let fixture = try NativeRouteFixture()
+    var environment = fixture.store.environment
+    environment.homeDirectory = fixture.root.appendingPathComponent("fresh-home")
+    environment.environment = [:]
+    let store = StateStore(scope: .user, environment: environment)
+    let routes = try Set([
+      NativeTargetRoute.named(.claudeCommand, scope: .user, name: "team/check"),
+      .named(.geminiExtension, scope: .user, name: "example"),
+      .named(.cursorLocalPlugin, scope: .user, name: "example"),
+    ])
+    let before = try FileSnapshot.read(at: fixture.root)
+    try store.withReadLock(footprint: routes) {
+      for route in routes {
+        #expect(try store.nativeTargetIdentity(for: route) == nil)
+        let target = try store.nativeTarget(for: route)
+        #expect(target.url.path.hasPrefix(environment.homeDirectory.path + "/"))
+        #expect(try store.materializationReceipt(for: target) == nil)
+      }
+    }
+    #expect(try FileSnapshot.read(at: fixture.root) == before)
+    for name in [
+      "", ".", "..", "../escape", "/escape", "a//b", "a/../b", "a\\b", ".agents-native",
+      "a/.agents-native/b", ".agents-temporary",
+    ] {
+      #expect(throws: CoreError.self) {
+        try NativeTargetRoute.named(.claudeCommand, scope: .user, name: name)
+      }
+    }
+    #expect(throws: CoreError.self) {
+      try NativeTargetRoute.named(.cursorCommand, scope: .user, name: "example")
+    }
+    #expect(throws: CoreError.self) {
+      try NativeTargetRoute.named(.geminiExtension, scope: .project, name: "example")
+    }
+    #expect(throws: CoreError.self) { try fixture.store.nativeTarget(for: .claudeSettingsUser) }
+    let beforeRefusal = try FileSnapshot.read(at: fixture.root)
+    #expect(throws: CoreError.self) {
+      try fixture.store.withLock(footprint: [.claudeSettingsUser]) {
+        _ = Issue.record("wrong-scope request must be refused before callback")
+      }
+    }
+    #expect(try FileSnapshot.read(at: fixture.root) == beforeRefusal)
+    var collidingEnvironment = fixture.store.environment
+    collidingEnvironment.environment["CLAUDE_CONFIG_DIR"] =
+      fixture.root.appendingPathComponent(".claude").path
+    let colliding = StateStore(scope: .project, environment: collidingEnvironment)
+    #expect(throws: CoreError.self) {
+      try colliding.nativeTarget(for: .named(.claudeAgent, scope: .project, name: "example"))
+    }
+    #expect(try FileSnapshot.read(at: fixture.root) == beforeRefusal)
+    let linkParent = fixture.config.appendingPathComponent("commands")
+    try FileManager.default.createSymbolicLink(at: linkParent, withDestinationURL: fixture.root)
+    let user = StateStore(scope: .user, environment: fixture.store.environment)
+    #expect(throws: CoreError.self) {
+      try user.nativeTarget(for: .named(.claudeCommand, scope: .user, name: "escape"))
+    }
+    #expect(NativeTargetRoute.claudeSettingsUser.knownReaders == [.claudeCode, .cursor])
+    let fileRoute = try NativeTargetRoute.file(
+      .claudeCommand, scope: .user, relativePath: "team/check.md")
+    let namedRoute = try NativeTargetRoute.named(.claudeCommand, scope: .user, name: "team/check")
+    #expect(fileRoute == namedRoute)
+    #expect(throws: CoreError.self) {
+      try NativeTargetRoute.file(.claudeCommand, scope: .user, relativePath: "team/check.toml")
+    }
+  }
+
+  @Test func aliasedComponentKindsShareIdentityAndSensitiveReceiptAcrossHomes() throws {
+    let fixture = try NativeRouteFixture()
+    var environment = fixture.store.environment
+    environment.environment["GEMINI_CLI_HOME"] = fixture.root.path
+    environment.environment["CLAUDE_CONFIG_DIR"] =
+      fixture.root.appendingPathComponent(".gemini").path
+    let a = StateStore(scope: .user, environment: environment)
+    environment.homeDirectory = fixture.root.appendingPathComponent("other-home")
+    let b = StateStore(scope: .project, environment: environment)
+    let routes: Set<NativeTargetRoute> = [.claudeSettingsUser, .geminiMCPUser, .cursorHooksUser]
+    var identity: NativeTargetIdentity?
+    try a.withLock(footprint: routes) {
+      let first = try a.nativeTarget(for: .claudeSettingsUser)
+      let second = try a.nativeTarget(for: .geminiMCPUser)
+      #expect(first.path == second.path)
+      identity = try a.nativeTargetIdentity(for: .claudeSettingsUser)
+      #expect(identity == (try a.nativeTargetIdentity(for: .geminiMCPUser)))
+      #expect(identity != (try a.nativeTargetIdentity(for: .cursorHooksUser)))
+      let transaction = FileTransaction(store: a)
+      try transaction.replacePrivate(
+        a.preparePrivateMaterialization(first), provider: NativeRouteBindings()
+      ) { _ in Data("bound; sibling".utf8) }
+      try transaction.commit()
+    }
+    try b.withLock(footprint: [.geminiMCPUser]) {
+      let target = try b.nativeTarget(for: .geminiMCPUser)
+      #expect(identity == (try b.nativeTargetIdentity(for: .geminiMCPUser)))
+      let previous = try #require(try b.materializationReceipt(for: target))
+      let transaction = FileTransaction(store: b)
+      try transaction.replace(target.url, with: .data(Data("bound; changed sibling".utf8)))
+      try transaction.commit()
+      #expect(try b.materializationReceipt(for: target)?.generation != previous.generation)
+    }
+    try a.withReadLock(footprint: [.claudeSettingsUser]) {
+      let target = try a.nativeTarget(for: .claudeSettingsUser)
+      let receipt = try a.materializationReceipt(for: target)
+      #expect(receipt != nil)
+    }
+  }
+}
+
+extension RegisteredNativeTargetTests {
+  @Test(arguments: ["shared.1.reservation.halfWritten", "entry.0.applied", "journal.finalized"])
+  func namedFilesWithEqualBasenamesRecoverThroughTheirClosedRoots(_ point: String) throws {
+    let fixture = try NativeRouteFixture()
+    let routes = try [
+      NativeTargetRoute.named(.claudeAgent, scope: .user, name: "example"),
+      .named(.cursorAgent, scope: .user, name: "example"),
+    ]
+    let store = StateStore(scope: .user, environment: fixture.store.environment)
+    let child = try stateTestProcess(
+      root: fixture.root,
+      arguments: [
+        "shared-install", point, "--native-routes", routes.map(\.rawValue).joined(separator: ","),
+        "--shared-config", fixture.config.path, "--scope", "user",
+      ])
+    defer { terminateProcess(child) }
+    try ProcessWait.marker(
+      fixture.root.appendingPathComponent("ready"), child: child, root: fixture.root)
+    terminateProcess(child)
+    let before = try FileSnapshot.read(at: fixture.root)
+    try store.withReadLock(
+      onPendingRecovery: {
+        let diagnosis = FileTransaction.recoveryDiagnostic(store: store)
+        #expect(!diagnosis.requiresOwner)
+      }, { _ = Issue.record("expected pending named targets") })
+    #expect(try FileSnapshot.read(at: fixture.root) == before)
+    #expect(throws: CoreError.transactionRecovered(store.directory.path)) { try store.withLock {} }
+    try store.withReadLock(footprint: Set(routes)) {
+      for route in routes {
+        let target = try store.nativeTarget(for: route)
+        let receipt = try store.materializationReceipt(for: target)
+        #expect((receipt != nil) == (point == "journal.finalized"))
+      }
+    }
+  }
+
+  @Test(arguments: [
+    NativeTargetRoute.Member.claudeSkillPlugin, .cursorLocalPlugin, .geminiExtension,
+  ])
+  func registeredBundleContainersPublishAndDeleteWithoutInstallerAuthority(
+    _ member: NativeTargetRoute.Member
+  ) throws {
+    let fixture = try NativeRouteFixture()
+    let store = StateStore(scope: .user, environment: fixture.store.environment)
+    let route = try NativeTargetRoute.named(member, scope: .user, name: "example")
+    let payload = fixture.root.appendingPathComponent("bundle")
+    try FileManager.default.createDirectory(at: payload, withIntermediateDirectories: true)
+    try Data("native manifest fixture".utf8).write(
+      to: payload.appendingPathComponent("manifest.json"))
+    try store.withLock(footprint: [route]) {
+      let target = try store.nativeTarget(for: route)
+      #expect(throws: CoreError.self) { try store.preparePrivateMaterialization(target) }
+      #expect(throws: CoreError.self) {
+        let invalid = FileTransaction(store: store)
+        try invalid.replace(target.url, with: .data(Data("wrong kind".utf8)))
+      }
+      let transaction = FileTransaction(store: store)
+      try transaction.replace(target.url, with: .copy(payload))
+      try transaction.commit()
+      #expect(
+        try Data(contentsOf: target.url.appendingPathComponent("manifest.json"))
+          == Data("native manifest fixture".utf8))
+      #expect(throws: CoreError.self) {
+        let outside = fixture.root.appendingPathComponent("outside-native-root")
+        try FileTransaction(store: store).replace(outside, with: .copy(payload))
+      }
+      let removal = FileTransaction(store: store)
+      try removal.delete(target.url)
+      try removal.commit()
+      #expect(!FileManager.default.fileExists(atPath: target.url.path))
+    }
+  }
+}
+
+extension RegisteredNativeTargetTests {
+  @Test func projectAliasesPreserveWholeFileSensitivityAcrossComponentKinds() throws {
+    let fixture = try NativeRouteFixture()
+    let store = fixture.store
+    let claude = try NativeTargetRoute.named(.claudeAgent, scope: .project, name: "example")
+    let cursor = try NativeTargetRoute.named(.cursorAgent, scope: .project, name: "example")
+    try FileManager.default.createDirectory(
+      at: fixture.root.appendingPathComponent(".claude"), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: fixture.root.appendingPathComponent(".cursor"),
+      withDestinationURL: fixture.root.appendingPathComponent(".claude"))
+    try store.withLock(footprint: [claude, cursor]) {
+      let a = try store.nativeTarget(for: claude)
+      let b = try store.nativeTarget(for: cursor)
+      #expect(a.path == b.path)
+      let transaction = FileTransaction(store: store)
+      try transaction.replacePrivate(
+        store.preparePrivateMaterialization(a), provider: NativeRouteBindings()
+      ) { _ in Data("private sibling; first region".utf8) }
+      try transaction.commit()
+    }
+    try store.withLock(footprint: [cursor]) {
+      let target = try store.nativeTarget(for: cursor)
+      let before = try #require(try store.materializationReceipt(for: target))
+      let transaction = FileTransaction(store: store)
+      try transaction.replace(target.url, with: .data(Data("private sibling; changed region".utf8)))
+      try transaction.commit()
+      #expect(try store.materializationReceipt(for: target)?.generation != before.generation)
+    }
+    try store.withReadLock(footprint: [claude]) {
+      let target = try store.nativeTarget(for: claude)
+      let receipt = try store.materializationReceipt(for: target)
+      #expect(receipt != nil)
+    }
   }
 }

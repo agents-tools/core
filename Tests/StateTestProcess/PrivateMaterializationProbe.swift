@@ -114,9 +114,11 @@ func sharedMaterializationProbe(
         try transaction.replace(target.url, with: .data(Data("secret sibling; edited region".utf8)))
       }
     }
-    try transaction.replace(
-      store.environment.projectDirectory.appendingPathComponent("old-data/AGENTS.md"),
-      with: .data(Data("ordinary after".utf8)))
+    if store.scope == .project {
+      try transaction.replace(
+        store.environment.projectDirectory.appendingPathComponent("old-data/AGENTS.md"),
+        with: .data(Data("ordinary after".utf8)))
+    }
     try transaction.commit()
   }
 }

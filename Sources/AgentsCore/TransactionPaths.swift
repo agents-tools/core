@@ -29,14 +29,26 @@ struct TransactionPaths {
         }
       }
     }
-    let nativeRoutes = NativeTargetRoute.allCases.sorted { $0.shared && !$1.shared }
-    for route in nativeRoutes where route.shared || store.scope == .project {
-      guard destination.lastPathComponent == route.basename else { continue }
-      let registered = try route.logicalDirectory(store.environment).resolvingSymlinksInPath()
+    let admitted =
+      Array(TransactionLockContext.current(store)?.requestedRoutes ?? [])
+      + (TransactionLockContext.current(store)?.admissions.map(\.route) ?? [])
+    let nativeRoutes = Array(Set(admitted + NativeTargetRoute.allCases)).sorted {
+      if $0.shared != $1.shared { return $0.shared }
+      if admitted.contains($0) != admitted.contains($1) { return admitted.contains($0) }
+      return $0.shared == $1.shared ? $0.rawValue < $1.rawValue : $0.shared
+    }
+    for route in nativeRoutes where route.shared || route.permits(store.scope) {
+      guard destination.lastPathComponent.utf8.elementsEqual(route.basename.utf8) else { continue }
+      let registered = try route.physicalDirectory(store.environment)
         .appendingPathComponent(route.basename)
-      guard registered == destination.standardizedFileURL else { continue }
+      guard registered.path.utf8.elementsEqual(destination.standardizedFileURL.path.utf8) else {
+        continue
+      }
+      guard route.permits(store.scope) else {
+        throw CoreError.unsafePath("native target belongs to another scope")
+      }
       let target = try store.nativeTarget(for: route)
-      if target.url == destination.standardizedFileURL {
+      if target.url.path.utf8.elementsEqual(destination.standardizedFileURL.path.utf8) {
         if route.shared {
           guard let context = TransactionLockContext.current(store) else {
             throw CoreError.invalidState("shared target requires its held footprint")
@@ -94,7 +106,7 @@ struct TransactionPaths {
         ? store.environment.projectDirectory : store.environment.homeDirectory
       url = base.resolvingSymlinksInPath().appendingPathComponent(store.directory.lastPathComponent)
     } else if let route = NativeTargetRoute.targetRoute(key) {
-      guard route.shared || store.scope == .project else {
+      guard route.permits(store.scope) else {
         throw CoreError.unsafePath("project native targets require their project scope")
       }
       if route.shared {
@@ -103,7 +115,7 @@ struct TransactionPaths {
         }
         url = try context.targetDirectory(for: route)
       } else {
-        url = try route.logicalDirectory(store.environment).resolvingSymlinksInPath()
+        url = try route.physicalDirectory(store.environment)
       }
     } else if let route = NativeTargetRoute.metadataRoute(key) {
       guard let context = TransactionLockContext.current(store),
@@ -190,7 +202,7 @@ struct TransactionPaths {
         throw CoreError.unsafePath("unmanaged state transaction path")
       }
     } else if let route = NativeTargetRoute.targetRoute(key) {
-      guard route.shared || store.scope == .project, descendants == [route.basename] else {
+      guard route.permits(store.scope), descendants == [route.basename] else {
         throw CoreError.unsafePath("unregistered native target")
       }
     } else if NativeTargetRoute.metadataRoute(key) != nil {

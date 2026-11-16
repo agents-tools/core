@@ -114,6 +114,9 @@ extension StateStore {
     _ target: MaterializationTarget, changingAccess: Bool = false,
     requiringReceiptForExistingTarget: Bool = false, expecting generation: UUID? = nil
   ) throws -> PreparedPrivateMaterialization {
+    if NativeTargetRoute.targetRoute(target.path)?.isContainer == true {
+      throw CoreError.invalidState("private materialization requires a registered regular file")
+    }
     guard target.scope.path == directory.path,
       try TransactionPaths(store: self).path(for: target.url) == target.path
     else { throw CoreError.invalidState("materialization target belongs to another scope") }
@@ -198,7 +201,15 @@ struct MaterializationReceipts: Codable {
     guard version == 1 else { throw CoreError.invalidState("unsupported materialization receipt") }
     for (path, record) in targets {
       let paths = TransactionPaths(store: store)
-      let parts = try paths.components(path)
+      let parts: (root: String, descendants: [String])
+      if let route = NativeTargetRoute.sharedRoute(path) {
+        guard path.utf8.elementsEqual((route.root + "/" + route.basename).utf8) else {
+          throw CoreError.invalidState("invalid physical receipt target")
+        }
+        parts = (route.root, [route.basename])
+      } else {
+        parts = try paths.components(path)
+      }
       guard
         (parts.root.hasPrefix("instructions-") && parts.root != "instructions-authoring")
           || NativeTargetRoute.targetRoute(parts.root) != nil
@@ -260,17 +271,49 @@ extension StateStore {
     let evidenceWithAccess = try evidence.capturingAccess()
     let access = try directory.requirePrivateAccess(url.lastPathComponent)
     do {
-      let records = try Self.decode(
+      var records = try Self.decode(
         directory.read(url.lastPathComponent), as: MaterializationReceipts.self)
       try records.validate(store: self)
-      if let resource,
-        Set(records.targets.keys) != [resource.route.root + "/" + resource.identity.basename]
-      {
-        throw CoreError.invalidState("shared receipt must identify its physical file")
+      if let resource {
+        guard records.targets.count == 1, let (key, record) = records.targets.first,
+          let recorded = NativeTargetRoute.sharedRoute(key),
+          recorded.basename.utf8.elementsEqual(resource.identity.basename.utf8),
+          record.rootIdentity.utf8.elementsEqual(resource.identity.orderingKey.utf8)
+        else { throw CoreError.invalidState("shared receipt must identify its physical file") }
+        records.targets = [resource.route.root + "/" + resource.identity.basename: record]
+      }
+      if !shared {
+        var candidates = TransactionLockContext.current(self)?.requestedRoutes ?? []
+        if let route = NativeTargetRoute.targetRoute(path) { candidates.insert(route) }
+        for route in candidates.filter({ !$0.shared }).sorted(by: {
+          $0.rawValue.utf8.lexicographicallyPrecedes($1.rawValue.utf8)
+        }) {
+          let target = try nativeTarget(for: route)
+          let parentURL = target.url.deletingLastPathComponent()
+          let ancestry = try DirectoryAccessEvidence.capture(at: parentURL)
+          guard ancestry.directories.count == parentURL.pathComponents.count else { continue }
+          let parent = try DirectoryHandle(at: parentURL)
+          let identity = try parent.identity
+          let matches = records.targets.filter { key, record in
+            NativeTargetRoute.targetRoute(key)?.shared == false
+              && key.split(separator: "/").last.map(String.init)?.utf8.elementsEqual(
+                route.basename.utf8) == true
+              && record.rootIdentity == identity
+          }
+          guard matches.count <= 1 else {
+            throw CoreError.invalidState("ambiguous physical materialization receipts")
+          }
+          if let (old, record) = matches.first {
+            records.targets.removeValue(forKey: old)
+            records.targets[target.path] = record
+          }
+          try ancestry.validate(at: parentURL)
+        }
       }
       for (key, record) in records.targets {
         guard shared == (NativeTargetRoute.sharedRoute(key) != nil),
-          !shared || record.rootIdentity == resource?.identity.orderingKey
+          !shared
+            || record.rootIdentity.utf8.elementsEqual((resource?.identity.orderingKey ?? "").utf8)
         else { throw CoreError.invalidState("receipt belongs to another physical resource") }
       }
       try evidence.validate()
