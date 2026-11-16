@@ -563,7 +563,7 @@ struct NativeComponentTests {
     ledger.lowerings = try linked.enumerated().map {
       try lower($0.element, frozen, surface: .claudeCode, id: "file-\($0.offset)")
     }
-    #expect(ledger.lowerings.allSatisfy { $0.format == "agents/claude-components@2" })
+    #expect(ledger.lowerings.allSatisfy { $0.format == "agents/claude-components@1" })
     ledger = try prepared(ledger, fixture)
     try replay(ledger, fixture) { output in
       let command = try #require(output[0].values?.object?["value"]?.text)
@@ -646,6 +646,42 @@ struct NativeComponentTests {
       #expect(
         handler["command"]
           == .string("env 'TOKEN=staged hook value' 'fixture-hook' 'a'\\''b' '$(never-execute)'"))
+    }
+  }
+
+  @Test func claudeFailurePolicyRequiresSynchronousExecution() throws {
+    let fixture = try LinkFixture()
+    for flag in ["async", "asyncRewake"] {
+      for policy in ["block", "continue"] {
+        let item: [String: Any] = [
+          "kind": "hook", "name": "guard", "agents": ["claude-code"],
+          "event": ["native": "PreToolUse"], "run": ["executable": "fixture-hook"],
+          "native": ["claude-code": [flag: true, "onFailure": policy]],
+        ]
+        let (linked, frozen) = try freeze([item], fixture)
+        var ledger = frozen.ledger
+        ledger.lowerings = [try lower(linked[0], frozen, surface: .claudeCode)]
+        do {
+          _ = try prepared(ledger, fixture)
+          Issue.record("accepted a failure policy the background native runner ignores")
+        } catch let issue as NativeComponentIssue {
+          #expect(issue.field == ["native", "claude-code", "onFailure"])
+          #expect(issue.reason == .unsupported)
+        }
+        var synchronous = item
+        synchronous["native"] = ["claude-code": [flag: false, "onFailure": policy]]
+        let (syncLinked, syncFrozen) = try freeze([synchronous], fixture)
+        var sync = syncFrozen.ledger
+        sync.lowerings = [try lower(syncLinked[0], syncFrozen, surface: .claudeCode)]
+        sync = try prepared(sync, fixture)
+        try replay(sync, fixture) { output in
+          let handler = try #require(
+            output[0].values?.object?["value"]?.object?["hooks"]?.array?.first?.object)
+          #expect(handler["onFailure"]?.text == policy)
+          #expect(handler[flag]?.boolean == false)
+          #expect(handler["timeout"] == nil)
+        }
+      }
     }
   }
 
@@ -841,7 +877,7 @@ struct NativeComponentTests {
     }
   }
 
-  @Test func nativeManifestFieldsPreserveFrozenChildrenAndColdV1Replay() throws {
+  @Test func nativeManifestFieldsPreserveFrozenChildrenAndColdReplay() throws {
     let fixture = try LinkFixture()
     let manifest: [String: Any] = [
       "name": "native-fields", "version": "build-label", "author": ["name": "Fixture"],
@@ -946,23 +982,22 @@ struct NativeComponentTests {
       #expect(issue.field == ["manifest", "hooks", "Stop", "onFailure"])
       #expect(issue.reason == .unsupported)
     }
-    // Revision 1 uses its frozen metadata-only validator and continues to replay valid bundles.
-    try fixture.write(
-      #"{"name":"native-fields","version":"1.0.0"}"#, to: "simple/.claude-plugin/plugin.json",
-      base: fixture.project)
-    var simple = item
-    simple["path"] = "simple"
-    let (oldLinked, oldFrozen) = try freeze([simple], fixture)
-    var old = oldFrozen.ledger
-    var lowering = try lower(oldLinked[0], oldFrozen, surface: .claudeCode)
-    lowering.format = "agents/claude-components@1"
-    old.lowerings = [lowering]
-    old = try prepared(old, fixture)
-    let locked = try ResolvedLedgerCodec.encode(old, limits: .standard)
+    let locked = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
     try FileManager.default.removeItem(at: fixture.project)
     try replay(ResolvedLedgerCodec.decode(locked, limits: .standard), fixture) { output in
       #expect(output.count == 2)
       #expect(output[0].values?.object?["route"]?.text == "claudeSkillPlugin")
+      let root = try #require(output[1].tree)
+      let bytes = try Data(contentsOf: root.appendingPathComponent(".claude-plugin/plugin.json"))
+      let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+      #expect(object["version"] as? String == "build-label")
+      let commands = try #require(object["commands"] as? [String: [String: Any]])
+      #expect(commands["about"]?["argumentHint"] as? String == "[file]")
+      let servers = try #require(object["lspServers"] as? [String: [String: Any]])
+      #expect(servers["fixture"]?["transport"] as? String == "socket")
+      #expect(
+        try String(contentsOf: root.appendingPathComponent("commands/default.md"), encoding: .utf8)
+          == "Default command.")
     }
   }
 

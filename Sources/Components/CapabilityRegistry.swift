@@ -145,16 +145,15 @@ package struct NativeComponentDescriptor {
   package let format: String
   package let evidence: NativeSchemaEvidence
   package var knownReaders: Set<AgentID> {
-    CapabilityRegistry.componentReaders(
-      request, kind: kind, profileVersion: NativeComponentLayoutsV1.profileVersion(request.surface))
+    CapabilityRegistry.componentReaders(request, kind: kind)
   }
 }
 
 extension CapabilityRegistry {
   static func componentReaders(
-    _ request: NativeComponentRequest, kind: DeclaredComponentKind, profileVersion: Int
+    _ request: NativeComponentRequest, kind: DeclaredComponentKind
   ) -> Set<AgentID> {
-    if profileVersion == 2, request.surface == .claudeCode, [.hook, .subagent].contains(kind) {
+    if request.surface == .claudeCode, [.hook, .subagent].contains(kind) {
       return [.claudeCode, .cursor]
     }
     return [request.surface.agent]

@@ -64,8 +64,7 @@ package enum NativeComponentLowering {
     let record = frozen.ledger.components[owner.id]!
     let input = ComponentRenderInput(
       record: record, component: owner.id, request: request,
-      occurrences: owner.occurrences, resources: [:], ledger: frozen.ledger, limits: .standard,
-      profileVersion: NativeComponentLayoutsV1.profileVersion(request.surface))
+      occurrences: owner.occurrences, resources: [:], ledger: frozen.ledger, limits: .standard)
     try input.validateProfile()
     return .init(
       id: id, format: format, inputs: [owner.id], resources: record.resources, deployments: [],
@@ -89,11 +88,9 @@ struct ComponentRenderInput {
   let ledger: ResolvedLedger
   let limits: LedgerLimits
   let budget: NativeDocumentBudget
-  let profileVersion: Int
   init(
     record: LedgerComponent, component: String, request: NativeComponentRequest,
-    occurrences: [Int], resources: [String: URL], ledger: ResolvedLedger, limits: LedgerLimits,
-    profileVersion: Int = 1
+    occurrences: [Int], resources: [String: URL], ledger: ResolvedLedger, limits: LedgerLimits
   ) {
     self.record = record
     self.component = component
@@ -102,7 +99,6 @@ struct ComponentRenderInput {
     self.resources = resources
     self.ledger = ledger
     self.limits = limits
-    self.profileVersion = profileVersion
     budget = .init(
       limits: .init(
         storage: limits.encodedBytes, work: limits.encodedBytes,
@@ -306,8 +302,7 @@ struct ComponentRenderInput {
       "recipients": LedgerPayload.strings([request.surface.agent.rawValue]),
       "knownReaders": LedgerPayload.strings(
         CapabilityRegistry.componentReaders(
-          request, kind: DeclaredComponentKind(rawValue: record.kind)!,
-          profileVersion: profileVersion
+          request, kind: DeclaredComponentKind(rawValue: record.kind)!
         ).map(\.rawValue).sorted()),
       "keys": LedgerPayload.strings(keys), "selection": .init(selection), "value": value,
     ]

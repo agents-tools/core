@@ -68,14 +68,9 @@ enum NativePluginLayoutV1 {
     else {
       throw input.issue(["path"], .invalid, "native plugin manifest is not an exact JSON object")
     }
-    if input.profileVersion == 2 {
-      try NativePluginFieldsV1(input: input, resource: record, root: root).validate(manifestFields)
-    } else {
+    if input.request.surface == .geminiCLI {
       for (key, value) in manifestFields {
-        let metadata =
-          input.request.surface == .geminiCLI
-          ? ["name", "version"] : ["name", "version", "description"]
-        guard metadata.contains(key) else {
+        guard ["name", "version"].contains(key) else {
           throw input.issue(
             ["manifest", key], .unverified,
             "this native manifest field's registration/path semantics are not captured by the fixed profile"
@@ -85,6 +80,8 @@ enum NativePluginLayoutV1 {
           throw input.issue(["manifest", key], .invalid, "native metadata must be a string")
         }
       }
+    } else {
+      try NativePluginFieldsV1(input: input, resource: record, root: root).validate(manifestFields)
     }
     guard try document.read(.init(keys: ["name"]))?.value == .string(name) else {
       throw input.issue(

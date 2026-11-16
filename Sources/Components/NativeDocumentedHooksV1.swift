@@ -102,12 +102,17 @@ enum NativeDocumentedHooksV1 {
       throw input.issue(
         ["native", "claude-code", "if"], .unsupported, "native if filters never run on this event")
     }
-    if hook["onFailure"] != nil,
-      !["PreToolUse", "PermissionRequest", "UserPromptSubmit"].contains(event)
-    {
-      throw input.issue(
-        ["native", "claude-code", "onFailure"], .unverified,
-        "failure blocking is not verified for this event")
+    if hook["onFailure"] != nil {
+      guard hook["async"]?.boolean != true, hook["asyncRewake"]?.boolean != true else {
+        throw input.issue(
+          ["native", "claude-code", "onFailure"], .unsupported,
+          "native background hooks ignore this failure policy")
+      }
+      guard ["PreToolUse", "PermissionRequest", "UserPromptSubmit"].contains(event) else {
+        throw input.issue(
+          ["native", "claude-code", "onFailure"], .unverified,
+          "failure blocking is not verified for this event")
+      }
     }
     if let timeout = input.fields["timeoutSeconds"] {
       guard timeout.integer.map({ $0 > 0 }) == true else {

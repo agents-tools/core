@@ -37,10 +37,6 @@ extension CursorAdapter {
           path: name + ".md", selection: "file",
           value: .init(try input.frontmatter(fields, body: input.prompt()))))
     case "hook":
-      guard input.profileVersion == 2 else {
-        throw input.issue(
-          ["event"], .unverified, "native event/runner schema requires profile version 2")
-      }
       return try NativeDocumentedHooksV1.cursor(lowering, input)
     case "ignore":
       _ = try input.checkedNative([:])
