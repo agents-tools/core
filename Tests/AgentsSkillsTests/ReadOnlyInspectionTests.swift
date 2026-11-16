@@ -84,6 +84,33 @@ struct ReadOnlyInspectionTests {
     try inspectPendingTransaction(scope: .project, initialize: true)
   }
 
+  @Test func instructionDoctorsDiagnosePendingSharedRecoveryWithoutWriting() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let environment = RuntimeEnvironment(
+      projectDirectory: root, homeDirectory: root.appendingPathComponent("home"),
+      environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path])
+    for directory in [environment.homeDirectory, root.appendingPathComponent("old-data")] {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+    try Data("ordinary before".utf8).write(
+      to: root.appendingPathComponent("old-data/AGENTS.md"))
+    let child = try interruptedTransaction(
+      root: root, scope: .project, command: "shared-install", checkpoint: "shared.ready")
+    defer { terminateProcess(child) }
+    try ProcessWait.marker(root.appendingPathComponent("ready"), child: child, root: root)
+    terminateProcess(child)
+    let before = try snapshot(root)
+    let pending = StateStore(scope: .project, environment: environment)
+    for scope in [InstallScope.project, .user] {
+      let report = try InstructionOperations.doctor(scope: scope, environment: environment)
+      #expect(report.diagnostics.map(\.kind) == [.pendingRecovery])
+      #expect(report.diagnostics.first?.path == pending.directory)
+      #expect(report.diagnostics.first?.message == TransactionRecoveryDiagnostic.pendingMessage)
+    }
+    #expect(try snapshot(root) == before)
+  }
+
   private func inspectPendingTransaction(
     scope: InstallScope, initialize: Bool
   ) throws {
@@ -417,7 +444,10 @@ struct ReadOnlyInspectionTests {
     return result
   }
 
-  private func interruptedTransaction(root: URL, scope: InstallScope) throws -> Process {
+  private func interruptedTransaction(
+    root: URL, scope: InstallScope, command: String = "inspection-transaction",
+    checkpoint: String = TransactionCheckpoint.progress(4, .applied).name
+  ) throws -> Process {
     var directory = Bundle(for: InspectionTestBundle.self).bundleURL
     while !FileManager.default.isExecutableFile(
       atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
@@ -427,7 +457,7 @@ struct ReadOnlyInspectionTests {
     let process = Process()
     process.executableURL = directory.appendingPathComponent("StateTestProcess")
     process.arguments = [
-      root.path, "inspection-transaction", TransactionCheckpoint.progress(4, .applied).name,
+      root.path, command, checkpoint,
       "--scope", scope.rawValue,
     ]
     try process.run()

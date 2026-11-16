@@ -140,9 +140,17 @@ package final class FileTransaction {
           && ($0.security.isPrivate || state.records.targets[$0.path] != nil)
       }
       guard !affected.isEmpty else { continue }
+      var sensitiveTargets = Set(state.records.targets.keys)
+      for request in affected {
+        if request.security.replacement == .privateMaterialization {
+          sensitiveTargets.insert(request.path)
+        } else {
+          sensitiveTargets.remove(request.path)
+        }
+      }
       var security = TransactionSecurity()
       security.preimage = state.access == nil ? .ordinary : .privateMaterialization
-      let deletesShared = shared && affected.allSatisfy { !$0.installs }
+      let deletesShared = shared && sensitiveTargets.isEmpty
       security.replacement = deletesShared ? .ordinary : .privateMaterialization
       security.preimageAccess = state.access
       security.ancestry = try DirectoryAccessEvidence.capture(

@@ -126,6 +126,9 @@ extension FileTransaction {
           requiresOwner: false,
           message: "Transaction metadata cleanup is pending (\(journal.phase.rawValue)).")
       }
+      if journal.isReservationOnly {
+        return .init(requiresOwner: false, message: TransactionRecoveryDiagnostic.pendingMessage)
+      }
       retained += journal.entries.compactMap(journal.containerLocation(of:))
       let session = try recoverySession(
         journal, store: store, directory: directory, checkpoint: { _ in })

@@ -141,12 +141,18 @@ struct PrivateMaterializationTests {
     #expect(provider.calls == (["provider", "renderer"].contains(kind) ? 1 : 0))
   }
 
-  @Test func ordinaryRegionEditsKeepSensitiveSiblingsAndPrivateReceipt() throws {
+  @Test(arguments: [false, true])
+  func ordinaryRegionEditsKeepSensitiveSiblingsAndPrivateReceipt(_ digestMatches: Bool) throws {
     let fixture = try TransactionFixture()
     try installPrivate("secret sibling; region before", in: fixture)
     let target = try fixture.store.materializationTarget(
       at: fixture.root.appendingPathComponent("AGENTS.md"))
     let before = try fixture.store.preparePrivateMaterialization(target)
+    let targetBefore = try FileSnapshot.read(at: target.url)
+    let receiptBefore = try Data(contentsOf: fixture.store.materializationReceiptURL)
+    let replacement = Data("secret sibling; region after".utf8)
+    let expectedHash =
+      "sha256:" + FileHash.sha256Hex(data: digestMatches ? replacement : Data("different".utf8))
     var inspected = false
     try fixture.store.withLock {
       let transaction = FileTransaction(store: fixture.store) { point in
@@ -161,10 +167,25 @@ struct PrivateMaterializationTests {
           inspected = true
         }
       }
-      try transaction.replace(target.url, with: .data(Data("secret sibling; region after".utf8)))
-      try transaction.commit()
+      try transaction.replace(target.url, with: .data(replacement), expectedHash: expectedHash)
+      if digestMatches {
+        try transaction.commit()
+      } else {
+        #expect(throws: CoreError.invalidState("staged content digest mismatch")) {
+          try transaction.commit()
+        }
+      }
     }
     #expect(inspected)
+    if !digestMatches {
+      #expect(try FileSnapshot.read(at: target.url) == targetBefore)
+      #expect(try Data(contentsOf: fixture.store.materializationReceiptURL) == receiptBefore)
+      #expect(
+        try fixture.store.preparePrivateMaterialization(
+          target, requiringReceiptForExistingTarget: true
+        ).receiptGeneration == before.receiptGeneration)
+      return
+    }
     #expect(try Data(contentsOf: target.url) == Data("secret sibling; region after".utf8))
     let after = try fixture.store.preparePrivateMaterialization(
       target, requiringReceiptForExistingTarget: true)

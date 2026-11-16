@@ -109,6 +109,46 @@ struct SharedTargetTests {
     #expect(try Data(contentsOf: fixture.target) == Data("external trust change".utf8))
   }
 
+  @Test(arguments: [false, true])
+  func ordinaryRecreationOfAnAbsentTargetRemovesItsSensitiveReceipt(_ rollback: Bool) throws {
+    let fixture = try SharedFixture()
+    try fixture.install()
+    let receiptURL = try fixture.receiptURL()
+    let receipt = try Data(contentsOf: receiptURL)
+    try FileManager.default.removeItem(at: fixture.target)
+    try fixture.b.withLock(footprint: [.claudeMCPLocal]) {
+      let transaction = FileTransaction(store: fixture.b) { point in
+        if rollback, point == "entry.1.applied" {
+          throw CoreError.invalidState("injected receipt publication failure")
+        }
+      }
+      try transaction.replace(fixture.target, with: .data(Data("ordinary recreation".utf8)))
+      if rollback {
+        #expect(throws: CoreError.self) { try transaction.commit() }
+        #expect(!FileManager.default.fileExists(atPath: fixture.target.path))
+        #expect(try Data(contentsOf: receiptURL) == receipt)
+        let retry = FileTransaction(store: fixture.b)
+        try retry.replace(fixture.target, with: .data(Data("ordinary recreation".utf8)))
+        try retry.commit()
+      } else {
+        try transaction.commit()
+      }
+    }
+    #expect(!FileManager.default.fileExists(atPath: receiptURL.path))
+    try fixture.user.withReadLock(footprint: [.claudeMCPUser]) {
+      let target = try fixture.user.nativeTarget(for: .claudeMCPUser)
+      #expect(try fixture.user.materializationReceipt(for: target) == nil)
+      #expect(try Data(contentsOf: target.url) == Data("ordinary recreation".utf8))
+    }
+    try fixture.a.withLock(footprint: [.claudeMCPLocal]) {
+      let transaction = FileTransaction(store: fixture.a)
+      try transaction.replace(fixture.target, with: .data(Data("ordinary next edit".utf8)))
+      try transaction.commit()
+    }
+    #expect(try Data(contentsOf: fixture.target) == Data("ordinary next edit".utf8))
+    #expect(!FileManager.default.fileExists(atPath: receiptURL.path))
+  }
+
   @Test(arguments: ["target", "ancestor"])
   func sharedPreparedWriteRejectsChangedAccess(_ changed: String) throws {
     let fixture = try SharedFixture()
@@ -585,6 +625,16 @@ struct SharedTargetTests {
     }
     let before = try FileSnapshot.read(at: fixture.target)
     let receipt = try Data(contentsOf: fixture.receiptURL())
+    let scope = try FileSnapshot.read(at: fixture.a.directory)
+    let config = try FileSnapshot.read(at: fixture.config)
+    try fixture.a.withReadLock(
+      onPendingRecovery: {
+        let diagnostic = FileTransaction.recoveryDiagnostic(store: fixture.a)
+        #expect(!diagnostic.requiresOwner)
+        #expect(diagnostic.message == TransactionRecoveryDiagnostic.pendingMessage)
+      }, { _ = Issue.record("expected pending reservation intent") })
+    #expect(try FileSnapshot.read(at: fixture.a.directory) == scope)
+    #expect(try FileSnapshot.read(at: fixture.config) == config)
     do { try fixture.a.withLock {} } catch CoreError.transactionRecovered {}
     #expect(try FileSnapshot.read(at: fixture.target) == before)
     #expect(try Data(contentsOf: fixture.receiptURL()) == receipt)

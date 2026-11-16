@@ -97,8 +97,12 @@ extension TransactionSession {
       // The callback is never given a path or unverified descriptor.
       let data = try privateData()
       try requireParent(index)
+      let hash = "sha256:" + FileHash.sha256Hex(data: data)
+      if let expected = expectation.hash, expected != hash {
+        throw CoreError.invalidState("staged content digest mismatch")
+      }
       try file.write(data)
-      expectation.hash = "sha256:" + FileHash.sha256Hex(data: data)
+      expectation.hash = expectation.hash ?? hash
       expectation.kind = S_IFREG
       expectation.mode = file.evidence.mode
       return expectation
