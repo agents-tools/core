@@ -46,21 +46,28 @@ struct TransactionPaths {
         return target.path
       }
     }
+    var matchingInstallation = false
     for agent in AgentID.allCases {
       let logical = AgentRegistry.installSkillsDirectory(
         for: agent, scope: store.scope, environment: store.environment)
       let physical = logical.resolvingSymlinksInPath()
       let parent = destination.deletingLastPathComponent().standardizedFileURL
-      if parent.path == logical.standardizedFileURL.path || parent.path == physical.path {
+      if parent.path.utf8.elementsEqual(logical.standardizedFileURL.path.utf8)
+        || parent.path.utf8.elementsEqual(physical.path.utf8)
+      {
+        matchingInstallation = true
         guard
           try PathSafety.sanitizeName(destination.lastPathComponent)
             == destination.lastPathComponent
             || persistedInstallation(destination.lastPathComponent, agent: agent)
-        else { throw CoreError.unsafePath("unrecorded noncanonical installation target") }
+        else { continue }
         let path = agent.rawValue + "/" + destination.lastPathComponent
         _ = try components(path)
         return path
       }
+    }
+    if matchingInstallation {
+      throw CoreError.unsafePath("unrecorded noncanonical installation target")
     }
     for state in [store.directory.standardizedFileURL, physicalState] {
       if PathSafety.isContained(destination.standardizedFileURL, in: state) {
@@ -149,7 +156,7 @@ struct TransactionPaths {
       let ledger = try ResolvedLedgerCodec.decode(bytes, limits: .standard)
       return ledger.deployments.contains {
         $0.target.kind == .registered && $0.target.root == "skills-" + agent.rawValue
-          && $0.target.path == name && $0.recipients.contains(agent)
+          && $0.target.path.utf8.elementsEqual(name.utf8) && $0.recipients.contains(agent)
           && $0.route == "agents/skill@1"
       }
     }

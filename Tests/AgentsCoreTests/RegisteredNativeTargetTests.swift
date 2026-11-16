@@ -87,37 +87,23 @@ struct RegisteredNativeTargetTests {
     #expect(!FileManager.default.fileExists(atPath: store.directory.path))
   }
 
-  @Test(arguments: [false, true])
-  func legacyInstallationSpellingRequiresItsExactCommittedRecipient(_ rollback: Bool) throws {
+  @Test(arguments: [false, true], [AgentID.codex, .cursor])
+  func legacyInstallationSpellingRequiresItsExactCommittedRecipient(
+    _ rollback: Bool, _ agent: AgentID
+  ) throws {
     let fixture = try NativeRouteFixture()
     let store = fixture.store
     let parent = AgentRegistry.installSkillsDirectory(
-      for: .codex, scope: .project, environment: store.environment)
+      for: agent, scope: .project, environment: store.environment)
     try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
     let legacy = parent.appendingPathComponent("Example Skill")
     try Data("old".utf8).write(to: legacy)
-    var ledger = ResolvedLedger()
-    ledger.sources["fixture"] = LedgerSource(kind: .local, revision: "live")
-    ledger.components["skill"] = LedgerComponent(
-      declaringSource: "fixture", source: "fixture", root: ".", kind: "skills",
-      name: "Example Skill",
-      payload: .init(object: [:]), conditions: [], recipients: [.codex], chatGPT: false,
-      resources: [])
-    ledger.deployments = [
-      LedgerDeployment(
-        id: "deployment",
-        target: .init(kind: .registered, root: "skills-codex", path: "Example Skill"),
-        route: "agents/skill@1", owners: ["skill"], recipients: [.codex], ownership: .generated,
-        expectedHash: "sha256:" + FileHash.sha256Hex(data: Data("old".utf8)), created: true)
-    ]
-    ledger.lowerings = [
-      LockedLowering(
-        id: "lowering", format: "agents/skill@1", inputs: ["skill"], resources: [],
-        deployments: ["deployment"], layout: .init(object: [:]), platform: "macos", artifacts: [])
-    ]
-    try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
-    try ResolvedLedgerCodec.encode(ledger, limits: .standard).write(to: store.resolvedURL)
+    let ledger = try fixture.recordSkill(name: "Example Skill", agent: agent)
     let transaction = FileTransaction(store: store) { point in
+      if point == "entry.0.applied" {
+        let journal = try fixture.journal()
+        #expect(journal.entries.first?.path == agent.rawValue + "/Example Skill")
+      }
       if rollback && point == "entry.1.applied" { throw CoreError.invalidState("fixture rollback") }
     }
     try transaction.replace(legacy, with: .data(Data("next".utf8)))
@@ -156,6 +142,49 @@ struct RegisteredNativeTargetTests {
     #expect(
       !FileManager.default.fileExists(atPath: parent.appendingPathComponent("example-skill").path))
   }
+
+  #if os(Linux)
+    @Test func distinctUnicodeFilenamesKeepSeparateInstallationAuthority() throws {
+      let fixture = try NativeRouteFixture()
+      let recorded = "\u{00E9} Skill"
+      let alternate = "e\u{0301} Skill"
+      try fixture.recordSkill(name: recorded, agent: .codex)
+      let parent = AgentRegistry.installSkillsDirectory(
+        for: .codex, scope: .project, environment: fixture.store.environment)
+      try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+      let authorized = parent.appendingPathComponent(recorded)
+      let unrecorded = parent.appendingPathComponent(alternate)
+      let recordedBytes = Data("old".utf8)
+      let alternateBytes = Data("unrecorded before".utf8)
+      let directory = try DirectoryHandle(at: parent)
+      try directory.write(recorded, data: recordedBytes)
+      try directory.write(alternate, data: alternateBytes)
+      #require(authorized.lastPathComponent.utf8.elementsEqual(recorded.utf8))
+      #require(unrecorded.lastPathComponent.utf8.elementsEqual(alternate.utf8))
+      let first = FileObjectIdentity(try #require(try directory.info(recorded)))
+      let second = FileObjectIdentity(try #require(try directory.info(alternate)))
+      #require(first != second)
+      let names = try directory.names()
+      #require(names.contains(where: { $0.utf8.elementsEqual(recorded.utf8) }))
+      #require(names.contains(where: { $0.utf8.elementsEqual(alternate.utf8) }))
+      let refused = FileTransaction(store: fixture.store)
+      #expect(throws: CoreError.self) { try refused.delete(unrecorded) }
+      #expect(throws: CoreError.self) {
+        try refused.replace(unrecorded, with: .data(Data("unauthorized".utf8)))
+      }
+      #expect(try directory.info(recorded).map(FileObjectIdentity.init) == first)
+      #expect(try directory.info(alternate).map(FileObjectIdentity.init) == second)
+      #expect(try Data(contentsOf: authorized) == recordedBytes)
+      #expect(try Data(contentsOf: unrecorded) == alternateBytes)
+      let allowed = FileTransaction(store: fixture.store)
+      try allowed.replace(authorized, with: .data(Data("recorded after".utf8)))
+      try allowed.commit()
+      #expect(try Data(contentsOf: authorized) == Data("recorded after".utf8))
+      #expect(try Data(contentsOf: unrecorded) == alternateBytes)
+      #expect(try directory.info(alternate).map(FileObjectIdentity.init) == second)
+      #expect(try directory.info(recorded).map(FileObjectIdentity.init) != second)
+    }
+  #endif
 
   @Test(arguments: NativeTargetRoute.allCases)
   func registeredFilesPublishPrivatelyAndRetainTheirReceipt(_ route: NativeTargetRoute) throws {
@@ -514,6 +543,32 @@ private final class NativeRouteFixture {
     }
   }
   deinit { removeTemporaryDirectory(root) }
+  @discardableResult
+  func recordSkill(name: String, agent: AgentID) throws -> ResolvedLedger {
+    let store = self.store
+    var ledger = ResolvedLedger()
+    ledger.sources["fixture"] = LedgerSource(kind: .local, revision: "live")
+    ledger.components["skill"] = LedgerComponent(
+      declaringSource: "fixture", source: "fixture", root: ".", kind: "skills",
+      name: name,
+      payload: .init(object: [:]), conditions: [], recipients: [agent], chatGPT: false,
+      resources: [])
+    ledger.deployments = [
+      LedgerDeployment(
+        id: "deployment",
+        target: .init(kind: .registered, root: "skills-" + agent.rawValue, path: name),
+        route: "agents/skill@1", owners: ["skill"], recipients: [agent], ownership: .generated,
+        expectedHash: "sha256:" + FileHash.sha256Hex(data: Data("old".utf8)), created: true)
+    ]
+    ledger.lowerings = [
+      LockedLowering(
+        id: "lowering", format: "agents/skill@1", inputs: ["skill"], resources: [],
+        deployments: ["deployment"], layout: .init(object: [:]), platform: "macos", artifacts: [])
+    ]
+    try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+    try ResolvedLedgerCodec.encode(ledger, limits: .standard).write(to: store.resolvedURL)
+    return ledger
+  }
   func journal() throws -> TransactionJournal {
     try FileTransaction.readJournal(
       Data(contentsOf: store.directory.appendingPathComponent("transaction.json")))
