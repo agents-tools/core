@@ -22,7 +22,12 @@ let store = StateStore(
   environment: RuntimeEnvironment(
     projectDirectory: root,
     homeDirectory: root.appendingPathComponent("home"),
-    environment: ["CLAUDE_CONFIG_DIR": sharedConfig]))
+    environment: arguments.contains("--native-routes")
+      ? [
+        "CLAUDE_CONFIG_DIR": sharedConfig, "CODEX_HOME": sharedConfig,
+        "OPENCODE_CONFIG_DIR": sharedConfig, "GEMINI_CLI_HOME": sharedConfig,
+      ]
+      : ["CLAUDE_CONFIG_DIR": sharedConfig]))
 let checkpointState = Mutex(
   (requested: arguments.count > 3 ? arguments[3] : "", seen: Set<String>()))
 let traceURL = root.appendingPathComponent(

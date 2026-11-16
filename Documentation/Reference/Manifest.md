@@ -23,8 +23,8 @@ exports: [checks]
 ```
 
 The distributed [JSON schema](../../Sources/AgentsManifest/Resources/agents.schema.json)
-is the field-shape owner. [Generated field help](ManifestSchema.md) lists every
-supported shape and its schema-owned collection bounds. The finite compiler
+is the field-shape owner. [Generated field help](ManifestSchema.md) lists supported
+shapes, field descriptions, examples and schema-owned collection bounds. The finite compiler
 rejects unsupported validation keywords, values and combinations; its generated
 rules enforce the accepted constraints. Parser and decoded-value safety budgets
 apply independently of these field constraints.
@@ -35,6 +35,31 @@ resolve sources, access resources or execute component programs.
 
 Git requirements also apply to local Git repositories declared with `path`;
 their local source identity and declaring environment remain unchanged.
+
+## Public Schema Resource
+
+Consumers importing `AgentsManifest` can obtain the bundled schema for offline
+editor association or export:
+
+```swift
+import AgentsManifest
+
+let bytes: [UInt8] = try ManifestSchemaResource.encodedJSON()
+```
+
+The API returns the exact resource bytes, including descriptions, examples and
+`x-agents-*` scalar annotations. It reads no declaration or scope state and uses
+no network. All schema references are bundled; the schema identifier is not a
+download requirement. Executable distributions must include the Swift package's
+resource bundle. A missing or unreadable schema file throws an I/O error;
+consumers do not need a checkout or a build-directory path.
+
+The schema supplies completion, field help and structural validation. Core
+diagnostics remain authoritative for YAML admission, scalar kinds, numeric
+identity and domain relationships. General JSON Schema treats `1.0` as a
+mathematical integer and cannot preserve decimal lexical identity. Saving a
+manifest must preserve its YAML text rather than convert it through JSON numbers
+or enable schema-driven format conversion.
 
 ## Values and Ordering
 

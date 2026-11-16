@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Guard the bundled schema compiler's accepted validation semantics."""
+import copy
 import importlib.util
 import unittest
 from pathlib import Path
@@ -10,6 +11,32 @@ spec.loader.exec_module(compiler)
 
 
 class SchemaCompilerTests(unittest.TestCase):
+    def test_annotations_reach_help_without_changing_runtime_rules(self):
+        schema = {
+            'type': 'object', 'additionalProperties': False, '$defs': {
+                'choice': {'oneOf': [
+                    {'type': 'object', 'additionalProperties': False,
+                     'properties': {'description': {'type': 'string'}}, 'required': ['description']},
+                    {'type': 'string'},
+                ]},
+            },
+            'properties': {'examples': {'$ref': '#/$defs/choice'}},
+        }
+        annotated = copy.deepcopy(schema)
+        annotated['description'] = 'Declaration documentation.'
+        annotated['properties']['examples']['description'] = 'A field with a schema reference.'
+        branch = annotated['$defs']['choice']['oneOf'][0]
+        branch['description'] = 'Mapping alternative documentation.'
+        branch['properties']['description']['description'] = 'First line | `text`\nSecond line.'
+        branch['properties']['description']['examples'] = ['a | b', '<value>']
+        swift, help_text = compiler.compile_schema(annotated)
+        self.assertEqual(swift, compiler.compile_schema(schema)[0])
+        for expected in ['Declaration documentation.', 'A field with a schema reference.',
+                         'Mapping alternative documentation.', 'First line &#124; &#96;text&#96;<br>Second line.',
+                         '<code>"a &#124; b"</code>', '<code>"&lt;value&gt;"</code>',
+                         '| `description` | yes | string |', '| `examples` |  | choice |']:
+            self.assertIn(expected, help_text)
+
     def test_schema_values_drive_runtime_constraints_and_help(self):
         schema = {
             'type': 'object', 'additionalProperties': False, '$defs': {},

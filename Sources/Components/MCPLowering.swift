@@ -104,54 +104,25 @@ package enum NativeMCPLowering {
     _ linked: LinkedComponent, frozen: LedgerFreeze.Result, request: NativeMCPRequest
   ) throws -> NativeMCPContribution {
     let ledger = frozen.ledger
-    let sourceIDs = frozen.sources
     let descriptor = try CapabilityRegistry.mcp(request, component: linked.key.name)
     func invalid(_ detail: String) -> NativeAdapterIssue {
       .init(
         request: request, component: linked.key.name, field: ["component"], reason: .invalid,
         detail: detail)
     }
-    guard linked.recipients.contains(request.surface.agent),
-      case .declaration(let declaration) = linked.payload,
+    guard case .declaration(let declaration) = linked.payload,
       case .mcpServer(let name, let transport, _, _, let native) = declaration
-    else { throw invalid("the linked component does not target this MCP recipient") }
-    let ids = Set(linked.origins.map(\.occurrence))
-    let occurrences = ledger.occurrences.filter { ids.contains($0.id) }
-    let owners = Set(occurrences.map(\.component))
-    guard !ids.isEmpty, occurrences.count == ids.count, owners.count == 1,
-      let id = owners.first, let record = ledger.components[id],
-      record.kind == DeclaredComponentKind.mcpServer.rawValue, record.name == name,
-      record.declaringSource == sourceIDs[linked.declaringSnapshot],
-      record.source == sourceIDs[linked.snapshot], linked.key.source == linked.snapshot.source,
-      record.revision == linked.pin?.revision, record.version == linked.pin?.version,
-      record.root == linked.key.root, record.group == linked.key.group,
-      record.payload == (try LedgerPayload.component(declaration)),
-      record.conditions == linked.conditions.map(LedgerCondition.init),
-      Set(record.recipients) == linked.recipients,
-      record.resources.count == linked.resources.count
-    else { throw invalid("linked component and frozen occurrence graph do not match") }
-    for (origin, frozen) in zip(linked.origins, occurrences) {
-      let audience: InstallScope = request.scope == .user ? .user : .project
-      guard origin.occurrence == frozen.id, origin.reference == frozen.reference,
-        frozen.declaringSource == record.declaringSource,
-        origin.provenance.sourceIdentity == linked.declaringSnapshot.source,
-        origin.dependencies.compactMap({ sourceIDs[$0] }) == frozen.dependencies,
-        origin.dependencies.allSatisfy({ sourceIDs[$0] != nil }),
-        LedgerCondition(origin.condition) == frozen.condition,
-        origin.condition.scopes?.contains(audience) ?? true,
-        origin.condition.agents?.contains(request.surface.agent) ?? true,
-        origin.provenance.relativePath == frozen.manifestPath,
-        origin.recipients.contains(request.surface.agent),
-        Set(origin.recipients) == Set(frozen.recipients),
-        origin.consumerEditable == frozen.consumerEditable
-      else { throw invalid("linked origin and frozen occurrence do not match") }
+    else {
+      throw invalid("the linked component is not an MCP server")
     }
-    for (resource, frozen) in zip(linked.resources, record.resources) {
-      guard let item = ledger.resources[frozen], item.path == resource.path,
-        item.source == sourceIDs[resource.snapshot], item.artifact == resource.artifact,
-        item.hash == resource.hash
-      else { throw invalid("linked resource and frozen evidence do not match") }
-    }
+    let identity: (id: String, occurrences: [Int])
+    do {
+      identity = try FrozenNativeIdentity.match(
+        linked, frozen: frozen,
+        agent: request.surface.agent, scope: request.scope == .user ? .user : .project)
+    } catch { throw invalid("linked component and frozen source identity do not match") }
+    let id = identity.id
+    let record = ledger.components[id]!
     let input = MCPInput(
       descriptor: descriptor, name: name, transport: transport,
       native: native[request.surface.agent.rawValue] ?? [:], resources: record.resources)
@@ -164,7 +135,7 @@ package enum NativeMCPLowering {
     case .cursorEditor, .cursorCLI, .cursorCloud: entry = try CursorAdapter.mcp(input)
     }
     return .init(
-      descriptor: descriptor, component: id, name: name, occurrences: occurrences.map(\.id),
+      descriptor: descriptor, component: id, name: name, occurrences: identity.occurrences,
       recipients: [request.surface.agent], bindings: entry.placements,
       resourcePlacements: entry.resourcePlacements, value: .init(object: entry.fields),
       resources: record.resources)
@@ -199,9 +170,23 @@ struct MCPInput {
   }
 
   func literal(_ value: String, field: [String]) throws {
-    guard !value.contains("\0") else { throw issue(field, .invalid, "NUL is not a native string") }
+    try descriptor.validateLiteral(value, component: name, field: field)
+  }
+}
+
+extension NativeMCPDescriptor {
+  func validateLiteral(_ value: String, component: String, field: [String]) throws {
+    func issue(_ reason: NativeAdapterIssue.Reason, _ detail: String) -> NativeAdapterIssue {
+      .init(request: request, component: component, field: field, reason: reason, detail: detail)
+    }
+    guard !value.contains("\0") else { throw issue(.invalid, "NUL is not a native string") }
+    if let first = field.first, ["headers", "http_headers"].contains(first),
+      value.utf8.contains(13) || value.utf8.contains(10)
+    {
+      throw issue(.invalid, "native header value contains a line break")
+    }
     let interpolates: Bool
-    switch descriptor.request.surface {
+    switch request.surface {
     case .claudeCode: interpolates = value.contains("${")
     case .geminiCLI:
       interpolates = value.range(of: #"\$(?:\w|\{)"#, options: .regularExpression) != nil
@@ -211,7 +196,7 @@ struct MCPInput {
     }
     guard !interpolates else {
       throw issue(
-        field, .unverified, "literal preservation across native interpolation needs evidence")
+        .unverified, "literal preservation across native interpolation needs evidence")
     }
   }
 }
@@ -236,12 +221,21 @@ enum MCPReferenceSyntax {
 }
 
 enum MCPNativeField {
-  case boolean, falseOnly, string, strings, positiveNumber, durationSeconds, environmentName
+  case boolean, falseOnly, string, strings, positiveNumber, positiveInteger, durationSeconds,
+    environmentName
   case oneOf(Set<String>)
   case positiveIntegerObject(Set<String>)
+  case numberOrNull
+  case object, nonnegativeInteger
 
   func accepts(_ value: NativeValue) -> Bool {
     switch (self, value) {
+    case (.object, .object): true
+    case (.nonnegativeInteger, .integer(let value)): value >= 0 && Double(exactly: value) != nil
+    case (.nonnegativeInteger, .decimal(let value)):
+      Double(value).map { $0.isFinite && $0 >= 0 && $0.rounded(.towardZero) == $0 } ?? false
+    case (.numberOrNull, .null), (.numberOrNull, .integer): true
+    case (.numberOrNull, .decimal(let number)): Double(number)?.isFinite == true
     case (.boolean, .boolean): true
     case (.falseOnly, .boolean(false)): true
     case (.string, .string), (.environmentName, .string): true
@@ -252,6 +246,9 @@ enum MCPNativeField {
       // Rust Duration uses u64 seconds. The f64 immediately below 2^64 is 2048 seconds
       // smaller, so fractional nanosecond rounding cannot overflow an accepted f64.
       Double(number).map { $0 >= 0 && $0 < 0x1p64 } ?? false
+    case (.positiveInteger, .integer(let number)): number > 0 && Double(exactly: number) != nil
+    case (.positiveInteger, .decimal(let text)):
+      Double(text).map { $0.isFinite && $0 > 0 && $0.rounded(.towardZero) == $0 } ?? false
     case (.positiveNumber, .integer(let number)): number > 0
     case (.positiveNumber, .decimal(let number)):
       Double(number).map { $0.isFinite && $0 > 0 } ?? false

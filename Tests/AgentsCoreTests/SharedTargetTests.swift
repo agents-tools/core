@@ -1,6 +1,7 @@
 import CPlatform
 import Foundation
 import StateTestSupport
+import Synchronization
 import Testing
 
 @testable import AgentsCore
@@ -359,7 +360,8 @@ struct SharedTargetTests {
     }
   }
 
-  @Test func pendingFootprintReadmitsBeforeCallbackOrProvider() throws {
+  @Test(arguments: [false, true])
+  func pendingFootprintReadmitsBeforeCallbackOrProvider(_ multipleResources: Bool) throws {
     let fixture = try SharedFixture()
     try fixture.install()
     let original = try Data(contentsOf: fixture.target)
@@ -367,15 +369,16 @@ struct SharedTargetTests {
     let marker = fixture.root.appendingPathComponent("ready")
     let nextStop = fixture.root.appendingPathComponent("stop-at")
     let journal = fixture.a.directory.appendingPathComponent("transaction.json")
+    let extra = multipleResources ? ["--native-routes", "claude.mcp.local,codex.mcp.user"] : []
     let holder = try stateTestProcess(
-      root: fixture.root, arguments: ["shared-readmission-writer", "shared.beforeJournal"])
+      root: fixture.root, arguments: ["shared-readmission-writer", "shared.beforeJournal"] + extra)
     defer { terminateProcess(holder) }
     try ProcessWait.marker(marker, child: holder, root: fixture.root)
     try ProcessWait.stopped(holder, root: fixture.root)
     #expect(!FileManager.default.fileExists(atPath: journal.path))
     try FileManager.default.removeItem(at: marker)
     let waiter = try stateTestProcess(
-      root: fixture.root, arguments: ["shared-admission-wait", "scope-contention"])
+      root: fixture.root, arguments: ["shared-admission-wait", "scope-contention"] + extra)
     defer { terminateProcess(waiter) }
     try ProcessWait.marker(marker, child: waiter, root: fixture.root)
     try ProcessWait.stopped(waiter, root: fixture.root)
@@ -399,11 +402,16 @@ struct SharedTargetTests {
     try ProcessWait.marker(other.appendingPathComponent("ready"), child: blocker, root: other)
     try ProcessWait.stopped(blocker, root: other)
     try FileManager.default.removeItem(at: marker)
-    try Data("shared.0.lock.contended".utf8).write(to: nextStop)
+    let pending = try fixture.journal(fixture.a)
+    let claude = try SharedResource(store: fixture.b, create: false).identity
+    let index = try #require(pending.footprint.firstIndex(of: claude))
+    let sharedContention = "shared.\(index).lock.contended"
+    if multipleResources { #expect(pending.footprint.contains { $0.basename == "config.toml" }) }
+    try Data(sharedContention.utf8).write(to: nextStop)
     try #require(kill(waiter.processIdentifier, SIGCONT) == 0)
     try ProcessWait.marker(marker, child: waiter, root: fixture.root)
     try ProcessWait.stopped(waiter, root: fixture.root)
-    #expect(try String(contentsOf: marker, encoding: .utf8) == "shared.0.lock.contended")
+    #expect(try String(contentsOf: marker, encoding: .utf8) == sharedContention)
     #expect(FileManager.default.fileExists(atPath: journal.path))
     #expect(
       !FileManager.default.fileExists(
@@ -990,9 +998,10 @@ struct SharedTargetTests {
 }
 
 private final class SharedBindings: RuntimeBindingProvider {
-  var calls = 0
+  private let count = Mutex(0)
+  var calls: Int { count.withLock { $0 } }
   func value(for binding: String, environment: RuntimeEnvironment) throws -> Data {
-    calls += 1
+    count.withLock { $0 += 1 }
     return Data("secret sibling; initial region".utf8)
   }
 }

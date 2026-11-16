@@ -1,6 +1,7 @@
 import CPlatform
 import Foundation
 import StateTestSupport
+import Synchronization
 import Testing
 
 @testable import AgentsCore
@@ -486,11 +487,18 @@ struct PrivateMaterializationTests {
 
 private final class TestBindings: RuntimeBindingProvider {
   let value: String
-  var calls = 0
-  var fails = false
+  private let state = Mutex((calls: 0, fails: false))
+  var calls: Int { state.withLock { $0.calls } }
+  var fails: Bool {
+    get { state.withLock { $0.fails } }
+    set { state.withLock { $0.fails = newValue } }
+  }
   init(_ value: String) { self.value = value }
   func value(for binding: String, environment: RuntimeEnvironment) throws -> Data {
-    calls += 1
+    let fails = state.withLock {
+      $0.calls += 1
+      return $0.fails
+    }
     if fails { throw CoreError.invalidState(value) }
     return Data(value.utf8)
   }

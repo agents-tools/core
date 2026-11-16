@@ -22,8 +22,9 @@ struct TransactionJournal: Codable {
   var finalized = false
 
   func validateCoordination() throws {
-    // The closed routes currently share exactly one possible physical file per runtime.
-    guard footprint.count <= 1 else {
+    guard footprint.count <= NativeTargetRoute.sharedRoutes.count,
+      zip(footprint, footprint.dropFirst()).allSatisfy({ $0 < $1 })
+    else {
       throw CoreError.invalidState("unregistered shared transaction footprint")
     }
     for identity in footprint { try identity.validate() }
@@ -39,10 +40,15 @@ struct TransactionJournal: Codable {
       }
     }
     if !finalized {
-      let sharedRoots =
-        roots.keys.contains(NativeTargetRoute.globalRoot)
-        || roots.keys.contains(NativeTargetRoute.metadataRoot)
-      guard sharedRoots == !footprint.isEmpty else {
+      let sharedRoots = Set(
+        roots.keys.compactMap { key in
+          (NativeTargetRoute.sharedRoute(key) ?? NativeTargetRoute.metadataRoute(key))?.root
+        })
+      let footprintRoots = Set(
+        footprint.compactMap { identity in
+          NativeTargetRoute.sharedRoutes.first { $0.basename == identity.basename }?.root
+        })
+      guard sharedRoots == footprintRoots, footprintRoots.count == footprint.count else {
         throw CoreError.invalidState("journal roots contradict shared footprint")
       }
     }

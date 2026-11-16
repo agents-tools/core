@@ -2,29 +2,127 @@ import CPlatform
 import Foundation
 
 /// Closed physical routes; regional ownership and rendering belong to the native adapter.
-package enum NativeTargetRoute: String, Codable, Sendable {
+package enum NativeTargetRoute: String, Codable, Sendable, CaseIterable {
   case claudeMCPProject = "claude.mcp.project"
   case claudeMCPLocal = "claude.mcp.local"
   case claudeMCPUser = "claude.mcp.user"
+  case codexMCPProject = "codex.mcp.project"
+  case codexMCPUser = "codex.mcp.user"
+  case geminiMCPProject = "gemini.mcp.project"
+  case geminiMCPUser = "gemini.mcp.user"
+  case cursorMCPProject = "cursor.mcp.project"
+  case cursorMCPUser = "cursor.mcp.user"
+  case openCodeMCPProjectJSON = "opencode.mcp.project.json"
+  case openCodeMCPProjectJSONC = "opencode.mcp.project.jsonc"
+  case openCodeMCPUserJSON = "opencode.mcp.user.json"
+  case openCodeMCPUserJSONC = "opencode.mcp.user.jsonc"
 
-  var shared: Bool { self != .claudeMCPProject }
+  var shared: Bool {
+    switch self {
+    case .claudeMCPLocal, .claudeMCPUser, .codexMCPUser, .geminiMCPUser, .cursorMCPUser,
+      .openCodeMCPUserJSON, .openCodeMCPUserJSONC:
+      true
+    default: false
+    }
+  }
   static let projectRoot = "native-claude-project"
   static let globalRoot = "native-claude-global"
   static let metadataRoot = "native-claude-metadata"
 
-  static func globalLogicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
-    if let override = environment.environment["CLAUDE_CONFIG_DIR"], !override.isEmpty {
-      guard override.hasPrefix("/"), !override.contains("\0") else {
-        throw CoreError.unsafePath("registered Claude config root must be an absolute directory")
-      }
-      return URL(fileURLWithPath: override).standardizedFileURL
+  var root: String {
+    switch self {
+    case .claudeMCPProject: Self.projectRoot
+    case .claudeMCPLocal, .claudeMCPUser: Self.globalRoot
+    default:
+      "native-"
+        + rawValue.replacingOccurrences(of: ".mcp.", with: "-")
+        .replacingOccurrences(of: ".", with: "-")
     }
-    guard environment.homeDirectory.isFileURL, !environment.homeDirectory.path.contains("\0") else {
-      throw CoreError.unsafePath("registered Claude HOME must be a filesystem directory")
+  }
+  var metadata: String { root == Self.globalRoot ? Self.metadataRoot : root + "-metadata" }
+  var basename: String {
+    switch self {
+    case .claudeMCPProject: ".mcp.json"
+    case .claudeMCPLocal, .claudeMCPUser: ".claude.json"
+    case .codexMCPProject, .codexMCPUser: "config.toml"
+    case .geminiMCPProject, .geminiMCPUser: "settings.json"
+    case .cursorMCPProject, .cursorMCPUser: "mcp.json"
+    case .openCodeMCPProjectJSON, .openCodeMCPUserJSON: "opencode.json"
+    case .openCodeMCPProjectJSONC, .openCodeMCPUserJSONC: "opencode.jsonc"
     }
-    return environment.homeDirectory.standardizedFileURL
+  }
+  static var sharedRoutes: [Self] {
+    [
+      .claudeMCPLocal, .codexMCPUser, .geminiMCPUser, .cursorMCPUser,
+      .openCodeMCPUserJSON, .openCodeMCPUserJSONC,
+    ]
+  }
+  static func targetRoute(_ path: String) -> Self? {
+    let key = path.split(separator: "/").first.map(String.init)
+    return allCases.first { $0.root == key }
+  }
+  static func sharedRoute(_ path: String) -> Self? {
+    targetRoute(path).flatMap { $0.shared ? $0 : nil }
+  }
+  static func metadataRoute(_ path: String) -> Self? {
+    let key = path.split(separator: "/").first.map(String.init)
+    return sharedRoutes.first { $0.metadata == key }
   }
 
+  func logicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+    func home() throws -> URL { try Self.absoluteDirectory(environment.homeDirectory) }
+    func override(_ key: String) throws -> URL? {
+      guard let value = environment.environment[key], !value.isEmpty else { return nil }
+      guard value.hasPrefix("/"), !value.contains("\0") else {
+        throw CoreError.unsafePath("registered " + key + " must be an absolute directory")
+      }
+      return URL(fileURLWithPath: value).standardizedFileURL
+    }
+    switch self {
+    case .claudeMCPProject:
+      return try Self.absoluteDirectory(environment.projectDirectory)
+    case .claudeMCPLocal, .claudeMCPUser:
+      return try override("CLAUDE_CONFIG_DIR") ?? home()
+    case .codexMCPProject:
+      return try Self.absoluteDirectory(environment.projectDirectory).appendingPathComponent(
+        ".codex")
+    case .codexMCPUser:
+      if let root = try override("CODEX_HOME") {
+        _ = try DirectoryHandle(at: root.resolvingSymlinksInPath())
+        return root
+      }
+      return try home().appendingPathComponent(".codex")
+    case .geminiMCPProject:
+      return try Self.absoluteDirectory(environment.projectDirectory).appendingPathComponent(
+        ".gemini")
+    case .geminiMCPUser:
+      return try (override("GEMINI_CLI_HOME") ?? home()).appendingPathComponent(".gemini")
+    case .cursorMCPProject:
+      return try Self.absoluteDirectory(environment.projectDirectory).appendingPathComponent(
+        ".cursor")
+    case .cursorMCPUser:
+      return try home().appendingPathComponent(".cursor")
+    case .openCodeMCPProjectJSON, .openCodeMCPProjectJSONC:
+      return try Self.absoluteDirectory(environment.projectDirectory)
+    case .openCodeMCPUserJSON, .openCodeMCPUserJSONC:
+      if environment.environment["OPENCODE_CONFIG_DIR"] == "" {
+        throw CoreError.unsafePath(
+          "empty OPENCODE_CONFIG_DIR does not establish a registered absolute root")
+      }
+      return try override("OPENCODE_CONFIG_DIR")
+        ?? (override("XDG_CONFIG_HOME") ?? home().appendingPathComponent(".config"))
+        .appendingPathComponent("opencode")
+    }
+  }
+  private static func absoluteDirectory(_ url: URL) throws -> URL {
+    guard url.isFileURL, url.path.hasPrefix("/"), !url.path.contains("\0") else {
+      throw CoreError.unsafePath("registered native root must be an absolute filesystem directory")
+    }
+    return url.standardizedFileURL
+  }
+  static func globalLogicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+    try Self.claudeMCPLocal.logicalDirectory(environment)
+  }
   static func globalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
     try globalLogicalDirectory(environment).resolvingSymlinksInPath()
   }
@@ -42,7 +140,9 @@ struct SharedResourceIdentity: Codable, Equatable, Comparable {
   static func < (lhs: Self, rhs: Self) -> Bool { lhs.orderingKey < rhs.orderingKey }
 
   func validate() throws {
-    guard parent.isDirectory, basename == ".claude.json" else {
+    guard parent.isDirectory,
+      NativeTargetRoute.sharedRoutes.contains(where: { $0.basename == basename })
+    else {
       throw CoreError.invalidState("unregistered shared transaction resource")
     }
   }
@@ -60,6 +160,7 @@ struct SharedReservation: Codable, Equatable {
 final class SharedResource {
   static let metadataName = ".agents-native"
   let identity: SharedResourceIdentity
+  let route: NativeTargetRoute
   let parent: DirectoryHandle
   let metadata: DirectoryHandle?
   let ancestry: DirectoryAccessEvidence
@@ -69,12 +170,14 @@ final class SharedResource {
   private var lockDescriptor: Int32?
   private var lockAccess: FileAccessEvidence?
 
-  init(store: StateStore, create: Bool) throws {
-    authorizedRoot = try NativeTargetRoute.globalLogicalDirectory(store.environment)
+  init(store: StateStore, route: NativeTargetRoute = .claudeMCPLocal, create: Bool) throws {
+    guard route.shared else { throw CoreError.invalidState("project route has no shared resource") }
+    self.route = NativeTargetRoute.sharedRoutes.first { $0.root == route.root }!
+    authorizedRoot = try route.logicalDirectory(store.environment)
     let url = authorizedRoot.resolvingSymlinksInPath()
     parent = try DirectoryHandle(at: url, create: create)
     ancestry = try DirectoryAccessEvidence.capture(at: url)
-    identity = SharedResourceIdentity(parent: try parent.objectIdentity, basename: ".claude.json")
+    identity = SharedResourceIdentity(parent: try parent.objectIdentity, basename: route.basename)
     func child(_ parent: DirectoryHandle, _ name: String) throws -> DirectoryHandle? {
       if try parent.info(name) == nil {
         guard create else { return nil }
@@ -236,6 +339,34 @@ final class SharedResource {
   }
 }
 
+/// Absence has no physical resource key. Only read admission may carry this evidence;
+/// a writer must create and open the real parent before deriving its coordination domain.
+struct AbsentSharedRoot {
+  let route: NativeTargetRoute
+  let logical: URL
+  let physical: URL
+  let ancestry: DirectoryAccessEvidence
+
+  init?(store: StateStore, route: NativeTargetRoute) throws {
+    logical = try route.logicalDirectory(store.environment)
+    physical = logical.resolvingSymlinksInPath()
+    ancestry = try DirectoryAccessEvidence.capture(at: physical)
+    guard ancestry.directories.count < physical.pathComponents.count else { return nil }
+    self.route = route
+  }
+
+  func remainsAbsent() throws -> Bool {
+    guard logical.resolvingSymlinksInPath().path == physical.path else {
+      throw CoreError.invalidState("registered native root changed during inspection")
+    }
+    let current = try DirectoryAccessEvidence.capture(at: physical)
+    guard current.directories.starts(with: ancestry.directories) else {
+      throw CoreError.invalidState("registered native ancestry changed during inspection")
+    }
+    return current.directories.count < physical.pathComponents.count
+  }
+}
+
 /// Synchronous, thread-confined admission. There is no lock acquisition inside a transaction.
 final class TransactionLockContext {
   private static let threadKey = "agents.core.transaction-lock-context"
@@ -243,15 +374,20 @@ final class TransactionLockContext {
   let resources: [SharedResource]
   let writable: Bool
   let requestedShared: Bool
+  let absentRoots: [AbsentSharedRoot]
   private var scopeDirectory: DirectoryHandle?
   private var scopeDescriptor: Int32?
   private var scopeLockIdentity: FileObjectIdentity?
 
-  init(store: StateStore, resources: [SharedResource], writable: Bool, requestedShared: Bool) {
+  init(
+    store: StateStore, resources: [SharedResource], writable: Bool, requestedShared: Bool,
+    absentRoots: [AbsentSharedRoot] = []
+  ) {
     scopeURL = store.directory.standardizedFileURL
     self.resources = resources
     self.writable = writable
     self.requestedShared = requestedShared
+    self.absentRoots = absentRoots
   }
 
   static var isHeld: Bool { Thread.current.threadDictionary[threadKey] != nil }
@@ -310,12 +446,33 @@ final class TransactionLockContext {
 
   func resource(_ identity: SharedResourceIdentity? = nil) throws -> SharedResource {
     try validateScope()
-    guard let resource = resources.first(where: { identity == nil || $0.identity == identity })
+    guard identity != nil || resources.count == 1,
+      let resource = resources.first(where: { identity == nil || $0.identity == identity })
     else {
       throw CoreError.invalidState("shared target is outside the held request footprint")
     }
     try resource.validate()
     return resource
+  }
+
+  func resource(for route: NativeTargetRoute) throws -> SharedResource {
+    guard let resource = resources.first(where: { $0.route.root == route.root }) else {
+      throw CoreError.invalidState("shared target is outside the held request footprint")
+    }
+    return try self.resource(resource.identity)
+  }
+
+  func absentRoot(for route: NativeTargetRoute) throws -> AbsentSharedRoot? {
+    guard !writable, let absent = absentRoots.first(where: { $0.route.root == route.root }) else {
+      return nil
+    }
+    guard try absent.remainsAbsent() else { throw CoordinationReadmission.required }
+    return absent
+  }
+
+  func targetDirectory(for route: NativeTargetRoute) throws -> URL {
+    if let absent = try absentRoot(for: route) { return absent.physical }
+    return try resource(for: route).parent.url
   }
 
   func validate(_ journal: TransactionJournal, scope: DirectoryHandle) throws {
@@ -333,27 +490,19 @@ final class TransactionLockContext {
 
 extension StateStore {
   package func nativeTarget(for route: NativeTargetRoute) throws -> MaterializationTarget {
-    guard environment.projectDirectory.isFileURL, !environment.projectDirectory.path.contains("\0")
-    else {
-      throw CoreError.unsafePath("registered project root must be a filesystem directory")
-    }
     guard route.shared || scope == .project else {
       throw CoreError.unsafePath("project native targets require their project scope")
     }
-    let root = route.shared ? NativeTargetRoute.globalRoot : NativeTargetRoute.projectRoot
+    let logical = try route.logicalDirectory(environment)
     let parent: URL
-    if route.shared, let resource = TransactionLockContext.current(self)?.resources.first {
-      try resource.validate()
-      parent = resource.parent.url
+    if route.shared, let context = TransactionLockContext.current(self) {
+      parent = try context.targetDirectory(for: route)
     } else {
-      parent =
-        route.shared
-        ? try NativeTargetRoute.globalDirectory(environment)
-        : environment.projectDirectory.resolvingSymlinksInPath()
+      parent = logical.resolvingSymlinksInPath()
     }
-    let name = route.shared ? ".claude.json" : ".mcp.json"
     return MaterializationTarget(
-      url: parent.appendingPathComponent(name), path: root + "/" + name, scope: directory)
+      url: parent.appendingPathComponent(route.basename),
+      path: route.root + "/" + route.basename, scope: directory)
   }
 
   /// Acquire the union before the scope lock. Re-admission never replays a delivered callback.
@@ -366,43 +515,69 @@ extension StateStore {
     }
     while true {
       let before = try pendingCoordinationJournal(diagnosing: !writable)
-      let needsShared = routes.contains(where: \.shared) || before?.footprint.isEmpty == false
       var resources: [SharedResource] = []
-      if needsShared {
-        let pendingShared = before?.footprint.isEmpty == false
+      var absentRoots: [AbsentSharedRoot] = []
+      let pending = before?.footprint ?? []
+      var requested = Set(
+        routes.filter(\.shared).map { route in
+          NativeTargetRoute.sharedRoutes.first { $0.root == route.root }!
+        })
+      for identity in pending {
+        try identity.validate()
+        guard
+          let route = NativeTargetRoute.sharedRoutes.first(where: {
+            $0.basename == identity.basename
+          })
+        else {
+          throw CoreError.invalidState("unregistered shared recovery resource")
+        }
+        requested.insert(route)
+      }
+      // Validate every original recovery domain before creating any newly requested metadata.
+      let ordered = requested.sorted { left, right in
+        let leftPending = pending.contains { $0.basename == left.basename }
+        let rightPending = pending.contains { $0.basename == right.basename }
+        return leftPending == rightPending ? left.rawValue < right.rawValue : leftPending
+      }
+      for route in ordered {
+        let recovering = pending.contains { $0.basename == route.basename }
+        if !writable, !recovering, let absent = try AbsentSharedRoot(store: self, route: route) {
+          absentRoots.append(absent)
+          continue
+        }
         let resource: SharedResource
-        do { resource = try SharedResource(store: self, create: writable && !pendingShared) } catch
-        {
-          if pendingShared {
+        do {
+          resource = try SharedResource(store: self, route: route, create: writable && !recovering)
+        } catch {
+          if recovering {
             throw CoreError.invalidState(
               "shared recovery requires the original registered runtime context and verifiable coordination metadata"
             )
           }
           throw error
         }
-        if pendingShared {
-          guard let metadata = resource.metadata, try metadata.info("lock") != nil else {
-            throw CoreError.invalidState("shared recovery coordination metadata is missing")
+        if recovering {
+          guard pending.contains(resource.identity), let metadata = resource.metadata,
+            try metadata.info("lock") != nil
+          else {
+            throw CoreError.invalidState(
+              "shared recovery requires the original runtime context and coordination lock")
           }
         }
-        for identity in before?.footprint ?? [] {
-          try identity.validate()
-          guard identity == resource.identity else {
-            throw CoreError.invalidState("shared recovery requires the original runtime context")
-          }
+        if !resources.contains(where: { $0.identity == resource.identity }) {
+          resources.append(resource)
         }
-        resources = [resource]
       }
       let context = TransactionLockContext(
         store: self, resources: resources.sorted { $0.identity < $1.identity }, writable: writable,
-        requestedShared: routes.contains(where: \.shared))
+        requestedShared: routes.contains(where: \.shared), absentRoots: absentRoots)
       func locked(_ index: Int) throws -> T? {
         if index < context.resources.count {
           let resource = context.resources[index]
           guard let metadata = resource.metadata else {
             // No metadata means no prior registered writer. Recheck after the unlocked read.
             let result = Result { try locked(index + 1) }
-            let after = try SharedResource(store: self, create: false)
+            let after = try SharedResource(store: self, route: resource.route, create: false)
             guard after.metadata == nil else { return nil }
             return try result.get()
           }
@@ -422,7 +597,9 @@ extension StateStore {
               return try locked(index + 1)
             })
         }
-        return try context.run { try body() }
+        let result = Result { try context.run { try body() } }
+        for absent in absentRoots where try !absent.remainsAbsent() { return nil }
+        return try result.get()
       }
       // The scope-lock body checks that the preflight footprint still covers the journal.
       do {
