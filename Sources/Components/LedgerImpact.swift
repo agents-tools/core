@@ -77,7 +77,9 @@ package struct LedgerImpact {
     }
     var direct: [ComponentKey: SourceRevision] = [:]
     for c in ledger.components.values where !updating || !selected(c) {
-      guard c.group == nil, let revision = c.revision else { continue }
+      guard c.group == nil else { continue }
+      let artifact = c.resources.compactMap { ledger.resources[$0]?.artifact?.digest }.first
+      guard let revision = artifact ?? c.revision else { continue }
       direct[
         ComponentKey(
           source: try ledger.sourceIdentity(c.declaringSource, roots: roots), root: c.root,

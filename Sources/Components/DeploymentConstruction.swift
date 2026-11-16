@@ -24,9 +24,114 @@ package enum DeploymentConstruction {
     var result = Set<NativeTargetRoute>()
     for lowering in ledger.lowerings where lowering.format.hasSuffix("-mcp@1") {
       let contribution = try MCPLayoutV1.contribution(lowering, ledger: ledger)
-      result.insert(try route(contribution))
+      let route = try route(contribution)
+      result.insert(route)
+      if contribution.descriptor.request.surface == .openCodeCLI {
+        result.insert(
+          contribution.descriptor.request.scope == .project
+            ? .openCodeMCPProjectJSONC : .openCodeMCPUserJSONC)
+      }
+    }
+    for lowering in ledger.lowerings where lowering.format.hasSuffix("-components@1") {
+      let input = try NativeComponentLayoutsV1.input(lowering, ledger: ledger, limits: .standard)
+      let scope = input.request.scope
+      let name = input.record.name
+      switch (input.request.surface, input.record.kind) {
+      case (.claudeCode, "command"):
+        result.insert(try .named(.claudeCommand, scope: scope, name: name))
+      case (.claudeCode, "subagent"):
+        result.insert(try .named(.claudeAgent, scope: scope, name: name))
+      case (.claudeCode, "lspServer"), (.claudeCode, "plugin"):
+        result.insert(try .named(.claudeSkillPlugin, scope: scope, name: name))
+      case (.claudeCode, _):
+        result.insert(scope == .project ? .claudeSettingsProject : .claudeSettingsUser)
+      case (.codexCLI, "subagent"):
+        result.insert(try .named(.codexAgent, scope: scope, name: name))
+        result.insert(scope == .project ? .codexMCPProject : .codexMCPUser)
+      case (.codexCLI, _): result.insert(scope == .project ? .codexHooksProject : .codexHooksUser)
+      case (.geminiCLI, "command"):
+        result.insert(try .named(.geminiCommand, scope: scope, name: name))
+      case (.geminiCLI, "subagent"):
+        result.insert(try .named(.geminiAgent, scope: scope, name: name))
+      case (.geminiCLI, "plugin"):
+        result.insert(try .named(.geminiExtension, scope: scope, name: name))
+      case (.geminiCLI, "ignore"): result.insert(.geminiIgnoreProject)
+      case (.geminiCLI, _): result.insert(scope == .project ? .geminiMCPProject : .geminiMCPUser)
+      case (.cursorEditor, "command"):
+        result.insert(try .named(.cursorCommand, scope: scope, name: name))
+      case (.cursorEditor, "subagent"):
+        result.insert(try .named(.cursorAgent, scope: scope, name: name))
+      case (.cursorEditor, "plugin"):
+        result.insert(try .named(.cursorLocalPlugin, scope: scope, name: name))
+      case (.cursorEditor, "ignore"): result.insert(.cursorIgnoreProject)
+      case (.cursorEditor, _):
+        result.insert(scope == .project ? .cursorHooksProject : .cursorHooksUser)
+      case (.openCodeCLI, _):
+        result.insert(scope == .project ? .openCodeMCPProjectJSON : .openCodeMCPUserJSON)
+        result.insert(scope == .project ? .openCodeMCPProjectJSONC : .openCodeMCPUserJSONC)
+      default: throw CoreError.invalidState("native surface has no integrated closed route")
+      }
     }
     return result
+  }
+
+  package static func physicalRoute(
+    _ route: NativeTargetRoute, ledger: ResolvedLedger, store: StateStore
+  ) throws -> NativeTargetRoute {
+    let alternate: NativeTargetRoute
+    if route == .openCodeMCPProjectJSON {
+      alternate = .openCodeMCPProjectJSONC
+    } else if route == .openCodeMCPUserJSON {
+      alternate = .openCodeMCPUserJSONC
+    } else {
+      return route
+    }
+    let recorded = ledger.deployments.filter { $0.route.hasPrefix("agents/opencode-") }
+    let names = Set(recorded.map { ($0.target.path as NSString).lastPathComponent })
+    if names.contains("opencode.jsonc"), !names.contains("opencode.json") { return alternate }
+    if names.contains("opencode.json"), !names.contains("opencode.jsonc") { return route }
+    let json = try store.nativeTarget(for: route)
+    let jsonc = try store.nativeTarget(for: alternate)
+    let hasJSON = FileManager.default.fileExists(atPath: json.url.path)
+    let hasJSONC = FileManager.default.fileExists(atPath: jsonc.url.path)
+    guard !(hasJSON && hasJSONC) else {
+      throw CoreError.invalidState(
+        "multiple OpenCode configuration files require an explicit native target decision")
+    }
+    return hasJSONC ? alternate : route
+  }
+
+  package static func route(_ output: NativeComponentOutput, request: NativeComponentRequest) throws
+    -> NativeTargetRoute
+  {
+    let project = request.scope == .project
+    let path: String
+    switch output.content {
+    case .file(let name, _): path = name
+    case .generatedLSPPlugin(let directory, _, _), .nativePlugin(let directory, _, _):
+      path = directory
+    default: path = ""
+    }
+    switch output.route {
+    case .claudeCommand: return try .file(.claudeCommand, scope: request.scope, relativePath: path)
+    case .claudeAgent: return try .file(.claudeAgent, scope: request.scope, relativePath: path)
+    case .codexAgent: return try .file(.codexAgent, scope: request.scope, relativePath: path)
+    case .geminiCommand: return try .file(.geminiCommand, scope: request.scope, relativePath: path)
+    case .geminiAgent: return try .file(.geminiAgent, scope: request.scope, relativePath: path)
+    case .cursorCommand: return try .file(.cursorCommand, scope: request.scope, relativePath: path)
+    case .cursorAgent: return try .file(.cursorAgent, scope: request.scope, relativePath: path)
+    case .claudeSkillPlugin: return try .named(.claudeSkillPlugin, scope: request.scope, name: path)
+    case .cursorLocalPlugin: return try .named(.cursorLocalPlugin, scope: request.scope, name: path)
+    case .geminiExtension: return try .named(.geminiExtension, scope: request.scope, name: path)
+    case .claudeSettings: return project ? .claudeSettingsProject : .claudeSettingsUser
+    case .codexHooks: return project ? .codexHooksProject : .codexHooksUser
+    case .cursorHooks: return project ? .cursorHooksProject : .cursorHooksUser
+    case .geminiIgnore: return .geminiIgnoreProject
+    case .cursorIgnore: return .cursorIgnoreProject
+    case .geminiSettings: return project ? .geminiMCPProject : .geminiMCPUser
+    case .codexConfig: return project ? .codexMCPProject : .codexMCPUser
+    case .openCodeConfig: return project ? .openCodeMCPProjectJSON : .openCodeMCPUserJSON
+    }
   }
 
   package static func route(_ contribution: NativeMCPContribution) throws -> NativeTargetRoute {
@@ -56,14 +161,6 @@ package enum DeploymentConstruction {
     var ledger = frozen.ledger
     for component in linked.components {
       guard case .declaration = component.payload else { continue }
-      guard component.key.kind == .mcpServer else {
-        if !component.recipients.isEmpty {
-          throw CoreError.invalidState(
-            "\(component.key.kind.rawValue)/\(component.key.name): production adapter integration is pending"
-          )
-        }
-        continue
-      }
       for agent in component.recipients.sorted(by: { $0.rawValue < $1.rawValue }) {
         let surface: NativeClientSurface
         switch agent {
@@ -72,6 +169,15 @@ package enum DeploymentConstruction {
         case .cursor: surface = .cursorEditor
         case .geminiCLI: surface = .geminiCLI
         case .opencode: surface = .openCodeCLI
+        }
+        if component.key.kind != .mcpServer {
+          ledger.lowerings.append(
+            try NativeComponentLowering.lower(
+              component, frozen: frozen,
+              request: .init(surface: surface, scope: scope),
+              id: "native:" + String(component.origins[0].occurrence) + ":" + agent.rawValue,
+              platform: platform))
+          continue
         }
         var contribution = try NativeMCPLowering.lower(
           component, frozen: frozen,

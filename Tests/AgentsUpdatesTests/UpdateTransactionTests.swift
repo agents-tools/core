@@ -276,3 +276,42 @@ private func waitFor(_ name: String, fixture: UpdateFixture, child: Process) thr
 private func terminate(_ process: Process) {
   do { try ProcessWait.terminate(process) } catch { Issue.record(error) }
 }
+
+extension UpdateTransactionTests {
+  @Test func combinedNativeFileAndSharedDocumentFaultRollBackTogether() throws {
+    let fixture = try UpdateFixture()
+    let config = fixture.root.appendingPathComponent(".codex/config.toml")
+    let role = fixture.root.appendingPathComponent(".codex/agents/researcher.toml")
+    try fixture.write("# User setting\ntheme = 'fixture'\n", to: config)
+    let initial = Declaration(components: [
+      .subagent(
+        name: "researcher", description: "Research sources", prompt: .literal("Before."),
+        agents: [.codex]),
+      .mcpServer(name: "db", transport: .stdio(.init(executable: "before")), agents: [.codex]),
+    ])
+    try fixture.store.save(declaration: initial, ledger: ResolvedLedger())
+    _ = try fixture.apply()
+    let files = [fixture.store.declarationURL, fixture.store.resolvedURL, config, role]
+    let before = try files.map { try Data(contentsOf: $0) }
+    let next = Declaration(components: [
+      .subagent(
+        name: "researcher", description: "Research sources", prompt: .literal("After."),
+        agents: [.codex]),
+      .mcpServer(name: "db", transport: .stdio(.init(executable: "after")), agents: [.codex]),
+    ])
+    var reached = false
+    let completion = UpdateOperations.perform(
+      .init(operation: .declaration(next)), environment: fixture.environment,
+      checkpoint: { step in
+        if step == TransactionCheckpoint.progress(0, .applied).name {
+          reached = true
+          throw CoreError.invalidState("combined native fault fixture")
+        }
+      }, { try $0.apply() })
+    #expect(reached)
+    #expect(completion.disposition == .rolledBack)
+    #expect(!completion.recovery.pending)
+    #expect(throws: UpdateApplyError.self) { try completion.result.get() }
+    #expect(try files.map { try Data(contentsOf: $0) } == before)
+  }
+}

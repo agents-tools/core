@@ -77,6 +77,7 @@ package enum LedgerReplay {
       "agents/claude-import@1": { try forwarding($0, $1, $2, outputBytes: outputBytes) },
       "agents/chatgpt@1": { try chatGPT($0, $1, $2, outputBytes: outputBytes) },
     ].merging(MCPLayoutV1.renderers) { existing, _ in existing }
+      .merging(NativeComponentLayoutsV1.renderers(limits: .standard)) { existing, _ in existing }
   }
 
   package static func withReplay<T>(
@@ -304,9 +305,29 @@ package enum LedgerReplay {
     ]
   }
 
+  package static func exportPrompt(
+    _ lowering: LockedLowering, ledger: ResolvedLedger, resources: [String: URL],
+    roots: [String: URL]
+  ) throws -> Data {
+    let locations = try lowering.inputs.compactMap {
+      try ledger.components[$0]?.payload.object?["localAppend"].map {
+        try LedgerLocation(ledgerValue: $0)
+      }
+    }
+    let paths = try Set(locations.map { try $0.resolve(roots: roots) })
+    guard paths.count <= 1 else {
+      throw CoreError.invalidState("prompt has conflicting consumer append locations")
+    }
+    let append = try locations.first.map { try $0.readContainedFile(roots: roots) }
+    return try chatGPT(
+      lowering, ledger, resources, outputBytes: LedgerLimits.standard.resourceBytes,
+      consumerAppend: append
+    ).first!.bytes!
+  }
+
   private static func chatGPT(
     _ lowering: LockedLowering, _ ledger: ResolvedLedger, _ resources: [String: URL],
-    outputBytes: Int
+    outputBytes: Int, consumerAppend: Data? = nil
   ) throws -> [ReplayedArtifact] {
     guard let count = lowering.layout.object?["sectionCount"]?.integer, count > 0,
       count <= lowering.resources.count, lowering.resources.count <= count + 1,
@@ -316,9 +337,17 @@ package enum LedgerReplay {
       guard let file = resources[id] else { throw CoreError.invalidState("missing prompt section") }
       return try FileSystem.read(at: file)
     }
-    let append = try lowering.resources.dropFirst(count).first.map { id in
+    var append = try lowering.resources.dropFirst(count).first.map { id in
       guard let file = resources[id] else { throw CoreError.invalidState("missing prompt append") }
       return try FileSystem.read(at: file)
+    }
+    if let consumerAppend, !consumerAppend.isEmpty {
+      if append?.isEmpty == false {
+        append!.append(Data("\n".utf8))
+        append!.append(consumerAppend)
+      } else {
+        append = consumerAppend
+      }
     }
     return [
       .init(

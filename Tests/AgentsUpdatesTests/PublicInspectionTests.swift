@@ -291,6 +291,7 @@ extension PublicInspectionTests {
     let before = try FileHash.folderHash(f.root)
     let proposal = try SourceImportOperations.inspect(
       format: "apmManifest", root: input, document: "apm.yml")
+    #expect(!proposal.specificationStatus.isEmpty)
     #expect(proposal.diagnostics.isEmpty)
     #expect(proposal.components.count == 1)
     #expect(proposal.resources.first?.requiresStandaloneSource == true)

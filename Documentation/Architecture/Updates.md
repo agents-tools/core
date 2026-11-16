@@ -202,3 +202,28 @@ The existing writer revalidates both normalized source identity and the exact Gi
 commit or artifact digest map before retention and watch-state publication. A
 redirected alias or changed content requires refresh. Status and diff never deploy
 configuration.
+
+Concrete native contributions are decoded from their sealed F artifacts inside
+replay's resource lifetime. Composition resolves D's closed routes and descriptor
+physical identities before grouping logical owners. A shared document receives
+one regional preparation, including protected MCP and native component siblings.
+Reader and sensitivity evidence covers the physical object; selection controls
+which runtime bindings may be requested. Ordinary changes preserve an unselected
+private region using its verified receipt, without replaying its provider.
+
+Public prompt export renders locked sections in their recorded order and retains
+producer append resources. A recorded consumer `localAppend` is read from its
+current contained file only during export. Update, install and locked recovery do
+not read that mutable consumer file.
+
+`SourceImportInspection.producerRevision` is optional. Documentation-backed native
+profiles retain an unavailable upstream revision as `nil`; their
+`specificationStatus` remains available. Import requests rebase producer-local
+source coordinates into the captured declaration while retaining the proposal's
+input freshness evidence and conversion/binding diagnostics.
+
+A consumer presenting authored YAML occurrences can use the captured document's
+`node(at:)`, verify `editability(of:)`, and submit a typed `ManifestEdit` through
+`UpdateRequest.operation.edit`, with `expectedDeclarationDigest`. This addresses
+the selected authored node; it does not infer a producer child's ownership from a
+recorded occurrence index. The node and expected digest reject stale reuse.

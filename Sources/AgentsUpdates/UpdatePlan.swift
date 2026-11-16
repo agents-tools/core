@@ -156,7 +156,7 @@ final class UpdatePlan {
     #endif
     return try ComponentLinker.withLinkedComponents(
       document: document, store: store, platform: platform,
-      preserving: impact.pins, directPins: impact.directPins
+      preserving: impact.pins, directPins: impact.directPins, retaining: previous
     ) { linked, session in
       if let expected = request.automaticSkill {
         guard
@@ -238,7 +238,8 @@ final class UpdatePlan {
     aggregation = try ArtifactAggregation(
       ledger: next, previous: previous, artifacts: artifacts,
       resources: resources, workspace: workspace, store: store, replace: request.replace,
-      changingAccess: request.changingAccess, kinds: request.kinds)
+      changingAccess: request.changingAccess, kinds: request.kinds,
+      names: Set(request.names), selectedIdentities: request.selectedIdentities)
     if let imported = request.importPreparation {
       for resource in imported.proposal.resources
       where resource.selected && resource.requiresStandaloneSource {

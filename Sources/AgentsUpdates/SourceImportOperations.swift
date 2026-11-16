@@ -90,7 +90,7 @@ public struct ImportOrderedSourceInspection: Sendable {
 
 public struct SourceImportInspection: Sendable {
   public let format: String
-  public let producerRevision: String
+  public let producerRevision: String?
   public let specificationStatus: String
   public let sources: [ImportSourceInspection]
   public let components: [ImportComponentInspection]
@@ -122,12 +122,26 @@ public struct SourceImportInspection: Sendable {
         "import requires verified captured content for the producer integrity claim")
     }
     for source in preparation.proposal.sources {
-      guard let imported = source.declaration else {
+      guard var imported = source.declaration else {
         throw CoreError.invalidState("import lacks exact canonical source coordinates")
       }
-      if let existing = declaration.sources[source.alias], existing != imported {
-        throw CoreError.invalidState(
-          "import source alias conflicts with the captured declaration: " + source.alias)
+      if imported.kind == .local {
+        let identity = try imported.identity(
+          environment: RuntimeEnvironment(
+            projectDirectory: preparation.input.root, homeDirectory: preparation.input.root,
+            environment: [:]))
+        imported.location = String(identity.dropFirst("local:".count))
+        imported.environment = nil
+      }
+      if let existing = declaration.sources[source.alias] {
+        let oldIdentity = try existing.identity(environment: RuntimeEnvironment(environment: [:]))
+        let newIdentity = try imported.identity(environment: RuntimeEnvironment(environment: [:]))
+        guard existing.kind == imported.kind, existing.requirement == imported.requirement,
+          existing.path == imported.path, oldIdentity == newIdentity
+        else {
+          throw CoreError.invalidState(
+            "import source alias conflicts with the captured declaration: " + source.alias)
+        }
       }
       declaration.sources[source.alias] = imported
     }

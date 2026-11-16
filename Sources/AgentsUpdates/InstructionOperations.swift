@@ -176,13 +176,14 @@ extension InstructionOperations {
     return try store.withReadLock {
       _ = try store.readDeclaration()
       let ledger = try store.readLedger()
-      return try LedgerReplay.withReplay(
+      guard let lowering = ledger.lowerings.first(where: { $0.id == "prompt:" + name }) else {
+        throw InstructionError.emptyPrompt
+      }
+      return try LedgerReplay.withLockedResources(
         ledger, store: store, roots: store.ledgerRoots, limits: .standard
-      ) { artifacts in
-        guard let bytes = artifacts.first(where: { $0.name == "prompt:" + name })?.bytes else {
-          throw InstructionError.emptyPrompt
-        }
-        return bytes
+      ) { _, resources, _ in
+        try LedgerReplay.exportPrompt(
+          lowering, ledger: ledger, resources: resources, roots: store.ledgerRoots)
       }
     }
   }
