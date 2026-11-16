@@ -189,7 +189,12 @@ while true {
     let cursor = (message["params"] as? [String: Any])?["cursor"] as? String
     let tool: [String: Any] = [
       "name": cursor == nil ? "first" : "second",
-      "description": scenario == "long-text" ? String(repeating: "x", count: 17) : "fixture",
+      "description": scenario == "long-text"
+        ? String(repeating: "x", count: 17)
+        : scenario == "facade"
+          ? ["FACADE_SECRET", "FACADE_LITERAL", "FACADE_ENV"].map {
+            ProcessInfo.processInfo.environment[$0] ?? "absent"
+          }.joined(separator: " ") : "fixture",
       "inputSchema": ["type": "object"],
     ]
     var result: [String: Any] = ["tools": [tool]]
