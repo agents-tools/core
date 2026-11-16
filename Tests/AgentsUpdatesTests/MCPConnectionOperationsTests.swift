@@ -99,12 +99,15 @@ private final class MCPFacadeFixture {
 @Suite(.serialized) struct MCPConnectionOperationsTests {
   @Test func describeIsPureAndExactSelectionUsesOnlyNecessaryBindings() async throws {
     let fixture = try MCPFacadeFixture()
-    let spy = MCPBindingSpy(["wanted": Data("provider-canary".utf8)])
+    let spy = MCPBindingSpy([
+      "wanted": Data("provider-canary".utf8), "controlled": Data("control-\ncanary".utf8),
+    ])
     let selected = try fixture.snapshot(
       "facade",
       values: [
         "FACADE_SECRET": .secret("wanted"), "SECOND_SECRET": .secret("wanted"),
         "FACADE_LITERAL": .literal("literal-canary"), "FACADE_ENV": .environment("SELECTED_ENV"),
+        "FACADE_CONTROLLED": .secret("controlled"),
       ])
     let other = try fixture.snapshot(
       "wrong-version", selection: "source-b/same-name", values: ["UNUSED": .secret("unused")])
@@ -112,7 +115,7 @@ private final class MCPFacadeFixture {
     let description = MCPConnectionOperations.describe(selected)
     #expect(description.snapshotID == selected.id && selected.id != other.id)
     #expect(description.startsOwnedProcess)
-    #expect(description.requiredBindings == ["wanted"])
+    #expect(description.requiredBindings == ["controlled", "wanted"])
     #expect(description.environmentBindings == ["SELECTED_ENV"])
     #expect(spy.calls.isEmpty && fixture.text("pid") == nil)
     #expect(
@@ -126,12 +129,20 @@ private final class MCPFacadeFixture {
     #expect(result.cleanupComplete && result.startedAt <= result.finishedAt)
     #expect(result.elapsed >= 0 && result.transport == .stdio)
     #expect(result.tools.map(\.name) == ["first", "second"])
-    #expect(spy.calls == ["wanted"])
+    #expect(spy.calls == ["controlled", "wanted"])
     let encoded = String(decoding: try JSONEncoder().encode(result), as: UTF8.self)
-    for secret in ["provider-canary", "literal-canary", "environment-canary", fixture.root.path] {
+    for secret in [
+      "provider-canary", "control-canary", "literal-canary", "environment-canary",
+      fixture.root.path,
+    ] {
       #expect(!encoded.contains(secret))
     }
     #expect(result.tools.allSatisfy { $0.description?.contains("[redacted]") == true })
+    #expect(
+      result.tools.allSatisfy {
+        $0.description?.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+          == false
+      })
     let pid = try #require(Int32(fixture.text("pid") ?? ""))
     #expect(kill(pid, 0) == -1 && errno == ESRCH)
     try fixture.unchanged()

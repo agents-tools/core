@@ -192,8 +192,10 @@ while true {
       "description": scenario == "long-text"
         ? String(repeating: "x", count: 17)
         : scenario == "facade"
-          ? ["FACADE_SECRET", "FACADE_LITERAL", "FACADE_ENV"].map {
+          ? ["FACADE_SECRET", "FACADE_LITERAL", "FACADE_ENV", "FACADE_CONTROLLED"].map {
             ProcessInfo.processInfo.environment[$0] ?? "absent"
+          }.map { value in
+            value + " " + value.replacingOccurrences(of: "-", with: "-\n")
           }.joined(separator: " ") : "fixture",
       "inputSchema": ["type": "object"],
     ]

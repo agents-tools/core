@@ -330,18 +330,25 @@ public enum MCPConnectionOperations {
         outcome = .failed
         issue = .init(rawValue: error.rawValue)
       }
-      let redactions = Set(privateValues.filter { !$0.isEmpty }).sorted { $0.count > $1.count }
+      func withoutControls(_ value: String) -> String {
+        String(value.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+      }
+      // Match the final text projection, including private values containing
+      // controls. No character removal may join text after this masking pass.
+      let redactions = Set(privateValues.map(withoutControls).filter { !$0.isEmpty }).sorted {
+        $0.count > $1.count
+      }
       let expression = try NSRegularExpression(
         pattern: redactions.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|"))
       func redact(_ value: String) -> String {
+        let filtered = withoutControls(value)
         let text =
           redactions.isEmpty
-          ? value
+          ? filtered
           : expression.stringByReplacingMatches(
-            in: value, range: NSRange(value.startIndex..., in: value), withTemplate: "[redacted]")
-        let filtered = String(
-          text.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
-        var bytes = Data(filtered.utf8.prefix(options.limits.textBytes))
+            in: filtered, range: NSRange(filtered.startIndex..., in: filtered),
+            withTemplate: "[redacted]")
+        var bytes = Data(text.utf8.prefix(options.limits.textBytes))
         // A byte cap may split the last Unicode scalar; remove only that suffix.
         while String(data: bytes, encoding: .utf8) == nil { bytes.removeLast() }
         return String(decoding: bytes, as: UTF8.self)
