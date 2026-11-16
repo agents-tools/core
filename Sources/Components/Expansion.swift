@@ -14,7 +14,12 @@ final class Expansion {
   var active: [GroupIdentity] = []
   var nextOccurrence = 0
   var referenceParent: Int?
-  var indexes: [String: [SnapshotIndexSkill]] = [:]
+  private struct IndexRequest: Hashable {
+    let source: String
+    let names: [String]?
+    let exclude: [String]
+  }
+  private var indexes: [IndexRequest: [SnapshotIndexSkill]] = [:]
   var values = ManifestExpansionBudget()
 
   init(linking: Linking, choices: [String: SourceRevision], emit: Bool) {
@@ -387,26 +392,63 @@ final class Expansion {
     context: LinkingDocument, group: String?, condition: DeclarationCondition,
     chain: [SourceSpan], position: SourceMapEntry?, dependencies: [SourceSnapshotID]
   ) throws {
-    if indexes[address.id] == nil { indexes[address.id] = try SkillSnapshotReader.index(source) }
-    let available = indexes[address.id]!
-    let names: [String]
+    let requested: [String]?
     switch selection.select {
-    case .all: names = available.map(\.name)
-    case .names(let requested): names = requested
+    case .all: requested = nil
+    case .names(let names): requested = names.map(PathSafety.sanitizeName)
     }
-    for name in names where !(selection.exclude ?? []).contains(name) {
-      let location = chain + (position.map { [$0.span] + $0.origins } ?? [])
-      guard let artifact = available.first(where: { $0.name == name }) else {
-        throw LinkError.missing("skill '\(name)'", location)
+    let excluded = Set((selection.exclude ?? []).map(PathSafety.sanitizeName))
+    var overrides: [String: SkillOverride] = [:]
+    for (name, override) in selection.overrides ?? [:] {
+      let canonical = PathSafety.sanitizeName(name)
+      guard overrides[canonical] == nil else {
+        throw LinkError.invalid("duplicate canonical skill override: \(canonical)", chain)
       }
-      let override = selection.overrides?[name]
+      overrides[canonical] = override
+    }
+    var retained: [String: LedgerResource] = [:]
+    for candidate in linking.directPins.keys.sorted(by: { $0.name < $1.name }) {
+      try linking.budget.step()
+      guard candidate.kind == .skills, candidate.source == context.view.snapshot.source,
+        candidate.root == context.view.discoveryPath, candidate.group == group,
+        !excluded.contains(candidate.name), requested?.contains(candidate.name) ?? true,
+        let resource = try linking.retainedArtifact(key: candidate, source: address.id)
+      else { continue }
+      retained[candidate.name] = resource
+    }
+    let freshNames = requested.map { $0.filter { retained[$0] == nil && !excluded.contains($0) } }
+    let request = IndexRequest(
+      source: address.id, names: freshNames?.sorted(),
+      exclude: excluded.union(retained.keys).sorted())
+    if indexes[request] == nil {
+      indexes[request] =
+        try freshNames == []
+        ? [] : SkillSnapshotReader.index(source, names: request.names, exclude: request.exclude)
+    }
+    let available = indexes[request]!
+    let names = requested ?? (available.map(\.name) + retained.keys).sorted()
+    for name in names where !excluded.contains(name) {
+      let location = chain + (position.map { [$0.span] + $0.origins } ?? [])
+      let override = overrides[name]
       let mode = override?.mode ?? selection.mode ?? .link
       guard mode != .edit else {
         throw LinkError.invalid("edit requires an actual local skill with no requirement", location)
       }
-      let view = try linking.session.fileSnapshot(
-        source: address.id, revision: artifact.artifact.digest,
-        files: artifact.files)
+      let view: SourceSnapshot
+      let artifact: LockedArtifact
+      if let resource = retained[name] {
+        artifact = resource.artifact!
+        view = try linking.session.artifactSnapshot(
+          source: address.id, resource: resource, objects: linking.retainedLedger!.contentObjects)
+      } else {
+        guard let current = available.first(where: { $0.name == name }) else {
+          throw LinkError.missing("skill '\(name)'", location)
+        }
+        artifact = current.artifact
+        view = try linking.session.fileSnapshot(
+          source: address.id, revision: artifact.digest,
+          files: current.files, executableFlags: current.executableFlags)
+      }
       try linking.budget.snapshot(view.snapshot)
       guard let skill = try SkillSnapshotReader.read(view).first,
         PathSafety.sanitizeName(skill.name) == name
@@ -426,7 +468,7 @@ final class Expansion {
         resources: [
           LinkedResource(
             snapshot: view.snapshot, path: skill.path, hash: skill.hash,
-            executableFlags: skill.executableFlags, artifact: artifact.artifact)
+            executableFlags: skill.executableFlags, artifact: artifact)
         ],
         chain: chain, position: position, dependencies: dependencies + [view.snapshot])
     }

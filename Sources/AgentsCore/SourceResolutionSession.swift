@@ -283,7 +283,9 @@ package final class SourceResolutionSession {
     return try view.resource(path)
   }
 
-  package func fileSnapshot(source: String, revision: String, files: [String: Data]) throws
+  package func fileSnapshot(
+    source: String, revision: String, files: [String: Data], executableFlags: [String: Bool] = [:]
+  ) throws
     -> SourceSnapshot
   {
     try requireOpen()
@@ -293,9 +295,41 @@ package final class SourceResolutionSession {
     try FileSystem.createDirectory(at: root)
     for path in files.keys.sorted() {
       try Task.checkCancellation()
-      try FileSystem.write(files[path]!, to: PathSafety.resolvedChild(base: root, subpath: path))
+      let file = try PathSafety.resolvedChild(base: root, subpath: path)
+      try FileSystem.createDirectory(at: file.deletingLastPathComponent())
+      try FileSystem.write(files[path]!, to: file)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: executableFlags[path] == true ? 0o755 : 0o644], ofItemAtPath: file.path)
     }
     let result = try SourceSnapshot(snapshot: id, pin: nil, root: root)
+    register(result)
+    return result
+  }
+
+  /// Reborrows an admitted artifact closure without consulting its index or download coordinates.
+  package func artifactSnapshot(
+    source: String, resource: LedgerResource, objects: [String: Data]
+  ) throws -> SourceSnapshot {
+    try requireOpen()
+    guard resource.kind == .artifact, let artifact = resource.artifact else {
+      throw CoreError.invalidState("missing pinned artifact resource")
+    }
+    try artifact.validate()
+    let id = SourceSnapshotID(source: source, revision: artifact.digest)
+    if let existing = borrowed[id] { return existing }
+    let root = workspace.appendingPathComponent(UUID().uuidString)
+    let destination =
+      resource.support.isEmpty
+      ? try PathSafety.resolvedChild(base: root, subpath: resource.path) : root
+    var embedded = resource
+    embedded.kind = .embedded
+    try LedgerResources.materialize(embedded, objects: objects, at: destination)
+    let result = try SourceSnapshot(snapshot: id, pin: nil, root: root)
+    let captured = try LedgerResources.capture(
+      result.resource(resource.path), embed: false, limits: .standard, sourceRoot: root)
+    guard captured.hash == resource.hash else {
+      throw CoreError.invalidState("pinned artifact resource hash mismatch")
+    }
     register(result)
     return result
   }

@@ -9,12 +9,17 @@ package enum ComponentLinker {
     document: DeclarationDocument, store: StateStore, platform: DeclarationPlatform,
     preserving pins: [String: SourceRevision] = [:],
     directPins: [ComponentKey: SourceRevision] = [:],
+    retaining ledger: ResolvedLedger? = nil,
     _ body: (LinkedComponents, SourceResolutionSession) throws -> T
   ) throws -> T {
-    try SourceResolutionSession.withTemporaryRead(store: store) { session in
+    if let ledger {
+      try ResolvedLedgerCodec.checkModel(ledger, limits: .standard)
+      try ledger.validate()
+    }
+    return try SourceResolutionSession.withTemporaryRead(store: store) { session in
       let linker = Linking(
         document: document, store: store, platform: platform,
-        session: session, directPins: directPins)
+        session: session, directPins: directPins, retainedLedger: ledger)
       let graph = try linker.solve(preserving: pins)
       return try body(graph, session)
     }
@@ -53,6 +58,7 @@ final class Linking {
   let platform: DeclarationPlatform
   let session: SourceResolutionSession
   let directPins: [ComponentKey: SourceRevision]
+  let retainedLedger: ResolvedLedger?
   let budget = LinkBudget()
   var documents: [GroupIdentity: LinkingDocument] = [:]
   var nonGit = Set<String>()
@@ -64,13 +70,34 @@ final class Linking {
 
   init(
     document: DeclarationDocument, store: StateStore, platform: DeclarationPlatform,
-    session: SourceResolutionSession, directPins: [ComponentKey: SourceRevision]
+    session: SourceResolutionSession, directPins: [ComponentKey: SourceRevision],
+    retainedLedger: ResolvedLedger?
   ) {
     self.document = document
     self.store = store
     self.platform = platform
     self.session = session
     self.directPins = directPins
+    self.retainedLedger = retainedLedger
+  }
+
+  /// Direct artifact pins use the artifact digest, independently of every other index member.
+  /// The caller supplies the admitted ledger closure; absence never means refresh the index.
+  func retainedArtifact(key: ComponentKey, source: String) throws -> LedgerResource? {
+    guard let pin = directPins[key], pin.revision.hasPrefix("sha256:") else { return nil }
+    guard let ledger = retainedLedger else {
+      throw CoreError.invalidState("missing pinned artifact closure")
+    }
+    for resource in ledger.resources.sorted(by: { $0.key < $1.key }).map(\.value) {
+      try budget.step()
+      guard resource.kind == .artifact, resource.artifact?.digest == pin.revision,
+        let origin = ledger.sources[resource.source], origin.kind == .wellKnown,
+        origin.revision == pin.revision, let transport = origin.transport,
+        try SourceDeclaration(kind: .wellKnown, location: transport).transportIdentity() == source
+      else { continue }
+      return resource
+    }
+    throw CoreError.invalidState("missing pinned artifact resource for source")
   }
 
   func solve(preserving pins: [String: SourceRevision]) throws -> LinkedComponents {

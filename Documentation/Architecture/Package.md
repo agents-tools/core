@@ -344,8 +344,14 @@ An all-selection includes members from their effective override views, admits li
 members only when that view is selected, and omits missing effective-view members;
 named selections still require their members. Named own-instruction reads validate only
 the selected path and its ancestors, while full enumeration remains strict.
-Remote-contained local sources inherit the producer snapshot. Existing skill-index formats supply skill artifacts, and do
-not define an export-package format.
+Remote-contained local sources inherit the producer snapshot. Existing skill-index
+formats supply skill artifacts, and do not define an export-package format. Indexed
+members have independent artifact-digest pins. A scoped link can retain an admitted
+ledger alongside its direct pins: protected members borrow their exact resource trees
+and content objects, while selected members download only their requested artifacts.
+The recorded index transport and artifact digest must both match; a missing closure
+fails rather than refreshing that member. Nested artifact files and executable flags
+are materialized only inside the source session's disposable workspace.
 
 The linked result records relative resource evidence, source requirements,
 reference and contribution occurrences, provenance and exact dependency pins.

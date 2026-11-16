@@ -57,13 +57,20 @@ package struct SnapshotIndexSkill: Sendable {
   package let name: String
   package let artifact: LockedArtifact
   package let files: [String: Data]
+  package let executableFlags: [String: Bool]
 }
 
 extension SkillSnapshotReader {
-  package static func index(_ source: SourceDeclaration) throws -> [SnapshotIndexSkill] {
+  package static func index(
+    _ source: SourceDeclaration, names: [String]? = nil, exclude: [String] = []
+  ) throws -> [SnapshotIndexSkill] {
     try Task.checkCancellation()
-    let result = try WellKnownProvider().fetchAllSkills(from: source.location).map {
-      SnapshotIndexSkill(name: $0.installName, artifact: $0.artifact, files: $0.files)
+    let result = try WellKnownProvider().fetchAllSkills(
+      from: source.location, names: names, exclude: exclude
+    ).map {
+      SnapshotIndexSkill(
+        name: $0.installName, artifact: $0.artifact, files: $0.files,
+        executableFlags: $0.executableFlags)
     }
     try Task.checkCancellation()
     return result
