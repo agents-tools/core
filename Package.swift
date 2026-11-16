@@ -16,6 +16,9 @@ let package = Package(
     .library(name: "AgentsUpdates", targets: ["AgentsUpdates"]),
   ],
   dependencies: [
+    .package(
+      url: "https://github.com/modelcontextprotocol/swift-sdk.git",
+      revision: "a0ae212ebf6eab5f754c3129608bc5557637e605"),
     .package(url: "https://github.com/apple/swift-crypto.git", from: "5.0.0"),
     .package(url: "https://github.com/jpsim/Yams", exact: "6.2.2"),
     .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.9.0"),
@@ -51,13 +54,18 @@ let package = Package(
       ]),
     .target(
       name: "Components",
-      dependencies: ["AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions"]),
+      dependencies: [
+        "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions",
+        .product(name: "MCP", package: "swift-sdk"),
+      ]),
     .testTarget(
       name: "ComponentsTests",
       dependencies: [
         "Components", "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions",
-        "StateTestProcess", "StateTestSupport",
-      ]),
+        "StateTestProcess", "StateTestSupport", "MCPTestProcess",
+      ], resources: [.copy("Fixtures")]),
+    .executableTarget(
+      name: "MCPTestProcess", dependencies: ["CPlatform"], path: "Tests/MCPTestProcess"),
     .target(name: "StateTestSupport", path: "Tests/StateTestSupport"),
     .executableTarget(
       name: "StateTestProcess",

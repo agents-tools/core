@@ -1,6 +1,8 @@
 #ifndef CORE_CPLATFORM_H
 #define CORE_CPLATFORM_H
 
+#include "DuplexProcess.h"
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
