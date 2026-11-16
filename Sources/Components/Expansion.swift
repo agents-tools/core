@@ -304,32 +304,67 @@ final class Expansion {
     let requestedNames: [String]?
     switch selection.select {
     case .all: requestedNames = nil
-    case .names(let names): requestedNames = names
+    case .names(let names): requestedNames = names.map(PathSafety.sanitizeName)
     }
+    let excluded = Set((selection.exclude ?? []).map(PathSafety.sanitizeName))
+    var overrides: [String: SkillOverride] = [:]
+    for (name, override) in selection.overrides ?? [:] {
+      let canonical = PathSafety.sanitizeName(name)
+      guard overrides[canonical] == nil else {
+        throw LinkError.invalid("duplicate canonical skill override: \(canonical)", location)
+      }
+      overrides[canonical] = override
+    }
+    func selectedMode(_ name: String) -> InstallMode {
+      overrides[name]?.mode ?? selection.mode ?? .link
+    }
+    var discovered: [SourceSnapshotID: [SnapshotSkill]] = [:]
+    func members(_ view: SourceSnapshot, live: Bool) throws -> [SnapshotSkill] {
+      if let existing = discovered[view.snapshot] { return existing }
+      let result = try SkillSnapshotReader.read(view, live: live)
+      discovered[view.snapshot] = result
+      return result
+    }
+    // Membership comes from the default view plus only explicitly overridden alternate members.
     // Each direct member may retain a different pin even when it shares an alias with exports.
     let names: [String]
     if let requestedNames {
       names = requestedNames
     } else {
       let live = selection.mode == .edit
-      names = try SkillSnapshotReader.read(selectedView(address, key: nil, live: live), live: live)
-        .map(\.name)
+      let primary = try selectedView(address, key: nil, live: live)
+      var selected = try members(primary, live: live).map { PathSafety.sanitizeName($0.name) }
+      for name in overrides.keys.sorted()
+      where !excluded.contains(name) && (selectedMode(name) == .edit) != live {
+        let view = try selectedView(
+          address, key: key(name, kind: .skills, context: context, group: group),
+          live: selectedMode(name) == .edit)
+        if try members(view, live: selectedMode(name) == .edit).contains(where: {
+          PathSafety.sanitizeName($0.name) == name
+        }) {
+          selected.append(name)
+        }
+      }
+      names = Array(Set(selected)).sorted()
     }
-    for name in names where !(selection.exclude ?? []).contains(name) {
-      let componentKey = key(name, kind: .skills, context: context, group: group)
-      let override = selection.overrides?[name]
-      let mode = override?.mode ?? selection.mode ?? .link
-      let view = try selectedView(address, key: componentKey, live: mode == .edit)
+    for name in names where !excluded.contains(name) {
+      let requestedKey = key(name, kind: .skills, context: context, group: group)
+      let override = overrides[name]
+      let mode = selectedMode(name)
+      let view = try selectedView(address, key: requestedKey, live: mode == .edit)
       if mode == .edit, view.liveRoot == nil {
         throw LinkError.invalid("edit requires an actual local skill with no requirement", location)
       }
-      let matches = try SkillSnapshotReader.read(view, live: mode == .edit).filter {
-        $0.name == name || PathSafety.sanitizeName($0.name) == name
-          || URL(fileURLWithPath: $0.path).lastPathComponent == name
+      let matches = try members(view, live: mode == .edit).filter {
+        PathSafety.sanitizeName($0.name) == name
+          || PathSafety.sanitizeName(URL(fileURLWithPath: $0.path).lastPathComponent) == name
       }
+      if matches.isEmpty, requestedNames == nil { continue }
       guard matches.count == 1, let skill = matches.first else {
         throw LinkError.missing("skill '\(name)'", location)
       }
+      let componentKey = key(
+        PathSafety.sanitizeName(skill.name), kind: .skills, context: context, group: group)
       let effective = condition.intersecting(skill.condition)
       let resource = LinkedResource(
         snapshot: view.snapshot, path: skill.path,
@@ -410,10 +445,11 @@ final class Expansion {
     let address = try linking.address(section.source, in: context, chain: location)
     let componentKey = key(section.name, kind: .instructions, context: context, group: group)
     let view = try selectedView(address, key: componentKey)
-    guard
-      let unit = try InstructionSnapshotReader.read(view, own: own).first(where: {
-        $0.name == section.name
-      })
+    let selected =
+      try own
+      ? InstructionSnapshotReader.read(view, own: section.name)
+      : InstructionSnapshotReader.read(view).first(where: { $0.name == section.name })
+    guard let unit = selected
     else {
       throw LinkError.missing("instruction '\(section.name)'", location)
     }
@@ -424,20 +460,16 @@ final class Expansion {
         snapshot: view.snapshot, path: unit.path,
         hash: unit.section.hash, executableFlags: [:])
     ]
+    var localAppend: LedgerLocation?
     if let appendPath {
-      if linking.store.scope == .user {
-        let home = linking.store.environment.homeDirectory
-        let view = try SourceSnapshot(
-          snapshot: SourceSnapshotID(source: "local:" + home.path, revision: "live"),
-          pin: nil, root: home,
-          localEnvironment: SourceEnvironment(projectDirectory: home, homeDirectory: home),
-          liveRoot: home)
-        try linking.budget.snapshot(view.snapshot)
-        linking.session.register(view)
-        resources.append(try resource(appendPath, in: view, chain: location))
-      } else {
+      if context.producer {
         resources.append(
           try resource(ResourceDeclaration(path: appendPath), context: context, chain: location))
+      } else {
+        localAppend = LedgerLocation(
+          kind: .registered, root: linking.store.scope == .user ? "home" : "project",
+          path: try PathSafety.sanitizeSubpath(appendPath))
+        try localAppend?.validate()
       }
     }
     let recipients =
@@ -452,7 +484,7 @@ final class Expansion {
       chatGPT: prompt != nil
         && effective.matches(scope: linking.store.scope, platform: linking.platform),
       resources: resources, chain: chain, position: position,
-      dependencies: dependencies + resources.map(\.snapshot))
+      dependencies: dependencies + resources.map(\.snapshot), localAppend: localAppend)
   }
 
   private func constrainResource(
@@ -513,7 +545,7 @@ final class Expansion {
     payload: LinkedPayload, context: LinkingDocument,
     group: String?, condition: DeclarationCondition, recipients: Set<AgentID>, chatGPT: Bool,
     resources: [LinkedResource], chain: [SourceSpan], position: SourceMapEntry?,
-    dependencies: [SourceSnapshotID]
+    dependencies: [SourceSnapshotID], localAppend: LedgerLocation? = nil
   ) throws {
     try linking.budget.contribution(chain: chain.count + (position?.origins.count ?? 0))
     let occurrence = nextOccurrence
@@ -535,7 +567,7 @@ final class Expansion {
         key: key, declaringSnapshot: context.view.snapshot, snapshot: snapshot, pin: pin,
         payload: payload,
         conditions: [condition], recipients: recipients, chatGPT: chatGPT, resources: resources,
-        origins: [origin]))
+        origins: [origin], localAppend: localAppend))
   }
 
   func result() throws -> LinkedComponents {
