@@ -72,6 +72,27 @@ struct NativeComponentTests {
     try replay(ledger, fixture) { output in
       let envelopes = try #require(output[0].values?.array)
       #expect(envelopes.count == 2)
+      let contribution = try NativeComponentLayoutsV1.contribution(
+        ledger.lowerings[0], ledger: ledger, artifacts: output, limits: .standard)
+      #expect(contribution.occurrences == linked[0].origins.map(\.occurrence))
+      #expect(contribution.outputs.count == 2)
+      guard case .file(let path, let bytes) = contribution.outputs[0].content,
+        case .member(let member, let registration) = contribution.outputs[1].content
+      else {
+        Issue.record("missing coupled typed role outputs")
+        return
+      }
+      #expect(path == "researcher.toml")
+      #expect(member.keys == ["agents", "researcher"])
+      #expect(contribution.outputs.map(\.route) == [.codexAgent, .codexConfig])
+      #expect(contribution.outputs[1].route.documentFormat == .toml)
+      #expect(
+        try registration.referenceValue(budget: budget())
+          == .object([
+            "description": .string("Research-focused role."),
+            "config_file": .string("./agents/researcher.toml"),
+          ]))
+      #expect(bytes == Data(try #require(envelopes[0].object?["value"]?.text).utf8))
       let text = try #require(envelopes[0].object?["value"]?.text)
       let doc = try NativeDocument(bytes: Data(text.utf8), format: .toml, budget: budget())
       #expect(
@@ -153,13 +174,19 @@ struct NativeComponentTests {
     let encoded = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
     #expect(!String(decoding: encoded, as: UTF8.self).contains("private staged fixture"))
     try replay(ledger, fixture) { output in
-      let envelope = try #require(output[0].values)
+      let contribution = try NativeComponentLayoutsV1.contribution(
+        ledger.lowerings[0], ledger: ledger, artifacts: output, limits: .standard)
+      guard case .hook(let concreteHook) = contribution.outputs[0].content else {
+        Issue.record("missing typed native group")
+        return
+      }
+      #expect(
+        concreteHook.value.resourcePlacements.map(\.slot) == [.executable, .workingDirectory])
       let placements = Dictionary(
         uniqueKeysWithValues: frozen.ledger.components.values.first!.resources.enumerated().map {
           ($0.element, $0.offset == 0 ? "/registered/scripts/check" : "/registered/working")
         })
-      let native = try NativeProgramV1.stagedValue(
-        envelope,
+      let native = try concreteHook.value.stagedValue(
         bindings: RuntimeBindingValues(["fixture/token": Data("private staged fixture".utf8)]),
         environment: fixture.environment, resourcePaths: placements, budget: budget(),
         codexCommandShell: .posix)
@@ -203,8 +230,20 @@ struct NativeComponentTests {
       let environment = RuntimeEnvironment(
         projectDirectory: fixture.project, homeDirectory: fixture.home,
         environment: ["SOURCE": "fixture value"])
-      let value = try NativeProgramV1.stagedValue(
-        envelope, bindings: RuntimeBindingValues([:]), environment: environment, resourcePaths: [:],
+      let contribution = try NativeComponentLayoutsV1.contribution(
+        ledger.lowerings[0], ledger: ledger, artifacts: output, limits: .standard)
+      guard case .member(let member, let template) = contribution.outputs[0].content else {
+        Issue.record("missing typed LSP member")
+        return
+      }
+      #expect(member.keys == ["lsp", "fixture"])
+      #expect(template.bindings.count == 1)
+      #expect(template.bindings[0].slot == .environment("TOKEN"))
+      #expect(template.bindings[0].binding == .environment("SOURCE"))
+      #expect(template.resourcePlacements.isEmpty)
+      #expect(throws: NativeComponentIssue.self) { try template.referenceValue(budget: budget()) }
+      let value = try template.stagedValue(
+        bindings: RuntimeBindingValues([:]), environment: environment, resourcePaths: [:],
         budget: budget())
       #expect(
         value
@@ -217,6 +256,28 @@ struct NativeComponentTests {
             ]),
             "extensions": .array([.string(".fixture")]),
           ]))
+      var corrupted = ledger
+      let component = try #require(ledger.lowerings[0].inputs.first)
+      var payload = try #require(corrupted.components[component]?.payload.object)
+      payload["initializationOptions"] = .init(object: [
+        "hidden": .init("fixture/hidden", kind: .secret)
+      ])
+      corrupted.components[component]?.payload = .init(object: payload)
+      var changed = output
+      var fields = try #require(envelope.object)
+      var native = try #require(fields["value"]?.object)
+      native["initialization"] = payload["initializationOptions"]
+      fields["value"] = .init(object: native)
+      changed[0].values = .init(object: fields)
+      corrupted.lowerings[0].artifacts = try changed.map { try $0.digest(limits: .standard) }
+      do {
+        _ = try NativeComponentLayoutsV1.contribution(
+          corrupted.lowerings[0], ledger: corrupted, artifacts: changed, limits: .standard)
+        Issue.record("accepted a symbolic binding inside arbitrary native data")
+      } catch let issue as NativeComponentIssue {
+        #expect(issue.field == ["bindings"])
+        #expect(!issue.description.contains("fixture/hidden"))
+      }
     }
   }
 
@@ -243,6 +304,27 @@ struct NativeComponentTests {
     try FileManager.default.removeItem(at: fixture.project)
     try replay(ResolvedLedgerCodec.decode(bytes, limits: .standard), fixture) { output in
       #expect(output[0].values?.object?["route"]?.text == "claudeSkillPlugin")
+      let contribution = try NativeComponentLayoutsV1.contribution(
+        ledger.lowerings[0], ledger: ledger, artifacts: output, limits: .standard)
+      guard
+        case .nativePlugin(let directory, let resource, let manifest) = contribution.outputs[0]
+          .content
+      else {
+        Issue.record("missing typed frozen plugin")
+        return
+      }
+      #expect(directory == "fixture-plugin")
+      #expect(manifest == ".claude-plugin/plugin.json")
+      let entry = try #require(
+        contribution.resources[resource]?.entries.first { $0.path == "scripts/check" })
+      #expect(entry.executable)
+      var mismatchedResource = ledger
+      mismatchedResource.resources[resource]?.hash = "sha256:" + String(repeating: "0", count: 64)
+      #expect(throws: NativeComponentIssue.self) {
+        try NativeComponentLayoutsV1.contribution(
+          mismatchedResource.lowerings[0], ledger: mismatchedResource, artifacts: output,
+          limits: .standard)
+      }
       let root = try #require(output[1].tree)
       #expect(
         try String(contentsOf: root.appendingPathComponent("commands/review.md"), encoding: .utf8)
@@ -317,6 +399,13 @@ struct NativeComponentTests {
       ledger.lowerings = [try lower(linked[0], frozen, surface: surface)]
       ledger = try prepared(ledger, fixture)
       try replay(ledger, fixture) { output in
+        let contribution = try NativeComponentLayoutsV1.contribution(
+          ledger.lowerings[0], ledger: ledger, artifacts: output, limits: .standard)
+        guard case .ignore(let patterns) = contribution.outputs[0].content else {
+          Issue.record("missing typed context ignore block")
+          return
+        }
+        #expect(patterns == ["private/**", "!private/public.txt"])
         #expect(output[0].values?.object?["selection"]?.text == "managedIgnore")
         #expect(
           output[0].values?.object?["value"]
@@ -396,6 +485,29 @@ struct NativeComponentTests {
     try replay(ledger, fixture) { output in
       #expect(output[0].values?.object?["value"]?.text == "Review source.\n")
       #expect(output[0].values?.object?["route"]?.text == "cursorCommand")
+      for (name, reason) in [
+        ("../escape", NativeAdapterIssue.Reason.invalid), ("nested/review", .unverified),
+      ] {
+        var corrupted = ledger
+        let owner = try #require(corrupted.lowerings[0].inputs.first)
+        corrupted.components[owner]?.name = name
+        var payload = try #require(corrupted.components[owner]?.payload.object)
+        payload["name"] = .init(name)
+        corrupted.components[owner]?.payload = .init(object: payload)
+        var fields = try #require(output[0].values?.object)
+        fields["name"] = .init(name)
+        fields["path"] = .init(name + ".md")
+        var artifacts = output
+        artifacts[0].values = .init(object: fields)
+        corrupted.lowerings[0].artifacts = try artifacts.map { try $0.digest(limits: .standard) }
+        do {
+          _ = try NativeComponentLayoutsV1.contribution(
+            corrupted.lowerings[0], ledger: corrupted, artifacts: artifacts, limits: .standard)
+          Issue.record("accepted an unadmitted native filename")
+        } catch let issue as NativeComponentIssue {
+          #expect(issue.reason == reason)
+        }
+      }
     }
     try fixture.write(
       #"{"name":"extension-fixture","version":"1.0.0"}"#, to: "extension/gemini-extension.json",
@@ -608,17 +720,30 @@ struct NativeComponentTests {
     #expect(!String(decoding: encoded, as: UTF8.self).contains("staged hook value"))
     try replay(ledger, fixture) { output in
       let envelope = try #require(output[0].values)
+      let contribution = try NativeComponentLayoutsV1.contribution(
+        ledger.lowerings[0], ledger: ledger, artifacts: output, limits: .standard)
+      guard case .hook(let hook) = contribution.outputs[0].content else {
+        Issue.record("missing typed native hook")
+        return
+      }
+      #expect(
+        hook.keys == ["hooks", surface == .claudeCode ? "PreToolUse" : "beforeShellExecution"])
+      #expect(hook.layout == (surface == .claudeCode ? .group : .cursorVersion1))
+      #expect(contribution.recipients == [surface.agent])
+      #expect(
+        contribution.knownReaders == (surface == .claudeCode ? [.claudeCode, .cursor] : [.cursor]))
+      #expect(hook.value.bindings.count == 1)
       if surface == .cursorEditor {
         #expect(envelope.object?["rootRequirements"]?.object?["version"]?.integer == 1)
         #expect(envelope.object?["value"]?.object?["matcher"]?.text == "curl|wget")
         #expect(throws: NativeComponentIssue.self) {
-          try NativeProgramV1.stagedValue(
-            envelope, bindings: .init([:]), environment: fixture.environment, resourcePaths: [:],
+          try hook.value.stagedValue(
+            bindings: .init([:]), environment: fixture.environment, resourcePaths: [:],
             budget: budget())
         }
       }
-      let native = try NativeProgramV1.stagedValue(
-        envelope, bindings: .init(["fixture/hook": Data("staged hook value".utf8)]),
+      let native = try hook.value.stagedValue(
+        bindings: .init(["fixture/hook": Data("staged hook value".utf8)]),
         environment: fixture.environment, resourcePaths: [:], budget: budget(),
         cursorCommandShell: .posix)
       guard case .object(let object) = native else {
@@ -716,12 +841,29 @@ struct NativeComponentTests {
       #expect(envelope.object?["selection"]?.text == "generatedPlugin")
       #expect(envelope.object?["route"]?.text == "claudeSkillPlugin")
       let id = try #require(frozen.ledger.components.values.first?.resources.first)
-      let materialized = try NativeProgramV1.stagedValue(
-        envelope, bindings: .init(["fixture/lsp": Data("staged LSP value".utf8)]),
+      let contribution = try NativeComponentLayoutsV1.contribution(
+        ledger.lowerings[0], ledger: ledger, artifacts: output, limits: .standard)
+      guard
+        case .generatedLSPPlugin(let directory, let manifestPath, let value) = contribution.outputs[
+          0
+        ].content
+      else {
+        Issue.record("missing typed generated plugin")
+        return
+      }
+      #expect(directory == "fixture-lsp")
+      #expect(manifestPath == ".claude-plugin/plugin.json")
+      #expect(value.bindings.count == 1)
+      #expect(value.bindings[0].slot == .environment("TOKEN"))
+      #expect(value.bindings[0].binding == .secret("fixture/lsp"))
+      #expect(value.resourcePlacements.count == 1)
+      #expect(value.resourcePlacements[0].slot == .executable)
+      #expect(value.resourcePlacements[0].resource == id)
+      let materialized = try value.stagedValue(
+        bindings: .init(["fixture/lsp": Data("staged LSP value".utf8)]),
         environment: fixture.environment,
         resourcePaths: [id: "/registered/bin/server"], budget: budget())
-      guard case .object(let files) = materialized,
-        case .object(let manifest) = files[".claude-plugin/plugin.json"],
+      guard case .object(let manifest) = materialized,
         case .object(let servers) = manifest["lspServers"],
         case .object(let config) = servers["fixture-lsp"]
       else {
@@ -741,8 +883,8 @@ struct NativeComponentTests {
       #expect(config["env"] == .object(["TOKEN": .string("staged LSP value")]))
       for invalid in [Data([0xff]), Data([0]), Data("${CLAUDE_PLUGIN_ROOT}".utf8)] {
         do {
-          _ = try NativeProgramV1.stagedValue(
-            envelope, bindings: .init(["fixture/lsp": invalid]), environment: fixture.environment,
+          _ = try value.stagedValue(
+            bindings: .init(["fixture/lsp": invalid]), environment: fixture.environment,
             resourcePaths: [id: "/registered/bin/server"], budget: budget())
           Issue.record("accepted a nonliteral staged native value")
         } catch let issue as NativeComponentIssue {
@@ -1093,6 +1235,155 @@ struct NativeComponentTests {
     }
   }
 
+  @Test func strictContributionRejectsForgedIdentityRoutesSlotsAndUnsealedOutput() throws {
+    let fixture = try LinkFixture()
+    try fixture.write("#!/bin/sh\n# never executed\n", to: "scripts/check", base: fixture.project)
+    let item: [String: Any] = [
+      "kind": "hook", "name": "guard", "agents": ["claude-code"],
+      "event": ["native": "PreToolUse"],
+      "run": [
+        "executable": "./scripts/check", "environment": ["TOKEN": ["secret": "fixture/token"]],
+      ],
+    ]
+    let (linked, frozen) = try freeze([item], fixture)
+    var ledger = frozen.ledger
+    ledger.lowerings = [try lower(linked[0], frozen, surface: .claudeCode)]
+    ledger = try prepared(ledger, fixture)
+    try replay(ledger, fixture) { artifacts in
+      let original = try #require(artifacts[0].values?.object)
+      var wrongOwner = original
+      wrongOwner["component"] = .init("unrelated-owner")
+      var wrongOccurrence = original
+      wrongOccurrence["occurrences"] = .init(array: [.init(integer: 999)])
+      var wrongReaders = original
+      wrongReaders["knownReaders"] = LedgerPayload.strings(["claude-code"])
+      var wrongRoute = original
+      wrongRoute["route"] = .init("cursorHooks")
+      var extra = original
+      extra["arbitraryPatch"] = .init("SENSITIVE_CORRUPTION")
+      var wrongBinding = original
+      var value = try #require(original["value"]?.object)
+      var hook = try #require(value["hooks"]?.array?.first?.object)
+      var program = try #require(hook["command"]?.object?["program"]?.object)
+      program["environment"] = .init(object: ["TOKEN": .init("SENSITIVE_CORRUPTION", kind: .secret)]
+      )
+      hook["command"] = .init(object: ["program": .init(object: program)])
+      value["hooks"] = .init(array: [.init(object: hook)])
+      wrongBinding["value"] = .init(object: value)
+      var wrongResource = original
+      program["executable"] = .init(object: ["resource": .init("foreign-resource")])
+      hook["command"] = .init(object: ["program": .init(object: program)])
+      value["hooks"] = .init(array: [.init(object: hook)])
+      wrongResource["value"] = .init(object: value)
+      for fields in [
+        wrongOwner, wrongOccurrence, wrongReaders, wrongRoute, extra, wrongBinding, wrongResource,
+      ] {
+        var changed = artifacts
+        changed[0].values = .init(object: fields)
+        var resealed = ledger
+        // Even a supplied new digest cannot turn arbitrary metadata/slots into the frozen profile.
+        resealed.lowerings[0].artifacts = try changed.map { try $0.digest(limits: .standard) }
+        do {
+          _ = try NativeComponentLayoutsV1.contribution(
+            resealed.lowerings[0], ledger: resealed, artifacts: changed, limits: .standard)
+          Issue.record("accepted forged native component output")
+        } catch let issue as NativeComponentIssue {
+          #expect(issue.reason == .invalid)
+          #expect(!issue.description.contains("SENSITIVE_CORRUPTION"))
+        }
+      }
+      var invalidProgram = ledger
+      let owner = try #require(invalidProgram.lowerings[0].inputs.first)
+      var payload = try #require(invalidProgram.components[owner]?.payload.object)
+      var run = try #require(payload["run"]?.object)
+      run["executable"] = .init("SENSITIVE_CORRUPTION", kind: .secret)
+      payload["run"] = .init(object: run)
+      invalidProgram.components[owner]?.payload = .init(object: payload)
+      do {
+        _ = try NativeComponentLayoutsV1.contribution(
+          invalidProgram.lowerings[0], ledger: invalidProgram, artifacts: artifacts,
+          limits: .standard)
+        Issue.record("accepted a non-string frozen executable")
+      } catch let issue as NativeComponentIssue {
+        #expect(issue.field == ["run"])
+        #expect(!issue.description.contains("SENSITIVE_CORRUPTION"))
+      }
+      var unsealed = ledger
+      unsealed.lowerings[0].artifacts = []
+      #expect(throws: CoreError.self) {
+        try NativeComponentLayoutsV1.contribution(
+          unsealed.lowerings[0], ledger: unsealed, artifacts: artifacts, limits: .standard)
+      }
+      #expect(throws: NativeComponentIssue.self) {
+        var changed = artifacts
+        changed[0].values = .init(object: wrongOwner)
+        return try NativeComponentLayoutsV1.contribution(
+          ledger.lowerings[0], ledger: ledger, artifacts: changed, limits: .standard)
+      }
+      var oversized = artifacts
+      var large = original
+      large["value"] = .init(String(repeating: "x", count: 8192))
+      oversized[0].values = .init(object: large)
+      var limits = LedgerLimits.standard
+      limits.encodedBytes = 4096
+      #expect(throws: NativeDocumentBudget.Failure.self) {
+        try NativeComponentLayoutsV1.contribution(
+          ledger.lowerings[0], ledger: ledger, artifacts: oversized, limits: limits)
+      }
+    }
+  }
+
+  @Test func strictContributionKeepsOrderedPolicyAndCategoryOwnershipDistinct() throws {
+    let fixture = try LinkFixture()
+    let items: [[String: Any]] = [
+      [
+        "kind": "permissions", "name": "ordered", "agents": ["opencode"],
+        "rules": [
+          ["effect": "deny", "operation": ["tool": "read"], "pattern": "*"],
+          ["effect": "allow", "operation": ["tool": "read"], "pattern": "public/**"],
+        ],
+      ],
+      [
+        "kind": "permissions", "name": "categories", "agents": ["claude-code"], "rules": [],
+        "native": [
+          "claude-code": ["allow": [], "deny": ["Read(private/**)"], "defaultMode": "plan"]
+        ],
+      ],
+    ]
+    let (linked, frozen) = try freeze(items, fixture)
+    var ledger = frozen.ledger
+    ledger.lowerings = try linked.enumerated().map {
+      try lower(
+        $0.element, frozen, surface: $0.offset == 0 ? .openCodeCLI : .claudeCode,
+        id: "policy-" + String($0.offset))
+    }
+    ledger = try prepared(ledger, fixture)
+    try replay(ledger, fixture) { artifacts in
+      let ordered = try NativeComponentLayoutsV1.contribution(
+        ledger.lowerings[0], ledger: ledger, artifacts: [artifacts[0]], limits: .standard)
+      guard case .orderedPermissions(let rules) = ordered.outputs[0].content else {
+        Issue.record("missing typed ordered policy")
+        return
+      }
+      #expect(rules.map(\.tool) == ["read", "read"])
+      #expect(rules.map(\.resource) == ["*", "public/**"])
+      #expect(rules.map(\.effect) == [.deny, .allow])
+      #expect(ordered.outputs[0].route.documentFormat == .jsonc(trailingCommas: true))
+      let categorized = try NativeComponentLayoutsV1.contribution(
+        ledger.lowerings[1], ledger: ledger, artifacts: [artifacts[1]], limits: .standard)
+      guard case .claudePermissions(let policy) = categorized.outputs[0].content else {
+        Issue.record("missing typed categorized policy")
+        return
+      }
+      #expect(policy.allow == [])
+      #expect(policy.ask == nil)
+      #expect(policy.deny == ["Read(private/**)"])
+      #expect(policy.defaultMode == "plan")
+      #expect(ordered.component != categorized.component)
+      #expect(ordered.occurrences != categorized.occurrences)
+    }
+  }
+
   private var platform: DeclarationPlatform {
     #if os(macOS)
       .macOS
@@ -1145,7 +1436,16 @@ struct NativeComponentTests {
   ) throws {
     try LedgerReplay.withReplay(
       ledger, store: fixture.store, roots: [:], limits: .standard,
-      renderers: NativeComponentLayoutsV1.renderers(limits: .standard), body)
+      renderers: NativeComponentLayoutsV1.renderers(limits: .standard)
+    ) { artifacts in
+      for lowering in ledger.lowerings {
+        let names = Set(lowering.artifacts.map(\.name))
+        _ = try NativeComponentLayoutsV1.contribution(
+          lowering, ledger: ledger, artifacts: artifacts.filter { names.contains($0.name) },
+          limits: .standard)
+      }
+      try body(artifacts)
+    }
   }
   private func budget() -> NativeDocumentBudget {
     .init(
