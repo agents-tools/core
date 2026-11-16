@@ -358,7 +358,8 @@ struct ImportNativeTests {
       #"{"name":"bundle","mcpServers":{"mcp":{"command":"./server"}},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"./server"}]}]}}"#
     )
     try fixture.write(
-      ".lsp.json", #"{"lsp":{"command":"./server","extensionToLanguage":{".x":"x"}}}"#)
+      ".lsp.json",
+      #"{"lsp":{"command":"${CLAUDE_PLUGIN_ROOT}/server","extensionToLanguage":{".x":"x"}}}"#)
     try fixture.write("server", "#!/bin/sh\nexit 0\n", executable: true)
     let before = try fixture.hash()
     let result = try SourceImport.preview(
@@ -477,6 +478,196 @@ struct ImportNativeTests {
     var narrow = fixture.input(.codexConfigV1, "config.toml")
     narrow.selection = ["selected"]
     #expect(try SourceImport.preview(narrow).components.count == 1)
+  }
+
+  @Test func sharedMarkdownFieldsKeepNativeIntentAndActualRegistrationContext() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write(
+      "auditor.md",
+      "---\nname: auditor\ndescription: Inspect source\npermissionMode: plan\nmaxTurns: 3\n---\nInspect carefully.\n"
+    )
+    let standalone = try SourceImport.preview(fixture.input(.claudeAgentV1, "auditor.md"))
+    guard case .subagent(_, _, _, _, _, _, _, let native) = standalone.components.first?.declaration
+    else {
+      Issue.record("Expected standalone agent")
+      return
+    }
+    #expect(native[AgentID.claudeCode.rawValue]?["permissionMode"] == .string("plan"))
+    #expect(native[AgentID.claudeCode.rawValue]?["maxTurns"] == .integer(3))
+    try fixture.write("bundle/.claude-plugin/plugin.json", #"{"name":"bundle"}"#)
+    try fixture.write(
+      "bundle/agents/auditor.md",
+      "---\nname: auditor\ndescription: Inspect source\npermissionMode: plan\n---\nInspect.\n")
+    let plugin = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json"))
+    #expect(!plugin.components.contains { $0.declaration.kind == .subagent })
+    #expect(
+      plugin.diagnostics.contains {
+        $0.code == .unconverted && $0.location.document == "bundle/agents/auditor.md"
+          && $0.location.span?.line == 4
+      })
+    try fixture.write(
+      "review.md",
+      "---\ncontext: fork\nagent: auditor\nbackground: true\nmodel: sonnet\n---\nReview.\n")
+    let command = try SourceImport.preview(fixture.input(.claudeCommandV1, "review.md"))
+    guard case .command(_, _, _, _, _, _, let fields) = command.components.first?.declaration else {
+      Issue.record("Expected native command")
+      return
+    }
+    #expect(fields[AgentID.claudeCode.rawValue]?["context"] == .string("fork"))
+    #expect(fields[AgentID.claudeCode.rawValue]?["model"] == .string("sonnet"))
+    try fixture.write("review.md", "---\nbackground: true\n---\nReview.\n")
+    let refused = try SourceImport.preview(fixture.input(.claudeCommandV1, "review.md"))
+    #expect(refused.components.isEmpty)
+    #expect(
+      refused.diagnostics.contains { $0.code == .unconverted && $0.location.span?.line == 2 })
+    try fixture.write(
+      "review.md", "---\nzzzUnknown: value\ndescription: Review\naaaUnknown: value\n---\nReview.\n")
+    let unknown = try SourceImport.preview(fixture.input(.claudeCommandV1, "review.md"))
+    #expect(unknown.components.isEmpty)
+    #expect(unknown.diagnostics.contains { $0.code == .unconverted && $0.location.span?.line == 4 })
+    try fixture.write("review.md", "---\nzzz: 3.5\ndescription: Review\n---\nReview.\n")
+    let decimalUnknown = try SourceImport.preview(fixture.input(.claudeCommandV1, "review.md"))
+    #expect(decimalUnknown.components.isEmpty)
+    #expect(
+      decimalUnknown.diagnostics.contains { $0.code == .unconverted && $0.location.span?.line == 2 }
+    )
+    let cursorBody = "---\nnot-frontmatter: [this is prompt text\n---\nKeep all bytes.\n"
+    try fixture.write("review.md", cursorBody)
+    let cursor = try SourceImport.preview(fixture.input(.cursorCommandV1, "review.md"))
+    guard case .command(_, _, .literal(let body), _, _, _, _) = cursor.components.first?.declaration
+    else {
+      Issue.record("Expected plain Cursor prompt")
+      return
+    }
+    #expect(body == cursorBody)
+  }
+
+  @Test func sharedLSPFieldsPreserveExtrasBindingsAndRefuseAbsentPrograms() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write("bundle/.claude-plugin/plugin.json", #"{"name":"bundle"}"#)
+    try fixture.write(
+      "bundle/.lsp.json",
+      #"{"source":{"command":"${CLAUDE_PLUGIN_ROOT}/server","extensionToLanguage":{".s":"source"},"transport":"socket","workspaceFolder":"workspace","requestTimeout":4,"settings":{"nested":[true,7]},"initializationOptions":{"feature":true},"env":{"TOKEN":"SHARED_SECRET_CANARY"}}}"#
+    )
+    try fixture.write("bundle/server", "#!/bin/sh\nexit 0\n", executable: true)
+    let before = try fixture.hash()
+    let result = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json"))
+    guard
+      case .lspServer(_, let run, _, let options, _, _, let native) = result.components.first?
+        .declaration
+    else {
+      Issue.record("Expected native LSP")
+      return
+    }
+    #expect(run.executable == "./server")
+    #expect(run.workingDirectory == nil)
+    #expect(options == ["feature": .boolean(true)])
+    #expect(native[AgentID.claudeCode.rawValue]?["workspaceFolder"] == .string("workspace"))
+    #expect(
+      native[AgentID.claudeCode.rawValue]?["settings"]
+        == .object(["nested": .array([.boolean(true), .integer(7)])]))
+    #expect(!String(reflecting: result).contains("SHARED_SECRET_CANARY"))
+    #expect(
+      result.resources.contains {
+        $0.path == ".lsp.json" && $0.requiresBindingRewrite && $0.observedHash == nil
+      })
+    #expect(try fixture.hash() == before)
+    try fixture.write(
+      "opencode.json",
+      #"{"lsp":{"builtin":{"disabled":true},"empty":{"command":[]},"valid":{"command":["source-lsp"],"initialization":{"feature":true}}}}"#
+    )
+    let open = try SourceImport.preview(fixture.input(.openCodeConfigV2, "opencode.json"))
+    #expect(open.components.map(\.member?.selector) == [.lspServer(name: "valid")])
+    #expect(open.diagnostics.filter { $0.code == .unconverted }.count == 2)
+    try fixture.write(
+      "bundle/.lsp.json",
+      #"{"source":{"command":"server","extensionToLanguage":{".s":"source"},"requestTimeout":0}}"#)
+    let invalid = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json"))
+    #expect(invalid.components.isEmpty)
+    #expect(
+      invalid.diagnostics.contains {
+        $0.code == .invalidInput && $0.location.document == "bundle/.lsp.json"
+          && $0.location.span != nil
+      })
+  }
+
+  @Test func sharedPluginDefaultsReplaceClaudeCommandsAgentsAndValidateRealDocuments() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write(
+      "bundle/.claude-plugin/plugin.json",
+      #"{"name":"bundle","commands":"./chosen/review.md","agents":"./chosen/auditor.md"}"#)
+    try fixture.write("bundle/commands/ignored.md", "Ignored default\n")
+    try fixture.write(
+      "bundle/agents/ignored.md", "---\nname: ignored\ndescription: Ignored\n---\nIgnored default\n"
+    )
+    try fixture.write("bundle/chosen/review.md", "Chosen command\n")
+    try fixture.write(
+      "bundle/chosen/auditor.md", "---\nname: auditor\ndescription: Inspect\n---\nChosen agent\n")
+    try fixture.write("bundle/hooks/hooks.json", #"{"hooks":{"invented":[]}}"#)
+    let input = fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json")
+    let invalidDefault = try SourceImport.preview(input)
+    #expect(
+      invalidDefault.components.map(\.member?.selector) == [
+        .command(name: "review"), .subagent(name: "auditor"),
+      ])
+    #expect(
+      invalidDefault.diagnostics.contains {
+        $0.code == .unconverted && $0.location.document == "bundle/hooks/hooks.json"
+      })
+    try fixture.write("bundle/hooks/hooks.json", #"{"hooks":{}}"#)
+    let valid = try SourceImport.preview(input)
+    #expect(valid.diagnostics.isEmpty)
+    try fixture.write(
+      "bundle/.claude-plugin/plugin.json", #"{"name":"bundle","agents":"./chosen"}"#)
+    let wrongKind = try SourceImport.preview(input)
+    #expect(
+      wrongKind.diagnostics.contains {
+        $0.code == .invalidInput && $0.location.document == input.document
+      })
+  }
+
+  @Test func nativeSensitiveDefaultsRequireBindingsBeforeManifestPreservation() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write(
+      "bundle/.claude-plugin/plugin.json",
+      #"{"name":"bundle","userConfig":{"access":{"type":"string","title":"Access","description":"Local binding","sensitive":true,"default":"USER_CONFIG_SECRET_CANARY"}}}"#
+    )
+    let result = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json"))
+    #expect(!result.bindings.isEmpty)
+    #expect(!String(reflecting: result).contains("USER_CONFIG_SECRET_CANARY"))
+    #expect(
+      result.resources.contains {
+        $0.path == ".claude-plugin/plugin.json" && $0.requiresBindingRewrite
+          && $0.observedHash == nil
+      })
+  }
+
+  @Test func multiplePluginConfigurationInputsDoNotInventAnErrorDocument() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write(
+      "bundle/.claude-plugin/plugin.json",
+      #"{"name":"bundle","mcpServers":["./first.json","./second.json"]}"#)
+    try fixture.write("bundle/first.json", #"{"mcpServers":{"same":{"command":"tool"}}}"#)
+    try fixture.write("bundle/second.json", #"{"mcpServers":{"same":{"command":17}}}"#)
+    let result = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json"))
+    #expect(result.components.isEmpty)
+    #expect(
+      result.diagnostics.contains {
+        $0.code == .invalidInput && $0.location.document == "bundle/second.json"
+      })
+    #expect(
+      !result.diagnostics.contains {
+        $0.code == .invalidInput && $0.location.document == "bundle/first.json"
+      })
+    #expect(
+      result.diagnostics.contains {
+        $0.code == .invalidInput && $0.location.document == "bundle/.claude-plugin/plugin.json"
+      })
   }
 
   @Test func typedMembersStayStableWhenCallerMovesTheInputRoot() throws {

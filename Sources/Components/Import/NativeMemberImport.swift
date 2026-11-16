@@ -1,5 +1,7 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
+import NativeDocuments
 
 /// Native file bodies share the package-owned bounded YAML/TOML readers.
 enum NativeMemberImport {
@@ -7,7 +9,7 @@ enum NativeMemberImport {
     _ input: SourceImportInput, container: String,
     kind explicitKind: DeclaredComponentKind? = nil, limits: SourceImportLimits,
     into diagnostics: inout ImportDiagnostics, admission supplied: NativeImportBudget? = nil,
-    discoveryRoot: String? = nil
+    discoveryRoot: String? = nil, inPlugin: Bool = false
   ) throws {
     let admission = try supplied ?? NativeImportBudget(limits)
     let agent = NativeImportInput.agent(input.profile)
@@ -29,6 +31,7 @@ enum NativeMemberImport {
     let description: String
     var model: String?
     var tools: [String]?
+    var native: NativeConfiguration = [:]
     if input.profile == .geminiCommandV1 || (!isAgent && agent == .geminiCLI) {
       let parsed = try NativeImportDocument(
         input, format: .toml, limits: limits, admission: admission)
@@ -46,51 +49,70 @@ enum NativeMemberImport {
       body = prompt
       description = parsed.fields["description"]?.importString ?? ""
     } else {
-      let parsed = try ImportFrontmatter.read(bytes, document: input.document, limits: limits)
+      let parsed =
+        try agent == .cursor && !isAgent && !inPlugin
+        ? (header: Optional<ImportYAML>.none, body: bytes)
+        : ImportFrontmatter.read(bytes, document: input.document, limits: limits)
       guard let text = String(data: parsed.body, encoding: .utf8) else {
         throw ImportReadFailure.invalid
       }
       // Gemini's native agent loader trims its body; the proposal represents that loaded value.
       body =
         agent == .geminiCLI && isAgent ? text.trimmingCharacters(in: .whitespacesAndNewlines) : text
-      let converted: Set<String> =
-        isAgent ? ["name", "description", "model", "tools"] : ["description"]
-      parsed.header?.unknown(converted, into: &diagnostics)
-      let unknown = Set(parsed.header?.pairs?.map(\.0) ?? []).subtracting(converted)
-      guard unknown.isEmpty else { return }
+      var fields: [String: NativeValue] = [:]
       if let header = parsed.header {
         origin = header.location
-        guard
-          header.validate(
-            strings: isAgent ? ["name", "description", "model"] : ["description"],
-            into: &diagnostics)
-        else { return }
-        if isAgent {
-          name = header["name"]?.string ?? name
-          model = header["model"]?.string
-          if let value = header["tools"] {
-            if let values = value.strings {
-              tools = values
-            } else if let value = value.string, agent == .claudeCode {
-              tools = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            } else {
-              diagnostics.add(
-                .invalidInput, value.location,
-                "Native tool selection cannot be represented as a string list.")
-              return
-            }
-          }
-        }
+        fields = try nativeValue(header).importObject!
       }
-      description = parsed.header?["description"]?.string ?? ""
-      if isAgent,
-        description.isEmpty
-          || ([AgentID.claudeCode, .geminiCLI].contains(agent) && parsed.header?["name"] == nil)
-      {
+      // All original frontmatter participates in preservation admission, even on refusal.
+      if NativeImportInput.sensitive(.object(fields), at: origin, into: &diagnostics) {
         diagnostics.add(
-          .invalidInput, origin, "Native agent requires its producer name and description.")
+          .unconverted, origin,
+          "Native frontmatter credential slots require symbolic reconstruction.")
         return
       }
+      if agent != .opencode {
+        do {
+          fields = try NativeComponentFieldsV1.markdown(
+            surface: NativeImportSemantics.surface(input.profile),
+            kind: isAgent ? .subagent : .command, name: fallback, fields: fields,
+            inPlugin: inPlugin, budget: admission.parser)
+        } catch let issue as NativeComponentFieldIssue {
+          let location =
+            parsed.header.flatMap { header in
+              issue.field.first.flatMap { field in
+                Int(field).flatMap {
+                  header.pairs?.indices.contains($0) == true
+                    ? header.pairs?.sorted { $0.0 < $1.0 }[$0].1 : nil
+                }
+                  ?? header[field]
+              }
+            }?.location ?? origin
+          NativeImportSemantics.report(issue, at: location, into: &diagnostics)
+          return
+        }
+      } else {
+        let converted: Set<String> =
+          isAgent ? ["name", "description", "model", "tools"] : ["description"]
+        NativeImportInput.unknown(fields, allowed: converted, at: origin, into: &diagnostics)
+        guard Set(fields.keys).isSubset(of: converted) else { return }
+      }
+      name = fields["name"]?.importString ?? name
+      model = fields["model"]?.importString
+      if let value = fields["tools"] {
+        if let values = value.importStrings {
+          tools = values
+        } else if let text = value.importString, agent == .claudeCode {
+          tools = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        } else {
+          throw ImportReadFailure.invalid
+        }
+      }
+      description = fields["description"]?.importString ?? ""
+      let converted: Set<String> =
+        isAgent ? ["name", "description", "model", "tools"] : ["description"]
+      let extras = fields.filter { !converted.contains($0.key) }
+      if !extras.isEmpty { native[agent.rawValue] = extras }
       if !isAgent, agent == .claudeCode,
         body.contains("$ARGUMENTS")
           || body.range(of: #"\$[0-9]+"#, options: .regularExpression) != nil
@@ -115,12 +137,15 @@ enum NativeMemberImport {
       NativeImportInput.emit(
         .subagent(
           name: name, description: description, prompt: .literal(body),
-          model: model, tools: tools, agents: [agent]), selector: .subagent(name: name),
+          model: model, tools: tools, agents: [agent], native: native),
+        selector: .subagent(name: name),
         origin: origin, container: container, profile: input.profile, into: &diagnostics,
         admission: admission)
     } else {
       NativeImportInput.emit(
-        .command(name: name, description: description, prompt: .literal(body), agents: [agent]),
+        .command(
+          name: name, description: description, prompt: .literal(body), agents: [agent],
+          native: native),
         selector: .command(name: name), origin: origin, container: container,
         profile: input.profile, into: &diagnostics, admission: admission)
     }
@@ -129,5 +154,24 @@ enum NativeMemberImport {
     try NativeImportInput.resource(
       relative, root: container, input: input, origin: origin, limits: limits, into: &diagnostics,
       admission: admission)
+  }
+
+  private static func nativeValue(_ yaml: ImportYAML) throws -> NativeValue {
+    if let pairs = yaml.pairs {
+      return .object(
+        try pairs.map { ($0.0, try nativeValue($0.1)) }.reduce(into: [:]) { $0[$1.0] = $1.1 })
+    }
+    if let items = yaml.items { return .array(try items.map { try nativeValue($0) }) }
+    if let text = yaml.string { return .string(text) }
+    if let value = yaml.boolean { return .boolean(value) }
+    if let value = yaml.integer { return .integer(value) }
+    if let scalar = yaml.node.scalar {
+      if scalar.decimalTag || YAMLScalar.classify(scalar.text) == .decimal {
+        // Decimal spelling stays private until the finite field validator admits its domain.
+        return .decimal(scalar.text)
+      }
+      if YAMLScalar.classify(scalar.text) == .null { return .null }
+    }
+    throw ImportLocatedFailure(location: yaml.location)
   }
 }

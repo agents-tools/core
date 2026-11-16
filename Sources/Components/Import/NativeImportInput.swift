@@ -47,6 +47,24 @@ struct NativeImportDocument {
       keys + [name], display: keys.map { "/" + $0 }.joined() + "/member[\(index)]")
   }
 
+  /// Structural helper paths are resolved against original syntax, with value-free ordinals.
+  func fieldLocation(_ keys: [String]) -> ImportLocation {
+    var prefix: [String] = []
+    var display = ""
+    for key in keys {
+      let value = try? document.read(.init(keys: prefix))?.value
+      if let map = value?.importObject, let index = map.keys.sorted().firstIndex(of: key) {
+        display += "/member[\(index)]"
+      } else if case .array = value, Int(key) != nil {
+        display += "/" + key
+      } else {
+        return location(prefix, display: display)
+      }
+      prefix.append(key)
+    }
+    return location(keys, display: display)
+  }
+
   func location(_ keys: [String] = [], display: String? = nil) -> ImportLocation {
     let observation = try? document.read(.init(keys: keys))
     var range = observation?.valueRange ?? observation?.entryRanges.first
