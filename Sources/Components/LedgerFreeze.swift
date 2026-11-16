@@ -9,10 +9,24 @@ package struct LedgerFreezeLocations {
 }
 
 package enum LedgerFreeze {
+  /// Ephemeral B-to-C identities accompany the frozen ledger during native lowering.
+  /// They retain exact snapshots without persisting machine-local source coordinates.
+  package struct Result {
+    package var ledger: ResolvedLedger
+    package let sources: [SourceSnapshotID: String]
+  }
+
   package static func freeze(
     _ linked: LinkedComponents, session: SourceResolutionSession,
     locations: LedgerFreezeLocations, limits: LedgerLimits
   ) throws -> ResolvedLedger {
+    try freezeWithSources(linked, session: session, locations: locations, limits: limits).ledger
+  }
+
+  package static func freezeWithSources(
+    _ linked: LinkedComponents, session: SourceResolutionSession,
+    locations: LedgerFreezeLocations, limits: LedgerLimits
+  ) throws -> Result {
     var ledger = ResolvedLedger()
     let allSnapshots = linked.sourceSnapshots + linked.declaringSnapshots
     let evidence = Dictionary(
@@ -161,6 +175,6 @@ package enum LedgerFreeze {
         children: (children[reference.occurrence] ?? []).sorted())
     }
     try ledger.validate()
-    return ledger
+    return Result(ledger: ledger, sources: sources)
   }
 }

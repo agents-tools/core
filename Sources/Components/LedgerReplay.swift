@@ -76,7 +76,7 @@ package enum LedgerReplay {
       "agents/instructions@1": { try instructions($0, $1, $2, outputBytes: outputBytes) },
       "agents/claude-import@1": { try forwarding($0, $1, $2, outputBytes: outputBytes) },
       "agents/chatgpt@1": { try chatGPT($0, $1, $2, outputBytes: outputBytes) },
-    ]
+    ].merging(MCPLayoutV1.renderers) { existing, _ in existing }
   }
 
   package static func withReplay<T>(
