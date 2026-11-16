@@ -7,19 +7,23 @@ final class TransactionSession {
   let parents: [DirectoryHandle]
   let checkpoint: (String) throws -> Void
   let resources: [SharedResource]
+  /// Logical project-root authorization is checked separately from opened physical parents.
+  private let nativeRoots: [String: URL]
   /// Devices whose atomic renames passed a probe during this session only; `st_dev` values
   /// can be reused by another filesystem after an unmount.
   var capableDevices: Set<UInt64> = []
 
   init(
     journal: TransactionJournal, directory: DirectoryHandle, parents: [DirectoryHandle],
-    checkpoint: @escaping (String) throws -> Void, resources: [SharedResource] = []
+    checkpoint: @escaping (String) throws -> Void, resources: [SharedResource] = [],
+    nativeRoots: [String: URL] = [:]
   ) {
     self.journal = journal
     self.directory = directory
     self.parents = parents
     self.checkpoint = checkpoint
     self.resources = resources
+    self.nativeRoots = nativeRoots
   }
 
   func emit(_ point: TransactionCheckpoint) throws { try checkpoint(point.name) }
@@ -84,6 +88,14 @@ final class TransactionSession {
 
   func requireParent(_ index: Int) throws {
     if !resources.isEmpty { try requireScope() }
+    if let route = NativeTargetRoute.targetRoute(journal.entries[index].path), !route.shared {
+      guard let logical = nativeRoots[route.root],
+        try DirectoryHandle(at: logical.resolvingSymlinksInPath()).identity
+          == journal.roots[route.root]
+      else {
+        throw conflict(index, "registered native root changed after preparation")
+      }
+    }
     try journal.entries[index].security.ancestry?.validate(at: parents[index].url)
     guard
       try DirectoryHandle(at: parents[index].url).identity == journal.entries[index].parentIdentity

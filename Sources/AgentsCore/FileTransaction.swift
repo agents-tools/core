@@ -101,7 +101,11 @@ package final class FileTransaction {
     guard prepared.target.scope.path == store.directory.path, prepared.owner == geteuid(),
       bindings.allSatisfy({ !$0.isEmpty && !$0.contains("\0") })
     else { throw CoreError.invalidState("invalid private materialization inputs") }
-    try prepared.receiptEvidence.validate()
+    guard let receiptEvidence = prepared.receiptEvidence else {
+      throw CoreError.invalidState(
+        "private publication requires an existing admitted native parent")
+    }
+    try receiptEvidence.validate()
     let (path, evidence, previous) = try request(prepared.target.url, expecting: prepared.evidence)
     guard path == prepared.target.path else {
       throw CoreError.invalidState("materialization registration changed")
@@ -134,9 +138,10 @@ package final class FileTransaction {
   private func queueReceipt() throws {
     let originals = requests
     for state in receiptStates.values.sorted(by: { $0.path < $1.path }) {
-      let shared = state.path.hasPrefix(NativeTargetRoute.metadataRoot + "/")
+      let receiptRoute = NativeTargetRoute.metadataRoute(state.path)
+      let shared = receiptRoute != nil
       let affected = originals.filter {
-        $0.path.hasPrefix(NativeTargetRoute.globalRoot + "/") == shared
+        NativeTargetRoute.sharedRoute($0.path)?.root == receiptRoute?.root
           && ($0.security.isPrivate || state.records.targets[$0.path] != nil)
       }
       guard !affected.isEmpty else { continue }
@@ -180,7 +185,7 @@ package final class FileTransaction {
     guard path != "state/" + MaterializationReceipts.fileName else {
       throw CoreError.unsafePath("materialization receipts are transaction-owned")
     }
-    if path.hasPrefix(NativeTargetRoute.globalRoot + "/") {
+    if NativeTargetRoute.sharedRoute(path) != nil {
       guard TransactionLockContext.current(store)?.writable == true else {
         throw CoreError.invalidState("shared writes require the held writer footprint")
       }
@@ -237,14 +242,14 @@ package final class FileTransaction {
 
   package func commit() throws {
     guard !requests.isEmpty else { return }
-    let shared = requests.filter { $0.path.hasPrefix(NativeTargetRoute.globalRoot + "/") }
+    let shared = requests.filter { NativeTargetRoute.sharedRoute($0.path) != nil }
     if !shared.isEmpty {
       guard let context = TransactionLockContext.current(store), context.writable else {
         throw CoreError.invalidState("shared commit requires its held writer footprint")
       }
       try context.requireWriterScope()
-      let resource = try context.resource()
       for request in shared {
+        let resource = try context.resource(for: NativeTargetRoute.sharedRoute(request.path)!)
         let parent = try DirectoryHandle(
           at: request.evidence.physicalURL.deletingLastPathComponent())
         guard try parent.objectIdentity == resource.identity.parent else {
@@ -282,7 +287,7 @@ package final class FileTransaction {
             try StateStore.encode(
               session.materializationReceipts(
                 previous: state.records,
-                shared: state.path.hasPrefix(NativeTargetRoute.metadataRoot + "/")))
+                targetRoot: NativeTargetRoute.metadataRoute(state.path)?.root))
           }
         } else {
           try session.stage(
@@ -346,7 +351,15 @@ package final class FileTransaction {
         try checkpoint(TransactionCheckpoint.parentAncestry(entry: index, step).name)
       }
     }
-    for request in requests { try request.evidence.validateIdentity() }
+    for (index, request) in requests.enumerated() {
+      try request.evidence.validateIdentity()
+      if NativeTargetRoute.targetRoute(request.path) != nil,
+        parents[index].url.standardizedFileURL.path
+          != request.evidence.physicalURL.deletingLastPathComponent().standardizedFileURL.path
+      {
+        throw CoreError.invalidState("registered native parent changed after preparation")
+      }
+    }
     let id = UUID()
     var containers: [TransactionJournal.Container] = []
     var identities: [String: Int] = [:]
@@ -373,16 +386,24 @@ package final class FileTransaction {
           preimage: request.evidence.snapshot, parentIdentity: identity, container: container,
           security: security))
     }
-    let shared =
-      roots[NativeTargetRoute.globalRoot] != nil || roots[NativeTargetRoute.metadataRoot] != nil
-    let resources = shared ? [try TransactionLockContext.current(store).requiredResource()] : []
+    let sharedRoutes = Set(
+      roots.keys.compactMap { key in
+        NativeTargetRoute.sharedRoute(key) ?? NativeTargetRoute.metadataRoute(key)
+      })
+    let resources = try sharedRoutes.map { route in
+      guard let context = TransactionLockContext.current(store) else {
+        throw CoreError.invalidState("shared transaction requires its held footprint")
+      }
+      return try context.resource(for: route)
+    }.sorted { $0.identity < $1.identity }
     let journal = TransactionJournal(
       id: id, scope: try directory.identity,
       roots: try roots.mapValues { try $0.identity }, entries: entries, containers: containers,
       footprint: resources.map(\.identity))
     let session = TransactionSession(
       journal: journal, directory: directory, parents: parents,
-      checkpoint: checkpoint, resources: resources)
+      checkpoint: checkpoint, resources: resources,
+      nativeRoots: try paths.nativeRootAuthorities(Set(journal.roots.keys)))
     try session.validateRecords(store: store)
     return session
   }
