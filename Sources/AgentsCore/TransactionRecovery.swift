@@ -246,7 +246,7 @@ extension FileTransaction {
       journal: journal, directory: directory, parents: parents, checkpoint: checkpoint,
       resources: try journal.footprint.map { identity in
         try TransactionLockContext.current(store).requiredResource(identity)
-      })
+      }, nativeRoots: try paths.nativeRootAuthorities(Set(journal.roots.keys)))
     try session.validateRecords(store: store)
     return session
   }

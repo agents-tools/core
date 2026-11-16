@@ -29,16 +29,20 @@ struct TransactionPaths {
         }
       }
     }
-    let nativeRoutes: [NativeTargetRoute] =
-      store.scope == .project
-      ? [.claudeMCPProject, .claudeMCPLocal] : [.claudeMCPUser]
-    for route in nativeRoutes {
-      guard destination.lastPathComponent == (route.shared ? ".claude.json" : ".mcp.json") else {
-        continue
-      }
+    let nativeRoutes = NativeTargetRoute.allCases.sorted { $0.shared && !$1.shared }
+    for route in nativeRoutes where route.shared || store.scope == .project {
+      guard destination.lastPathComponent == route.basename else { continue }
+      let registered = try route.logicalDirectory(store.environment).resolvingSymlinksInPath()
+        .appendingPathComponent(route.basename)
+      guard registered == destination.standardizedFileURL else { continue }
       let target = try store.nativeTarget(for: route)
       if target.url == destination.standardizedFileURL {
-        if route.shared { _ = try TransactionLockContext.current(store).requiredResource() }
+        if route.shared {
+          guard let context = TransactionLockContext.current(store) else {
+            throw CoreError.invalidState("shared target requires its held footprint")
+          }
+          _ = try context.resource(for: route)
+        }
         return target.path
       }
     }
@@ -77,12 +81,21 @@ struct TransactionPaths {
         store.scope == .project
         ? store.environment.projectDirectory : store.environment.homeDirectory
       url = base.resolvingSymlinksInPath().appendingPathComponent(store.directory.lastPathComponent)
-    } else if key == NativeTargetRoute.projectRoot, store.scope == .project {
-      url = store.environment.projectDirectory.resolvingSymlinksInPath()
-    } else if key == NativeTargetRoute.globalRoot {
-      url = try TransactionLockContext.current(store).requiredResource().parent.url
-    } else if key == NativeTargetRoute.metadataRoot {
-      guard let metadata = try TransactionLockContext.current(store).requiredResource().metadata
+    } else if let route = NativeTargetRoute.targetRoute(key) {
+      guard route.shared || store.scope == .project else {
+        throw CoreError.unsafePath("project native targets require their project scope")
+      }
+      if route.shared {
+        guard let context = TransactionLockContext.current(store) else {
+          throw CoreError.invalidState("shared target requires its held footprint")
+        }
+        url = try context.resource(for: route).parent.url
+      } else {
+        url = try route.logicalDirectory(store.environment).resolvingSymlinksInPath()
+      }
+    } else if let route = NativeTargetRoute.metadataRoute(key) {
+      guard let context = TransactionLockContext.current(store),
+        let metadata = try context.resource(for: route).metadata
       else {
         throw CoreError.invalidState("shared metadata directory is missing")
       }
@@ -106,6 +119,16 @@ struct TransactionPaths {
       throw CoreError.invalidState("unknown transaction root")
     }
     return url
+  }
+
+  func nativeRootAuthorities(_ keys: Set<String>) throws -> [String: URL] {
+    var result: [String: URL] = [:]
+    for key in keys {
+      if let route = NativeTargetRoute.targetRoute(key), !route.shared {
+        result[key] = try route.logicalDirectory(store.environment)
+      }
+    }
+    return result
   }
 
   /// A top-level file in the project's own instructions container, `.agent/instructions/<name>.md`.
@@ -134,15 +157,11 @@ struct TransactionPaths {
       guard stateFile || cache else {
         throw CoreError.unsafePath("unmanaged state transaction path")
       }
-    } else if key == NativeTargetRoute.projectRoot {
-      guard store.scope == .project, descendants == [".mcp.json"] else {
-        throw CoreError.unsafePath("unregistered project native target")
+    } else if let route = NativeTargetRoute.targetRoute(key) {
+      guard route.shared || store.scope == .project, descendants == [route.basename] else {
+        throw CoreError.unsafePath("unregistered native target")
       }
-    } else if key == NativeTargetRoute.globalRoot {
-      guard descendants == [".claude.json"] else {
-        throw CoreError.unsafePath("unregistered shared native target")
-      }
-    } else if key == NativeTargetRoute.metadataRoot {
+    } else if NativeTargetRoute.metadataRoute(key) != nil {
       guard descendants == ["receipt"] else {
         throw CoreError.unsafePath("unregistered shared transaction metadata")
       }

@@ -250,24 +250,28 @@ extension TransactionSession {
     }
   }
 
-  func materializationReceipts(previous: MaterializationReceipts, shared: Bool = false) throws
+  func materializationReceipts(previous: MaterializationReceipts, targetRoot: String? = nil) throws
     -> MaterializationReceipts
   {
 
     var records = previous
     for entry in journal.entries
     where entry.path != "state/" + MaterializationReceipts.fileName
-      && !entry.path.hasPrefix(NativeTargetRoute.metadataRoot + "/")
-      && entry.path.hasPrefix(NativeTargetRoute.globalRoot + "/") == shared
+      && NativeTargetRoute.metadataRoute(entry.path) == nil
+      && NativeTargetRoute.sharedRoute(entry.path)?.root == targetRoot
     {
       if entry.security.replacement == .privateMaterialization {
         guard let snapshot = entry.staged, let access = entry.security.stagedAccess,
           let root = entry.path.split(separator: "/").first,
           let identity = journal.roots[String(root)]
         else { throw CoreError.invalidState("materialization is missing sealed receipt evidence") }
+        let resource = resources.first { $0.route.root == String(root) }
+        if targetRoot != nil, resource == nil {
+          throw CoreError.invalidState("receipt resource is outside the transaction footprint")
+        }
         records.targets[entry.path] = .init(
           generation: journal.id,
-          rootIdentity: shared ? resources[0].identity.orderingKey : identity,
+          rootIdentity: resource?.identity.orderingKey ?? identity,
           digest: snapshot.digest, access: access)
       } else {
         records.targets.removeValue(forKey: entry.path)

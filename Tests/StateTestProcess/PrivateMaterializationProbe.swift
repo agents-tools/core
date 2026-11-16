@@ -80,26 +80,39 @@ func sharedMaterializationProbe(
     do { try store.withLock(checkpoint: checkpoint, {}) } catch CoreError.transactionRecovered {}
     return
   }
-  try store.withLock(checkpoint: checkpoint, footprint: [.claudeMCPLocal]) {
+  let routes: [NativeTargetRoute]
+  if let index = CommandLine.arguments.firstIndex(of: "--native-routes"),
+    CommandLine.arguments.indices.contains(index + 1)
+  {
+    routes = try CommandLine.arguments[index + 1].split(separator: ",").map {
+      guard let route = NativeTargetRoute(rawValue: String($0)) else {
+        throw CoreError.invalidState("invalid test native route")
+      }
+      return route
+    }
+  } else {
+    routes = [.claudeMCPLocal]
+  }
+  try store.withLock(checkpoint: checkpoint, footprint: Set(routes)) {
     if command == "shared-lock" {
       try checkpoint("shared.locked")
       return
     }
     if command == "shared-readmission-writer" { try checkpoint("shared.beforeJournal") }
-    let target = try store.nativeTarget(for: .claudeMCPLocal)
     let transaction = FileTransaction(store: store, checkpoint: checkpoint)
-    if command == "shared-delete" {
-      try transaction.delete(target.url)
-    } else if command == "shared-install" {
-      let prepared = try store.preparePrivateMaterialization(target, changingAccess: true)
-      try transaction.replacePrivate(
-        prepared, bindings: ["value"],
-        provider: ProbeBindings(root: store.environment.projectDirectory)
-      ) {
-        try $0.value(for: "value")
+    for route in routes {
+      let target = try store.nativeTarget(for: route)
+      if command == "shared-delete" {
+        try transaction.delete(target.url)
+      } else if command == "shared-install" {
+        let prepared = try store.preparePrivateMaterialization(target, changingAccess: true)
+        try transaction.replacePrivate(
+          prepared, bindings: ["value"],
+          provider: ProbeBindings(root: store.environment.projectDirectory)
+        ) { try $0.value(for: "value") }
+      } else {
+        try transaction.replace(target.url, with: .data(Data("secret sibling; edited region".utf8)))
       }
-    } else {
-      try transaction.replace(target.url, with: .data(Data("secret sibling; edited region".utf8)))
     }
     try transaction.replace(
       store.environment.projectDirectory.appendingPathComponent("old-data/AGENTS.md"),

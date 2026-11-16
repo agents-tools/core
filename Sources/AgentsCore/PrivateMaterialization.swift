@@ -2,7 +2,9 @@ import CPlatform
 import Foundation
 
 /// Runtime data supplied by the application. Source declarations never supply commands.
-package protocol RuntimeBindingProvider {
+/// Implementations must return bounded, noninteractive data synchronously. They must not
+/// hide network requests, login flows or unbounded work inside value resolution.
+public protocol RuntimeBindingProvider: Sendable {
   func value(for binding: String, environment: RuntimeEnvironment) throws -> Data
 }
 
@@ -183,7 +185,7 @@ struct MaterializationReceipts: Codable {
       let parts = try paths.components(path)
       guard
         (parts.root.hasPrefix("instructions-") && parts.root != "instructions-authoring")
-          || [NativeTargetRoute.projectRoot, NativeTargetRoute.globalRoot].contains(parts.root)
+          || NativeTargetRoute.targetRoute(parts.root) != nil
       else {
         throw CoreError.invalidState("invalid materialization receipt target")
       }
@@ -202,22 +204,34 @@ extension StateStore {
   }
 
   func materializationRootIdentity(_ root: String) throws -> String {
-    if root == NativeTargetRoute.globalRoot {
-      return try TransactionLockContext.current(self).requiredResource().identity.orderingKey
+    if let route = NativeTargetRoute.sharedRoute(root) {
+      guard let context = TransactionLockContext.current(self) else {
+        throw CoreError.invalidState("shared receipt requires its held footprint")
+      }
+      return try context.resource(for: route).identity.orderingKey
     }
     return try TransactionPaths(store: self).root(root).identity
   }
 
   func materializationReceipts(for path: String = "") throws -> MaterializationReceiptState {
-    let shared = path.hasPrefix(NativeTargetRoute.globalRoot + "/")
-    let resource = shared ? try TransactionLockContext.current(self).requiredResource() : nil
+    let route = NativeTargetRoute.sharedRoute(path)
+    let shared = route != nil
+    let resource: SharedResource?
+    if let route {
+      guard let context = TransactionLockContext.current(self) else {
+        throw CoreError.invalidState("shared receipt requires its held footprint")
+      }
+      resource = try context.resource(for: route)
+    } else {
+      resource = nil
+    }
     let url: URL
     let receiptPath: String
     if let resource {
       let metadataURL = resource.parent.url.appendingPathComponent(SharedResource.metadataName)
         .appendingPathComponent(resource.identity.directoryName)
       url = (resource.metadata?.url ?? metadataURL).appendingPathComponent("receipt")
-      receiptPath = NativeTargetRoute.metadataRoot + "/receipt"
+      receiptPath = resource.route.metadata + "/receipt"
     } else {
       url = materializationReceiptURL
       receiptPath = "state/" + MaterializationReceipts.fileName
@@ -233,11 +247,13 @@ extension StateStore {
       let records = try Self.decode(
         directory.read(url.lastPathComponent), as: MaterializationReceipts.self)
       try records.validate(store: self)
-      if shared, Set(records.targets.keys) != [NativeTargetRoute.globalRoot + "/.claude.json"] {
+      if let resource,
+        Set(records.targets.keys) != [resource.route.root + "/" + resource.identity.basename]
+      {
         throw CoreError.invalidState("shared receipt must identify its physical file")
       }
       for (key, record) in records.targets {
-        guard shared == key.hasPrefix(NativeTargetRoute.globalRoot + "/"),
+        guard shared == (NativeTargetRoute.sharedRoute(key) != nil),
           !shared || record.rootIdentity == resource?.identity.orderingKey
         else { throw CoreError.invalidState("receipt belongs to another physical resource") }
       }
