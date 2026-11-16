@@ -15,7 +15,7 @@ Version 1 declaration of symbolic sources, components and groups. Parsing valida
 | `groups` |  | name → group (at most 10000 properties) | Named reusable groups, retained in declaration order. Defining a group does not activate it; uses selects it and exports makes it available to importers. Unused groups are still validated. |
 | `uses` |  | sequence of use (at most 10000 items) | Group references expanded in declaration order. Omission or an empty sequence activates no groups. Local reference cycles are errors, including in inactive groups. |
 | `exports` |  | sequence of string (at most 10000 items) | Names of local groups available to importing declarations, retained in order. Every name must name a declared group and occur once. Omission or an empty sequence exports none. |
-| `watch` |  | sequence of string (at most 10000 items) | Source aliases subscribed independently of installations. Names must be unique and refer to a declared source or . for the current source. Omission and an empty sequence are equivalent; watch order has set-like semantics. |
+| `watch` |  | sequence of string (at most 10000 items) | Source aliases subscribed independently of installations. Names must be unique and refer to declared source aliases. Omission and an empty sequence are equivalent; watch order has set-like semantics. |
 
 ## agent
 

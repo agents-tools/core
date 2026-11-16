@@ -68,7 +68,7 @@
         "type": "string"
       },
       "maxItems": 10000,
-      "description": "Source aliases subscribed independently of installations. Names must be unique and refer to a declared source or . for the current source. Omission and an empty sequence are equivalent; watch order has set-like semantics."
+      "description": "Source aliases subscribed independently of installations. Names must be unique and refer to declared source aliases. Omission and an empty sequence are equivalent; watch order has set-like semantics."
     }
   },
   "required": [
