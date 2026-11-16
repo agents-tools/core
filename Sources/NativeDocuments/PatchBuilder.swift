@@ -6,9 +6,14 @@ struct BytePatch {
 }
 
 struct PatchBuilder {
+  struct InlineChange {
+    let container: Node
+    var additions: [String]
+  }
   let document: NativeDocument
   let region: NativeRegion
   var patches: [BytePatch] = []
+  var inlineChanges: [InlineChange] = []
   var budget: NativeDocumentBudget { document.budget }
   var toml: Bool { document.format == .toml }
   var newline: String {
@@ -62,7 +67,7 @@ struct PatchBuilder {
         }
       }
       if toml, let container = old.inline ? old : old.enclosingInline {
-        try pruneInlineCommas(in: container)
+        try recordInlineChange(in: container)
       } else if old.inline && retained.count != old.members.count {
         let keepCommas = Set(retained.dropLast().compactMap { old.members[$0].comma?.lowerBound })
         for m in old.members {
@@ -112,7 +117,7 @@ struct PatchBuilder {
         throw NativeDocumentError.unsupportedEdit(.ambiguousTrivia, region, [entry])
       }
       try patch(entry)
-    } else if toml && !parent.inline {
+    } else if toml && (!parent.inline || member.node.enclosingInline === parent) {
       try eraseTable(member.node)
     } else {
       throw NativeDocumentError.unsupportedEdit(.syntaxNotLocated, region, [])
@@ -146,7 +151,7 @@ struct PatchBuilder {
       }
       try eraseMember(parent.members[i], parent: parent)
       if toml, let container = parent.inline ? parent : parent.enclosingInline {
-        try pruneInlineCommas(in: container)
+        try recordInlineChange(in: container)
       } else if parent.inline {
         if let comma = parent.members[i].comma {
           try patch(comma)
@@ -193,6 +198,21 @@ struct PatchBuilder {
       }
     }
     return surviving
+  }
+  private mutating func recordInlineChange(in container: Node, additions: [String] = []) throws {
+    guard let range = container.range else {
+      throw NativeDocumentError.unsupportedEdit(.syntaxNotLocated, region, [])
+    }
+    for i in inlineChanges.indices {
+      try budget.step()
+      if inlineChanges[i].container.range == range {
+        try budget.allocate(additions.count, stage: "inline additions")
+        inlineChanges[i].additions.append(contentsOf: additions)
+        return
+      }
+    }
+    try budget.allocate(additions.count + 1, stage: "inline changes")
+    inlineChanges.append(InlineChange(container: container, additions: additions))
   }
   private mutating func pruneInlineCommas(in container: Node) throws {
     let surviving = try survivingInlineMembers(in: container)
@@ -382,6 +402,68 @@ struct PatchBuilder {
     return String(decoding: prefix, as: UTF8.self)
   }
 
+  private mutating func insertInlinePieces(
+    _ pieces: [String], in parent: Node, surviving: [Member], remaining: Int
+  ) throws {
+    guard let at = parent.insertion else {
+      throw NativeDocumentError.unsupportedEdit(.syntaxNotLocated, region, [])
+    }
+    let first =
+      toml
+      ? try parent.inlineEntries(budget).first.map { $0.parent.members[$0.index] }
+      : parent.members.first
+    let multiline = parent.range.map { document.source[$0].contains(10) } ?? false
+    let last = surviving.last
+    let commaRemoved =
+      try last?.comma.map { comma in
+        try patches.contains {
+          try budget.step()
+          return $0.range == comma && $0.bytes.isEmpty
+        }
+      } ?? false
+    let hasComma = last?.comma != nil && !commaRemoved
+    if multiline, let closeIndent = try indentation(at: at) {
+      let nl = try newline
+      var indent = closeIndent + "  "
+      if let entry = first?.entry,
+        let local = try indentation(at: entry.lowerBound)
+      {
+        indent = local
+      }
+      if let last, !hasComma, let entry = last.entry {
+        try patch(entry.upperBound..<entry.upperBound, ",")
+      }
+      let lineStart = at - closeIndent.utf8.count
+      let text = try nativeJoin(
+        pieces.map { indent + $0 }, prefix: "", suffix: nl, separator: "," + nl, budget: budget)
+      try patch(lineStart..<lineStart, text)
+    } else {
+      var separator = " "
+      if let range = parent.range {
+        let end = first?.entry?.lowerBound ?? at
+        let gap = document.source[(range.lowerBound + 1)..<end]
+        if try gap.allSatisfy({
+          try budget.step()
+          return $0 == 9 || $0 == 32
+        }) {
+          try budget.allocate(gap.count, stage: "local style")
+          separator = String(decoding: gap, as: UTF8.self)
+        }
+      }
+      var insertion = at
+      let lower = parent.range.map { $0.lowerBound + 1 } ?? at
+      while insertion > lower
+        && (document.source[insertion - 1] == 9 || document.source[insertion - 1] == 32)
+      {
+        try budget.step()
+        insertion -= 1
+      }
+      let text = try nativeJoin(
+        pieces, prefix: (remaining > 0 && !hasComma ? "," : "") + separator, suffix: "",
+        separator: "," + separator, budget: budget)
+      try patch(insertion..<insertion, text)
+    }
+  }
   mutating func insertMembers(
     _ members: [Member], in parent: Node, path: [NativePathStep], remaining: Int,
     survivors: [Member]? = nil
@@ -390,13 +472,7 @@ struct PatchBuilder {
     let renderer = NativeRenderer(format: document.format, budget: budget, region: region)
     if let container = parent.inline ? parent : parent.enclosingInline {
       let keyPath = parent.inline ? [] : parent.inlineKeyPath
-      let surviving = toml ? try survivingInlineMembers(in: container) : survivors ?? parent.members
-      let remaining = toml ? surviving.count : remaining
-      let parent = container
-      guard let at = parent.insertion else {
-        throw NativeDocumentError.unsupportedEdit(.syntaxNotLocated, region, [])
-      }
-      let assignment = try assignment(in: parent)
+      let assignment = try assignment(in: container)
       var pieces: [String] = []
       for m in members {
         var keys: [String] = []
@@ -410,60 +486,11 @@ struct PatchBuilder {
           try nativeJoin(keys, prefix: "", suffix: "", separator: ".", budget: budget) + assignment
             + encoded(m.node))
       }
-      let first =
-        toml
-        ? try parent.inlineEntries(budget).first.map { $0.parent.members[$0.index] }
-        : parent.members.first
-      let multiline = parent.range.map { document.source[$0].contains(10) } ?? false
-      let last = surviving.last
-      let commaRemoved =
-        try last?.comma.map { comma in
-          try patches.contains {
-            try budget.step()
-            return $0.range == comma && $0.bytes.isEmpty
-          }
-        } ?? false
-      let hasComma = last?.comma != nil && !commaRemoved
-      if multiline, let closeIndent = try indentation(at: at) {
-        let nl = try newline
-        var indent = closeIndent + "  "
-        if let entry = first?.entry,
-          let local = try indentation(at: entry.lowerBound)
-        {
-          indent = local
-        }
-        if let last, !hasComma, let entry = last.entry {
-          try patch(entry.upperBound..<entry.upperBound, ",")
-        }
-        let lineStart = at - closeIndent.utf8.count
-        let text = try nativeJoin(
-          pieces.map { indent + $0 }, prefix: "", suffix: nl, separator: "," + nl, budget: budget)
-        try patch(lineStart..<lineStart, text)
+      if toml {
+        try recordInlineChange(in: container, additions: pieces)
       } else {
-        var separator = " "
-        if let range = parent.range {
-          let end = first?.entry?.lowerBound ?? at
-          let gap = document.source[(range.lowerBound + 1)..<end]
-          if try gap.allSatisfy({
-            try budget.step()
-            return $0 == 9 || $0 == 32
-          }) {
-            try budget.allocate(gap.count, stage: "local style")
-            separator = String(decoding: gap, as: UTF8.self)
-          }
-        }
-        var insertion = at
-        let lower = parent.range.map { $0.lowerBound + 1 } ?? at
-        while insertion > lower
-          && (document.source[insertion - 1] == 9 || document.source[insertion - 1] == 32)
-        {
-          try budget.step()
-          insertion -= 1
-        }
-        let text = try nativeJoin(
-          pieces, prefix: (remaining > 0 && !hasComma ? "," : "") + separator, suffix: "",
-          separator: "," + separator, budget: budget)
-        try patch(insertion..<insertion, text)
+        try insertInlinePieces(
+          pieces, in: container, surviving: survivors ?? parent.members, remaining: remaining)
       }
       return
     }
@@ -512,7 +539,16 @@ struct PatchBuilder {
 
     }
   }
-  func apply() throws -> Data {
+  mutating func apply() throws -> Data {
+    // Resolve each physical inline delta after all recursive entry removals are known.
+    for change in inlineChanges {
+      try pruneInlineCommas(in: change.container)
+      if !change.additions.isEmpty {
+        let surviving = try survivingInlineMembers(in: change.container)
+        try insertInlinePieces(
+          change.additions, in: change.container, surviving: surviving, remaining: surviving.count)
+      }
+    }
     // Coalesce repeated deletions but reject any other overlap before allocating a result.
     try budget.allocate(patches.count, stage: "patch order")
     var ordered = try patches.sorted {

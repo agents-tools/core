@@ -705,37 +705,75 @@ let t1 = #"""
   } catch NativeDocumentError.ownershipMismatch {}
 }
 
-@Test(arguments: [false, true])
-func dottedInlineInsertionStaysWithinBraces(_ ownedParent: Bool) throws {
+@Test func dottedInlineInsertionStaysWithinBraces() throws {
   let source = "# keep\nx = { a.b = 1, z = 2 } # outside\n"
   let doc = try document(source)
   let region = keyRegion("x", "a", "c")
-  let edit: NativeRegionEdit
-  if ownedParent {
-    let parent = keyRegion("x", "a")
-    edit = .put(
-      region: parent, expected: try owned(doc, parent),
-      value: .object([
-        "b": .integer(1), "c": .object(["d": .integer(2)]),
-      ]))
-  } else {
-    edit = .put(region: region, expected: .absent, value: .object(["d": .integer(2)]))
+  for ownedParent in [false, true] {
+    let edit: NativeRegionEdit
+    if ownedParent {
+      let parent = keyRegion("x", "a")
+      edit = .put(
+        region: parent, expected: try owned(doc, parent),
+        value: .object([
+          "b": .integer(1), "c": .object(["d": .integer(2)]),
+        ]))
+    } else {
+      edit = .put(region: region, expected: .absent, value: .object(["d": .integer(2)]))
+    }
+    let change = try doc.prepare([edit])
+    #expect(text(change) == "# keep\nx = { a.b = 1, z = 2, \"a\".\"c\" = {\"d\" = 2} } # outside\n")
+    let added = try NativeDocument(bytes: change.bytes, format: .toml, budget: generousBudget())
+    #expect(try added.read(region)?.value == .object(["d": .integer(2)]))
+    let child = keyRegion("x", "a", "c", "d")
+    let update = try added.prepare([
+      .put(region: child, expected: owned(added, child), value: .integer(3))
+    ])
+    #expect(text(update) == text(change).replacingOccurrences(of: "= 2}", with: "= 3}"))
+    let remove = try added.prepare([.remove(region: region, expected: owned(added, region))])
+    #expect(
+      try NativeDocument(bytes: remove.bytes, format: .toml, budget: generousBudget()).read(
+        keyRegion("x"))?.value == .object(["a": .object(["b": .integer(1)]), "z": .integer(2)]))
+    #expect(text(remove).contains("a.b = 1, z = 2"))
+    #expect(text(remove).hasSuffix(" # outside\n"))
   }
-  let change = try doc.prepare([edit])
-  #expect(text(change) == "# keep\nx = { a.b = 1, z = 2, \"a\".\"c\" = {\"d\" = 2} } # outside\n")
-  let added = try NativeDocument(bytes: change.bytes, format: .toml, budget: generousBudget())
-  #expect(try added.read(region)?.value == .object(["d": .integer(2)]))
-  let child = keyRegion("x", "a", "c", "d")
-  let update = try added.prepare([
-    .put(region: child, expected: owned(added, child), value: .integer(3))
+  let whole = keyRegion("x")
+  let desired: NativeValue = .object([
+    "a": .object(["b": .integer(1), "c": .integer(3)]), "z": .integer(2), "extra": .integer(4),
   ])
-  #expect(text(update) == text(change).replacingOccurrences(of: "= 2}", with: "= 3}"))
-  let remove = try added.prepare([.remove(region: region, expected: owned(added, region))])
-  #expect(
-    try NativeDocument(bytes: remove.bytes, format: .toml, budget: generousBudget()).read(
-      keyRegion("x"))?.value == .object(["a": .object(["b": .integer(1)]), "z": .integer(2)]))
-  #expect(text(remove).contains("a.b = 1, z = 2"))
-  #expect(text(remove).hasSuffix(" # outside\n"))
+  let additions = NativeRegionEdit.put(
+    region: whole, expected: try owned(doc, whole), value: desired)
+  do {
+    let change = try doc.prepare([additions])
+    #expect(
+      text(change) == "# keep\nx = { a.b = 1, z = 2, \"a\".\"c\" = 3, \"extra\" = 4 } # outside\n")
+    let checked = try NativeDocument(bytes: change.bytes, format: .toml, budget: generousBudget())
+    #expect(try checked.read(whole)?.value == desired)
+    #expect(try doc.prepare([additions]).bytes == change.bytes)
+  } catch {
+    Issue.record(error)
+  }
+  do {
+    _ = try doc.prepare([
+      additions, .put(region: region, expected: .absent, value: .integer(3)),
+    ])
+    Issue.record("overlapping owned and child intents were accepted")
+  } catch NativeDocumentError.unsupportedEdit(.overlappingEdits, _, _) {}
+  let implicit = keyRegion("x", "a")
+  let removals: [NativeRegionEdit] = try [
+    .remove(region: implicit, expected: owned(doc, implicit)),
+    .put(region: whole, expected: owned(doc, whole), value: .object(["z": .integer(2)])),
+  ]
+  for edit in removals {
+    do {
+      let change = try doc.prepare([edit])
+      #expect(text(change) == source.replacingOccurrences(of: "a.b = 1,", with: ""))
+      let checked = try NativeDocument(bytes: change.bytes, format: .toml, budget: generousBudget())
+      #expect(try checked.read(whole)?.value == .object(["z": .integer(2)]))
+    } catch {
+      Issue.record(error)
+    }
+  }
 }
 
 @Test(arguments: invalidTOMLExtensionsAndTimes)
