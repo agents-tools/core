@@ -5,10 +5,64 @@ import NativeDocuments
 /// Validates documented native container fields against the frozen bundle. Native source
 /// bytes and discovery precedence are preserved; this is not decomposition or installation.
 struct NativePluginFieldsV1 {
-  let input: ComponentRenderInput
-  let resource: LedgerResource
-  let root: URL
-  var claude: Bool { input.request.surface == .claudeCode }
+  let surface: NativeClientSurface
+  let entries: [LedgerEntry]
+  let budget: NativeDocumentBudget
+  let readJSON: (String, [String]) throws -> NativeValue
+  let issue: ([String], String, NativeAdapterIssue.Reason) -> Error
+  var claude: Bool { surface == .claudeCode }
+
+  init(input: ComponentRenderInput, resource: LedgerResource, root: URL) {
+    surface = input.request.surface
+    entries = resource.entries
+    budget = input.budget
+    issue = { input.issue(["manifest"] + $0, $2, $1) }
+    readJSON = { relative, field in
+      try input.budget.step(resource.entries.count)
+      guard let entry = resource.entries.first(where: { $0.path == relative }),
+        entry.kind == .file, let size = entry.byteCount, size <= input.limits.resourceBytes
+      else {
+        throw input.issue(
+          ["manifest"] + field, .invalid, "native JSON resource is not a bounded frozen file")
+      }
+      try input.budget.allocate(size, stage: "native plugin JSON")
+      try input.budget.step(size)
+      let bytes = try Data(contentsOf: PathSafety.resolvedChild(base: root, subpath: relative))
+      guard bytes.count == size else {
+        throw input.issue(["manifest"] + field, .invalid, "native JSON resource size changed")
+      }
+      do {
+        let document = try NativeDocument(bytes: bytes, format: .json, budget: input.budget)
+        guard let value = try document.read(.init(keys: []))?.value else {
+          throw input.issue(
+            ["manifest"] + field, .invalid, "native JSON resource has no root value")
+        }
+        return value
+      } catch NativeDocumentError.invalidDocument {
+        throw input.issue(["manifest"] + field, .invalid, "native JSON resource is malformed")
+      }
+    }
+  }
+
+  init(
+    surface: NativeClientSurface, entries: [LedgerEntry], budget: NativeDocumentBudget,
+    documents: [String: NativeValue]
+  ) {
+    self.surface = surface
+    self.entries = entries
+    self.budget = budget
+    issue = { NativeComponentFieldIssue(field: $0, reason: $2, detail: $1) }
+    readJSON = { relative, field in
+      guard entries.contains(where: { $0.path == relative && $0.kind == .file }),
+        let value = documents[relative]
+      else {
+        throw NativeComponentFieldIssue(
+          field: field, reason: .invalid, detail: "referenced native JSON document was not supplied"
+        )
+      }
+      return value
+    }
+  }
   static func validClaudeName(_ name: String) -> Bool {
     !name.isEmpty
       && name.unicodeScalars.allSatisfy {
@@ -20,9 +74,9 @@ struct NativePluginFieldsV1 {
   }
 
   func fail(_ path: [String], _ detail: String, _ reason: NativeAdapterIssue.Reason = .invalid)
-    -> NativeComponentIssue
+    -> Error
   {
-    input.issue(["manifest"] + path, reason, detail)
+    issue(path, detail, reason)
   }
 
   func text(_ value: NativeValue, _ path: [String]) throws -> String {
@@ -58,10 +112,10 @@ struct NativePluginFieldsV1 {
       else { throw CoreError.invalidState("invalid path") }
     } catch { throw fail(field, "native component path must remain inside its frozen plugin root") }
     if relative == ".", kind != .file, suffix == nil { return relative }
-    try input.budget.step(resource.entries.count)
-    guard let entry = resource.entries.first(where: { $0.path == relative }) else {
-      try input.budget.step(resource.entries.count)
-      if resource.entries.contains(where: {
+    try budget.step(entries.count)
+    guard let entry = entries.first(where: { $0.path == relative }) else {
+      try budget.step(entries.count)
+      if entries.contains(where: {
         $0.kind == .symlink && relative.hasPrefix($0.path + "/")
       }) {
         throw fail(
@@ -94,25 +148,7 @@ struct NativePluginFieldsV1 {
   }
 
   func json(_ relative: String, field: [String]) throws -> NativeValue {
-    try input.budget.step(resource.entries.count)
-    guard let entry = resource.entries.first(where: { $0.path == relative }), entry.kind == .file,
-      let size = entry.byteCount, size <= input.limits.resourceBytes
-    else {
-      throw fail(field, "native JSON resource is not a bounded frozen file")
-    }
-    try input.budget.allocate(size, stage: "native plugin JSON")
-    try input.budget.step(size)
-    let bytes = try Data(contentsOf: PathSafety.resolvedChild(base: root, subpath: relative))
-    guard bytes.count == size else { throw fail(field, "native JSON resource size changed") }
-    do {
-      let document = try NativeDocument(bytes: bytes, format: .json, budget: input.budget)
-      guard let value = try document.read(.init(keys: []))?.value else {
-        throw fail(field, "native JSON resource has no root value")
-      }
-      return value
-    } catch NativeDocumentError.invalidDocument {
-      throw fail(field, "native JSON resource is malformed")
-    }
+    try readJSON(relative, field)
   }
 
   func validate(_ fields: [String: NativeValue]) throws {
@@ -130,8 +166,17 @@ struct NativePluginFieldsV1 {
           "Cursor native plugin name must be a lowercase alphanumeric/hyphen/period identifier")
       }
     }
+    if !claude, case .string(let version) = fields["version"] {
+      do {
+        guard try SourceRequirement.exact(version).canonicalized() == .exact(version) else {
+          throw fail(["version"], "native plugin version must be canonical SemVer")
+        }
+      } catch {
+        throw fail(["version"], "native plugin version must be canonical SemVer")
+      }
+    }
     for (key, value) in fields.sorted(by: { $0.key < $1.key }) {
-      try input.budget.step()
+      try budget.step()
       switch key {
       case "name", "version", "description", "homepage", "repository", "license":
         _ = try text(value, [key])
@@ -202,19 +247,20 @@ struct NativePluginFieldsV1 {
       }
     }
     // Native defaults retain their own merge/replacement behavior. They are not rewritten.
-    try input.budget.step(resource.entries.count * 3)
-    for (file, field) in claude
-      ? [("hooks/hooks.json", "hooks"), (".mcp.json", "mcpServers"), (".lsp.json", "lspServers")]
-      : [("hooks/hooks.json", "hooks"), ("mcp.json", "mcpServers")]
-    where resource.entries.contains(where: { $0.path == file }) {
-      if !claude, fields[field] != nil { continue }
+    let defaults = try NativeComponentFieldsV1.pluginDefaults(
+      surface: surface, explicitFields: Set(fields.keys))
+    try budget.step(entries.count * 3)
+    for field in claude ? ["hooks", "mcpServers", "lspServers"] : ["hooks", "mcpServers"] {
+      guard let file = defaults[field], entries.contains(where: { $0.path == file }) else {
+        continue
+      }
       let value = try json(file, field: [field, "default"])
       try configuration(value, field: field, wrapped: true)
     }
   }
 
   func configurations(_ value: NativeValue, field: String) throws {
-    try input.budget.step()
+    try budget.step()
     if case .array(let values) = value {
       guard claude || field == "mcpServers" else {
         throw fail([field], "native hooks do not accept an array of configuration sources")
@@ -298,7 +344,7 @@ struct NativePluginFieldsV1 {
 
   func hooks(_ events: [String: NativeValue]) throws {
     for (event, value) in events {
-      try input.budget.step()
+      try budget.step()
       guard
         (claude ? NativeDocumentedHooksV1.claudeEvents : NativeDocumentedHooksV1.cursorEvents)
           .contains(event), case .array(let entries) = value
@@ -337,7 +383,7 @@ struct NativePluginFieldsV1 {
   }
 
   func handlerFields(_ value: NativeValue, event: String) throws {
-    try input.budget.step()
+    try budget.step()
     guard case .object(let handler) = value else {
       throw fail(["hooks", event], "native handler requires an object")
     }
@@ -493,7 +539,7 @@ struct NativePluginFieldsV1 {
   }
 
   func lsp(_ value: NativeValue, field: [String]) throws {
-    try input.budget.step()
+    try budget.step()
     guard case .object(let config) = value, let command = config["command"],
       case .object(let languages) = config["extensionToLanguage"], !languages.isEmpty
     else {
@@ -533,7 +579,7 @@ struct NativePluginFieldsV1 {
   }
 
   func mcp(_ value: NativeValue, field: [String]) throws {
-    try input.budget.step()
+    try budget.step()
     guard case .object(let server) = value, (server["command"] == nil) != (server["url"] == nil)
     else {
       throw fail(field, "native MCP needs exactly one command or URL")
@@ -563,7 +609,7 @@ struct NativePluginFieldsV1 {
   }
 
   func variables(_ value: NativeValue, field: [String], root: Bool = false) throws {
-    try input.budget.step()
+    try budget.step()
     guard case .object(let schema) = value else {
       throw fail(field, "native variables require a schema object")
     }
@@ -610,7 +656,7 @@ struct NativePluginFieldsV1 {
       throw fail(["userConfig"], "native userConfig requires an object")
     }
     for (name, value) in entries {
-      try input.budget.step()
+      try budget.step()
       let field = ["userConfig", name]
       guard MCPReferenceSyntax.isName(name), case .object(let option) = value,
         case .string(let type) = option["type"],

@@ -7,6 +7,8 @@ enum FrozenNativeIdentity {
     agent: AgentID, scope: InstallScope
   ) throws -> (id: String, occurrences: [Int]) {
     let ledger = frozen.ledger
+    try ResolvedLedgerCodec.checkModel(ledger, limits: .standard)
+    try ledger.validate()
     let sourceIDs = frozen.sources
     func invalid(_ detail: String) -> CoreError { .invalidState(detail) }
     guard linked.recipients.contains(agent), case .declaration(let declaration) = linked.payload,
@@ -44,17 +46,9 @@ enum FrozenNativeIdentity {
     for (resource, frozen) in zip(linked.resources, record.resources) {
       guard let item = ledger.resources[frozen], item.path == resource.path,
         item.source == sourceIDs[resource.snapshot], item.artifact == resource.artifact,
-        item.hash == resource.hash
+        item.hash == resource.hash, try ResolvedLedgerCodec.digest(item) == frozen
       else { throw invalid("linked resource and frozen evidence do not match") }
-      let flags: [String: Bool]
-      if item.entries.count == 1, item.entries[0].kind == .file, item.entries[0].path == "." {
-        flags = [resource.path: item.entries[0].executable]
-      } else {
-        flags = Dictionary(
-          uniqueKeysWithValues: item.entries.filter { $0.kind == .file }.map {
-            ($0.path, $0.executable)
-          })
-      }
+      let flags = try executableFlags(item)
       guard resource.executableFlags.isEmpty || resource.executableFlags == flags else {
         throw invalid("linked executable flags and frozen resource do not match")
       }
@@ -68,4 +62,74 @@ enum FrozenNativeIdentity {
     }
     return (id, selected.map(\.id))
   }
+
+  /// FileHash follows the selected root directory link, but does not follow links inside
+  /// that directory. Supporting entries use source-root coordinates, unlike selected entries.
+  private static func executableFlags(_ resource: LedgerResource) throws -> [String: Bool] {
+    guard let root = resource.entries.first(where: { $0.path == "." }) else {
+      throw CoreError.invalidState("missing selected resource root")
+    }
+    if root.kind == .file { return [resource.path: root.executable] }
+    if root.kind == .directory {
+      return Dictionary(
+        uniqueKeysWithValues: resource.entries.filter { $0.kind == .file }.map {
+          ($0.path, $0.executable)
+        })
+    }
+    // Core's ledger admission validates containment, ancestors, link cycles and support.
+    // This traversal only projects the selected referent's executable flags.
+    var entries = Dictionary(uniqueKeysWithValues: resource.support.map { ($0.path, $0) })
+    for original in resource.entries {
+      var entry = original
+      entry.path = original.path == "." ? resource.path : resource.path + "/" + original.path
+      entries[entry.path] = entry
+    }
+    let parents = resource.path.split(separator: "/").dropLast()
+    for count in 1..<(parents.count + 1) {
+      let ancestor = parents.prefix(count).joined(separator: "/")
+      if entries[ancestor] == nil {
+        entries[ancestor] = .init(path: ancestor, kind: .directory, executable: false)
+      }
+    }
+    var path: [String] = []
+    var pending = resource.path.split(separator: "/").map(String.init).reversed().map { $0 }
+    var remainingWork = LedgerLimits.standard.encodedBytes
+    while let part = pending.popLast() {
+      guard remainingWork > 0 else {
+        throw CoreError.invalidState("resource projection work budget")
+      }
+      remainingWork -= 1
+      if part == "." { continue }
+      if part == ".." {
+        guard !path.isEmpty else { throw CoreError.invalidState("invalid resource referent") }
+        path.removeLast()
+        continue
+      }
+      path.append(part)
+      let coordinate = path.joined(separator: "/")
+      guard let entry = entries[coordinate] else {
+        throw CoreError.invalidState("missing resource referent evidence")
+      }
+      if entry.kind == .symlink {
+        guard let link = entry.link, link.utf8.count <= remainingWork else {
+          throw CoreError.invalidState("invalid resource referent evidence")
+        }
+        remainingWork -= link.utf8.count
+        path.removeLast()
+        pending += link.split(separator: "/").reversed().map(String.init)
+      }
+    }
+    let target = path.isEmpty ? "." : path.joined(separator: "/")
+    guard entries[target]?.kind == .directory else {
+      throw CoreError.invalidState("selected native resource link is not a directory")
+    }
+    let prefix = target == "." ? "" : target + "/"
+    var flags: [String: Bool] = [:]
+    for entry in entries.values where entry.kind == .file && entry.path.hasPrefix(prefix) {
+      let relative = String(entry.path.dropFirst(prefix.count))
+      flags[relative] = entry.executable
+    }
+    return flags
+  }
+
 }
