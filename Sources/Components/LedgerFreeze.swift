@@ -133,6 +133,7 @@ package enum LedgerFreeze {
           "sourceHash": .init(instruction.section.hash), "native": LedgerPayload.native(native),
         ]
         fields["prompt"] = prompt.map { .init($0) }
+        fields["localAppend"] = component.localAppend?.ledgerValue
         payload = .init(object: fields)
       }
       let record = LedgerComponent(

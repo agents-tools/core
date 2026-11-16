@@ -70,6 +70,8 @@ package struct LinkedComponent: Equatable, Sendable {
   package let chatGPT: Bool
   package let resources: [LinkedResource]
   package var origins: [ContributionOrigin]
+  /// Consumer-owned export input. It is not read or retained for installation replay.
+  package var localAppend: LedgerLocation? = nil
 }
 
 package struct SourceConstraint: Equatable, Sendable {
@@ -129,6 +131,7 @@ package struct LinkedComponents: Equatable, Sendable {
         if a.key != b.key || a.snapshot != b.snapshot || a.pin != b.pin
           || !a.payload.sameContent(as: b.payload)
           || !sameConditions
+          || a.localAppend != b.localAppend
           || a.recipients != b.recipients || a.chatGPT != b.chatGPT || a.resources != b.resources
           || Set(a.origins.flatMap(\.dependencies)) != Set(b.origins.flatMap(\.dependencies))
         {

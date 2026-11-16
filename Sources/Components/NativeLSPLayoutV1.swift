@@ -1,6 +1,10 @@
 import AgentsCore
 
 enum NativeLSPLayoutV1 {
+  static let openCodeNativeFields: [String: MCPNativeField] = [
+    "extensions": .strings, "disabled": .boolean,
+  ]
+
   static func claude(_ lowering: LockedLowering, _ input: ComponentRenderInput) throws
     -> [ReplayedArtifact]
   {
@@ -78,7 +82,7 @@ enum NativeLSPLayoutV1 {
         "native extensions do not encode extension-to-language IDs; runtime equivalence is not established"
       )
     }
-    var fields = try input.checkedNative(["extensions": .strings, "disabled": .boolean])
+    var fields = try input.checkedNative(openCodeNativeFields)
     guard let run = input.fields["run"]?.object else {
       throw input.issue(["run"], .invalid, "missing frozen LSP executable")
     }

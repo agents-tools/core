@@ -9,6 +9,32 @@ package enum NativeProgramV1 {
   /// of the applying process's environment. Gemini's pinned Unix runner selects bash itself.
   package enum CommandShell { case posix }
 
+  /// Frozen program shape is still the typed declaration's run, not native settings data.
+  static func validateFrozenRun(_ input: ComponentRenderInput) throws {
+    guard let run = input.fields["run"]?.object,
+      Set(run.keys).subtracting(["workingDirectory"]) == [
+        "executable", "arguments", "environment",
+      ],
+      run["executable"]?.kind == .string, run["executable"]?.text?.isEmpty == false,
+      let arguments = run["arguments"]?.array, arguments.allSatisfy({ $0.kind == .string }),
+      let environment = run["environment"]?.object,
+      environment.allSatisfy({
+        !$0.key.isEmpty && !$0.key.contains("=") && !$0.key.utf8.contains(0)
+          && [.literal, .environment, .secret].contains($0.value.kind)
+          && ($0.value.kind == .literal || $0.value.text?.isEmpty == false)
+      })
+    else { throw input.issue(["run"], .invalid, "invalid frozen typed native program") }
+    if let cwd = run["workingDirectory"] {
+      guard let fields = cwd.object, Set(fields.keys).isSubset(of: ["path", "source"]),
+        fields["path"]?.kind == .string, fields["path"]?.text?.isEmpty == false,
+        fields["source"] == nil || fields["source"]?.kind == .string
+      else {
+        throw input.issue(
+          ["run", "workingDirectory"], .invalid, "invalid frozen directory resource")
+      }
+    }
+  }
+
   static func executable(_ run: [String: LedgerValue], input: ComponentRenderInput) throws
     -> LedgerValue
   {
@@ -40,9 +66,8 @@ package enum NativeProgramV1 {
     }
   }
 
-  /// E calls this only inside its private render closure, with the already obtained Core values.
-  /// This converts hookGroup/LSP intentions emitted by the concrete versioned profiles.
-  package static func stagedValue(
+  /// The strict contribution decoder supplies the envelope; package callers use its typed value.
+  static func stagedValue(
     _ envelope: LedgerValue, bindings: RuntimeBindingValues,
     environment: RuntimeEnvironment, resourcePaths: [String: String], budget: NativeDocumentBudget,
     codexCommandShell: CommandShell? = nil, cursorCommandShell: CommandShell? = nil
@@ -145,7 +170,8 @@ package enum NativeProgramV1 {
       var words: [String] = []
       if let cwd = run["workingDirectory"] {
         // Working directories are frozen resources; original authored paths never become native paths.
-        guard let resource = cwd.object?["resource"]?.text, let final = resourcePaths[resource]
+        guard let resource = cwd.object?["resource"]?.text, let final = resourcePaths[resource],
+          !final.isEmpty
         else {
           throw issue(
             ["run", "workingDirectory"], "final registered directory placement is required")
@@ -229,6 +255,8 @@ package enum NativeProgramV1 {
       case .object:
         var fields: [String: NativeValue] = [:]
         for (key, value) in value.object!.sorted(by: { $0.key < $1.key }) {
+          try budget.allocate(key.utf8.count, stage: "native program key")
+          try budget.step(key.utf8.count)
           fields[key] = try convert(value, path: path + [key], depth: depth + 1)
         }
         return .object(fields)

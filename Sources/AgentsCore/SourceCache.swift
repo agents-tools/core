@@ -99,6 +99,18 @@ package struct SourceCache {
     } ?? nil
   }
 
+  /// Acquires a known object in an owned cache, without enumerating or selecting mutable refs.
+  func acquireCommit(_ object: String, source: SourceDeclaration) throws -> String {
+    guard Self.isObjectID(object) else {
+      throw CoreError.invalidSource("expected an exact Git object")
+    }
+    if let commit = try catalogRevision(object, source: source) { return commit }
+    let mirror = try fetch(source, id: source.identity(environment: store.environment))
+    return try git(
+      mirror, ["rev-parse", "--verify", object + "^{commit}"],
+      operation: .resolveRevision(revision: object), source: source.location)
+  }
+
   /// Subscriptions follow branches even when installations select a tag or version range.
   func watchRevision(_ source: SourceDeclaration, revision: String? = nil) throws -> String {
     let id = try source.identity(environment: store.environment)
