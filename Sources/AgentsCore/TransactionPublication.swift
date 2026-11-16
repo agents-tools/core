@@ -131,8 +131,12 @@ extension TransactionSession {
       guard PathSafety.isContained(url.resolvingSymlinksInPath(), in: root) else {
         throw CoreError.unsafePath("prepared content escapes transaction staging")
       }
-      expectation = try FileTransaction.copyExpectation(
+      let produced = try FileTransaction.copyExpectation(
         url, hash: expectation.hash, flags: expectation.executableFlags)
+      guard expectation.kind == nil || expectation.kind == produced.kind else {
+        throw CoreError.invalidState("prepared content type contradicts registered target")
+      }
+      expectation = produced
       try emit(.stage(index, .workPrepared))
       try copy(url, named: name, index: index, container: container)
     }

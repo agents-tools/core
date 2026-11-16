@@ -67,6 +67,19 @@ package final class FileTransaction {
         url, parent: destination.deletingLastPathComponent(), store: store)
     case .data, .prepared: break
     }
+    if let route = NativeTargetRoute.targetRoute(path) {
+      let requiredKind: mode_t = route.isContainer ? S_IFDIR : S_IFREG
+      if route.isContainer, case .data = source {
+        throw CoreError.unsafePath("registered native container requires a directory")
+      }
+      guard expectation.kind == nil || expectation.kind == requiredKind else {
+        throw CoreError.unsafePath("registered native target has the wrong object kind")
+      }
+      if case .link = source {
+        throw CoreError.unsafePath("registered native targets cannot be symbolic links")
+      }
+      expectation.kind = requiredKind
+    }
     if security.preimage == .privateMaterialization {
       guard case .data(let data) = source else {
         throw CoreError.invalidState("sensitive replacement requires private byte construction")
@@ -197,6 +210,12 @@ package final class FileTransaction {
       throw CoreError.invalidState("duplicate transaction destination")
     }
     let evidence = try expecting ?? TargetPrecondition(destination)
+    if let route = NativeTargetRoute.targetRoute(path), let snapshot = evidence.snapshot {
+      let requiredKind: mode_t = route.isContainer ? S_IFDIR : S_IFREG
+      guard snapshot.identity.kind == requiredKind else {
+        throw CoreError.unsafePath("registered native preimage has the wrong object kind")
+      }
+    }
     guard evidence.url.path == destination.standardizedFileURL.path else {
       throw CoreError.invalidState("precondition belongs to another target")
     }

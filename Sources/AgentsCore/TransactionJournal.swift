@@ -22,8 +22,7 @@ struct TransactionJournal: Codable {
   var finalized = false
 
   func validateCoordination() throws {
-    guard footprint.count <= NativeTargetRoute.sharedRoutes.count,
-      zip(footprint, footprint.dropFirst()).allSatisfy({ $0 < $1 })
+    guard zip(footprint, footprint.dropFirst()).allSatisfy({ $0 < $1 })
     else {
       throw CoreError.invalidState("unregistered shared transaction footprint")
     }
@@ -44,13 +43,15 @@ struct TransactionJournal: Codable {
         roots.keys.compactMap { key in
           (NativeTargetRoute.sharedRoute(key) ?? NativeTargetRoute.metadataRoute(key))?.root
         })
-      let footprintRoots = Set(
-        footprint.compactMap { identity in
-          NativeTargetRoute.sharedRoutes.first { $0.basename == identity.basename }?.root
+      let routes = sharedRoots.compactMap(NativeTargetRoute.sharedRoute)
+      guard sharedRoots.count == routes.count, sharedRoots.count == footprint.count,
+        routes.allSatisfy({ route in
+          footprint.contains { $0.basename.utf8.elementsEqual(route.basename.utf8) }
+        }),
+        footprint.allSatisfy({ identity in
+          routes.contains { $0.basename.utf8.elementsEqual(identity.basename.utf8) }
         })
-      guard sharedRoots == footprintRoots, footprintRoots.count == footprint.count else {
-        throw CoreError.invalidState("journal roots contradict shared footprint")
-      }
+      else { throw CoreError.invalidState("journal roots contradict shared footprint") }
     }
   }
 
