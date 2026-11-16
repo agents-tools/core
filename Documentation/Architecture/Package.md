@@ -13,7 +13,7 @@ terminal/UI presentation and executable distribution.
 AgentsManifest → AgentsCore, TreeSitterYAML, TreeSitter, Yams
 AgentsSkills → AgentsCore, AgentsManifest, Yams
 AgentsInstructions → AgentsCore, AgentsManifest, Markdown
-Components → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions
+Components → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, NativeDocuments
 AgentsUpdates → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions
 NativeDocuments → AgentsCore, TOMLSemantics, TreeSitterTOML, TreeSitter
 TOMLSemantics → Foundation

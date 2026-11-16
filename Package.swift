@@ -67,7 +67,9 @@ let package = Package(
       ]),
     .target(
       name: "Components",
-      dependencies: ["AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions"]),
+      dependencies: [
+        "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "NativeDocuments",
+      ]),
     .testTarget(
       name: "ComponentsTests",
       dependencies: [
