@@ -53,7 +53,7 @@ package struct PreparedPrivateMaterialization {
   package let accessChange: PrivateAccessChange?
   package let target: MaterializationTarget
   let evidence: TargetPrecondition
-  let receiptEvidence: TargetPrecondition
+  let receiptEvidence: TargetPrecondition?
   var ancestry: DirectoryAccessEvidence { evidence.access!.ancestry }
   var beforeAccess: FileAccessEvidence? { evidence.access?.target }
 
@@ -96,6 +96,11 @@ extension StateStore {
     guard target.scope.path == directory.path,
       try TransactionPaths(store: self).path(for: target.url) == target.path
     else { throw CoreError.invalidState("materialization target belongs to another scope") }
+    if let route = NativeTargetRoute.sharedRoute(target.path),
+      try TransactionLockContext.current(self)?.absentRoot(for: route) != nil
+    {
+      return nil
+    }
     guard let record = try materializationReceipts(for: target.path).records.targets[target.path]
     else {
       return nil
@@ -112,6 +117,17 @@ extension StateStore {
     guard target.scope.path == directory.path,
       try TransactionPaths(store: self).path(for: target.url) == target.path
     else { throw CoreError.invalidState("materialization target belongs to another scope") }
+    if let route = NativeTargetRoute.sharedRoute(target.path),
+      try TransactionLockContext.current(self)?.absentRoot(for: route) != nil
+    {
+      guard generation == nil else {
+        throw CoreError.invalidState("materialization receipt generation changed or is missing")
+      }
+      let evidence = try TargetPrecondition(target.url).capturingAccess()
+      return PreparedPrivateMaterialization(
+        owner: UInt32(geteuid()), receiptGeneration: nil, accessChange: nil, target: target,
+        evidence: evidence, receiptEvidence: nil)
+    }
     let receipt = try materializationReceipts(for: target.path)
     let record = receipt.records.targets[target.path]
     if let generation, record?.generation != generation {

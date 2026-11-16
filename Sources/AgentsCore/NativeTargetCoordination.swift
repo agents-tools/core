@@ -339,6 +339,34 @@ final class SharedResource {
   }
 }
 
+/// Absence has no physical resource key. Only read admission may carry this evidence;
+/// a writer must create and open the real parent before deriving its coordination domain.
+struct AbsentSharedRoot {
+  let route: NativeTargetRoute
+  let logical: URL
+  let physical: URL
+  let ancestry: DirectoryAccessEvidence
+
+  init?(store: StateStore, route: NativeTargetRoute) throws {
+    logical = try route.logicalDirectory(store.environment)
+    physical = logical.resolvingSymlinksInPath()
+    ancestry = try DirectoryAccessEvidence.capture(at: physical)
+    guard ancestry.directories.count < physical.pathComponents.count else { return nil }
+    self.route = route
+  }
+
+  func remainsAbsent() throws -> Bool {
+    guard logical.resolvingSymlinksInPath().path == physical.path else {
+      throw CoreError.invalidState("registered native root changed during inspection")
+    }
+    let current = try DirectoryAccessEvidence.capture(at: physical)
+    guard current.directories.starts(with: ancestry.directories) else {
+      throw CoreError.invalidState("registered native ancestry changed during inspection")
+    }
+    return current.directories.count < physical.pathComponents.count
+  }
+}
+
 /// Synchronous, thread-confined admission. There is no lock acquisition inside a transaction.
 final class TransactionLockContext {
   private static let threadKey = "agents.core.transaction-lock-context"
@@ -346,15 +374,20 @@ final class TransactionLockContext {
   let resources: [SharedResource]
   let writable: Bool
   let requestedShared: Bool
+  let absentRoots: [AbsentSharedRoot]
   private var scopeDirectory: DirectoryHandle?
   private var scopeDescriptor: Int32?
   private var scopeLockIdentity: FileObjectIdentity?
 
-  init(store: StateStore, resources: [SharedResource], writable: Bool, requestedShared: Bool) {
+  init(
+    store: StateStore, resources: [SharedResource], writable: Bool, requestedShared: Bool,
+    absentRoots: [AbsentSharedRoot] = []
+  ) {
     scopeURL = store.directory.standardizedFileURL
     self.resources = resources
     self.writable = writable
     self.requestedShared = requestedShared
+    self.absentRoots = absentRoots
   }
 
   static var isHeld: Bool { Thread.current.threadDictionary[threadKey] != nil }
@@ -429,6 +462,19 @@ final class TransactionLockContext {
     return try self.resource(resource.identity)
   }
 
+  func absentRoot(for route: NativeTargetRoute) throws -> AbsentSharedRoot? {
+    guard !writable, let absent = absentRoots.first(where: { $0.route.root == route.root }) else {
+      return nil
+    }
+    guard try absent.remainsAbsent() else { throw CoordinationReadmission.required }
+    return absent
+  }
+
+  func targetDirectory(for route: NativeTargetRoute) throws -> URL {
+    if let absent = try absentRoot(for: route) { return absent.physical }
+    return try resource(for: route).parent.url
+  }
+
   func validate(_ journal: TransactionJournal, scope: DirectoryHandle) throws {
     try journal.validateCoordination()
     try validateScope()
@@ -450,7 +496,7 @@ extension StateStore {
     let logical = try route.logicalDirectory(environment)
     let parent: URL
     if route.shared, let context = TransactionLockContext.current(self) {
-      parent = try context.resource(for: route).parent.url
+      parent = try context.targetDirectory(for: route)
     } else {
       parent = logical.resolvingSymlinksInPath()
     }
@@ -470,6 +516,7 @@ extension StateStore {
     while true {
       let before = try pendingCoordinationJournal(diagnosing: !writable)
       var resources: [SharedResource] = []
+      var absentRoots: [AbsentSharedRoot] = []
       let pending = before?.footprint ?? []
       var requested = Set(
         routes.filter(\.shared).map { route in
@@ -494,6 +541,10 @@ extension StateStore {
       }
       for route in ordered {
         let recovering = pending.contains { $0.basename == route.basename }
+        if !writable, !recovering, let absent = try AbsentSharedRoot(store: self, route: route) {
+          absentRoots.append(absent)
+          continue
+        }
         let resource: SharedResource
         do {
           resource = try SharedResource(store: self, route: route, create: writable && !recovering)
@@ -519,7 +570,7 @@ extension StateStore {
       }
       let context = TransactionLockContext(
         store: self, resources: resources.sorted { $0.identity < $1.identity }, writable: writable,
-        requestedShared: routes.contains(where: \.shared))
+        requestedShared: routes.contains(where: \.shared), absentRoots: absentRoots)
       func locked(_ index: Int) throws -> T? {
         if index < context.resources.count {
           let resource = context.resources[index]
@@ -546,7 +597,9 @@ extension StateStore {
               return try locked(index + 1)
             })
         }
-        return try context.run { try body() }
+        let result = Result { try context.run { try body() } }
+        for absent in absentRoots where try !absent.remainsAbsent() { return nil }
+        return try result.get()
       }
       // The scope-lock body checks that the preflight footprint still covers the journal.
       do {

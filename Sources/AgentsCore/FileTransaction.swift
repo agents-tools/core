@@ -101,7 +101,11 @@ package final class FileTransaction {
     guard prepared.target.scope.path == store.directory.path, prepared.owner == geteuid(),
       bindings.allSatisfy({ !$0.isEmpty && !$0.contains("\0") })
     else { throw CoreError.invalidState("invalid private materialization inputs") }
-    try prepared.receiptEvidence.validate()
+    guard let receiptEvidence = prepared.receiptEvidence else {
+      throw CoreError.invalidState(
+        "private publication requires an existing admitted native parent")
+    }
+    try receiptEvidence.validate()
     let (path, evidence, previous) = try request(prepared.target.url, expecting: prepared.evidence)
     guard path == prepared.target.path else {
       throw CoreError.invalidState("materialization registration changed")

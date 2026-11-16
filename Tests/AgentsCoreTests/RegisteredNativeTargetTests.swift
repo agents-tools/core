@@ -7,6 +7,156 @@ import Testing
 
 @Suite("Registered native MCP files")
 struct RegisteredNativeTargetTests {
+  @Test func absentSharedRootPreviewIsPureAndApplyCreatesPrivateObjects() throws {
+    let fixture = try NativeRouteFixture()
+    var environment = fixture.store.environment
+    let missing = fixture.root.appendingPathComponent("fresh/nested")
+    environment.environment["CLAUDE_CONFIG_DIR"] = missing.path
+    let store = StateStore(scope: .project, environment: environment)
+    let before = try FileSnapshot.read(at: fixture.root)
+    try store.withReadLock(footprint: [.claudeMCPLocal, .codexMCPUser]) {
+      let target = try store.nativeTarget(for: .claudeMCPLocal)
+      #expect(target.url == missing.appendingPathComponent(".claude.json"))
+      #expect(try store.materializationReceipt(for: target) == nil)
+      let prepared = try store.preparePrivateMaterialization(target)
+      #expect(prepared.receiptGeneration == nil && prepared.beforeAccess == nil)
+      #expect(throws: CoreError.self) {
+        let transaction = FileTransaction(store: store)
+        try transaction.replacePrivate(prepared, provider: NativeRouteBindings()) { _ in Data() }
+      }
+    }
+    #expect(try FileSnapshot.read(at: fixture.root) == before)
+    try store.withLock(footprint: [.claudeMCPLocal]) {
+      let target = try store.nativeTarget(for: .claudeMCPLocal)
+      let transaction = FileTransaction(store: store)
+      try transaction.replacePrivate(
+        store.preparePrivateMaterialization(target), provider: NativeRouteBindings()
+      ) { _ in Data("private fixture".utf8) }
+      try transaction.commit()
+      #expect(try store.materializationReceipt(for: target) != nil)
+      _ = try DirectoryHandle(at: missing).requirePrivateAccess(".claude.json")
+    }
+  }
+
+  @Test func absentRootAppearanceReadmitsWithoutInventingAMetadataIdentity() throws {
+    let fixture = try NativeRouteFixture()
+    var environment = fixture.store.environment
+    let root = fixture.root.appendingPathComponent("fresh")
+    environment.environment["CLAUDE_CONFIG_DIR"] = root.path
+    let store = StateStore(scope: .project, environment: environment)
+    let bytes = try store.withReadLock(footprint: [.claudeMCPLocal]) {
+      let target = try store.nativeTarget(for: .claudeMCPLocal)
+      if !FileManager.default.fileExists(atPath: root.path) {
+        // An external native writer does not participate in Core coordination.
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("external generation".utf8).write(to: target.url)
+        return Data("stale absence".utf8)
+      }
+      return try Data(contentsOf: target.url)
+    }
+    #expect(bytes == Data("external generation".utf8))
+    #expect(
+      !FileManager.default.fileExists(atPath: root.appendingPathComponent(".agents-native").path))
+    #expect(!FileManager.default.fileExists(atPath: store.directory.path))
+  }
+
+  @Test(arguments: ["alias", "ancestor"])
+  func absentRootInspectionRefusesRedirectedAuthority(_ change: String) throws {
+    let fixture = try NativeRouteFixture()
+    let parent = fixture.root.appendingPathComponent("authority")
+    let other = fixture.root.appendingPathComponent("unrelated")
+    for path in [parent, other] {
+      try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+    }
+    var environment = fixture.store.environment
+    let root = parent.appendingPathComponent("fresh")
+    environment.environment["CLAUDE_CONFIG_DIR"] = root.path
+    let store = StateStore(scope: .project, environment: environment)
+    #expect(throws: CoreError.self) {
+      try store.withReadLock(footprint: [.claudeMCPLocal]) {
+        _ = try store.nativeTarget(for: .claudeMCPLocal)
+        if change == "alias" {
+          try FileManager.default.createSymbolicLink(at: root, withDestinationURL: other)
+        } else {
+          try FileManager.default.moveItem(at: parent, to: parent.appendingPathExtension("old"))
+          try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        }
+      }
+    }
+    #expect(try DirectoryHandle(at: other).names().isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: store.directory.path))
+  }
+
+  @Test(arguments: [false, true])
+  func legacyInstallationSpellingRequiresItsExactCommittedRecipient(_ rollback: Bool) throws {
+    let fixture = try NativeRouteFixture()
+    let store = fixture.store
+    let parent = AgentRegistry.installSkillsDirectory(
+      for: .codex, scope: .project, environment: store.environment)
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    let legacy = parent.appendingPathComponent("Example Skill")
+    try Data("old".utf8).write(to: legacy)
+    var ledger = ResolvedLedger()
+    ledger.sources["fixture"] = LedgerSource(kind: .local, revision: "live")
+    ledger.components["skill"] = LedgerComponent(
+      declaringSource: "fixture", source: "fixture", root: ".", kind: "skills",
+      name: "Example Skill",
+      payload: .init(object: [:]), conditions: [], recipients: [.codex], chatGPT: false,
+      resources: [])
+    ledger.deployments = [
+      LedgerDeployment(
+        id: "deployment",
+        target: .init(kind: .registered, root: "skills-codex", path: "Example Skill"),
+        route: "agents/skill@1", owners: ["skill"], recipients: [.codex], ownership: .generated,
+        expectedHash: "sha256:" + FileHash.sha256Hex(data: Data("old".utf8)), created: true)
+    ]
+    ledger.lowerings = [
+      LockedLowering(
+        id: "lowering", format: "agents/skill@1", inputs: ["skill"], resources: [],
+        deployments: ["deployment"], layout: .init(object: [:]), platform: "macos", artifacts: [])
+    ]
+    try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+    try ResolvedLedgerCodec.encode(ledger, limits: .standard).write(to: store.resolvedURL)
+    let transaction = FileTransaction(store: store) { point in
+      if rollback && point == "entry.1.applied" { throw CoreError.invalidState("fixture rollback") }
+    }
+    try transaction.replace(legacy, with: .data(Data("next".utf8)))
+    #expect(throws: CoreError.self) {
+      try transaction.replace(
+        parent.appendingPathComponent("Unrecorded Skill"), with: .data(Data()))
+    }
+    let other = AgentRegistry.installSkillsDirectory(
+      for: .claudeCode, scope: .project, environment: store.environment)
+    #expect(throws: CoreError.self) {
+      try transaction.replace(other.appendingPathComponent("Example Skill"), with: .data(Data()))
+    }
+    let outside = fixture.root.appendingPathComponent("outside")
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    let alias = parent.appendingPathComponent("Traversal Skill")
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: outside)
+    #expect(throws: CoreError.self) {
+      try transaction.replace(alias.appendingPathComponent("child"), with: .data(Data()))
+    }
+    #expect(try DirectoryHandle(at: outside).names().isEmpty)
+    for path in ["codex/..", "codex/.", "codex/a/b", "codex/a\\b"] {
+      #expect(throws: CoreError.self) { try TransactionPaths(store: store).components(path) }
+    }
+    try transaction.replace(
+      store.resolvedURL,
+      with: .data(ResolvedLedgerCodec.encode(ResolvedLedger(), limits: .standard)))
+    if rollback {
+      #expect(throws: CoreError.self) { try transaction.commit() }
+      #expect(
+        try ResolvedLedgerCodec.decode(Data(contentsOf: store.resolvedURL), limits: .standard)
+          == ledger)
+    } else {
+      try transaction.commit()
+    }
+    #expect(try Data(contentsOf: legacy) == Data((rollback ? "old" : "next").utf8))
+    #expect(
+      !FileManager.default.fileExists(atPath: parent.appendingPathComponent("example-skill").path))
+  }
+
   @Test(arguments: NativeTargetRoute.allCases)
   func registeredFilesPublishPrivatelyAndRetainTheirReceipt(_ route: NativeTargetRoute) throws {
     let fixture = try NativeRouteFixture()

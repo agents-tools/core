@@ -41,7 +41,7 @@ struct TransactionPaths {
           guard let context = TransactionLockContext.current(store) else {
             throw CoreError.invalidState("shared target requires its held footprint")
           }
-          _ = try context.resource(for: route)
+          _ = try context.targetDirectory(for: route)
         }
         return target.path
       }
@@ -52,6 +52,11 @@ struct TransactionPaths {
       let physical = logical.resolvingSymlinksInPath()
       let parent = destination.deletingLastPathComponent().standardizedFileURL
       if parent.path == logical.standardizedFileURL.path || parent.path == physical.path {
+        guard
+          try PathSafety.sanitizeName(destination.lastPathComponent)
+            == destination.lastPathComponent
+            || persistedInstallation(destination.lastPathComponent, agent: agent)
+        else { throw CoreError.unsafePath("unrecorded noncanonical installation target") }
         let path = agent.rawValue + "/" + destination.lastPathComponent
         _ = try components(path)
         return path
@@ -89,7 +94,7 @@ struct TransactionPaths {
         guard let context = TransactionLockContext.current(store) else {
           throw CoreError.invalidState("shared target requires its held footprint")
         }
-        url = try context.resource(for: route).parent.url
+        url = try context.targetDirectory(for: route)
       } else {
         url = try route.logicalDirectory(store.environment).resolvingSymlinksInPath()
       }
@@ -129,6 +134,26 @@ struct TransactionPaths {
       }
     }
     return result
+  }
+
+  /// Only committed exact recipients authorize legacy spellings at the queue boundary.
+  /// Recovery instead consumes the journal's already-admitted single-component path.
+  private func persistedInstallation(_ name: String, agent: AgentID) throws -> Bool {
+    guard !name.isEmpty, name != ".", name != "..", !name.contains("/"),
+      !name.contains("\\"), !name.contains("\0"),
+      let bytes = try store.existingData(store.resolvedURL)
+    else { return false }
+    try LedgerAdmission.check(bytes, limits: .standard)
+    struct Version: Decodable { let version: Int }
+    if try JSONDecoder().decode(Version.self, from: bytes).version == 2 {
+      let ledger = try ResolvedLedgerCodec.decode(bytes, limits: .standard)
+      return ledger.deployments.contains {
+        $0.target.kind == .registered && $0.target.root == "skills-" + agent.rawValue
+          && $0.target.path == name && $0.recipients.contains(agent)
+          && $0.route == "agents/skill@1"
+      }
+    }
+    return false
   }
 
   /// A top-level file in the project's own instructions container, `.agent/instructions/<name>.md`.
@@ -181,8 +206,7 @@ struct TransactionPaths {
         throw CoreError.unsafePath("unmanaged user instruction path")
       }
     } else {
-      guard AgentID(rawValue: key) != nil, descendants.count == 1,
-        PathSafety.sanitizeName(descendants[0]) == descendants[0]
+      guard AgentID(rawValue: key) != nil, descendants.count == 1
       else { throw CoreError.unsafePath("unmanaged installation transaction path") }
     }
     return (key, descendants)
