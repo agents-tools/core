@@ -8,13 +8,8 @@ extension ClaudeAdapter {
     switch input.record.kind {
     case "command":
       try input.noParameters()
-      var fields = try input.checkedNative([
-        "argument-hint": .string, "allowed-tools": .strings,
-        "disallowed-tools": .strings, "when_to_use": .string,
-        "disable-model-invocation": .boolean, "user-invocable": .boolean,
-        "model": .string, "context": .oneOf(["fork"]), "agent": .string,
-        "background": .boolean, "effort": .oneOf(["low", "medium", "high", "xhigh", "max"]),
-      ])
+      var fields = try input.checkedNative(
+        NativeComponentFieldsV1.markdownRules(.claudeCode, kind: "command"))
       for key in ["agent", "background"]
       where fields[key] != nil && fields["context"]?.text != "fork" {
         throw input.issue(
@@ -29,16 +24,8 @@ extension ClaudeAdapter {
           route: .claudeCommand, path: name + ".md", selection: "file",
           value: .init(try input.frontmatter(fields, body: input.prompt()))))
     case "subagent":
-      var fields = try input.checkedNative([
-        "disallowedTools": .strings,
-        "permissionMode": .oneOf([
-          "default", "manual", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "plan",
-        ]),
-        "maxTurns": .positiveInteger, "skills": .strings,
-        "memory": .oneOf(["user", "project", "local"]), "background": .boolean,
-        "omitClaudeMd": .boolean, "isolation": .oneOf(["worktree"]),
-        "effort": .oneOf(["low", "medium", "high", "xhigh", "max"]),
-      ])
+      var fields = try input.checkedNative(
+        NativeComponentFieldsV1.markdownRules(.claudeCode, kind: "subagent"))
       let name = try input.filename()
       guard name.count <= 256, !name.contains(":") else {
         throw input.issue(

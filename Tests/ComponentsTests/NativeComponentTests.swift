@@ -157,22 +157,52 @@ struct NativeComponentTests {
       [.posixPermissions: 0o755],
       ofItemAtPath: fixture.project.appendingPathComponent("scripts/check").path)
     try fixture.write("data", to: "working/data", base: fixture.project)
+    try fixture.write("executable support", to: "working/check", base: fixture.project)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755],
+      ofItemAtPath: fixture.project.appendingPathComponent("working/check").path)
+    try FileManager.default.createDirectory(
+      at: fixture.project.appendingPathComponent("links"), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      atPath: fixture.project.appendingPathComponent("redirect").path,
+      withDestinationPath: "working")
+    try FileManager.default.createSymbolicLink(
+      atPath: fixture.project.appendingPathComponent("links/working-alias").path,
+      withDestinationPath: "../redirect")
     let item: [String: Any] = [
       "kind": "hook", "name": "check", "event": ["native": "SessionStart"],
       "run": [
         "executable": "./scripts/check",
         "arguments": ["a'b", "$(never-execute)", surface == .geminiCLI ? "plain" : "$ordinary"],
-        "workingDirectory": ["path": "working"],
+        "workingDirectory": ["path": "links/working-alias"],
         "environment": ["TOKEN": ["secret": "fixture/token"]],
       ],
       "matcher": "startup", "timeoutSeconds": 7, "agents": [surface.agent.rawValue],
     ]
     let (linked, frozen) = try freeze([item], fixture)
+    let cwdID = try #require(frozen.ledger.components.values.first?.resources.last)
+    let cwd = try #require(frozen.ledger.resources[cwdID])
+    #expect(cwd.entries.first?.kind == .symlink)
+    #expect(cwd.support.first(where: { $0.path == "working/check" })?.executable == true)
+    for remove in [false, true] {
+      var corrupted = frozen
+      if remove {
+        corrupted.ledger.resources[cwdID]!.support.removeAll { $0.path == "working/check" }
+      } else {
+        let index = try #require(cwd.support.firstIndex(where: { $0.path == "working/check" }))
+        corrupted.ledger.resources[cwdID]!.support[index].executable = false
+      }
+      #expect(throws: NativeComponentIssue.self) {
+        try lower(linked[0], corrupted, surface: surface)
+      }
+    }
     var ledger = frozen.ledger
     ledger.lowerings = [try lower(linked[0], frozen, surface: surface)]
     ledger = try prepared(ledger, fixture)
     let encoded = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
     #expect(!String(decoding: encoded, as: UTF8.self).contains("private staged fixture"))
+    ledger = try ResolvedLedgerCodec.decode(encoded, limits: .standard)
+    try FileManager.default.removeItem(at: fixture.project)
     try replay(ledger, fixture) { output in
       let contribution = try NativeComponentLayoutsV1.contribution(
         ledger.lowerings[0], ledger: ledger, artifacts: output, limits: .standard)

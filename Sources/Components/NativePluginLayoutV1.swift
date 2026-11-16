@@ -87,17 +87,6 @@ enum NativePluginLayoutV1 {
       throw input.issue(
         ["name"], .invalid, "native manifest name does not match the frozen component")
     }
-    if input.request.surface == .cursorEditor, case .string(let version) = manifestFields["version"]
-    {
-      do {
-        guard try SourceRequirement.exact(version).canonicalized() == .exact(version) else {
-          throw CoreError.invalidState("invalid native version")
-        }
-      } catch {
-        throw input.issue(
-          ["manifest", "version"], .invalid, "native plugin version must be canonical SemVer")
-      }
-    }
     if input.request.surface == .geminiCLI {
       guard name.range(of: #"^[a-zA-Z0-9-]+$"#, options: .regularExpression) != nil else {
         throw input.issue(
