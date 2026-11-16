@@ -144,10 +144,21 @@ package struct NativeComponentDescriptor {
   package let kind: DeclaredComponentKind
   package let format: String
   package let evidence: NativeSchemaEvidence
-  package var knownReaders: Set<AgentID> { [request.surface.agent] }
+  package var knownReaders: Set<AgentID> {
+    CapabilityRegistry.componentReaders(
+      request, kind: kind, profileVersion: NativeComponentLayoutsV1.profileVersion(request.surface))
+  }
 }
 
 extension CapabilityRegistry {
+  static func componentReaders(
+    _ request: NativeComponentRequest, kind: DeclaredComponentKind, profileVersion: Int
+  ) -> Set<AgentID> {
+    if profileVersion == 2, request.surface == .claudeCode, [.hook, .subagent].contains(kind) {
+      return [.claudeCode, .cursor]
+    }
+    return [request.surface.agent]
+  }
   package static func component(
     _ request: NativeComponentRequest,
     kind: DeclaredComponentKind, name: String
@@ -162,14 +173,9 @@ extension CapabilityRegistry {
     guard ![.skills, .instructions, .mcpServer].contains(kind) else {
       throw issue("kind", .invalid, "component belongs to its existing domain renderer")
     }
-    guard request.surface != .cursorCloud else {
+    guard request.surface != .cursorCloud || (kind == .hook && request.scope == .project) else {
       throw issue(
         "surface", .unverified, "Cloud deployment/loading requires a separate registered surface")
-    }
-    if request.surface == .claudeCode && kind != .plugin {
-      throw issue(
-        "kind", .unverified,
-        "captured Claude evidence lacks this component's complete fixed native schema")
     }
     if kind == .command {
       if request.surface == .codexCLI {
@@ -185,7 +191,7 @@ extension CapabilityRegistry {
           "named-command registration is not established for this surface/scope")
       }
     }
-    if kind == .lspServer && request.surface != .openCodeCLI {
+    if kind == .lspServer && request.surface != .openCodeCLI && request.surface != .claudeCode {
       throw issue(
         "kind", .unverified, "no complete LSP registration schema is captured for this surface")
     }
@@ -205,7 +211,7 @@ extension CapabilityRegistry {
         "OpenCode hooks require executable plugin API adaptation; equivalent event I/O is not established"
       )
     }
-    if kind == .permissions && request.surface != .openCodeCLI {
+    if kind == .permissions && request.surface != .openCodeCLI && request.surface != .claudeCode {
       throw issue(
         "rules", .unverified,
         "native policy precedence differs from ordered last-match semantics; exact translation is not established"
@@ -213,7 +219,7 @@ extension CapabilityRegistry {
     }
     let pinned = try mcp(
       .init(
-        surface: request.surface,
+        surface: request.surface == .cursorCloud ? .cursorEditor : request.surface,
         scope: request.scope == .user ? .user : .project), component: name
     ).evidence
     let sources: [String]
@@ -242,13 +248,21 @@ extension CapabilityRegistry {
         "https://cursor.com/docs/subagents", "https://docs.cursor.com/en/agent/chat/commands",
         "https://cursor.com/docs/reference/ignore-file",
         "https://cursor.com/docs/reference/plugins",
+        "https://cursor.com/docs/hooks",
       ]
-    case .claudeCode: sources = ["claude-plugin-discovery.json", "route-evidence.md"]
+    case .claudeCode:
+      sources = [
+        "https://code.claude.com/docs/en/skills", "https://code.claude.com/docs/en/sub-agents",
+        "https://code.claude.com/docs/en/hooks", "https://code.claude.com/docs/en/permissions",
+        "https://code.claude.com/docs/en/plugins/manifest-reference",
+        "https://cursor.com/docs/reference/third-party-hooks", "https://cursor.com/docs/subagents",
+        "claude-plugin-discovery.json", "route-evidence.md",
+      ]
     }
     let revision: String
     switch request.surface {
-    case .cursorEditor, .cursorCLI, .cursorCloud:
-      revision = "sha256:b5e03f48d099bce7b10892b57934b9b611a54b3d4c9cf64e309071760e1c163b"
+    case .claudeCode, .cursorEditor, .cursorCLI, .cursorCloud:
+      revision = "sha256:663204a0c4521fccc5ed534e5b81f3c084e9bd691cadf6882a2e95667519b9e0"
     default: revision = pinned.revision
     }
     let evidence = NativeSchemaEvidence(revision: revision, sources: sources)

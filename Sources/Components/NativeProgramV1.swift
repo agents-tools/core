@@ -45,19 +45,21 @@ package enum NativeProgramV1 {
   package static func stagedValue(
     _ envelope: LedgerValue, bindings: RuntimeBindingValues,
     environment: RuntimeEnvironment, resourcePaths: [String: String], budget: NativeDocumentBudget,
-    codexCommandShell: CommandShell? = nil
+    codexCommandShell: CommandShell? = nil, cursorCommandShell: CommandShell? = nil
   ) throws -> NativeValue {
     guard let metadata = envelope.object,
       let surface = metadata["surface"]?.text.flatMap(NativeClientSurface.init(rawValue:)),
       let scope = metadata["scope"]?.text.flatMap(InstallScope.init(rawValue:)),
       let kind = metadata["kind"]?.text, let component = metadata["name"]?.text,
       let value = metadata["value"], let selection = metadata["selection"]?.text,
-      ["hookGroup", "lsp"].contains(selection)
+      ["hookGroup", "cursorHook", "lsp", "generatedPlugin"].contains(selection)
     else { throw CoreError.invalidState("invalid staged native program intention") }
-    func issue(_ path: [String], _ detail: String) -> NativeComponentIssue {
+    func issue(_ path: [String], _ detail: String, _ reason: NativeAdapterIssue.Reason = .invalid)
+      -> NativeComponentIssue
+    {
       .init(
         request: .init(surface: surface, scope: scope), kind: kind, component: component,
-        field: path, reason: .invalid, detail: detail)
+        field: path, reason: reason, detail: detail)
     }
     if surface == .codexCLI {
       guard codexCommandShell == .posix
@@ -70,12 +72,31 @@ package enum NativeProgramV1 {
         )
       }
     }
+    if [.cursorEditor, .cursorCLI, .cursorCloud].contains(surface), cursorCommandShell != .posix {
+      throw NativeComponentIssue(
+        request: .init(surface: surface, scope: scope), kind: kind,
+        component: component, field: ["run"], reason: .integrationRequired,
+        detail:
+          "E must supply the verified native POSIX command-shell contract for this Cursor surface")
+    }
     func check(_ text: String, path: [String]) throws -> String {
       try budget.allocate(text.utf8.count, stage: "native program string")
       try budget.step(text.utf8.count)
       guard !text.utf8.contains(0) else { throw issue(path, "NUL is not a native string") }
       if surface == .openCodeCLI, text.contains("{env:") || text.contains("{file:") {
         throw issue(path, "literal cannot cross native interpolation exactly")
+      }
+      if surface == .claudeCode, text.contains("${"),
+        selection == "hookGroup"
+          || (selection == "generatedPlugin" && path.count >= 4
+            && ["command", "args", "env"].contains(path[3]))
+      {
+        throw issue(path, "literal cannot cross native placeholders exactly", .unverified)
+      }
+      if [.cursorEditor, .cursorCLI, .cursorCloud].contains(surface), text.contains("${") {
+        throw issue(
+          path, "exact literal preservation across Cursor command preprocessing needs evidence",
+          .unverified)
       }
       // Settings expand environment tokens before the hook runner sees shell quoting.
       if surface == .geminiCLI,
@@ -167,11 +188,29 @@ package enum NativeProgramV1 {
         }
         return .string(try program(run))
       }
+      if selection == "cursorHook", path == ["command"] {
+        guard let run = value.object?["program"]?.object else {
+          throw issue(path, "missing native Cursor hook program")
+        }
+        return .string(try program(run))
+      }
+      let generatedLSP =
+        selection == "generatedPlugin"
+        && path.count >= 3
+        && Array(path.prefix(3)) == [".claude-plugin/plugin.json", "lspServers", component]
+      if generatedLSP, path == [".claude-plugin/plugin.json", "lspServers", component, "command"],
+        value.object?["resource"] != nil
+      {
+        return .string(try string(value, path: path))
+      }
       if selection == "lsp", path == ["command", "0"], value.object?["resource"] != nil {
         return .string(try string(value, path: path))
       }
       if value.kind == .environment || value.kind == .secret {
-        guard selection == "lsp", path.count == 2, path.first == "env" else {
+        guard
+          (selection == "lsp" && path.count == 2 && path.first == "env")
+            || (generatedLSP && path.count == 5 && path[3] == "env")
+        else {
           throw issue(path, "symbolic binding is outside a native environment slot")
         }
         return .string(try string(value, path: path))

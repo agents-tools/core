@@ -2,13 +2,22 @@ import AgentsCore
 import Foundation
 
 package enum NativeComponentLayoutsV1 {
-  package static func format(_ surface: NativeClientSurface) -> String {
+  static func profileVersion(_ surface: NativeClientSurface) -> Int {
     switch surface {
-    case .claudeCode: "agents/claude-components@1"
+    case .claudeCode, .cursorEditor, .cursorCLI, .cursorCloud: 2
+    default: 1
+    }
+  }
+  package static func format(_ surface: NativeClientSurface) -> String {
+    format(surface, version: profileVersion(surface))
+  }
+  private static func format(_ surface: NativeClientSurface, version: Int) -> String {
+    switch surface {
+    case .claudeCode: "agents/claude-components@\(version)"
     case .codexCLI: "agents/codex-components@1"
     case .geminiCLI: "agents/gemini-components@1"
     case .openCodeCLI: "agents/opencode-components@1"
-    case .cursorEditor, .cursorCLI, .cursorCloud: "agents/cursor-components@1"
+    case .cursorEditor, .cursorCLI, .cursorCloud: "agents/cursor-components@\(version)"
     }
   }
 
@@ -16,6 +25,9 @@ package enum NativeComponentLayoutsV1 {
     [
       "agents/claude-components@1": {
         try render($0, $1, $2, limits: limits, surface: .claudeCode)
+      },
+      "agents/claude-components@2": {
+        try render($0, $1, $2, limits: limits, surface: .claudeCode, version: 2)
       },
       "agents/codex-components@1": { try render($0, $1, $2, limits: limits, surface: .codexCLI) },
       "agents/gemini-components@1": { try render($0, $1, $2, limits: limits, surface: .geminiCLI) },
@@ -25,12 +37,15 @@ package enum NativeComponentLayoutsV1 {
       "agents/cursor-components@1": {
         try render($0, $1, $2, limits: limits, surface: .cursorEditor)
       },
+      "agents/cursor-components@2": {
+        try render($0, $1, $2, limits: limits, surface: .cursorEditor, version: 2)
+      },
     ]
   }
 
   private static func render(
     _ lowering: LockedLowering, _ ledger: ResolvedLedger,
-    _ resources: [String: URL], limits: LedgerLimits, surface: NativeClientSurface
+    _ resources: [String: URL], limits: LedgerLimits, surface: NativeClientSurface, version: Int = 1
   ) throws -> [ReplayedArtifact] {
     func invalid() -> CoreError { .invalidState("invalid version 1 native component layout") }
     guard let layout = lowering.layout.object,
@@ -38,7 +53,7 @@ package enum NativeComponentLayoutsV1 {
       let declared = layout["surface"]?.text.flatMap(NativeClientSurface.init(rawValue:)),
       format(declared) == format(surface),
       let scope = layout["scope"]?.text.flatMap(InstallScope.init(rawValue:)),
-      lowering.format == format(declared), lowering.inputs.count == 1,
+      lowering.format == format(declared, version: version), lowering.inputs.count == 1,
       let component = lowering.inputs.first, let record = ledger.components[component],
       lowering.resources == record.resources,
       record.resources.allSatisfy({ resources[$0] != nil }),
@@ -59,7 +74,7 @@ package enum NativeComponentLayoutsV1 {
     let input = ComponentRenderInput(
       record: record, component: component,
       request: .init(surface: declared, scope: scope), occurrences: occurrences,
-      resources: resources, ledger: ledger, limits: limits)
+      resources: resources, ledger: ledger, limits: limits, profileVersion: version)
     try input.validateProfile()
     if record.kind == "plugin" { return try NativePluginLayoutV1.render(lowering, input) }
     switch declared {
@@ -69,7 +84,10 @@ package enum NativeComponentLayoutsV1 {
     case .cursorEditor, .cursorCLI, .cursorCloud:
       return try CursorAdapter.components(lowering, input)
     case .claudeCode:
-      throw input.issue(["kind"], .unverified, "complete fixed native schema is required")
+      guard version == 2 else {
+        throw input.issue(["kind"], .unverified, "complete fixed native schema is required")
+      }
+      return try ClaudeAdapter.components(lowering, input)
     }
   }
 }

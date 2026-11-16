@@ -537,6 +537,527 @@ struct NativeComponentTests {
     #expect(ledger.occurrences.count == 2)
   }
 
+  @Test func claudeFilesUseTheirDistinctFrontmatterContracts() throws {
+    let fixture = try LinkFixture()
+    let items: [[String: Any]] = [
+      [
+        "kind": "command", "name": "review", "description": "Review sources",
+        "prompt": "Keep exact text.\n",
+        "agents": ["claude-code"],
+        "native": ["claude-code": ["disable-model-invocation": true, "allowed-tools": ["Read"]]],
+      ],
+      [
+        "kind": "subagent", "name": "reviewer", "description": "Audit: sources",
+        "prompt": "Review source.",
+        "tools": ["Read", "Bash"], "model": "inherit", "agents": ["claude-code"],
+        "native": [
+          "claude-code": [
+            "disallowedTools": ["Bash"], "maxTurns": 5, "permissionMode": "plan",
+            "background": false,
+          ]
+        ],
+      ],
+    ]
+    let (linked, frozen) = try freeze(items, fixture)
+    var ledger = frozen.ledger
+    ledger.lowerings = try linked.enumerated().map {
+      try lower($0.element, frozen, surface: .claudeCode, id: "file-\($0.offset)")
+    }
+    #expect(ledger.lowerings.allSatisfy { $0.format == "agents/claude-components@2" })
+    ledger = try prepared(ledger, fixture)
+    try replay(ledger, fixture) { output in
+      let command = try #require(output[0].values?.object?["value"]?.text)
+      #expect(command.contains("disable-model-invocation: true"))
+      #expect(command.hasSuffix("---\nKeep exact text.\n"))
+      #expect(!command.contains("\nname:"))
+      let agent = try #require(output[1].values?.object?["value"]?.text)
+      #expect(agent.contains("disallowedTools: [\"Bash\"]"))
+      #expect(agent.contains("maxTurns: 5"))
+      #expect(agent.contains("permissionMode: \"plan\""))
+      #expect(output[0].values?.object?["route"]?.text == "claudeCommand")
+      #expect(output[1].values?.object?["route"]?.text == "claudeAgent")
+      #expect(
+        output[1].values?.object?["knownReaders"]
+          == LedgerPayload.strings(["claude-code", "cursor"]))
+      #expect(output[1].values?.object?["recipients"] == LedgerPayload.strings(["claude-code"]))
+    }
+  }
+
+  @Test(arguments: [NativeClientSurface.claudeCode, .cursorEditor, .cursorCLI, .cursorCloud])
+  func documentedNativeHooksKeepShapesAndPrivateArguments(_ surface: NativeClientSurface) throws {
+    let fixture = try LinkFixture()
+    let item: [String: Any] = [
+      "kind": "hook", "name": "guard",
+      "event": ["native": surface == .claudeCode ? "PreToolUse" : "beforeShellExecution"],
+      "run": [
+        "executable": "fixture-hook", "arguments": ["a'b", "$(never-execute)"],
+        "environment": ["TOKEN": ["secret": "fixture/hook"]],
+      ],
+      "matcher": surface == .claudeCode ? "Bash|Edit" : "curl|wget", "timeoutSeconds": 9,
+      "agents": [surface.agent.rawValue],
+      "native": [
+        surface.agent.rawValue: surface == .claudeCode
+          ? ["onFailure": "block"] : ["failClosed": true]
+      ],
+    ]
+    let (linked, frozen) = try freeze([item], fixture)
+    var ledger = frozen.ledger
+    ledger.lowerings = [try lower(linked[0], frozen, surface: surface)]
+    ledger = try prepared(ledger, fixture)
+    let encoded = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+    #expect(!String(decoding: encoded, as: UTF8.self).contains("staged hook value"))
+    try replay(ledger, fixture) { output in
+      let envelope = try #require(output[0].values)
+      if surface == .cursorEditor {
+        #expect(envelope.object?["rootRequirements"]?.object?["version"]?.integer == 1)
+        #expect(envelope.object?["value"]?.object?["matcher"]?.text == "curl|wget")
+        #expect(throws: NativeComponentIssue.self) {
+          try NativeProgramV1.stagedValue(
+            envelope, bindings: .init([:]), environment: fixture.environment, resourcePaths: [:],
+            budget: budget())
+        }
+      }
+      let native = try NativeProgramV1.stagedValue(
+        envelope, bindings: .init(["fixture/hook": Data("staged hook value".utf8)]),
+        environment: fixture.environment, resourcePaths: [:], budget: budget(),
+        cursorCommandShell: .posix)
+      guard case .object(let object) = native else {
+        Issue.record("missing native hook")
+        return
+      }
+      let handler: [String: NativeValue]
+      if surface == .claudeCode {
+        #expect(
+          envelope.object?["knownReaders"] == LedgerPayload.strings(["claude-code", "cursor"]))
+        #expect(envelope.object?["recipients"] == LedgerPayload.strings(["claude-code"]))
+        #expect(object["matcher"] == .string("Bash|Edit"))
+        guard case .array(let handlers) = object["hooks"], case .object(let first) = handlers.first
+        else {
+          Issue.record("missing Claude group")
+          return
+        }
+        handler = first
+        #expect(handler["onFailure"] == .string("block"))
+      } else {
+        handler = object
+        #expect(handler["failClosed"] == .boolean(true))
+      }
+      #expect(handler["timeout"] == .integer(9))
+      #expect(
+        handler["command"]
+          == .string("env 'TOKEN=staged hook value' 'fixture-hook' 'a'\\''b' '$(never-execute)'"))
+    }
+  }
+
+  @Test func claudeLSPFreezesGeneratedManifestAndPrivateSlots() throws {
+    let fixture = try LinkFixture()
+    try fixture.write("#!/bin/sh\n# never executed\n", to: "bin/server", base: fixture.project)
+    let item: [String: Any] = [
+      "kind": "lspServer", "name": "fixture-lsp",
+      "run": [
+        "executable": "./bin/server", "arguments": ["--stdio"],
+        "environment": ["TOKEN": ["secret": "fixture/lsp"]],
+      ],
+      "languages": [".fixture": "fixture"],
+      "initializationOptions": ["resource": "ordinary", "program": ["setting": true]],
+      "agents": ["claude-code"],
+      "native": [
+        "claude-code": [
+          "transport": "socket", "startupTimeout": 1000, "shutdownTimeout": 2000,
+          "requestTimeout": 3000, "restartOnCrash": false, "maxRestarts": 0, "diagnostics": false,
+          "settings": ["literal": "${ordinary}"], "workspaceFolder": "./workspace",
+        ]
+      ],
+    ]
+    let (linked, frozen) = try freeze([item], fixture)
+    var ledger = frozen.ledger
+    ledger.lowerings = [try lower(linked[0], frozen, surface: .claudeCode)]
+    ledger = try prepared(ledger, fixture)
+    let bytes = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+    try FileManager.default.removeItem(at: fixture.project)
+    try replay(ResolvedLedgerCodec.decode(bytes, limits: .standard), fixture) { output in
+      let envelope = try #require(output[0].values)
+      #expect(envelope.object?["selection"]?.text == "generatedPlugin")
+      #expect(envelope.object?["route"]?.text == "claudeSkillPlugin")
+      let id = try #require(frozen.ledger.components.values.first?.resources.first)
+      let materialized = try NativeProgramV1.stagedValue(
+        envelope, bindings: .init(["fixture/lsp": Data("staged LSP value".utf8)]),
+        environment: fixture.environment,
+        resourcePaths: [id: "/registered/bin/server"], budget: budget())
+      guard case .object(let files) = materialized,
+        case .object(let manifest) = files[".claude-plugin/plugin.json"],
+        case .object(let servers) = manifest["lspServers"],
+        case .object(let config) = servers["fixture-lsp"]
+      else {
+        Issue.record("missing generated native manifest")
+        return
+      }
+      #expect(config["command"] == .string("/registered/bin/server"))
+      #expect(config["transport"] == .string("socket"))
+      #expect(config["diagnostics"] == .boolean(false))
+      #expect(config["requestTimeout"] == .integer(3000))
+      #expect(config["settings"] == .object(["literal": .string("${ordinary}")]))
+      #expect(
+        config["initializationOptions"]
+          == .object([
+            "resource": .string("ordinary"), "program": .object(["setting": .boolean(true)]),
+          ]))
+      #expect(config["env"] == .object(["TOKEN": .string("staged LSP value")]))
+      for invalid in [Data([0xff]), Data([0]), Data("${CLAUDE_PLUGIN_ROOT}".utf8)] {
+        do {
+          _ = try NativeProgramV1.stagedValue(
+            envelope, bindings: .init(["fixture/lsp": invalid]), environment: fixture.environment,
+            resourcePaths: [id: "/registered/bin/server"], budget: budget())
+          Issue.record("accepted a nonliteral staged native value")
+        } catch let issue as NativeComponentIssue {
+          #expect(
+            issue.field == [
+              ".claude-plugin/plugin.json", "lspServers", "fixture-lsp", "env", "TOKEN",
+            ])
+          #expect(!issue.description.contains("${CLAUDE_PLUGIN_ROOT}"))
+        }
+      }
+    }
+    #expect(!String(decoding: bytes, as: UTF8.self).contains("staged LSP value"))
+  }
+
+  @Test func claudeExplicitNativePolicyKeepsCategoryPrecedence() throws {
+    let fixture = try LinkFixture()
+    let item: [String: Any] = [
+      "kind": "permissions", "name": "native-policy", "rules": [], "agents": ["claude-code"],
+      "native": [
+        "claude-code": [
+          "allow": ["Bash(git *)"], "ask": ["Edit"], "deny": ["Read(./secret/**)"],
+          "defaultMode": "plan",
+        ]
+      ],
+    ]
+    let (linked, frozen) = try freeze([item], fixture)
+    var ledger = frozen.ledger
+    ledger.lowerings = [try lower(linked[0], frozen, surface: .claudeCode)]
+    ledger = try prepared(ledger, fixture)
+    try replay(ledger, fixture) { output in
+      #expect(output[0].values?.object?["selection"]?.text == "nativePolicy")
+      let policy = try #require(output[0].values?.object?["value"]?.object)
+      #expect(policy["deny"] == LedgerPayload.strings(["Read(./secret/**)"]))
+      #expect(policy["allow"] == LedgerPayload.strings(["Bash(git *)"]))
+    }
+  }
+
+  @Test func documentedIgnoredAndUnverifiedHookCombinationsAreDiagnosed() throws {
+    let fixture = try LinkFixture()
+    let cases: [([String: Any], NativeClientSurface, [String], NativeAdapterIssue.Reason)] = [
+      (
+        [
+          "kind": "subagent", "name": "exact", "description": "Fixture", "prompt": "Prompt",
+          "agents": ["claude-code"], "native": ["claude-code": ["max_turns": 2]],
+        ], .claudeCode, ["native", "claude-code", "max_turns"], .unverified
+      ),
+      (
+        [
+          "kind": "hook", "name": "exact", "event": ["native": "Stop"],
+          "run": ["executable": "fixture"], "matcher": "Bash", "agents": ["claude-code"],
+        ], .claudeCode, ["matcher"], .unsupported
+      ),
+      (
+        [
+          "kind": "hook", "name": "exact", "event": ["native": "PreToolUse"],
+          "run": ["executable": "fixture"], "timeoutSeconds": 4,
+          "native": ["claude-code": ["async": true]], "agents": ["claude-code"],
+        ], .claudeCode, ["timeoutSeconds"], .unsupported
+      ),
+      (
+        [
+          "kind": "hook", "name": "exact", "event": ["native": "sessionStart"],
+          "run": ["executable": "fixture"], "native": ["cursor": ["failClosed": true]],
+          "agents": ["cursor"],
+        ], .cursorEditor, ["native", "cursor", "failClosed"], .unsupported
+      ),
+      (
+        [
+          "kind": "hook", "name": "exact", "event": ["native": "preToolUse"],
+          "run": ["executable": "fixture"], "native": ["cursor": ["loop_limit": 3]],
+          "agents": ["cursor"],
+        ], .cursorEditor, ["native", "cursor", "loop_limit"], .unsupported
+      ),
+      (
+        [
+          "kind": "hook", "name": "exact", "event": ["native": "sessionStart"],
+          "run": ["executable": "fixture"], "agents": ["cursor"],
+        ], .cursorCloud, ["event"], .unsupported
+      ),
+      (
+        [
+          "kind": "permissions", "name": "exact",
+          "rules": [
+            ["effect": "deny", "operation": ["tool": "Read"], "pattern": "*"],
+            ["effect": "allow", "operation": ["tool": "Read"], "pattern": "src/**"],
+          ], "agents": ["claude-code"],
+        ], .claudeCode, ["rules"], .unverified
+      ),
+      (
+        [
+          "kind": "hook", "name": "exact", "event": ["native": "beforeTabFileRead"],
+          "run": ["executable": "fixture"], "agents": ["cursor"],
+        ], .cursorCLI, ["event"], .unsupported
+      ),
+      (
+        [
+          "kind": "hook", "name": "exact", "event": ["native": "beforeMCPExecution"],
+          "run": ["executable": "fixture"], "matcher": "native-server", "agents": ["cursor"],
+        ], .cursorEditor, ["matcher"], .unverified
+      ),
+      (
+        [
+          "kind": "hook", "name": "exact", "event": ["native": "PreToolUse"],
+          "run": ["executable": "fixture"], "matcher": "[", "agents": ["claude-code"],
+        ], .claudeCode, ["matcher"], .unverified
+      ),
+      (
+        [
+          "kind": "hook", "name": "exact", "event": "beforeTool", "run": ["executable": "fixture"],
+          "agents": ["claude-code"],
+        ], .claudeCode, ["event"], .unverified
+      ),
+      (
+        [
+          "kind": "hook", "name": "exact", "event": ["native": "preToolUse"],
+          "run": ["executable": "fixture"], "native": ["cursor": ["type": "prompt"]],
+          "agents": ["cursor"],
+        ], .cursorEditor, ["native", "cursor", "type"], .unsupported
+      ),
+    ]
+    for (item, surface, field, reason) in cases {
+      let (linked, frozen) = try freeze([item], fixture)
+      var ledger = frozen.ledger
+      ledger.lowerings = [try lower(linked[0], frozen, surface: surface)]
+      do {
+        _ = try prepared(ledger, fixture)
+        Issue.record("accepted a lost native intent")
+      } catch let issue as NativeComponentIssue {
+        #expect(issue.field == field)
+        #expect(issue.reason == reason)
+      }
+    }
+  }
+
+  @Test func nativeManifestFieldsPreserveFrozenChildrenAndColdV1Replay() throws {
+    let fixture = try LinkFixture()
+    let manifest: [String: Any] = [
+      "name": "native-fields", "version": "build-label", "author": ["name": "Fixture"],
+      "commands": [
+        "about": ["content": "Review source.", "argumentHint": "[file]", "allowedTools": ["Read"]]
+      ],
+      "agents": ["./agents/reviewer.md"], "skills": ["./skills"],
+      "userConfig": [
+        "token": [
+          "type": "string", "title": "Token", "description": "Native client-owned token",
+          "sensitive": true,
+        ],
+        "tone": [
+          "type": "string", "title": "Tone", "description": "Picker",
+          "options": ["neutral", "warm"], "required": true,
+        ],
+      ],
+      "hooks": ["Stop": [["hooks": [["type": "prompt", "prompt": "Review $ARGUMENTS"]]]]],
+      "mcpServers": [
+        "fixture": [
+          "type": "stdio", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server.js"],
+        ]
+      ],
+      "lspServers": [
+        "fixture": [
+          "command": "fixture-lsp", "extensionToLanguage": [".fixture": "fixture"],
+          "transport": "socket", "diagnostics": false,
+        ]
+      ],
+    ]
+    try fixture.write(
+      String(decoding: JSONSerialization.data(withJSONObject: manifest), as: UTF8.self),
+      to: "bundle/.claude-plugin/plugin.json", base: fixture.project)
+    try fixture.write(
+      "---\nname: reviewer\ndescription: Fixture\n---\nReview source.",
+      to: "bundle/agents/reviewer.md", base: fixture.project)
+    try fixture.write("# Fixture", to: "bundle/skills/fixture/SKILL.md", base: fixture.project)
+    try fixture.write("Default command.", to: "bundle/commands/default.md", base: fixture.project)
+    let item: [String: Any] = [
+      "kind": "plugin", "name": "native-fields", "path": "bundle", "source": ".", "mode": "native",
+      "agents": ["claude-code"],
+    ]
+    let (linked, frozen) = try freeze([item], fixture)
+    var ledger = frozen.ledger
+    ledger.lowerings = [try lower(linked[0], frozen, surface: .claudeCode)]
+    ledger = try prepared(ledger, fixture)
+    try replay(ledger, fixture) { output in
+      let root = try #require(output[1].tree)
+      let bytes = try Data(contentsOf: root.appendingPathComponent(".claude-plugin/plugin.json"))
+      let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+      #expect(object["version"] as? String == "build-label")
+      #expect(
+        FileManager.default.fileExists(
+          atPath: root.appendingPathComponent("commands/default.md").path))
+      #expect(object["commands"] is [String: Any])
+    }
+    var invalid = manifest
+    invalid["agents"] = ["agents/reviewer.md"]
+    try fixture.write(
+      String(decoding: JSONSerialization.data(withJSONObject: invalid), as: UTF8.self),
+      to: "bundle/.claude-plugin/plugin.json", base: fixture.project)
+    let (badLinked, badFrozen) = try freeze([item], fixture)
+    var bad = badFrozen.ledger
+    bad.lowerings = [try lower(badLinked[0], badFrozen, surface: .claudeCode)]
+    do {
+      _ = try prepared(bad, fixture)
+      Issue.record("accepted a native path without its required prefix")
+    } catch let issue as NativeComponentIssue {
+      #expect(issue.field == ["manifest", "agents", "0"])
+      #expect(issue.reason == .invalid)
+    }
+    invalid = manifest
+    invalid["hooks"] = [
+      "PermissionRequest": [["hooks": [["type": "agent", "prompt": "Review request"]]]]
+    ]
+    try fixture.write(
+      String(decoding: JSONSerialization.data(withJSONObject: invalid), as: UTF8.self),
+      to: "bundle/.claude-plugin/plugin.json", base: fixture.project)
+    let (skippedLinked, skippedFrozen) = try freeze([item], fixture)
+    var skipped = skippedFrozen.ledger
+    skipped.lowerings = [try lower(skippedLinked[0], skippedFrozen, surface: .claudeCode)]
+    do {
+      _ = try prepared(skipped, fixture)
+      Issue.record("accepted a handler type the native event skips")
+    } catch let issue as NativeComponentIssue {
+      #expect(issue.field == ["manifest", "hooks", "PermissionRequest", "type"])
+      #expect(issue.reason == .unsupported)
+    }
+    invalid["hooks"] = [
+      "Stop": [["hooks": [["type": "command", "command": "fixture", "onFailure": "block"]]]]
+    ]
+    try fixture.write(
+      String(decoding: JSONSerialization.data(withJSONObject: invalid), as: UTF8.self),
+      to: "bundle/.claude-plugin/plugin.json", base: fixture.project)
+    let (ignoredLinked, ignoredFrozen) = try freeze([item], fixture)
+    var ignored = ignoredFrozen.ledger
+    ignored.lowerings = [try lower(ignoredLinked[0], ignoredFrozen, surface: .claudeCode)]
+    do {
+      _ = try prepared(ignored, fixture)
+      Issue.record("accepted a native failure policy with no effect")
+    } catch let issue as NativeComponentIssue {
+      #expect(issue.field == ["manifest", "hooks", "Stop", "onFailure"])
+      #expect(issue.reason == .unsupported)
+    }
+    // Revision 1 uses its frozen metadata-only validator and continues to replay valid bundles.
+    try fixture.write(
+      #"{"name":"native-fields","version":"1.0.0"}"#, to: "simple/.claude-plugin/plugin.json",
+      base: fixture.project)
+    var simple = item
+    simple["path"] = "simple"
+    let (oldLinked, oldFrozen) = try freeze([simple], fixture)
+    var old = oldFrozen.ledger
+    var lowering = try lower(oldLinked[0], oldFrozen, surface: .claudeCode)
+    lowering.format = "agents/claude-components@1"
+    old.lowerings = [lowering]
+    old = try prepared(old, fixture)
+    let locked = try ResolvedLedgerCodec.encode(old, limits: .standard)
+    try FileManager.default.removeItem(at: fixture.project)
+    try replay(ResolvedLedgerCodec.decode(locked, limits: .standard), fixture) { output in
+      #expect(output.count == 2)
+      #expect(output[0].values?.object?["route"]?.text == "claudeSkillPlugin")
+    }
+  }
+
+  @Test func cursorManifestUsesSelectedPathsAndCommandOnlyPluginHooks() throws {
+    let fixture = try LinkFixture()
+    let base = StateStore(scope: .user, environment: fixture.environment).directory
+    let manifest: [String: Any] = [
+      "name": "cursor-fields", "version": "1.2.3",
+      "author": ["name": "Fixture", "email": "fixture@example.test"],
+      "commands": "./commands", "rules": "./rules", "agents": "./agents", "skills": "./skills",
+      "hooks": "./config/hooks.json", "mcpServers": ["./config/mcp.json"],
+      "variables": [
+        "type": "object", "properties": ["TOKEN": ["type": "string", "title": "Token"]],
+        "required": ["TOKEN"],
+      ],
+    ]
+    try fixture.write(
+      String(decoding: JSONSerialization.data(withJSONObject: manifest), as: UTF8.self),
+      to: "bundle/.cursor-plugin/plugin.json", base: base)
+    for path in [
+      "commands/check.md", "rules/check.mdc", "agents/check.md", "skills/check/SKILL.md",
+    ] {
+      try fixture.write("Fixture source.", to: "bundle/" + path, base: base)
+    }
+    try fixture.write(
+      #"{"hooks":{"beforeShellExecution":[{"command":"./scripts/check.sh","matcher":"curl|wget","failClosed":true}]}}"#,
+      to: "bundle/config/hooks.json", base: base)
+    try fixture.write(
+      #"{"mcpServers":{"fixture":{"command":"node","args":["${CURSOR_PLUGIN_ROOT}/server.js"],"cwd":"${CURSOR_PLUGIN_ROOT}"}}}"#,
+      to: "bundle/config/mcp.json", base: base)
+    // An explicit Cursor hooks path replaces this default discovery file.
+    try fixture.write(
+      #"{"hooks":{"stop":[{"type":"prompt","command":"not-selected"}]}}"#,
+      to: "bundle/hooks/hooks.json", base: base)
+    let item: [String: Any] = [
+      "kind": "plugin", "name": "cursor-fields", "path": "bundle", "source": ".", "mode": "native",
+      "agents": ["cursor"],
+    ]
+    let (linked, frozen) = try freeze([item], fixture, scope: .user)
+    var ledger = frozen.ledger
+    ledger.lowerings = [
+      try NativeComponentLowering.lower(
+        linked[0], frozen: frozen, request: .init(surface: .cursorEditor, scope: .user),
+        id: "cursor-plugin", platform: platform)
+    ]
+    ledger = try prepared(ledger, fixture)
+    try replay(ledger, fixture) { output in
+      #expect(output[0].values?.object?["route"]?.text == "cursorLocalPlugin")
+      let tree = try #require(output[1].tree)
+      #expect(
+        try String(contentsOf: tree.appendingPathComponent("config/hooks.json"), encoding: .utf8)
+          .contains("failClosed"))
+      #expect(
+        try String(contentsOf: tree.appendingPathComponent("hooks/hooks.json"), encoding: .utf8)
+          .contains("not-selected"))
+    }
+    var changed = manifest
+    changed["hooks"] = "./hooks/hooks.json"
+    try fixture.write(
+      String(decoding: JSONSerialization.data(withJSONObject: changed), as: UTF8.self),
+      to: "bundle/.cursor-plugin/plugin.json", base: base)
+    let (badLinked, badFrozen) = try freeze([item], fixture, scope: .user)
+    var bad = badFrozen.ledger
+    bad.lowerings = [
+      try NativeComponentLowering.lower(
+        badLinked[0], frozen: badFrozen, request: .init(surface: .cursorEditor, scope: .user),
+        id: "cursor-plugin", platform: platform)
+    ]
+    do {
+      _ = try prepared(bad, fixture)
+      Issue.record("accepted a prompt handler in a Cursor plugin")
+    } catch let issue as NativeComponentIssue {
+      #expect(issue.field == ["manifest", "hooks", "stop", "type"])
+      #expect(issue.reason == .unsupported)
+    }
+    changed["hooks"] = ["hooks": ["stop": [["command": "fixture"]]]]
+    try fixture.write(
+      String(decoding: JSONSerialization.data(withJSONObject: changed), as: UTF8.self),
+      to: "bundle/.cursor-plugin/plugin.json", base: base)
+    let (inlineLinked, inlineFrozen) = try freeze([item], fixture, scope: .user)
+    var inline = inlineFrozen.ledger
+    inline.lowerings = [
+      try NativeComponentLowering.lower(
+        inlineLinked[0], frozen: inlineFrozen, request: .init(surface: .cursorEditor, scope: .user),
+        id: "cursor-plugin", platform: platform)
+    ]
+    do {
+      _ = try prepared(inline, fixture)
+      Issue.record("guessed an inline Cursor wrapper")
+    } catch let issue as NativeComponentIssue {
+      #expect(issue.field == ["manifest", "hooks"])
+      #expect(issue.reason == .unverified)
+    }
+  }
+
   private var platform: DeclarationPlatform {
     #if os(macOS)
       .macOS

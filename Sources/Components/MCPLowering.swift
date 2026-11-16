@@ -225,9 +225,17 @@ enum MCPNativeField {
     environmentName
   case oneOf(Set<String>)
   case positiveIntegerObject(Set<String>)
+  case numberOrNull
+  case object, nonnegativeInteger
 
   func accepts(_ value: NativeValue) -> Bool {
     switch (self, value) {
+    case (.object, .object): true
+    case (.nonnegativeInteger, .integer(let value)): value >= 0 && Double(exactly: value) != nil
+    case (.nonnegativeInteger, .decimal(let value)):
+      Double(value).map { $0.isFinite && $0 >= 0 && $0.rounded(.towardZero) == $0 } ?? false
+    case (.numberOrNull, .null), (.numberOrNull, .integer): true
+    case (.numberOrNull, .decimal(let number)): Double(number)?.isFinite == true
     case (.boolean, .boolean): true
     case (.falseOnly, .boolean(false)): true
     case (.string, .string), (.environmentName, .string): true
