@@ -6,40 +6,14 @@ extension OpenCodeAdapter {
     -> [ReplayedArtifact]
   {
     switch input.record.kind {
-    case "command":
-      try input.noParameters()
-      var fields = try input.checkedNative(["agent": .string, "subagent": .boolean])
-      fields["description"] = .init(try input.text("description"))
-      fields["template"] = .init(try input.prompt())
+    case "command", "subagent":
+      let fields = try definition(input, prompt: input.prompt())
       return try input.emitted(
         lowering,
         input.envelope(
           route: .openCodeConfig,
-          keys: ["commands", input.record.name], value: .init(object: fields)))
-    case "subagent":
-      guard input.fields["tools"] == nil else {
-        throw input.issue(
-          ["tools"], .unsupported,
-          "OpenCode agent schema has permissions rather than a tool allowlist")
-      }
-      var fields = try input.checkedNative(["hidden": .boolean, "disabled": .boolean])
-      fields["system"] = .init(try input.prompt())
-      fields["description"] = .init(try input.text("description"))
-      fields["mode"] = .init("subagent")
-      if let model = input.fields["model"]?.text {
-        guard model.range(of: #"^[^/#]+/[^#]+(?:#[^#]+)?$"#, options: .regularExpression) != nil
-        else {
-          throw input.issue(
-            ["model"], .invalid, "native model selection requires provider/model syntax")
-        }
-        try input.literal(model, field: ["model"])
-        fields["model"] = .init(model)
-      }
-      return try input.emitted(
-        lowering,
-        input.envelope(
-          route: .openCodeConfig,
-          keys: ["agents", input.record.name], value: .init(object: fields)))
+          keys: [input.record.kind == "command" ? "commands" : "agents", input.record.name],
+          value: .init(object: fields)))
     case "permissions":
       _ = try input.checkedNative([:])
       let rules = try (input.fields["rules"]?.array ?? []).enumerated().map {
@@ -71,4 +45,42 @@ extension OpenCodeAdapter {
       throw input.issue(["kind"], .invalid, "component does not match this concrete native profile")
     }
   }
+
+  /// Renderer and contribution decoder share the definition fields. A file-backed prompt body
+  /// reaches the decoder through its sealed artifact; no source path is rediscovered there.
+  static func definition(_ input: ComponentRenderInput, prompt: String) throws -> [String:
+    LedgerValue]
+  {
+    try input.literal(prompt, field: ["prompt"], prompt: input.record.kind == "command")
+    if input.record.kind == "command" {
+      try input.noParameters()
+      var fields = try input.checkedNative(["agent": .string, "subagent": .boolean])
+      fields["description"] = .init(try input.text("description"))
+      fields["template"] = .init(prompt)
+      return fields
+    }
+    guard input.record.kind == "subagent" else {
+      throw input.issue(["kind"], .invalid, "component is not an OpenCode definition")
+    }
+    guard input.fields["tools"] == nil else {
+      throw input.issue(
+        ["tools"], .unsupported,
+        "OpenCode agent schema has permissions rather than a tool allowlist")
+    }
+    var fields = try input.checkedNative(["hidden": .boolean, "disabled": .boolean])
+    fields["system"] = .init(prompt)
+    fields["description"] = .init(try input.text("description"))
+    fields["mode"] = .init("subagent")
+    if let model = input.fields["model"]?.text {
+      guard model.range(of: #"^[^/#]+/[^#]+(?:#[^#]+)?$"#, options: .regularExpression) != nil
+      else {
+        throw input.issue(
+          ["model"], .invalid, "native model selection requires provider/model syntax")
+      }
+      try input.literal(model, field: ["model"])
+      fields["model"] = .init(model)
+    }
+    return fields
+  }
+
 }

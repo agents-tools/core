@@ -51,7 +51,7 @@ let package = Package(
       dependencies: [
         "AgentsCore", "TreeSitterYAML", "Yams",
         .product(name: "TreeSitter", package: "tree-sitter"),
-      ], resources: [.copy("Resources/agents.schema.json")]),
+      ], exclude: ["Resources/agents.schema.json"]),
     .target(
       name: "AgentsCore",
       dependencies: ["CPlatform", .product(name: "Crypto", package: "swift-crypto")]
@@ -66,8 +66,8 @@ let package = Package(
     .target(
       name: "AgentsUpdates",
       dependencies: [
-        "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "Components",
-        "CPlatform",
+        "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "CPlatform",
+        "Components",
       ]),
     .target(
       name: "Components",
@@ -120,6 +120,7 @@ let package = Package(
       name: "AgentsUpdatesTests",
       dependencies: [
         "AgentsUpdates", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
+        "MCPTestProcess",
       ]),
     .testTarget(
       name: "AgentsSkillsTests",

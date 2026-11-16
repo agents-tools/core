@@ -32,17 +32,41 @@ package enum NativeComponentLayoutsV1 {
     _ lowering: LockedLowering, _ ledger: ResolvedLedger,
     _ resources: [String: URL], limits: LedgerLimits, surface: NativeClientSurface
   ) throws -> [ReplayedArtifact] {
+    let input = try input(lowering, ledger: ledger, resources: resources, limits: limits)
+    let record = input.record
+    let declared = input.request.surface
+    guard format(declared) == format(surface) else {
+      throw CoreError.invalidState("invalid version 1 native component renderer")
+    }
+    if record.kind == "plugin" { return try NativePluginLayoutV1.render(lowering, input) }
+    switch declared {
+    case .geminiCLI: return try GeminiAdapter.components(lowering, input)
+    case .openCodeCLI: return try OpenCodeAdapter.components(lowering, input)
+    case .codexCLI: return try CodexAdapter.components(lowering, input)
+    case .cursorEditor, .cursorCLI, .cursorCloud:
+      return try CursorAdapter.components(lowering, input)
+    case .claudeCode: return try ClaudeAdapter.components(lowering, input)
+    }
+  }
+
+  static func input(
+    _ lowering: LockedLowering, ledger: ResolvedLedger, resources: [String: URL]? = nil,
+    limits: LedgerLimits
+  ) throws -> ComponentRenderInput {
     func invalid() -> CoreError { .invalidState("invalid version 1 native component layout") }
-    guard let layout = lowering.layout.object,
+    guard lowering.layout.kind == .object, let layout = lowering.layout.object,
       Set(layout.keys) == ["surface", "scope", "occurrences"],
+      layout["surface"]?.kind == .string,
       let declared = layout["surface"]?.text.flatMap(NativeClientSurface.init(rawValue:)),
-      format(declared) == format(surface),
+      layout["scope"]?.kind == .string,
       let scope = layout["scope"]?.text.flatMap(InstallScope.init(rawValue:)),
       lowering.format == format(declared), lowering.inputs.count == 1,
       let component = lowering.inputs.first, let record = ledger.components[component],
+      record.payload.kind == .object,
+      ledger.sources[record.source] != nil, ledger.sources[record.declaringSource] != nil,
+      record.resources.allSatisfy({ ledger.resources[$0] != nil }),
       lowering.resources == record.resources,
-      record.resources.allSatisfy({ resources[$0] != nil }),
-      let items = layout["occurrences"]?.array,
+      layout["occurrences"]?.kind == .array, let items = layout["occurrences"]?.array,
       items.allSatisfy({ $0.kind == .integer }), !items.isEmpty
     else { throw invalid() }
     let occurrences = items.compactMap(\.integer)
@@ -59,16 +83,11 @@ package enum NativeComponentLayoutsV1 {
     let input = ComponentRenderInput(
       record: record, component: component,
       request: .init(surface: declared, scope: scope), occurrences: occurrences,
-      resources: resources, ledger: ledger, limits: limits)
-    try input.validateProfile()
-    if record.kind == "plugin" { return try NativePluginLayoutV1.render(lowering, input) }
-    switch declared {
-    case .geminiCLI: return try GeminiAdapter.components(lowering, input)
-    case .openCodeCLI: return try OpenCodeAdapter.components(lowering, input)
-    case .codexCLI: return try CodexAdapter.components(lowering, input)
-    case .cursorEditor, .cursorCLI, .cursorCloud:
-      return try CursorAdapter.components(lowering, input)
-    case .claudeCode: return try ClaudeAdapter.components(lowering, input)
+      resources: resources ?? [:], ledger: ledger, limits: limits)
+    if let resources, !record.resources.allSatisfy({ resources[$0] != nil }) {
+      throw invalid()
     }
+    try input.validateProfile()
+    return input
   }
 }

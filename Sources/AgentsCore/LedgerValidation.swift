@@ -136,6 +136,13 @@ extension ResolvedLedger {
         throw CoreError.invalidState("invalid component identity")
       }
       try component.payload.validate()
+      if let append = component.payload.object?["localAppend"] {
+        let location = try LedgerLocation(ledgerValue: append)
+        guard component.kind == "instructions",
+          component.payload.object?["prompt"]?.kind == .string,
+          location.kind == .registered, ["project", "home"].contains(location.root)
+        else { throw CoreError.invalidState("invalid local prompt append") }
+      }
       try requireResources(component.resources)
       for condition in component.conditions { try validate(condition) }
     }

@@ -199,21 +199,23 @@ generated files, takes over others only with `replace`, and records targets as
 
 ## ChatGPT Prompts
 
-`.instructions(chatGPT: [.prompt(name:sections:append:)])` declares a named
-prompt with ordered `sections` and an optional scope-relative `append` file.
-Update locks prompt sections with file targets. Reports list prompts whose
-section content, order, membership or append path changed. A
-revision change with identical section hashes alone does not mark a prompt
-changed. Consumer-owned append files remain live owner content; their independent
-edits do not require a lock update. Update and install may run before the append
-file exists. Public export resolves the current file against the declaring project
-or user home, and rejects missing, unreadable or escaping files. Append resources
-owned by an immutable producer remain frozen and anchored to that selected source.
+An instructions component's `chatgpt` mapping declares named prompts with ordered
+`sections` and an optional `append` path. Update locks prompt sections with file
+targets. Reports list prompts whose section content, order, membership or append
+path changed. A revision change with identical section hashes alone does not mark
+a prompt changed.
 
-Render verifies locked hashes, renders sections as in targets without the
-notice, and appends the custom file's bytes. It fails without locked sections or
-if an append path escapes the scope through a symlink. It never writes to
-ChatGPT.
+For consumer-authored prompts, append remains current owner content. Its authored
+path is project-relative in project scope and home-relative in user scope. Update
+and installation do not require that export-only file to exist. Export verifies
+locked section hashes, renders them without the notice and reads the current append
+bytes. Missing, unreadable or escaping append content fails export; recorded bytes
+are never a fallback. Append edits do not require a lock update. Export never writes
+to ChatGPT.
+
+The component freeze seam records consumer append coordinates as payload metadata,
+separate from deterministic installation inputs. Producer-owned append content is
+instead read from the selected source snapshot and retained as an exact resource.
 
 ## Diagnostics
 
