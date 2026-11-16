@@ -31,6 +31,18 @@ package enum NativeComponentRoute: String {
   case cursorCommand, cursorAgent, cursorIgnore
   case claudeSkillPlugin, cursorLocalPlugin, geminiExtension
   case claudeCommand, claudeAgent, claudeSettings, cursorHooks
+
+  /// Structured shared documents only. Whole files, ignore blocks and plugin trees have their
+  /// concrete content shape on NativeComponentOutput and do not use a shared-document editor.
+  package var documentFormat: NativeDocumentFormat? {
+    switch self {
+    case .claudeSettings, .codexHooks, .cursorHooks: .json
+    case .codexConfig: .toml
+    case .geminiSettings: .jsonc(trailingCommas: false)
+    case .openCodeConfig: .jsonc(trailingCommas: true)
+    default: nil
+    }
+  }
 }
 
 package enum NativeComponentLowering {
@@ -130,8 +142,36 @@ struct ComponentRenderInput {
         try budget.step(key.utf8.count)
         try admit(item, depth: depth + 1)
       }
+      var node = value
+      if node.array != nil { node.array = [] }
+      if node.object != nil { node.object = [:] }
+      try node.validate()
     }
     try admit(record.payload, depth: 0)
+    guard fields["name"] == .init(record.name) else {
+      throw issue(["name"], .invalid, "frozen payload and component identity do not match")
+    }
+    for key in ["model", "matcher", "description", "purpose", "mode"] where fields[key] != nil {
+      guard fields[key]?.kind == .string else {
+        throw issue([key], .invalid, "frozen native field requires a string")
+      }
+    }
+    for key in ["tools", "patterns"] where fields[key] != nil {
+      guard let values = fields[key]?.array, values.allSatisfy({ $0.kind == .string }) else {
+        throw issue([key], .invalid, "frozen native field requires strings")
+      }
+    }
+    if let timeout = fields["timeoutSeconds"] {
+      guard timeout.kind == .integer, timeout.integer.map({ $0 > 0 }) == true else {
+        throw issue(["timeoutSeconds"], .invalid, "frozen native timeout requires positive seconds")
+      }
+    }
+    if let native = fields["native"] {
+      guard let clients = native.object,
+        clients[request.surface.agent.rawValue] == nil
+          || clients[request.surface.agent.rawValue]?.kind == .object
+      else { throw issue(["native"], .invalid, "frozen native configuration requires objects") }
+    }
     guard record.recipients.contains(request.surface.agent) else {
       throw issue(["recipients"], .invalid, "component does not target this recipient")
     }
