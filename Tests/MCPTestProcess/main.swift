@@ -43,10 +43,22 @@ func response(_ id: Any, _ result: [String: Any]) {
 try? String(getpid()).write(
   to: root.appendingPathComponent(scenario == "holder" ? "holder-pid" : "pid"), atomically: true,
   encoding: .utf8)
-if scenario == "holder" || scenario == "ignore-input" {
+if scenario == "holder" || scenario == "ignore-input" || scenario == "blocked-input" {
+  if scenario == "blocked-input" { alarm(10) }
   _ = signal(SIGTERM, SIG_IGN)
   try? "ready".write(
     to: root.appendingPathComponent("holder-ready"), atomically: true, encoding: .utf8)
+  if scenario == "blocked-input" {
+    while true {
+      var descriptor = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+      if poll(&descriptor, 1, 100) > 0 && descriptor.revents & Int16(POLLIN) != 0 {
+        try? "ready".write(
+          to: root.appendingPathComponent("stdin-pending"), atomically: true, encoding: .utf8)
+        break
+      }
+      usleep(1000)
+    }
+  }
   while true { _ = sleep(1) }
 }
 if scenario == "descendant" {
