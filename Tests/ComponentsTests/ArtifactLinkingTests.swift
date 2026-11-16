@@ -159,6 +159,80 @@ struct ArtifactLinkingTests {
     }
   }
 
+  @Test(arguments: [InstallScope.project, .user])
+  func retainedAllMembersBelongToTheirRecordedIndexes(_ scope: InstallScope) throws {
+    let fixture = try LinkFixture()
+    let store = StateStore(scope: scope, environment: fixture.environment)
+    let packageRoot = scope == .project ? fixture.project : store.directory
+    let webA = fixture.root.appendingPathComponent("web-a")
+    let webB = fixture.root.appendingPathComponent("web-b")
+    for web in [webA, webB] {
+      try FileManager.default.createDirectory(at: web, withIntermediateDirectories: true)
+    }
+    let serverA = try IndexHTTPServer(root: webA)
+    defer { serverA.stop() }
+    let serverB = try IndexHTTPServer(root: webB)
+    defer { serverB.stop() }
+    let alphaDigest = try archive("alpha", body: "alpha original", fixture: fixture, web: webA)
+    let betaDigest = try archive("beta", body: "beta original", fixture: fixture, web: webB)
+    try index([("alpha", alphaDigest)], fixture: fixture, web: webA)
+    try index([("beta", betaDigest)], fixture: fixture, web: webB)
+    let document = try fixture.document(
+      """
+      version: 1
+      sources: {a: {index: '\(serverA.url)'}, b: {index: '\(serverB.url)'}}
+      components: [{kind: skills, source: a}, {kind: skills, source: b}]
+      """)
+    func freeze(pins: [ComponentKey: SourceRevision] = [:], previous: ResolvedLedger? = nil) throws
+      -> ResolvedLedger
+    {
+      try ComponentLinker.withLinkedComponents(
+        document: document, store: store, platform: .macOS,
+        directPins: pins, retaining: previous
+      ) { graph, session in
+        try LedgerFreeze.freeze(
+          graph, session: session,
+          locations: .init(sources: [
+            "local:" + packageRoot.path: .init(
+              kind: .registered, root: scope == .project ? "project" : "state", path: ".")
+          ]), limits: .standard)
+      }
+    }
+    let previous = try ResolvedLedgerCodec.decode(
+      ResolvedLedgerCodec.encode(freeze(), limits: .standard), limits: .standard)
+    func key(_ name: String) -> ComponentKey {
+      .init(
+        source: "local:" + packageRoot.path, root: ".", group: nil, kind: .skills, name: name)
+    }
+    let pins: [ComponentKey: SourceRevision] = [
+      key("alpha"): .init(revision: alphaDigest), key("beta"): .init(revision: betaDigest),
+    ]
+    // Membership comes from each pin's recorded index, even after its download disappears.
+    try FileManager.default.removeItem(at: webA.appendingPathComponent("alpha.zip"))
+    try FileManager.default.removeItem(at: webB.appendingPathComponent("beta.zip"))
+    try index([], fixture: fixture, web: webA)
+    try index([], fixture: fixture, web: webB)
+    let retained = try freeze(pins: pins, previous: previous)
+    #expect(retained.components == previous.components)
+    #expect(retained.resources == previous.resources)
+    #expect(retained.contentObjects == previous.contentObjects)
+    let freshAlpha = try archive("alpha", body: "alpha fresh", fixture: fixture, web: webA)
+    try index([("alpha", freshAlpha)], fixture: fixture, web: webA)
+    let mixed = try freeze(pins: [key("beta"): .init(revision: betaDigest)], previous: previous)
+    let beta = try #require(previous.components.values.first { $0.name == "beta" })
+    #expect(mixed.components.values.first { $0.name == "beta" } == beta)
+    for id in beta.resources { #expect(mixed.resources[id] == previous.resources[id]) }
+    let alpha = try #require(mixed.components.values.first { $0.name == "alpha" })
+    #expect(mixed.sources[alpha.source]?.revision == freshAlpha)
+    var missingPin = pins
+    missingPin[key("alpha")] = .init(revision: "sha256:" + String(repeating: "0", count: 64))
+    #expect(throws: LinkError.self) { try freeze(pins: missingPin, previous: previous) }
+    var corrupt = previous
+    let betaResource = try #require(beta.resources.first)
+    corrupt.resources[betaResource]?.hash = "sha256:" + String(repeating: "0", count: 64)
+    #expect(throws: LinkError.self) { try freeze(pins: pins, previous: corrupt) }
+  }
+
   private func archive(_ name: String, body: String, fixture: LinkFixture, web: URL) throws
     -> String
   {
@@ -204,6 +278,9 @@ private final class IndexHTTPServer {
       "-e",
       #"""
       use IO::Socket::INET;
+      use POSIX qw(SIG_SETMASK sigprocmask);
+      # The fixture's deadline and termination signals must be deliverable.
+      sigprocmask(SIG_SETMASK, POSIX::SigSet->new()) or die "sigprocmask: $!";
       alarm 120;
       my $root = shift;
       my $server = IO::Socket::INET->new(LocalAddr => '127.0.0.1', LocalPort => 0, Listen => 8, Proto => 'tcp') or die $!;

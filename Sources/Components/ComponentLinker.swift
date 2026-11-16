@@ -81,6 +81,50 @@ final class Linking {
     self.retainedLedger = retainedLedger
   }
 
+  /// An implicit selection admits only members owned by its recorded index. The component key
+  /// identifies the declaring context; resource lookup still verifies the applicable exact pin.
+  func artifactBelongsToIndex(key: ComponentKey, source: String) throws -> Bool {
+    guard let pin = directPins[key], pin.revision.hasPrefix("sha256:") else { return false }
+    guard let ledger = retainedLedger else {
+      throw CoreError.invalidState("missing pinned artifact closure")
+    }
+    var recorded = false
+    for component in ledger.components.sorted(by: { $0.key < $1.key }).map(\.value) {
+      try budget.step()
+      guard component.kind == key.kind.rawValue, component.root == key.root,
+        component.group == key.group, PathSafety.sanitizeName(component.name) == key.name,
+        try retainedSourceIdentity(component.declaringSource, ledger: ledger) == key.source
+      else { continue }
+      recorded = true
+      if try retainedSourceIdentity(component.source, ledger: ledger) == source { return true }
+    }
+    guard recorded else { throw CoreError.invalidState("missing pinned artifact component") }
+    return false
+  }
+
+  private func retainedSourceIdentity(_ id: String, ledger: ResolvedLedger) throws -> String {
+    try budget.step()
+    guard let source = ledger.sources[id] else {
+      throw CoreError.invalidState("missing retained source")
+    }
+    if let container = source.container {
+      return try retainedSourceIdentity(container, ledger: ledger) + (source.namespace ?? "")
+    }
+    let location: String
+    if let authored = source.location {
+      location = try authored.resolve(roots: [
+        "project": store.environment.projectDirectory, "home": store.environment.homeDirectory,
+        "state": store.directory,
+      ]).path
+    } else if let transport = source.transport {
+      location = transport
+    } else {
+      throw CoreError.invalidState("missing retained source coordinates")
+    }
+    return try SourceDeclaration(kind: source.kind, location: location).identity(
+      environment: store.environment)
+  }
+
   /// Direct artifact pins use the artifact digest, independently of every other index member.
   /// The caller supplies the admitted ledger closure; absence never means refresh the index.
   func retainedArtifact(key: ComponentKey, source: String) throws -> LedgerResource? {

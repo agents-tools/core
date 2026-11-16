@@ -411,9 +411,14 @@ final class Expansion {
       try linking.budget.step()
       guard candidate.kind == .skills, candidate.source == context.view.snapshot.source,
         candidate.root == context.view.discoveryPath, candidate.group == group,
-        !excluded.contains(candidate.name), requested?.contains(candidate.name) ?? true,
-        let resource = try linking.retainedArtifact(key: candidate, source: address.id)
+        !excluded.contains(candidate.name), requested?.contains(candidate.name) ?? true
       else { continue }
+      if requested == nil, try !linking.artifactBelongsToIndex(key: candidate, source: address.id) {
+        continue
+      }
+      guard let resource = try linking.retainedArtifact(key: candidate, source: address.id) else {
+        continue
+      }
       retained[candidate.name] = resource
     }
     let freshNames = requested.map { $0.filter { retained[$0] == nil && !excluded.contains($0) } }
