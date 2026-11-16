@@ -214,7 +214,17 @@ enum YAMLSourceImport {
         return
       }
     }
-    for field in ["name", "version"] { root[field]!.unconverted(into: &diagnostics) }
+    let name = root["name"]!
+    let version = root["version"]!
+    for field in [name, version]
+    where field.string!.contains("://") && !ImportInput.safeLocator(field.string!) {
+      diagnostics.binding(field.location)
+      field.unconverted(into: &diagnostics)
+      return
+    }
+    diagnostics.proposal.packageMetadata = .init(
+      name: name.string!, version: version.string!,
+      nameLocation: name.location, versionLocation: version.location)
     root.unknown(
       [
         "$schema", "name", "version", "target", "targets", "includes", "dependencies",

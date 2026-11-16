@@ -1,0 +1,355 @@
+import AgentsCore
+import Foundation
+
+/// Container discovery uses producer roots, never the parser's working directory.
+enum NativeContainerImport {
+  static func read(
+    _ input: SourceImportInput, limits: SourceImportLimits,
+    into diagnostics: inout ImportDiagnostics
+  ) throws {
+    let suffix: String
+    switch input.profile {
+    case .claudePluginV1: suffix = ".claude-plugin/plugin.json"
+    case .cursorPluginV1: suffix = ".cursor-plugin/plugin.json"
+    default: suffix = "gemini-extension.json"
+    }
+    guard input.document == suffix || input.document.hasSuffix("/" + suffix) else {
+      diagnostics.add(
+        .invalidInput, .init(document: input.document, pointer: ""),
+        "Manifest location does not match the selected native container profile.")
+      return
+    }
+    let root = input.document == suffix ? "." : String(input.document.dropLast(suffix.count + 1))
+    let parsed = try NativeImportDocument(input, format: .json, limits: limits)
+    guard let name = parsed.fields["name"]?.importString, NativeImportInput.name(name) else {
+      throw ImportReadFailure.invalid
+    }
+    let snapshot = try ImportInput.snapshot(input.root)
+    try parsed.admission.resource(try snapshot.resource(root), snapshot: snapshot)
+    let agent = NativeImportInput.agent(input.profile)
+    let alias = NativeImportInput.source(
+      input, root: root, origin: parsed.location(), into: &diagnostics)
+    let metadata: Set<String> = ["name", "version"]
+    let members: Set<String> =
+      agent == .geminiCLI
+      ? ["mcpServers", "contextFileName"]
+      : ["commands", "agents", "skills", "hooks", "mcpServers", "lspServers", "rules"]
+    NativeImportInput.unknown(
+      parsed.fields, allowed: metadata.union(members), at: parsed.location(), into: &diagnostics)
+    if agent == .geminiCLI, parsed.fields["version"]?.importString?.isEmpty != false {
+      diagnostics.add(
+        .invalidInput, parsed.location(["version"]), "Native extension requires a version string.")
+      return
+    }
+    // A container contributes typed children; .native selection/registration belongs to B/F.
+    // Unknown/dependency fields are already diagnosed rather than becoming opaque payloads.
+    for (field, kind, folder) in [
+      ("commands", DeclaredComponentKind.command, "commands"),
+      ("agents", .subagent, "agents"), ("skills", .skills, "skills"),
+    ] {
+      let supplied = parsed.fields[field]
+      if agent == .geminiCLI, supplied != nil {
+        NativeImportInput.unconverted(supplied!, at: parsed.location([field]), into: &diagnostics)
+        continue
+      }
+      var paths: [String] = []
+      var explicitPaths: Set<String> = []
+      // Cursor explicit paths replace default discovery. Claude paths add to defaults.
+      if agent != .cursor || supplied == nil { paths.append(folder) }
+      if let supplied {
+        if let path = supplied.importString {
+          let relative = try componentPath(path, agent: agent)
+          explicitPaths.insert(relative)
+          paths.append(relative)
+        } else if let list = supplied.importStrings {
+          let relative = try list.map { try componentPath($0, agent: agent) }
+          explicitPaths.formUnion(relative)
+          paths += relative
+        } else {
+          NativeImportInput.unconverted(supplied, at: parsed.location([field]), into: &diagnostics)
+        }
+      }
+      var seen: Set<String> = []
+      for path in paths where seen.insert(path).inserted {
+        try discover(
+          path, kind: kind, root: root, input: input, limits: limits, into: &diagnostics,
+          admission: parsed.admission,
+          requiredOrigin: explicitPaths.contains(path) ? parsed.location([field]) : nil)
+      }
+    }
+    var mcpSources: [(NativeValue, NativeImportDocument, [String])] = []
+    let mcpDefault = agent == .cursor ? "mcp.json" : ".mcp.json"
+    if agent != .geminiCLI, agent != .cursor || parsed.fields["mcpServers"] == nil,
+      let document = try optionalDocument(
+        mcpDefault, root: root, input: input, limits: limits, admission: parsed.admission)
+    {
+      NativeImportInput.unknown(
+        document.fields, allowed: ["mcpServers"], at: document.location(), into: &diagnostics)
+      if let map = document.fields["mcpServers"] {
+        mcpSources.append((map, document, ["mcpServers"]))
+      } else {
+        NativeImportInput.unconverted(
+          .object(document.fields), at: document.location(), into: &diagnostics)
+      }
+    }
+    if let declared = parsed.fields["mcpServers"] {
+      try configurations(
+        declared, field: "mcpServers", parsed: parsed, root: root, limits: limits,
+        into: &mcpSources, diagnostics: &diagnostics)
+    }
+    // The producer loads defaults then declarations; later duplicate names replace earlier ones.
+    var winners: [String: (NativeValue, NativeImportDocument, [String])] = [:]
+    for (value, document, keys) in mcpSources {
+      guard let fields = value.importObject else { throw ImportReadFailure.invalid }
+      for (name, entry) in fields {
+        if let previous = winners[name] {
+          diagnostics.add(
+            .unconverted, previous.1.location(previous.2 + [name]),
+            "Later native MCP declaration replaces this earlier source member.")
+        }
+        winners[name] = (entry, document, keys)
+      }
+    }
+    for name in winners.keys.sorted() {
+      let winner = winners[name]!
+      try NativeSourceImport.mcp(
+        .object([name: winner.0]), parsed: winner.1, keys: winner.2,
+        container: root, limits: limits, into: &diagnostics)
+    }
+    var observed: Set<String> = []
+    for (_, document, _) in mcpSources
+    where document.input.document != input.document
+      && observed.insert(document.input.document).inserted
+    {
+      let relative =
+        root == "."
+        ? document.input.document : String(document.input.document.dropFirst(root.count + 1))
+      let rewrite = diagnostics.proposal.bindings.contains {
+        $0.location.document == document.input.document
+      }
+      try NativeImportInput.resource(
+        relative, root: root, input: input, origin: document.location(), limits: limits,
+        rewrite: rewrite, into: &diagnostics, admission: parsed.admission)
+    }
+    var lspSources: [(NativeValue, NativeImportDocument, [String])] = []
+    if agent == .claudeCode,
+      let document = try optionalDocument(
+        ".lsp.json", root: root, input: input, limits: limits, admission: parsed.admission)
+    {
+      lspSources.append((.object(document.fields), document, []))
+    }
+    if let value = parsed.fields["lspServers"] {
+      try configurations(
+        value, field: "lspServers", parsed: parsed, root: root, limits: limits, into: &lspSources,
+        diagnostics: &diagnostics)
+    }
+    var lspWinners: [String: (NativeValue, NativeImportDocument, [String])] = [:]
+    for (value, document, keys) in lspSources {
+      for (name, entry) in value.importObject ?? [:] { lspWinners[name] = (entry, document, keys) }
+    }
+    for name in lspWinners.keys.sorted() {
+      let entry = lspWinners[name]!
+      try NativeSourceImport.lsp(
+        .object([name: entry.0]), parsed: entry.1, keys: entry.2, container: root, limits: limits,
+        into: &diagnostics)
+    }
+    var hookSources: [(NativeValue, NativeImportDocument, [String])] = []
+    if agent != .cursor || parsed.fields["hooks"] == nil,
+      let document = try optionalDocument(
+        "hooks/hooks.json", root: root, input: input, limits: limits, admission: parsed.admission),
+      let value = document.fields["hooks"]
+    {
+      NativeImportInput.unknown(
+        document.fields, allowed: ["hooks"], at: document.location(), into: &diagnostics)
+      hookSources.append((value, document, ["hooks"]))
+    }
+    if let value = parsed.fields["hooks"] {
+      try configurations(
+        value, field: "hooks", parsed: parsed, root: root, limits: limits, into: &hookSources,
+        diagnostics: &diagnostics)
+    }
+    for (value, document, keys) in hookSources {
+      try NativeSourceImport.hooks(
+        value, parsed: document, keys: keys, container: root, limits: limits, into: &diagnostics)
+    }
+    for (_, document, _) in lspSources + hookSources
+    where document.input.document != input.document
+      && observed.insert(document.input.document).inserted
+    {
+      let path =
+        root == "."
+        ? document.input.document : String(document.input.document.dropFirst(root.count + 1))
+      let rewrite = diagnostics.proposal.bindings.contains {
+        $0.location.document == document.input.document
+      }
+      try NativeImportInput.resource(
+        path, root: root, input: input, origin: document.location(), limits: limits,
+        rewrite: rewrite, into: &diagnostics, admission: parsed.admission)
+    }
+    for field in ["rules", "contextFileName"] where parsed.fields[field] != nil {
+      NativeImportInput.unconverted(
+        parsed.fields[field]!, at: parsed.location([field]), into: &diagnostics)
+    }
+    // Record the actual manifest, not a raw original bundle containing credential literals.
+    let rewrite = diagnostics.proposal.bindings.contains { $0.location.document == input.document }
+    try NativeImportInput.resource(
+      suffix, root: root, input: input, origin: parsed.location(), limits: limits, rewrite: rewrite,
+      into: &diagnostics, admission: parsed.admission)
+    if diagnostics.proposal.components.isEmpty {
+      diagnostics.add(
+        .unconverted, parsed.location(),
+        "No typed child was converted; native container preservation/registration remains an explicit B/F operation."
+      )
+    }
+    _ = alias
+  }
+
+  private static func componentPath(_ path: String, agent: AgentID) throws -> String {
+    if agent == .claudeCode, !path.hasPrefix("./"), path != "." {
+      throw CoreError.unsafePath("native component path")
+    }
+    return try NativeSourceImport.nativePath(path, container: ".")
+  }
+
+  private static func configurations(
+    _ value: NativeValue, field: String, parsed: NativeImportDocument,
+    root: String, limits: SourceImportLimits,
+    into sources: inout [(NativeValue, NativeImportDocument, [String])],
+    diagnostics: inout ImportDiagnostics
+  ) throws {
+    if let path = value.importString {
+      let relative = try componentPath(path, agent: NativeImportInput.agent(parsed.input.profile))
+      guard
+        let document = try optionalDocument(
+          relative, root: root, input: parsed.input, limits: limits, admission: parsed.admission)
+      else {
+        diagnostics.add(
+          .missingResource, parsed.location([field]), "Explicit native component file is absent.")
+        return
+      }
+      guard
+        let fields = field == "lspServers"
+          ? NativeValue.object(document.fields) : document.fields[field]
+      else {
+        NativeImportInput.unconverted(
+          .object(document.fields), at: document.location(), into: &diagnostics)
+        return
+      }
+      if field != "lspServers" {
+        NativeImportInput.unknown(
+          document.fields, allowed: [field],
+          at: document.location(), into: &diagnostics)
+      }
+      sources.append((fields, document, [field]))
+    } else if case .array(let entries) = value {
+      for entry in entries {
+        try configurations(
+          entry, field: field, parsed: parsed, root: root, limits: limits, into: &sources,
+          diagnostics: &diagnostics)
+      }
+    } else if value.importObject != nil, NativeImportInput.agent(parsed.input.profile) != .cursor {
+      sources.append((value, parsed, [field]))
+    } else {
+      NativeImportInput.unconverted(value, at: parsed.location([field]), into: &diagnostics)
+    }
+  }
+
+  private static func optionalDocument(
+    _ path: String, root: String, input: SourceImportInput,
+    limits: SourceImportLimits, admission: NativeImportBudget
+  ) throws -> NativeImportDocument? {
+    let relative = root == "." ? path : root + "/" + path
+    let snapshot = try ImportInput.snapshot(input.root)
+    let url = try snapshot.resource(relative)
+    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    return try NativeImportDocument(
+      .init(profile: input.profile, root: input.root, document: relative), format: .json,
+      limits: limits, admission: admission)
+  }
+
+  private static func discover(
+    _ path: String, kind: DeclaredComponentKind, root: String,
+    input: SourceImportInput, limits: SourceImportLimits, into diagnostics: inout ImportDiagnostics,
+    admission: NativeImportBudget, requiredOrigin: ImportLocation?
+  ) throws {
+    let snapshot = try ImportInput.snapshot(input.root)
+    let relative = root == "." ? path : root + (path == "." ? "" : "/" + path)
+    let url = try snapshot.resource(relative)
+    var directory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) else {
+      if let requiredOrigin {
+        diagnostics.add(.missingResource, requiredOrigin, "Explicit native member path is absent.")
+      }
+      return
+    }
+    var files: [String] = []
+    if directory.boolValue {
+      guard let iterator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
+      else { throw ImportReadFailure.invalid }
+      for case let file as URL in iterator {
+        try Task.checkCancellation()
+        guard files.count < limits.resourceEntries else { throw ImportReadFailure.invalid }
+        let location = try snapshot.relativePath(file)
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        guard attributes[.type] as? FileAttributeType != .typeSymbolicLink else {
+          diagnostics.add(
+            .unconverted, .init(document: location, pointer: ""),
+            "Native member discovery through a link requires explicit contained support closure.")
+          iterator.skipDescendants()
+          continue
+        }
+        if attributes[.type] as? FileAttributeType == .typeRegular { files.append(location) }
+      }
+    } else {
+      files = [relative]
+    }
+    for file in files.sorted() {
+      if kind == .skills {
+        guard URL(fileURLWithPath: file).lastPathComponent == "SKILL.md" else { continue }
+        let skillPath = (file as NSString).deletingLastPathComponent
+        let content = try ImportSkillContent.read(skillPath, input: input, limits: limits)
+        diagnostics.proposal.diagnostics += content.diagnostics
+        diagnostics.proposal.bindings += content.bindings
+        if !content.bindings.isEmpty { continue }
+        let alias = "native-skill-" + String(diagnostics.proposal.sources.count)
+        diagnostics.proposal.sources.append(
+          .init(
+            alias: alias, origin: .init(document: file, pointer: ""),
+            declaration: .init(
+              kind: .local, location: skillPath,
+              environment: .init(projectDirectory: input.root, homeDirectory: input.root)),
+            pin: .init(), requestedRef: nil, producerPath: skillPath))
+        NativeImportInput.emit(
+          .skills(
+            source: alias,
+            .init(
+              select: .names([content.skill.name]),
+              agents: [NativeImportInput.agent(input.profile)], condition: content.skill.condition)),
+          selector: .skill(name: content.skill.name),
+          origin: .init(document: file, pointer: "/frontmatter"), container: root,
+          profile: input.profile, into: &diagnostics, admission: admission)
+        diagnostics.proposal.resources.append(
+          .init(
+            origin: .init(document: file, pointer: ""), sourceAlias: alias,
+            producerName: content.skill.name, path: ".", producerIntegrity: nil,
+            observedHash: content.hash,
+            executableFlags: content.flags, requiresStandaloneSource: true, kind: .skills))
+      } else {
+        let ext = URL(fileURLWithPath: file).pathExtension
+        let allowed =
+          NativeImportInput.agent(input.profile) == .geminiCLI && kind == .command
+          ? ["toml"] : ["md", "mdc", "markdown", "txt"]
+        guard allowed.contains(ext) else {
+          diagnostics.add(
+            .unconverted, .init(document: file, pointer: ""),
+            "Native directory file has no converted member format.")
+          continue
+        }
+        try NativeMemberImport.read(
+          .init(profile: input.profile, root: input.root, document: file), container: root,
+          kind: kind, limits: limits, into: &diagnostics, admission: admission,
+          discoveryRoot: relative)
+      }
+    }
+  }
+}
