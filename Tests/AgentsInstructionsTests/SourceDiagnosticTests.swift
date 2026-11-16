@@ -1,7 +1,9 @@
 import AgentsCore
 import AgentsInstructions
 import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Instruction source diagnostics")

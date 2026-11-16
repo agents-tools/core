@@ -1,31 +1,31 @@
 import Foundation
 
 /// Version 2 of the scope's single resolved file. Arrays preserve contribution and render order.
-package struct ResolvedLedger: Codable, Equatable, Sendable {
-  package var version = 2
-  package var sources: [String: LedgerSource] = [:]
-  package var sourceUses: [LedgerSourceUse] = []
-  package var components: [String: LedgerComponent] = [:]
-  package var occurrences: [LedgerOccurrence] = []
-  package var groups: [LedgerGroup] = []
-  package var resources: [String: LedgerResource] = [:]
-  package var deployments: [LedgerDeployment] = []
-  package var lowerings: [LockedLowering] = []
+public struct ResolvedLedger: Codable, Equatable, Sendable {
+  public var version = 2
+  public var sources: [String: LedgerSource] = [:]
+  public var sourceUses: [LedgerSourceUse] = []
+  public var components: [String: LedgerComponent] = [:]
+  public var occurrences: [LedgerOccurrence] = []
+  public var groups: [LedgerGroup] = []
+  public var resources: [String: LedgerResource] = [:]
+  public var deployments: [LedgerDeployment] = []
+  public var lowerings: [LockedLowering] = []
   /// Digest-keyed non-secret bytes. These are authoritative; materializations are disposable.
-  package var contentObjects: [String: Data] = [:]
-  package init() {}
+  public var contentObjects: [String: Data] = [:]
+  public init() {}
 }
 
-package struct LedgerSource: Codable, Equatable, Sendable {
-  package var kind: SourceKind
-  package var transport: String?
-  package var location: LedgerLocation?
-  package var revision: String
-  package var version: String?
-  package var container: String?
-  package var namespace: String?
+public struct LedgerSource: Codable, Equatable, Sendable {
+  public var kind: SourceKind
+  public var transport: String?
+  public var location: LedgerLocation?
+  public var revision: String
+  public var version: String?
+  public var container: String?
+  public var namespace: String?
 
-  package init(
+  public init(
     kind: SourceKind, transport: String? = nil, location: LedgerLocation? = nil, revision: String,
     version: String? = nil, container: String? = nil, namespace: String? = nil
   ) {
@@ -39,12 +39,17 @@ package struct LedgerSource: Codable, Equatable, Sendable {
   }
 }
 
-package struct LedgerSourceUse: Codable, Equatable, Sendable {
-  package var source: String
-  package var root: String
-  package var requirement: SourceRequirement?
+public struct LedgerSourceUse: Codable, Equatable, Sendable {
+  public var source: String
+  public var root: String
+  public var requirement: SourceRequirement?
 
-  package init(source: String, root: String, requirement: SourceRequirement? = nil) {
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.source == rhs.source && lhs.root == rhs.root
+      && ledgerRequirementsEqual(lhs.requirement, rhs.requirement)
+  }
+
+  public init(source: String, root: String, requirement: SourceRequirement? = nil) {
     self.source = source
     self.root = root
     self.requirement = requirement
@@ -52,11 +57,11 @@ package struct LedgerSourceUse: Codable, Equatable, Sendable {
 }
 
 /// Physical URLs are supplied by the caller. Absolute authored locations retain their meaning.
-package struct LedgerLocation: Codable, Equatable, Hashable, Sendable {
-  package enum Kind: String, Codable, Sendable { case registered, authoringRelative, absolute }
-  package var kind: Kind
-  package var root: String?
-  package var path: String
+public struct LedgerLocation: Codable, Equatable, Hashable, Sendable {
+  public enum Kind: String, Codable, Sendable { case registered, authoringRelative, absolute }
+  public var kind: Kind
+  public var root: String?
+  public var path: String
 
   package func resolve(roots: [String: URL]) throws -> URL {
     try validate()
@@ -89,7 +94,7 @@ package struct LedgerLocation: Codable, Equatable, Hashable, Sendable {
     }
   }
 
-  package init(kind: Kind, root: String? = nil, path: String) {
+  public init(kind: Kind, root: String? = nil, path: String) {
     self.kind = kind
     self.root = root
     self.path = path
@@ -97,38 +102,38 @@ package struct LedgerLocation: Codable, Equatable, Hashable, Sendable {
 }
 
 /// A closed tagged value vocabulary, independent of Swift's synthesized enum representation.
-package struct LedgerValue: Codable, Equatable, Sendable {
-  package enum Kind: String, Codable, Sendable {
+public struct LedgerValue: Codable, Equatable, Sendable {
+  public enum Kind: String, Codable, Sendable {
     case string, integer, decimal, boolean, null, array, object, literal, environment, secret
   }
-  package var kind: Kind
-  package var text: String?
-  package var integer: Int?
-  package var boolean: Bool?
-  package var array: [LedgerValue]?
-  package var object: [String: LedgerValue]?
+  public var kind: Kind
+  public var text: String?
+  public var integer: Int?
+  public var boolean: Bool?
+  public var array: [LedgerValue]?
+  public var object: [String: LedgerValue]?
 
-  package init(_ text: String, kind: Kind = .string) {
+  public init(_ text: String, kind: Kind = .string) {
     self.kind = kind
     self.text = text
   }
-  package init(integer: Int) {
+  public init(integer: Int) {
     kind = .integer
     self.integer = integer
   }
-  package init(boolean: Bool) {
+  public init(boolean: Bool) {
     kind = .boolean
     self.boolean = boolean
   }
-  package init(array: [LedgerValue]) {
+  public init(array: [LedgerValue]) {
     kind = .array
     self.array = array
   }
-  package init(object: [String: LedgerValue]) {
+  public init(object: [String: LedgerValue]) {
     kind = .object
     self.object = object
   }
-  package init() { kind = .null }
+  public init() { kind = .null }
 
   package func validate() throws {
     let fields = [text != nil, integer != nil, boolean != nil, array != nil, object != nil]
@@ -149,34 +154,34 @@ package struct LedgerValue: Codable, Equatable, Sendable {
   }
 }
 
-package struct LedgerCondition: Codable, Equatable, Sendable {
-  package var agents: [AgentID]?
-  package var scopes: [InstallScope]?
-  package var platforms: [String]?
+public struct LedgerCondition: Codable, Equatable, Sendable {
+  public var agents: [AgentID]?
+  public var scopes: [InstallScope]?
+  public var platforms: [String]?
 
-  package init(_ condition: DeclarationCondition) {
+  public init(_ condition: DeclarationCondition) {
     agents = condition.agents
     scopes = condition.scopes
     platforms = condition.platforms?.map(\.rawValue)
   }
 }
 
-package struct LedgerComponent: Codable, Equatable, Sendable {
-  package var declaringSource: String
-  package var source: String
-  package var root: String
-  package var group: String?
-  package var kind: String
-  package var name: String
-  package var revision: String?
-  package var version: String?
-  package var payload: LedgerValue
-  package var conditions: [LedgerCondition]
-  package var recipients: [AgentID]
-  package var chatGPT: Bool
-  package var resources: [String]
+public struct LedgerComponent: Codable, Equatable, Sendable {
+  public var declaringSource: String
+  public var source: String
+  public var root: String
+  public var group: String?
+  public var kind: String
+  public var name: String
+  public var revision: String?
+  public var version: String?
+  public var payload: LedgerValue
+  public var conditions: [LedgerCondition]
+  public var recipients: [AgentID]
+  public var chatGPT: Bool
+  public var resources: [String]
 
-  package init(
+  public init(
     declaringSource: String, source: String, root: String, group: String? = nil, kind: String,
     name: String, revision: String? = nil, version: String? = nil, payload: LedgerValue,
     conditions: [LedgerCondition], recipients: [AgentID], chatGPT: Bool, resources: [String]
@@ -197,18 +202,18 @@ package struct LedgerComponent: Codable, Equatable, Sendable {
   }
 }
 
-package struct LedgerOccurrence: Codable, Equatable, Sendable {
-  package var declaringSource: String
-  package var manifestPath: String
-  package var id: Int
-  package var component: String
-  package var reference: Int?
-  package var dependencies: [String]
-  package var condition: LedgerCondition
-  package var recipients: [AgentID]
-  package var consumerEditable: Bool
+public struct LedgerOccurrence: Codable, Equatable, Sendable {
+  public var declaringSource: String
+  public var manifestPath: String
+  public var id: Int
+  public var component: String
+  public var reference: Int?
+  public var dependencies: [String]
+  public var condition: LedgerCondition
+  public var recipients: [AgentID]
+  public var consumerEditable: Bool
 
-  package init(
+  public init(
     declaringSource: String, manifestPath: String, id: Int, component: String,
     reference: Int? = nil, dependencies: [String], condition: LedgerCondition,
     recipients: [AgentID], consumerEditable: Bool
@@ -225,17 +230,23 @@ package struct LedgerOccurrence: Codable, Equatable, Sendable {
   }
 }
 
-package struct LedgerGroup: Codable, Equatable, Sendable {
-  package var id: Int
-  package var parent: Int?
-  package var source: String
-  package var root: String
-  package var name: String
-  package var requirement: SourceRequirement?
-  package var manifestHash: String
-  package var children: [Int]
+public struct LedgerGroup: Codable, Equatable, Sendable {
+  public var id: Int
+  public var parent: Int?
+  public var source: String
+  public var root: String
+  public var name: String
+  public var requirement: SourceRequirement?
+  public var manifestHash: String
+  public var children: [Int]
 
-  package init(
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.id == rhs.id && lhs.parent == rhs.parent && lhs.source == rhs.source && lhs.root == rhs.root
+      && lhs.name == rhs.name && lhs.manifestHash == rhs.manifestHash
+      && lhs.children == rhs.children && ledgerRequirementsEqual(lhs.requirement, rhs.requirement)
+  }
+
+  public init(
     id: Int, parent: Int? = nil, source: String, root: String, name: String,
     requirement: SourceRequirement? = nil, manifestHash: String, children: [Int]
   ) {
@@ -250,16 +261,16 @@ package struct LedgerGroup: Codable, Equatable, Sendable {
   }
 }
 
-package struct LedgerEntry: Codable, Equatable, Sendable {
-  package enum Kind: String, Codable, Sendable { case file, directory, symlink }
-  package var path: String
-  package var kind: Kind
-  package var object: String?
-  package var link: String?
-  package var executable: Bool
-  package var byteCount: Int?
+public struct LedgerEntry: Codable, Equatable, Sendable {
+  public enum Kind: String, Codable, Sendable { case file, directory, symlink }
+  public var path: String
+  public var kind: Kind
+  public var object: String?
+  public var link: String?
+  public var executable: Bool
+  public var byteCount: Int?
 
-  package init(
+  public init(
     path: String, kind: Kind, object: String? = nil, link: String? = nil, executable: Bool,
     byteCount: Int? = nil
   ) {
@@ -272,19 +283,19 @@ package struct LedgerEntry: Codable, Equatable, Sendable {
   }
 }
 
-package struct LedgerResource: Codable, Equatable, Sendable {
-  package enum Kind: String, Codable, Sendable { case git, artifact, embedded, liveEdit }
-  package var kind: Kind
-  package var source: String
-  package var path: String
-  package var hash: String
+public struct LedgerResource: Codable, Equatable, Sendable {
+  public enum Kind: String, Codable, Sendable { case git, artifact, embedded, liveEdit }
+  public var kind: Kind
+  public var source: String
+  public var path: String
+  public var hash: String
   /// Single files use path "."; directory entries are relative to the selected resource.
-  package var entries: [LedgerEntry]
-  package var support: [LedgerEntry]
-  package var artifact: LockedArtifact?
-  package var location: LedgerLocation?
+  public var entries: [LedgerEntry]
+  public var support: [LedgerEntry]
+  public var artifact: LockedArtifact?
+  public var location: LedgerLocation?
 
-  package init(
+  public init(
     kind: Kind, source: String, path: String, hash: String, entries: [LedgerEntry],
     support: [LedgerEntry] = [], artifact: LockedArtifact? = nil, location: LedgerLocation? = nil
   ) {
@@ -299,20 +310,20 @@ package struct LedgerResource: Codable, Equatable, Sendable {
   }
 }
 
-package struct LedgerDeployment: Codable, Equatable, Sendable {
-  package enum Ownership: String, Codable, Sendable { case generated, importBlock, ownedValues }
-  package var id: String
-  package var target: LedgerLocation
-  package var route: String
-  package var owners: [String]
-  package var recipients: [AgentID]
-  package var ownership: Ownership
-  package var expectedHash: String
-  package var created: Bool
-  package var importReference: String?
-  package var headingOffset: Int?
+public struct LedgerDeployment: Codable, Equatable, Sendable {
+  public enum Ownership: String, Codable, Sendable { case generated, importBlock, ownedValues }
+  public var id: String
+  public var target: LedgerLocation
+  public var route: String
+  public var owners: [String]
+  public var recipients: [AgentID]
+  public var ownership: Ownership
+  public var expectedHash: String
+  public var created: Bool
+  public var importReference: String?
+  public var headingOffset: Int?
 
-  package init(
+  public init(
     id: String, target: LedgerLocation, route: String, owners: [String], recipients: [AgentID],
     ownership: Ownership, expectedHash: String, created: Bool, importReference: String? = nil,
     headingOffset: Int? = nil
@@ -331,17 +342,17 @@ package struct LedgerDeployment: Codable, Equatable, Sendable {
 }
 
 /// Format identity fixes schema, ordering, paths, resource mappings and serialization semantics.
-package struct LockedLowering: Codable, Equatable, Sendable {
-  package var id: String
-  package var format: String
-  package var inputs: [String]
-  package var resources: [String]
-  package var deployments: [String]
-  package var layout: LedgerValue
-  package var platform: String
-  package var artifacts: [LedgerArtifactDigest]
+public struct LockedLowering: Codable, Equatable, Sendable {
+  public var id: String
+  public var format: String
+  public var inputs: [String]
+  public var resources: [String]
+  public var deployments: [String]
+  public var layout: LedgerValue
+  public var platform: String
+  public var artifacts: [LedgerArtifactDigest]
 
-  package init(
+  public init(
     id: String, format: String, inputs: [String], resources: [String], deployments: [String],
     layout: LedgerValue, platform: String, artifacts: [LedgerArtifactDigest]
   ) {
@@ -356,13 +367,13 @@ package struct LockedLowering: Codable, Equatable, Sendable {
   }
 }
 
-package struct LedgerArtifactDigest: Codable, Equatable, Sendable {
-  package enum Kind: String, Codable, Sendable { case file, tree, ownedValues, registration, link }
-  package var name: String
-  package var kind: Kind
-  package var hash: String
+public struct LedgerArtifactDigest: Codable, Equatable, Sendable {
+  public enum Kind: String, Codable, Sendable { case file, tree, ownedValues, registration, link }
+  public var name: String
+  public var kind: Kind
+  public var hash: String
 
-  package init(name: String, kind: Kind, hash: String) {
+  public init(name: String, kind: Kind, hash: String) {
     self.name = name
     self.kind = kind
     self.hash = hash
@@ -374,5 +385,13 @@ package func ledgerPath(_ path: String) throws {
     try PathSafety.sanitizeSubpath(path) == path
   else {
     throw CoreError.invalidState("noncanonical ledger path")
+  }
+}
+
+private func ledgerRequirementsEqual(_ lhs: SourceRequirement?, _ rhs: SourceRequirement?) -> Bool {
+  switch (lhs, rhs) {
+  case (nil, nil): true
+  case (.some(let left), .some(let right)): left == right || left.declarationEquivalent(to: right)
+  default: false
   }
 }

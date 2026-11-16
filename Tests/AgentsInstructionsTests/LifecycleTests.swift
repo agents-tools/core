@@ -1,7 +1,9 @@
 import AgentsCore
 import AgentsInstructions
 import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Instruction lifecycle")
@@ -344,11 +346,11 @@ struct InstructionLifecycleTests {
       try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
         $0.kind == .uncommittedSource
       })
-    #expect(throws: (any Error).self) {
+    #expect(
       try InstructionOperations.list(
         source: SourceDeclaration(kind: .local, location: fixture.home.path),
-        environment: fixture.environment)
-    }
+        environment: fixture.environment
+      ).isEmpty)
   }
 
   @Test func discoveryRejectsInvalidNamesSymbolicLinksAndDuplicates() throws {

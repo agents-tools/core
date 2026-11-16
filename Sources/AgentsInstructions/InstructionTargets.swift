@@ -1,13 +1,14 @@
 import AgentsCore
 import Foundation
 
-struct InstructionTargets {
+package struct InstructionTargets {
+  package init(store: StateStore) { self.store = store }
   let store: StateStore
 
   /// Plans every generated target from `sections` in declared order, the Claude import, and the
   /// removal of targets that no longer receive sections. `restoring` keeps the locked targets,
   /// recipients and Claude imports, and requires each rendering to match its locked hash.
-  func plan(
+  package func plan(
     sections: [InstructionSection], agents: [AgentID], previous: LockedInstructions,
     restoring: Bool = false
   ) throws -> (
@@ -284,7 +285,7 @@ struct InstructionTargets {
   }
 
   /// Rejects targets inside an instructions container of a local source.
-  static func validateSourceDirectories(
+  package static func validateSourceDirectories(
     _ changes: [InstructionTargetChange], sources: [String: LockedSource]
   ) throws {
     for source in sources where source.value.kind == .local {
@@ -315,7 +316,13 @@ struct InstructionTargets {
     return try FileSystem.read(at: file)
   }
 
-  private static func importBlock(in bytes: Data, at path: ClaudeInstructionPath) throws
+  package static func ownedImportBytes(_ bytes: Data?) throws -> Data? {
+    guard let bytes else { return nil }
+    let document = try MarkdownDocument(bytes: bytes)
+    return try document.managedBlock().map { Data(document.normalized($0).utf8) }
+  }
+
+  package static func importBlock(in bytes: Data, at path: ClaudeInstructionPath) throws
     -> (bytes: Data, blockHash: String)
   {
     let document = try MarkdownDocument(bytes: bytes)

@@ -1,6 +1,7 @@
 import AgentsInstructions
 import AgentsManifest
 import AgentsSkills
+import AgentsUpdates
 import CPlatform
 import Foundation
 import StateTestSupport

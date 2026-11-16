@@ -22,7 +22,7 @@ public struct InstructionSection: Sendable, Equatable {
   public var directory: String { Instructions.directory(for: paths) }
 }
 
-public enum InstructionDrift: Sendable, Equatable {
+public enum InstructionDrift: Codable, Sendable, Equatable {
   case clean
   case drifted
   case missing

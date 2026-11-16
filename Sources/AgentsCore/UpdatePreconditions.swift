@@ -146,14 +146,21 @@ package struct TargetPrecondition {
 struct TargetAccessPrecondition: Equatable {
   let ancestry: DirectoryAccessEvidence
   let target: FileAccessEvidence?
+  let linkOwner: UInt32?
+  let linkGroup: UInt32?
 
   static func capture(at url: URL) throws -> Self {
     let parentURL = url.deletingLastPathComponent()
     let ancestry = try DirectoryAccessEvidence.capture(at: parentURL)
     let complete = ancestry.directories.count == parentURL.standardizedFileURL.pathComponents.count
+    var info = stat()
+    let link = lstat(url.path, &info) == 0 && info.st_mode & S_IFMT == S_IFLNK
     let target =
-      try complete ? DirectoryHandle(at: parentURL).accessEvidence(url.lastPathComponent) : nil
-    return Self(ancestry: ancestry, target: target)
+      try complete && !link
+      ? DirectoryHandle(at: parentURL).accessEvidence(url.lastPathComponent) : nil
+    return Self(
+      ancestry: ancestry, target: target, linkOwner: link ? info.st_uid : nil,
+      linkGroup: link ? info.st_gid : nil)
   }
 
   func validate(at url: URL) throws {

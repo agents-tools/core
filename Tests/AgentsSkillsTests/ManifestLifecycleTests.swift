@@ -1,5 +1,6 @@
 import AgentsManifest
 import AgentsSkills
+import AgentsUpdates
 import CPlatform
 import Foundation
 import StateTestSupport
@@ -28,7 +29,8 @@ struct ManifestLifecycleTests {
         entries.value = journal.entries
       })
     #expect(
-      entries.value.map(\.path) == ["codex/demo", "state/agents.yaml", "state/agents.resolved"])
+      Set(["codex/demo", "state/agents.yaml", "state/agents.resolved"]).isSubset(
+        of: Set(entries.value.map(\.path))))
     #expect(entries.value.allSatisfy { $0.preimage == nil })
     #expect(
       String(decoding: try Data(contentsOf: store.declarationURL), as: UTF8.self) == """

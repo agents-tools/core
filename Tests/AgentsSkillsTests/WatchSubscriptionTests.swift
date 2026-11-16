@@ -1,7 +1,9 @@
 import AgentsCore
 import AgentsManifest
 import AgentsSkills
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Watch subscriptions")

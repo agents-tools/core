@@ -164,15 +164,14 @@ The optional throwing `beforeApply` callback runs before replacements so a
 consumer can show differences or cancel. Target bytes are checked again after
 the callback; intervening edits stop the commit. Update also revalidates state
 bytes/presence, target ancestry and all Claude forwarding decision inputs
-before and after retention. `InstructionUpdatePlan` supplies package-visible
-planning, validation, retention and staging to both standalone updates and
-`AgentsUpdates`; the latter commits both kinds together as described in
-[Updates](Updates.md).
+before and after retention. Lifecycle methods are public extensions in
+`AgentsUpdates`, which owns the complete linked ledger and one transaction for
+selected deployments, declaration, resources and pruning. Consumers import that
+product for lifecycle and locked ChatGPT rendering; pure text APIs remain here.
+See [Updates](Updates.md) for selection, prepared handles and exact restore.
 
 Mutations hold the scope writer lock and use the durable journal for instruction
-files, forwarding files, declaration, lock and cache pruning. Exact source
-materializations are verified and published through cache transactions before
-the target/state transaction. The journal has fixed project instruction paths,
+files, forwarding files, declaration, ledger, materializations and cache pruning. The journal has fixed project instruction paths,
 nested project `AGENTS.md` and `GEMINI.md` paths, configured user instruction
 roots and new top-level named Markdown files in `.agent/instructions/`.
 Initialization uses the project's state lock and journal without creating a

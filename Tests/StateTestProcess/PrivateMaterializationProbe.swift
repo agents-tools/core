@@ -1,6 +1,7 @@
 import AgentsCore
 import AgentsInstructions
 import AgentsSkills
+import AgentsUpdates
 import Foundation
 
 func privateMaterializationProbe(

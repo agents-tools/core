@@ -1,5 +1,7 @@
 import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore

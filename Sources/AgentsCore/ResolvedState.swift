@@ -184,7 +184,7 @@ public struct LockedInstructions: Codable, Equatable, Sendable {
   }
 }
 
-/// Version 1 of agents.resolved. Every item carries its independent immutable pin.
+/// Skill/instruction inventory projection. The persisted ledger owns pins and deployments.
 public struct ResolvedState: Codable, Equatable, Sendable {
   public var version: Int
   public var sources: [String: LockedSource]

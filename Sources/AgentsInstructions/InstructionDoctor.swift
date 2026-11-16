@@ -23,7 +23,7 @@ extension InstructionOperations {
       try other.withReadLock(
         onPendingRecovery: { (nil, [pendingRecovery(other)]) },
         {
-          _ = try other.readDeploymentDeclaration()
+          _ = try other.readDeclaration()
           return (try other.readResolved().instructions.sections, [])
         })
     let root = scope == .project ? environment.projectDirectory : environment.homeDirectory
@@ -33,15 +33,20 @@ extension InstructionOperations {
           root: root, diagnostics: otherDiagnostics + [pendingRecovery(store)])
       },
       {
-        let declaration = try store.readDeploymentDeclaration()
+        let declaration = try store.readDeclaration()
         let lock = try store.readResolved()
         var diagnostics = otherDiagnostics
         func report(_ kind: InstructionDiagnostic.Kind, _ message: String, _ path: URL? = nil) {
           diagnostics.append(InstructionDiagnostic(kind: kind, message: message, path: path))
         }
         if !FileManager.default.fileExists(atPath: store.resolvedURL.path),
-          try !((declaration.instructions)?.sections.isEmpty ?? true)
-            || !((declaration.instructions)?.chatgpt?.isEmpty ?? true)
+          declaration.components.contains(where: {
+            if case .instructions(let s) = $0 {
+              !s.sectionReferences.isEmpty || !s.prompts.isEmpty
+            } else {
+              false
+            }
+          })
         {
           report(
             .missingLock, "Instruction declaration has no lock; update can reconstruct it.",
@@ -126,8 +131,15 @@ extension InstructionOperations {
             report(.duplicateScope, "Section is installed at both scopes: \(id)")
           }
         }
-        let agents = Set(lock.instructions.targets.values.flatMap(\.agents))
-          .union((try declaration.instructions)?.agents ?? declaration.defaultAgents)
+        let selections = declaration.components.compactMap {
+          component -> InstructionsDeclaration? in
+          if case .instructions(let selection) = component { selection } else { nil }
+        }
+        let declaredAgents =
+          selections.isEmpty
+          ? declaration.defaultAgents
+          : selections.flatMap { $0.agents ?? declaration.defaultAgents }
+        let agents = Set(lock.instructions.targets.values.flatMap(\.agents)).union(declaredAgents)
         let claudeTargets = lock.instructions.targets.filter {
           $0.value.import == nil && $0.value.agents.contains(.claudeCode)
         }.keys.sorted()

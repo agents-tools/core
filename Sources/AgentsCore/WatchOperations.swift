@@ -33,7 +33,7 @@ public struct WatchOperations: Sendable {
       let baseline = try StatePrecondition(store: store)
       let previous = try declarations.read(store, baseline)
       var declaration = previous
-      let lock = try store.readResolved(prepared: baseline)
+      let lock = try store.readLedger(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       var argument = try SourceArgument(source)
       guard argument.name == nil else {
@@ -78,7 +78,7 @@ public struct WatchOperations: Sendable {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
       let declaration = try declarations.read(store, nil)
-      _ = try store.readResolved()
+      _ = try store.readLedger()
       let watch = try store.readWatch()
       return try (declaration.watch ?? []).sorted().map { alias in
         try inspect(alias: alias, declaration: declaration, watch: watch, store: store)
@@ -94,7 +94,7 @@ public struct WatchOperations: Sendable {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
       let declaration = try declarations.read(store, nil)
-      _ = try store.readResolved()
+      _ = try store.readLedger()
       let watch = try store.readWatch()
       let alias = try subscription(source, declaration: declaration, environment: environment)
       var result = try inspect(alias: alias, declaration: declaration, watch: watch, store: store)
@@ -114,7 +114,7 @@ public struct WatchOperations: Sendable {
     return try store.withLock(checkpoint: checkpoint) {
       let baseline = try StatePrecondition(store: store)
       let declaration = try declarations.read(store, baseline)
-      let lock = try store.readResolved(prepared: baseline)
+      let lock = try store.readLedger(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
       let declared = declaration.sources[alias]!
@@ -137,7 +137,7 @@ public struct WatchOperations: Sendable {
       let baseline = try StatePrecondition(store: store)
       let previous = try declarations.read(store, baseline)
       var declaration = previous
-      let lock = try store.readResolved(prepared: baseline)
+      let lock = try store.readLedger(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
       let id = try declaration.sources[alias]!.identity(environment: environment)
@@ -181,7 +181,7 @@ public struct WatchOperations: Sendable {
   /// The prepared generation, captured before any network acknowledgment, is the journal's
   /// preimage evidence and also guards the lock that pruning follows.
   private func commit(
-    _ change: DeclarationChange?, watch: WatchState, lock: ResolvedState, store: StateStore,
+    _ change: DeclarationChange?, watch: WatchState, lock: ResolvedLedger, store: StateStore,
     baseline: StatePrecondition
   ) throws {
     try watch.validate()
@@ -191,7 +191,9 @@ public struct WatchOperations: Sendable {
     try transaction.replace(
       store.watchURL, with: .data(StateStore.encode(watch)),
       expecting: baseline.evidence(for: store.watchURL))
-    try SourceCache(store: store).prune(referencedBy: lock, watch: watch, transaction: transaction)
+    var references = try RetentionReferences(ledger: lock, roots: store.ledgerRoots)
+    try references.include(watch: watch)
+    try SourceCache(store: store).prune(references: references, transaction: transaction)
     try transaction.commit()
   }
 

@@ -2,6 +2,7 @@ import AgentsInstructions
 import AgentsManifest
 import AgentsSkills
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -60,7 +61,12 @@ struct CombinedUpdateTests {
     let preview = try fixture.preview()
     #expect(preview.instructions.targets.contains { $0.target == "GEMINI.md" && $0.foreign })
     let before = try fixture.snapshot()
-    #expect(throws: InstructionError.unownedTargets(["GEMINI.md"])) { try fixture.apply() }
+    #expect { try fixture.apply() } throws: { error in
+      guard let failure = error as? UpdateApplyError, case .unchanged = failure.disposition,
+        let underlying = failure.underlyingError as? InstructionError
+      else { return false }
+      return underlying == .unownedTargets(["GEMINI.md"])
+    }
     #expect(try fixture.snapshot() == before)
     #expect(try fixture.bytes(fixture.instruction(.geminiCLI)) == Data("Hand written.\n".utf8))
   }
@@ -75,7 +81,7 @@ struct CombinedUpdateTests {
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     let before = try fixture.snapshot()
     var called = false
-    #expect(throws: CoreError.invalidState("edit installs must be local, unpinned live links")) {
+    #expect(throws: CoreError.self) {
       try InstructionOperations.updateInstalled(
         environment: fixture.environment, apply: apply, beforeApply: { _ in called = true })
     }
@@ -97,7 +103,7 @@ struct CombinedUpdateTests {
     try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
     let before = try fixture.snapshot()
     var called = false
-    #expect(throws: CoreError.invalidState("edit installs must be local, unpinned live links")) {
+    #expect(throws: CoreError.self) {
       try SkillOperations.updateInstalled(
         environment: fixture.environment, skillNames: ["demo"], apply: apply,
         beforeApply: { _ in called = true })

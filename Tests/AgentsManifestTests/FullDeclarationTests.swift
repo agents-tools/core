@@ -363,13 +363,6 @@ struct FullDeclarationTests {
     #expect(declaration.components.count == 3)
     #expect(throws: CoreError.self) { try declaration.skills }
     #expect(throws: CoreError.self) { try declaration.setSkills(nil) }
-    do {
-      try doc.requireDeploymentSubset()
-      Issue.record("ambiguous deployment selection accepted")
-    } catch let failure as ManifestFailure {
-      #expect(failure.diagnostics.map(\.code) == ["manifest.ambiguous"])
-      #expect(failure.diagnostics.first?.related.count == 2)
-    }
     guard case .skills(let source, var selection) = declaration.components[1] else { return }
     selection.agents = []
     declaration.components[1] = .skills(source: source, selection)

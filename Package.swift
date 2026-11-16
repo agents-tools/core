@@ -63,7 +63,8 @@ let package = Package(
     .target(
       name: "AgentsUpdates",
       dependencies: [
-        "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "CPlatform",
+        "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "Components",
+        "CPlatform",
       ]),
     .target(
       name: "Components",
@@ -76,7 +77,9 @@ let package = Package(
         "Components", "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions",
         "StateTestProcess", "StateTestSupport",
       ]),
-    .target(name: "StateTestSupport", path: "Tests/StateTestSupport"),
+    .target(
+      name: "StateTestSupport", dependencies: ["AgentsCore", "AgentsManifest"],
+      path: "Tests/StateTestSupport"),
     .executableTarget(
       name: "StateTestProcess",
       dependencies: [
@@ -90,7 +93,10 @@ let package = Package(
         "AgentsCore", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
       ]),
     .testTarget(
-      name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions", "AgentsManifest"]),
+      name: "AgentsInstructionsTests",
+      dependencies: [
+        "AgentsInstructions", "AgentsSkills", "AgentsManifest", "AgentsUpdates", "StateTestSupport",
+      ]),
     .target(
       name: "ManifestTestSupport", dependencies: ["AgentsManifest"],
       path: "Tests/ManifestTestSupport"),
@@ -112,7 +118,8 @@ let package = Package(
     .testTarget(
       name: "AgentsSkillsTests",
       dependencies: [
-        "AgentsSkills", "AgentsCore", "AgentsManifest", "AgentsInstructions", "Yams",
+        "AgentsSkills", "AgentsCore", "AgentsManifest", "AgentsInstructions", "AgentsUpdates",
+        "Yams",
         "StateTestProcess", "StateTestSupport", "CPlatform",
       ]),
   ],

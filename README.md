@@ -78,6 +78,7 @@ the live source for Codex and list the installed skills:
 ```swift
 import AgentsCore
 import AgentsSkills
+import AgentsUpdates
 
 let environment = RuntimeEnvironment()
 _ = try SkillOperations.add(AddOptions(
@@ -130,9 +131,9 @@ control.
 
 The declaration records source aliases, requirements, skill selections and
 recipients in the [manifest language](Documentation/Reference/Manifest.md).
-Tool writes edit only the changed source ranges and keep comments. The version 1
-lock records each skill's independent revision or artifact digest, content hash
-and agent-to-mode mapping. `link` uses shared cached content, `copy` writes a
+Tool writes edit only the changed source ranges and keep comments. The version 2
+ledger records the full linked graph, independent pins, resources, ownership and
+versioned deployments. `link` uses shared cached content, `copy` writes a
 directory, and `edit` links a live local source with no requirement or pin.
 Local Git installs in `link` and `copy` use committed content.
 
@@ -140,8 +141,8 @@ Local Git installs in `link` and `copy` use committed content.
 lock models.
 `loadDeclaration()` preserves all component families, conditions and symbolic
 groups; deployment support is checked by the owning operation. Skill
-operations preserve the instruction and watch declarations and the locked
-instruction records.
+operations use the shared composition layer and preserve recorded other-domain
+semantics and watch state. Import `AgentsUpdates` for domain lifecycle methods.
 
 Mutating state operations recover interrupted transactions before proceeding and
 report `CoreError.transactionRecovered` when the command should be retried. The
@@ -195,7 +196,7 @@ diff leave declaration, lock, watch state and installed content unchanged.
 
 ### Combined updates
 
-`UpdateOperations.preview(...)` returns both kinds under one shared scope lock.
+`UpdateOperations.preview(...)` returns the selected configuration under existing shared locks with temporary source acquisition.
 For application, `withPreparedUpdate(...)` prepares both kinds and holds the
 writer lock while the consumer renders `update.report` and calls
 `update.apply()`. Apply commits both kinds, changed state and pruning together.

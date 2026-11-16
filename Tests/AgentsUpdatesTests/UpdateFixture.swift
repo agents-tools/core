@@ -4,6 +4,7 @@ import AgentsManifest
 import AgentsSkills
 import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 final class UpdateFixture {

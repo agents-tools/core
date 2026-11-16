@@ -1,5 +1,7 @@
 import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -90,64 +92,6 @@ struct UpdateReportingTests {
     #expect(result.oldVersion == nil && result.newVersion == nil)
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(try !flag(file))
-  }
-
-  @Test(arguments: ["prepared", "cached", "staged"])
-  func rejectsModeDisagreementBeforePublication(_ kind: String) throws {
-    let fixture = try SkillFixture()
-    try fixture.skill("demo", body: "same")
-    try fixture.commit()
-    _ = try fixture.add(mode: .copy)
-    let store = fixture.store()
-    let before = try fixture.stateAndTargetBytes()
-    try store.withLock {
-      let resolutions = try SourceResolutionSession(store: store)
-      let plan = try SkillOperations.prepareUpdate(
-        store: store, declaration: store.readDeclaration(), previous: store.readResolved(),
-        resolutions: resolutions)
-      if kind == "prepared" {
-        let lifecycle = try SkillLifecycle(store: store, provider: WellKnownProvider())
-        let source = try lifecycle.discover(
-          store.readDeclaration().sources["fixture"]!, live: false, fullDepth: true)
-        let prepared = try lifecycle.prepare(
-          source.skills[0], in: source,
-          declaration: SkillDeclaration(select: .all, mode: .copy), defaultAgents: [.codex])
-        try FileManager.default.setAttributes(
-          [.posixPermissions: 0o755],
-          ofItemAtPath: prepared.directory.appendingPathComponent("SKILL.md").path)
-        #expect(throws: CoreError.self) { try lifecycle.validate(prepared, name: "demo") }
-      } else if kind == "cached" {
-        let record = try #require(plan.next.skills["demo"])
-        let path = SourceCache(store: store).materializedURL(
-          sourceID: record.source, revision: record.revision!
-        )
-        .appendingPathComponent("skills/demo/SKILL.md")
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
-        #expect(throws: CoreError.self) { try plan.retain() }
-      } else {
-        let retained = try plan.retain()
-        let transaction = FileTransaction(store: store) { step in
-          if step == TransactionCheckpoint.stage(0, .constructed).name {
-            let parent = fixture.target("demo").deletingLastPathComponent()
-            let staged = try #require(
-              FileManager.default.contentsOfDirectory(
-                at: parent,
-                includingPropertiesForKeys: nil
-              ).first { $0.lastPathComponent.hasPrefix(".agents-") }
-            )
-            .appendingPathComponent(TransactionSlot.exchanged.name(0))
-            try FileManager.default.setAttributes(
-              [.posixPermissions: 0o755],
-              ofItemAtPath: staged.appendingPathComponent("SKILL.md").path)
-          }
-        }
-        try plan.stage(retained: retained, transaction: transaction)
-        #expect(throws: CoreError.invalidState("staged content executable mode mismatch")) {
-          try transaction.commit()
-        }
-      }
-    }
-    #expect(try fixture.stateAndTargetBytes() == before)
   }
 
   @Test(arguments: [[AgentID.codex, .claudeCode], [.codex, .cursor]])

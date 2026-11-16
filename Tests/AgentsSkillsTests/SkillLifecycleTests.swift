@@ -1,6 +1,8 @@
 import AgentsCore
 import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsSkills
@@ -158,7 +160,9 @@ struct SkillLifecycleTests {
   @Test(
     arguments: [StateStore.declarationFileName, StateStore.resolvedFileName],
     ["add", "update", "install", "remove"])
-  func corruptStateStopsEveryMutation(_ filename: String, _ operation: String) throws {
+  func corruptStateStopsDeclarationEditsAndInvalidLedgerStopsRestore(
+    _ filename: String, _ operation: String
+  ) throws {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "A")
     try fixture.commit()
@@ -166,6 +170,11 @@ struct SkillLifecycleTests {
     let corrupt = fixture.store().directory.appendingPathComponent(filename)
     try Data("{broken".utf8).write(to: corrupt)
     let before = try fixture.stateAndTargetBytes()
+    if filename == StateStore.declarationFileName && operation == "install" {
+      _ = try SkillOperations.installResolvedReport(environment: fixture.environment)
+      #expect(try fixture.stateAndTargetBytes() == before)
+      return
+    }
     #expect(throws: (any Error).self) {
       switch operation {
       case "add": _ = try fixture.add()
