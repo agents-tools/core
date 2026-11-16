@@ -5,7 +5,7 @@ import TreeSitterYAML
 import Yams
 
 /// Ordered, decoded data with concrete UTF-8 ranges. Mapping order is retained independently
-/// of the domain's dictionary semantics. The parser tree never escapes this module.
+/// of the domain's dictionary semantics. Concrete parser and editing trees stay internal.
 indirect enum YAMLData: Sendable, Equatable {
   case scalar(String, quoted: Bool, decimalTag: Bool)
   case sequence([YAMLNode])
@@ -23,21 +23,29 @@ indirect enum YAMLData: Sendable, Equatable {
   }
 }
 
-struct YAMLNode: Sendable, Equatable {
+package struct YAMLNode: Sendable, Equatable {
   let data: YAMLData
-  let range: Range<Int>
+  package let range: Range<Int>
   let entryRange: Range<Int>
   let flow: Bool
 
-  var text: String? {
+  /// Scalar spelling and style are read-only; node and graph construction remain internal.
+  package var scalar: (text: String, quoted: Bool, decimalTag: Bool)? {
+    if case .scalar(let text, let quoted, let decimalTag) = data {
+      return (text, quoted, decimalTag)
+    }
+    return nil
+  }
+
+  package var text: String? {
     if case .scalar(let text, _, _) = data { return text }
     return nil
   }
-  var pairs: [(key: YAMLNode, value: YAMLNode)]? {
+  package var pairs: [(key: YAMLNode, value: YAMLNode)]? {
     if case .mapping(let pairs) = data { return pairs }
     return nil
   }
-  var items: [YAMLNode]? {
+  package var items: [YAMLNode]? {
     if case .sequence(let items) = data { return items }
     return nil
   }
