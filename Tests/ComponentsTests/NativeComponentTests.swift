@@ -776,6 +776,28 @@ struct NativeComponentTests {
         bindings: .init(["fixture/hook": Data("staged hook value".utf8)]),
         environment: fixture.environment, resourcePaths: [:], budget: budget(),
         cursorCommandShell: .posix)
+      let existing = try NativeDocument(
+        bytes: Data("{\"version\":1,\"privateSibling\":\"keep\"}".utf8),
+        format: .json, budget: budget())
+      let initial = try existing.prepare([hook.append(value: native, expected: .absent)])
+      let fresh = try NativeDocument(bytes: initial.bytes, format: .json, budget: budget())
+      let arrayRegion = NativeRegion(keys: hook.keys)
+      let append = hook.append(
+        value: native, expected: .owned(try #require(try fresh.read(arrayRegion))))
+      let owner = try #require(initial.appendedOccurrences.first).observation
+      let doubled = try fresh.prepare([
+        .put(region: owner.region, expected: .owned(owner), value: native), append,
+      ])
+      #expect(doubled.appendedOccurrences.map(\.editIndex) == [1])
+      let published = try NativeDocument(bytes: doubled.bytes, format: .json, budget: budget())
+      #expect(try published.read(arrayRegion)?.value == .array([native, native]))
+      #expect(try published.read(.init(keys: ["privateSibling"]))?.value == .string("keep"))
+      let addedOwner = try #require(doubled.appendedOccurrences.first).observation
+      let removed = try published.prepare([
+        .remove(region: addedOwner.region, expected: .owned(addedOwner))
+      ])
+      let afterRemoval = try NativeDocument(bytes: removed.bytes, format: .json, budget: budget())
+      #expect(try afterRemoval.read(arrayRegion)?.value == .array([native]))
       guard case .object(let object) = native else {
         Issue.record("missing native hook")
         return
