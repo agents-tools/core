@@ -7,6 +7,7 @@ final class TransactionSession {
   let parents: [DirectoryHandle]
   let checkpoint: (String) throws -> Void
   let resources: [SharedResource]
+  private let outcome: TransactionOutcome?
   /// Logical project-root authorization is checked separately from opened physical parents.
   private let nativeRoots: [String: NativeRootAuthority]
   /// Devices whose atomic renames passed a probe during this session only; `st_dev` values
@@ -16,7 +17,7 @@ final class TransactionSession {
   init(
     journal: TransactionJournal, directory: DirectoryHandle, parents: [DirectoryHandle],
     checkpoint: @escaping (String) throws -> Void, resources: [SharedResource] = [],
-    nativeRoots: [String: NativeRootAuthority] = [:]
+    nativeRoots: [String: NativeRootAuthority] = [:], outcome: TransactionOutcome? = nil
   ) {
     self.journal = journal
     self.directory = directory
@@ -24,6 +25,7 @@ final class TransactionSession {
     self.checkpoint = checkpoint
     self.resources = resources
     self.nativeRoots = nativeRoots
+    self.outcome = outcome
   }
 
   func emit(_ point: TransactionCheckpoint) throws { try checkpoint(point.name) }
@@ -57,6 +59,7 @@ final class TransactionSession {
     journal.entries[index].progress = next
     journal.entries[index].conflict = nil
     try persist(.entry(index, next))
+    if next == .publishing { outcome?.publicationStarted = true }
     try emit(.progress(index, next))
   }
 
@@ -87,7 +90,7 @@ final class TransactionSession {
   }
 
   func requireParent(_ index: Int) throws {
-    if !resources.isEmpty { try requireScope() }
+    try requireScope()
     if let route = NativeTargetRoute.targetRoute(journal.entries[index].path), !route.shared {
       guard let logical = nativeRoots[route.root],
         try DirectoryHandle(at: logical.physicalDirectory()).identity
