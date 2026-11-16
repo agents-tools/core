@@ -4,56 +4,71 @@
     "version": {
       "const": 1,
       "type": "integer",
-      "x-agents-scalar-kind": "integer"
+      "x-agents-scalar-kind": "integer",
+      "description": "Required manifest version, written as the plain integer 1. Core rejects decimal spelling such as 1.0 even when a JSON Schema validator treats it as an integer."
     },
     "defaultAgents": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/agent"
       },
-      "maxItems": 10000
+      "maxItems": 10000,
+      "description": "Default recipients for components that omit agents. Omission defaults to codex and claude-code; an empty list selects no recipients. Component overrides and conditions further determine effective targets.",
+      "examples": [
+        [
+          "codex",
+          "claude-code"
+        ],
+        []
+      ]
     },
     "sources": {
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/source"
       },
-      "maxProperties": 10000
+      "maxProperties": 10000,
+      "description": "Source aliases local to this declaration, retained in declaration order. References use these keys; aliases must be nonempty, must not be . or contain a colon, and must identify distinct normalized sources. Omission or an empty mapping declares none."
     },
     "components": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/component"
       },
-      "maxItems": 10000
+      "maxItems": 10000,
+      "description": "Direct component declarations, retained in order and checked even when their conditions select no targets. Omission or an empty sequence declares none."
     },
     "groups": {
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/group"
       },
-      "maxProperties": 10000
+      "maxProperties": 10000,
+      "description": "Named reusable groups, retained in declaration order. Defining a group does not activate it; uses selects it and exports makes it available to importers. Unused groups are still validated."
     },
     "uses": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/use"
       },
-      "maxItems": 10000
+      "maxItems": 10000,
+      "description": "Group references expanded in declaration order. Omission or an empty sequence activates no groups. Local reference cycles are errors, including in inactive groups."
     },
     "exports": {
       "type": "array",
       "items": {
         "type": "string"
       },
-      "maxItems": 10000
+      "maxItems": 10000,
+      "description": "Names of local groups available to importing declarations, retained in order. Every name must name a declared group and occur once. Omission or an empty sequence exports none."
     },
     "watch": {
       "type": "array",
       "items": {
         "type": "string"
       },
-      "maxItems": 10000
+      "maxItems": 10000,
+      "description": "Source aliases subscribed independently of installations. Names must be unique and refer to a declared source or . for the current source. Omission and an empty sequence are equivalent; watch order has set-like semantics."
     }
   },
   "required": [
@@ -63,7 +78,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agents.tools/schemas/agents-1.json",
   "title": "Agents declaration",
-  "description": "Version 1 symbolic sources, components and groups. Parsing never resolves sources or runs programs.",
+  "description": "Version 1 declaration of symbolic sources, components and groups. Parsing validates supplied YAML without resolving sources, reading referenced resources or running programs. Unknown fixed fields and null optional fields are errors; omitted collections are empty unless a field says otherwise. Core diagnostics also enforce YAML scalar kinds, numeric identity and domain relationships that general JSON Schema cannot express.",
   "$defs": {
     "agent": {
       "type": "string",
@@ -73,7 +88,8 @@
         "cursor",
         "gemini-cli",
         "opencode"
-      ]
+      ],
+      "description": "Recipient identifier. Support for deploying an individual component is checked by its consuming operation; accepting the identifier does not imply every component is supported by that client."
     },
     "condition": {
       "type": "object",
@@ -83,7 +99,8 @@
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Only these recipients remain eligible. Omission leaves recipients unrestricted; an empty list matches none. Duplicate recipients are errors."
         },
         "scopes": {
           "type": "array",
@@ -94,7 +111,8 @@
               "user"
             ]
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Only these installation scopes match. Omission allows either scope; an empty list matches neither. Duplicate scopes are errors."
         },
         "platforms": {
           "type": "array",
@@ -105,123 +123,162 @@
               "linux"
             ]
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Only these operating systems match. Omission allows either platform; an empty list matches neither. Duplicate platforms are errors."
         }
       },
       "required": [],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Intersecting restrictions on recipients, scope and platform. Omitted dimensions impose no restriction; an explicit empty dimension matches nothing. Nested group, use, component and section conditions combine by intersection, without removing inactive intent from the declaration."
     },
     "resource": {
       "type": "object",
       "properties": {
         "path": {
-          "type": "string"
+          "type": "string",
+          "description": "Required relative resource path within the selected source. Absolute paths, home expansion and parent traversal are not allowed."
         },
         "source": {
-          "type": "string"
+          "type": "string",
+          "description": "Alias declared in this document. Omission or . uses the current declaring source; imported declarations retain their own source context."
         }
       },
       "required": [
         "path"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "A resource path with an optional source alias. It remains symbolic during declaration reads; linking resolves and confines it to the selected source root.",
+      "examples": [
+        {
+          "path": "prompts/review.md",
+          "source": "team"
+        }
+      ]
     },
     "section": {
       "type": "object",
       "properties": {
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Instruction name relative to its instruction container, without .md. Nested names use / separators."
         },
         "source": {
-          "type": "string"
+          "type": "string",
+          "description": "Source alias for this section. Omission or . selects the declaring source's own instructions; root user instructions require a named source when linking."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions for this section, intersected with enclosing conditions. Omission imposes no additional restriction."
         }
       },
       "required": [
         "name"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "One instruction section reference. Section sequences retain their declared order and occurrences; the referenced content is read only by the consuming operation."
     },
     "binding": {
       "oneOf": [
         {
-          "type": "string"
+          "type": "string",
+          "description": "Literal text, used exactly as supplied. Strings resembling binding syntax are not interpolated."
         },
         {
           "type": "object",
           "properties": {
             "env": {
-              "type": "string"
+              "type": "string",
+              "description": "Name of an environment variable resolved locally by the consuming operation."
             }
           },
           "required": [
             "env"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Symbolic local environment binding; no value is captured in the declaration."
         },
         {
           "type": "object",
           "properties": {
             "secret": {
-              "type": "string"
+              "type": "string",
+              "description": "Name of a secret resolved locally by the consuming operation's binding provider."
             }
           },
           "required": [
             "secret"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Symbolic local secret binding; no value is captured in the declaration."
+        }
+      ],
+      "description": "A literal string or a symbolic local environment/secret binding. Declaration reads preserve the binding without looking up values. Only the consuming operation resolves bindings; they are not source-provided literals.",
+      "examples": [
+        "literal text",
+        {
+          "env": "SERVICE_TOKEN"
+        },
+        {
+          "secret": "service-token"
         }
       ]
     },
     "prompt": {
       "oneOf": [
         {
-          "type": "string"
+          "type": "string",
+          "description": "Inline prompt body, including any literal newlines."
         },
         {
           "type": "object",
           "properties": {
             "file": {
-              "$ref": "#/$defs/resource"
+              "$ref": "#/$defs/resource",
+              "description": "Resource containing the prompt body, resolved in its declaring source context."
             }
           },
           "required": [
             "file"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Prompt body read from a resource by the consuming operation."
         }
-      ]
+      ],
+      "description": "Inline prompt text or a reference to a prompt file. Declaration reads do not read the file. Command input tokens use ${input:name}; $${input:name} escapes a literal token."
     },
     "run": {
       "type": "object",
       "properties": {
         "executable": {
-          "type": "string"
+          "type": "string",
+          "description": "Required program name or relative executable path. A bare name is resolved by the consuming operation; paths containing / are source resources. Reading the declaration never starts the program."
         },
         "arguments": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Arguments in invocation order, passed as individual strings. Omission or an empty sequence supplies no arguments."
         },
         "environment": {
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/binding"
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Environment variable names mapped to literals or local bindings. Omission or an empty mapping supplies no declared entries; reading the declaration does not resolve bindings."
         },
         "workingDirectory": {
-          "$ref": "#/$defs/resource"
+          "$ref": "#/$defs/resource",
+          "description": "Working directory resource, resolved by the consuming operation. Omission leaves the directory unspecified in the declaration."
         }
       },
       "required": [
         "executable"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "A declared invocation, preserved as data until a consuming operation explicitly uses it. It does not contain a shell command line."
     },
     "transport": {
       "oneOf": [
@@ -229,34 +286,40 @@
           "type": "object",
           "properties": {
             "kind": {
-              "const": "stdio"
+              "const": "stdio",
+              "description": "Selects the local stdio transport."
             },
             "executable": {
-              "type": "string"
+              "type": "string",
+              "description": "Required program name or relative executable path. A bare name is resolved by the consuming operation; paths containing / are source resources. Reading the declaration never starts the program."
             },
             "arguments": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "maxItems": 10000
+              "maxItems": 10000,
+              "description": "Arguments in invocation order, passed as individual strings. Omission or an empty sequence supplies no arguments."
             },
             "environment": {
               "type": "object",
               "additionalProperties": {
                 "$ref": "#/$defs/binding"
               },
-              "maxProperties": 10000
+              "maxProperties": 10000,
+              "description": "Environment variable names mapped to literals or local bindings. Omission or an empty mapping supplies no declared entries; reading the declaration does not resolve bindings."
             },
             "workingDirectory": {
-              "$ref": "#/$defs/resource"
+              "$ref": "#/$defs/resource",
+              "description": "Working directory resource, resolved by the consuming operation. Omission leaves the directory unspecified in the declaration."
             }
           },
           "required": [
             "kind",
             "executable"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Local MCP server invocation over standard input/output."
         },
         {
           "type": "object",
@@ -266,26 +329,31 @@
               "enum": [
                 "streamableHTTP",
                 "sse"
-              ]
+              ],
+              "description": "Selects Streamable HTTP or SSE transport."
             },
             "url": {
-              "type": "string"
+              "type": "string",
+              "description": "Required HTTP or HTTPS endpoint with a host and no embedded credentials or fragment."
             },
             "headers": {
               "type": "object",
               "additionalProperties": {
                 "$ref": "#/$defs/binding"
               },
-              "maxProperties": 10000
+              "maxProperties": 10000,
+              "description": "HTTP header names mapped to literals or local bindings. Omission or an empty mapping supplies no declared headers. Values remain unresolved during declaration reads."
             }
           },
           "required": [
             "kind",
             "url"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Remote MCP endpoint with optional literal or locally bound headers."
         }
-      ]
+      ],
+      "description": "MCP connection declaration: a local stdio invocation, Streamable HTTP or SSE. Parsing neither starts a server nor opens a connection."
     },
     "event": {
       "oneOf": [
@@ -296,21 +364,25 @@
             "afterTool",
             "sessionStart",
             "sessionEnd"
-          ]
+          ],
+          "description": "Portable event mapped by the target client adapter."
         },
         {
           "type": "object",
           "properties": {
             "native": {
-              "type": "string"
+              "type": "string",
+              "description": "Event name in the selected client's vocabulary; the component must explicitly target exactly one agent."
             }
           },
           "required": [
             "native"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Client-specific hook event; support is checked by the consuming adapter."
         }
-      ]
+      ],
+      "description": "Portable hook event or a client-native event name. A native event requires exactly one explicit component recipient."
     },
     "operation": {
       "oneOf": [
@@ -320,21 +392,25 @@
             "read",
             "write",
             "execute"
-          ]
+          ],
+          "description": "Portable file-read, file-write or program-execution operation."
         },
         {
           "type": "object",
           "properties": {
             "tool": {
-              "type": "string"
+              "type": "string",
+              "description": "Tool identifier to which the rule applies."
             }
           },
           "required": [
             "tool"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Named tool operation interpreted by the target client."
         }
-      ]
+      ],
+      "description": "Portable permission operation or a named client tool operation. Interpretation belongs to the target client adapter."
     },
     "rule": {
       "type": "object",
@@ -345,13 +421,16 @@
             "allow",
             "ask",
             "deny"
-          ]
+          ],
+          "description": "Allow, ask for confirmation, or deny the matching operation in the target client."
         },
         "operation": {
-          "$ref": "#/$defs/operation"
+          "$ref": "#/$defs/operation",
+          "description": "Portable operation or named client tool to match."
         },
         "pattern": {
-          "type": "string"
+          "type": "string",
+          "description": "Match pattern interpreted for the operation by the target adapter. Read and write patterns must be safe relative resource paths."
         }
       },
       "required": [
@@ -359,26 +438,31 @@
         "operation",
         "pattern"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "One permission rule. Rules retain declaration order; the target client determines enforcement semantics."
     },
     "parameter": {
       "type": "object",
       "properties": {
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Input token name used in ${input:name}. It must be nonempty and contain no }, colon or NUL."
         },
         "description": {
-          "type": "string"
+          "type": "string",
+          "description": "User-facing explanation of the input requested by the command."
         },
         "defaultValue": {
-          "type": "string"
+          "type": "string",
+          "description": "Optional literal default input text. Omission leaves the default unspecified; an empty string is an explicit empty default."
         }
       },
       "required": [
         "name",
         "description"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "A named command input. Parameter names must be unique within the command; inline prompt tokens must refer to declared parameters."
     },
     "promptDeclaration": {
       "type": "object",
@@ -388,17 +472,21 @@
           "items": {
             "$ref": "#/$defs/section"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Instruction sections in rendering order, including repeated references. Omission or an empty sequence supplies none."
         },
         "append": {
-          "type": "string"
+          "type": "string",
+          "description": "Relative file appended to the prompt by the consuming operation. In project scope it uses the declaring source; in user scope it is relative to the user home directory. Omission appends no file."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional scope/platform restrictions for this named prompt. Omission imposes no additional restriction."
         }
       },
       "required": [],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "A named ChatGPT prompt composed from ordered instruction sections and an optional append file. Names are the keys in chatgpt; omission of sections means an empty sequence."
     },
     "override": {
       "type": "object",
@@ -408,7 +496,8 @@
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Recipients for this skill instead of component/default recipients. Omission inherits; an empty list selects no recipients. Enclosing conditions still restrict the result."
         },
         "mode": {
           "type": "string",
@@ -416,11 +505,13 @@
             "link",
             "copy",
             "edit"
-          ]
+          ],
+          "description": "Installation mode for this skill instead of the component mode. Omission inherits. edit requires a live local source without a requirement."
         }
       },
       "required": [],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Per-skill recipient and installation-mode overrides. The mapping key is the skill name and must belong to an explicit selection when one is supplied."
     },
     "requirement": {
       "oneOf": [
@@ -428,77 +519,103 @@
           "type": "object",
           "properties": {
             "branch": {
-              "type": "string"
+              "type": "string",
+              "description": "Track the named Git branch."
             }
           },
           "required": [
             "branch"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Track the named Git branch."
         },
         {
           "type": "object",
           "properties": {
             "revision": {
-              "type": "string"
+              "type": "string",
+              "description": "Select the specified Git revision."
             }
           },
           "required": [
             "revision"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Select the specified Git revision."
         },
         {
           "type": "object",
           "properties": {
             "exact": {
-              "type": "string"
+              "type": "string",
+              "description": "Select exactly this semantic version tag."
             }
           },
           "required": [
             "exact"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Select exactly this semantic version tag."
         },
         {
           "type": "object",
           "properties": {
             "from": {
-              "type": "string"
+              "type": "string",
+              "description": "Inclusive semantic-version lower bound, below the next major version."
             }
           },
           "required": [
             "from"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Inclusive semantic-version lower bound, below the next major version."
         },
         {
           "type": "object",
           "properties": {
             "upToNextMinor": {
-              "type": "string"
+              "type": "string",
+              "description": "Inclusive semantic-version lower bound, below the next minor version."
             }
           },
           "required": [
             "upToNextMinor"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Inclusive semantic-version lower bound, below the next minor version."
         },
         {
           "type": "object",
           "properties": {
             "from": {
-              "type": "string"
+              "type": "string",
+              "description": "Inclusive semantic-version lower bound."
             },
             "to": {
-              "type": "string"
+              "type": "string",
+              "description": "Exclusive semantic-version upper bound, greater than from."
             }
           },
           "required": [
             "from",
             "to"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Semantic-version interval with an inclusive lower bound and exclusive upper bound. The lower bound must be less than the upper bound."
+        }
+      ],
+      "description": "One Git selection policy, also applicable to local Git repositories. Version requirements select semantic-version tags; a resolved lock records the exact revision. Reading the declaration never performs resolution.",
+      "examples": [
+        {
+          "from": "1.2.0"
+        },
+        {
+          "from": "1.2.0",
+          "to": "2.0.0"
+        },
+        {
+          "branch": "main"
         }
       ]
     },
@@ -508,54 +625,66 @@
           "type": "object",
           "properties": {
             "url": {
-              "type": "string"
+              "type": "string",
+              "description": "Git transport URL. Complete URLs avoid canonicalization warnings; normalized repository identities must be distinct across aliases."
             },
             "subpath": {
-              "type": "string"
+              "type": "string",
+              "description": "Safe relative discovery path inside the source. Omission uses the source root; it cannot escape that root."
             },
             "requirement": {
-              "$ref": "#/$defs/requirement"
+              "$ref": "#/$defs/requirement",
+              "description": "Git selection policy. Omission leaves the source without an explicit requirement; resolution and exact locking belong to the consuming operation."
             }
           },
           "required": [
             "url"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Git repository selected by a transport URL and optional requirement."
         },
         {
           "type": "object",
           "properties": {
             "path": {
-              "type": "string"
+              "type": "string",
+              "description": "Local path, relative to the declaring project directory unless absolute or home-relative. A requirement selects committed content from a local Git repository; edit mode requires no requirement."
             },
             "subpath": {
-              "type": "string"
+              "type": "string",
+              "description": "Safe relative discovery path inside the source. Omission uses the source root; it cannot escape that root."
             },
             "requirement": {
-              "$ref": "#/$defs/requirement"
+              "$ref": "#/$defs/requirement",
+              "description": "Git selection policy. Omission leaves the source without an explicit requirement; resolution and exact locking belong to the consuming operation."
             }
           },
           "required": [
             "path"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Local source interpreted using the directories of its declaring environment."
         },
         {
           "type": "object",
           "properties": {
             "index": {
-              "type": "string"
+              "type": "string",
+              "description": "HTTP or HTTPS well-known skill index URL, without embedded credentials or fragment. Git requirements do not apply to this source kind."
             },
             "subpath": {
-              "type": "string"
+              "type": "string",
+              "description": "Safe relative discovery path inside the source. Omission uses the source root; it cannot escape that root."
             }
           },
           "required": [
             "index"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Well-known skill index accessed only during source-consuming operations."
         }
-      ]
+      ],
+      "description": "Exactly one Git URL, local path or well-known skill index per alias. subpath narrows the discovery root. No source is accessed while reading the declaration."
     },
     "componentReference": {
       "type": "object",
@@ -573,68 +702,82 @@
             "permissions",
             "ignore",
             "plugin"
-          ]
+          ],
+          "description": "Kind of the individual plugin member to exclude."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Relative member name within the plugin, paired with kind to identify the exclusion. Duplicate kind/name exclusions are errors."
         }
       },
       "required": [
         "kind",
         "name"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "A typed member reference used to exclude one component from a plugin expansion. The singular skill and instruction kinds identify individual members."
     },
     "component_skills": {
       "type": "object",
       "properties": {
         "kind": {
-          "const": "skills"
+          "const": "skills",
+          "description": "Selects the skills component shape."
         },
         "agents": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Explicit component recipients. Omission inherits the declaring document's defaultAgents; an empty list selects none. Conditions further restrict effective recipients."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions intersected with enclosing group/use conditions. Omission imposes no additional restriction; inactive components remain validated and preserved."
         },
         "native": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": {
-              "x-agents-native-value": true
+              "x-agents-native-value": true,
+              "description": "Arbitrary native data. Core preserves numeric kind and decimal lexical identity, including explicit !!float scalar payloads; general JSON Schema does not express these YAML-specific checks."
             },
-            "maxProperties": 10000
+            "maxProperties": 10000,
+            "description": "Native fields for one client schema identifier. Keys and values remain client data; portable field ownership and deployment support are checked by the consuming operation."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Client-schema identifiers mapped to native field mappings. Omission or an empty mapping supplies no native fields. Values are data, never environment/secret bindings: strings, representable integers, finite decimals, booleans, null, arrays and objects. Core preserves integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly retains decimal identity, which general JSON Schema cannot validate. Objects have unordered domain semantics and << is an ordinary key."
         },
         "source": {
-          "type": "string"
+          "type": "string",
+          "description": "Required source alias, or . for the current declaring source. Source resolution occurs only in the consuming operation."
         },
         "select": {
           "oneOf": [
             {
-              "const": "all"
+              "const": "all",
+              "description": "Select all discovered skills, subject to exclusions."
             },
             {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "maxItems": 10000
+              "maxItems": 10000,
+              "description": "Select only these skill names; an empty sequence selects none."
             }
-          ]
+          ],
+          "description": "all or omission selects all discovered skills; a name sequence selects those skills. An empty sequence selects none. Selection is combined with exclude and per-skill overrides."
         },
         "exclude": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Skill names removed from the selection. Omission or an empty sequence excludes none."
         },
         "mode": {
           "type": "string",
@@ -642,101 +785,133 @@
             "link",
             "copy",
             "edit"
-          ]
+          ],
+          "description": "link shares cached content, copy creates an installed directory, and edit links live local content. Omission defaults to link. edit requires a local source without a requirement or pin."
         },
         "overrides": {
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/override"
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Skill names mapped to recipient/mode overrides. Omission or an empty mapping supplies none; omitted override fields inherit the component settings."
         }
       },
       "required": [
         "kind",
         "source"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Select skills from a source and declare their recipients and installation modes.",
+      "examples": [
+        {
+          "kind": "skills",
+          "source": "team",
+          "select": [
+            "review"
+          ],
+          "agents": [
+            "codex"
+          ]
+        }
+      ]
     },
     "component_instructions": {
       "type": "object",
       "properties": {
         "kind": {
-          "const": "instructions"
+          "const": "instructions",
+          "description": "Selects the instructions component shape."
         },
         "agents": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Explicit component recipients. Omission inherits the declaring document's defaultAgents; an empty list selects none. Conditions further restrict effective recipients."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions intersected with enclosing group/use conditions. Omission imposes no additional restriction; inactive components remain validated and preserved."
         },
         "native": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": {
-              "x-agents-native-value": true
+              "x-agents-native-value": true,
+              "description": "Arbitrary native data. Core preserves numeric kind and decimal lexical identity, including explicit !!float scalar payloads; general JSON Schema does not express these YAML-specific checks."
             },
-            "maxProperties": 10000
+            "maxProperties": 10000,
+            "description": "Native fields for one client schema identifier. Keys and values remain client data; portable field ownership and deployment support are checked by the consuming operation."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Client-schema identifiers mapped to native field mappings. Omission or an empty mapping supplies no native fields. Values are data, never environment/secret bindings: strings, representable integers, finite decimals, booleans, null, arrays and objects. Core preserves integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly retains decimal identity, which general JSON Schema cannot validate. Objects have unordered domain semantics and << is an ordinary key."
         },
         "sections": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/section"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Instruction sections in rendering order. Omission or an empty sequence supplies none; repeated references retain their occurrences."
         },
         "chatgpt": {
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/promptDeclaration"
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Named ChatGPT prompts retained in declaration order, separate from agent-targeted sections. Omission or an empty mapping declares none."
         }
       },
       "required": [
         "kind"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Compose instruction targets and named ChatGPT prompts from ordered section references."
     },
     "component_mcpServer": {
       "type": "object",
       "properties": {
         "kind": {
-          "const": "mcpServer"
+          "const": "mcpServer",
+          "description": "Selects the mcpServer component shape."
         },
         "agents": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Explicit component recipients. Omission inherits the declaring document's defaultAgents; an empty list selects none. Conditions further restrict effective recipients."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions intersected with enclosing group/use conditions. Omission imposes no additional restriction; inactive components remain validated and preserved."
         },
         "native": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": {
-              "x-agents-native-value": true
+              "x-agents-native-value": true,
+              "description": "Arbitrary native data. Core preserves numeric kind and decimal lexical identity, including explicit !!float scalar payloads; general JSON Schema does not express these YAML-specific checks."
             },
-            "maxProperties": 10000
+            "maxProperties": 10000,
+            "description": "Native fields for one client schema identifier. Keys and values remain client data; portable field ownership and deployment support are checked by the consuming operation."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Client-schema identifiers mapped to native field mappings. Omission or an empty mapping supplies no native fields. Values are data, never environment/secret bindings: strings, representable integers, finite decimals, booleans, null, arrays and objects. Core preserves integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly retains decimal identity, which general JSON Schema cannot validate. Objects have unordered domain semantics and << is an ordinary key."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Required relative component name, retained as its symbolic identity. Nested names use / separators; empty, . and .. segments are not allowed."
         },
         "transport": {
-          "$ref": "#/$defs/transport"
+          "$ref": "#/$defs/transport",
+          "description": "Required MCP transport and its unresolved connection settings."
         }
       },
       "required": [
@@ -744,51 +919,63 @@
         "name",
         "transport"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Declare a named MCP server connection without starting or contacting it."
     },
     "component_hook": {
       "type": "object",
       "properties": {
         "kind": {
-          "const": "hook"
+          "const": "hook",
+          "description": "Selects the hook component shape."
         },
         "agents": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Explicit component recipients. Omission inherits the declaring document's defaultAgents; an empty list selects none. Conditions further restrict effective recipients."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions intersected with enclosing group/use conditions. Omission imposes no additional restriction; inactive components remain validated and preserved."
         },
         "native": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": {
-              "x-agents-native-value": true
+              "x-agents-native-value": true,
+              "description": "Arbitrary native data. Core preserves numeric kind and decimal lexical identity, including explicit !!float scalar payloads; general JSON Schema does not express these YAML-specific checks."
             },
-            "maxProperties": 10000
+            "maxProperties": 10000,
+            "description": "Native fields for one client schema identifier. Keys and values remain client data; portable field ownership and deployment support are checked by the consuming operation."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Client-schema identifiers mapped to native field mappings. Omission or an empty mapping supplies no native fields. Values are data, never environment/secret bindings: strings, representable integers, finite decimals, booleans, null, arrays and objects. Core preserves integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly retains decimal identity, which general JSON Schema cannot validate. Objects have unordered domain semantics and << is an ordinary key."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Required relative component name, retained as its symbolic identity. Nested names use / separators; empty, . and .. segments are not allowed."
         },
         "event": {
-          "$ref": "#/$defs/event"
+          "$ref": "#/$defs/event",
+          "description": "Required portable or native hook event. Native events require exactly one explicit component recipient."
         },
         "run": {
-          "$ref": "#/$defs/run"
+          "$ref": "#/$defs/run",
+          "description": "Required invocation performed when the target client triggers this hook. Declaration reads never execute it."
         },
         "matcher": {
-          "type": "string"
+          "type": "string",
+          "description": "Optional target-client matcher text. Omission leaves matching unspecified; support and interpretation belong to the adapter."
         },
         "timeoutSeconds": {
           "type": "integer",
           "minimum": 1,
-          "x-agents-scalar-kind": "integer"
+          "x-agents-scalar-kind": "integer",
+          "description": "Positive plain integer timeout in seconds. Omission leaves the timeout unspecified. Core rejects decimal spellings such as 1.0 and out-of-range integers."
         }
       },
       "required": [
@@ -797,53 +984,65 @@
         "event",
         "run"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Declare a named event-triggered invocation without executing it."
     },
     "component_subagent": {
       "type": "object",
       "properties": {
         "kind": {
-          "const": "subagent"
+          "const": "subagent",
+          "description": "Selects the subagent component shape."
         },
         "agents": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Explicit component recipients. Omission inherits the declaring document's defaultAgents; an empty list selects none. Conditions further restrict effective recipients."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions intersected with enclosing group/use conditions. Omission imposes no additional restriction; inactive components remain validated and preserved."
         },
         "native": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": {
-              "x-agents-native-value": true
+              "x-agents-native-value": true,
+              "description": "Arbitrary native data. Core preserves numeric kind and decimal lexical identity, including explicit !!float scalar payloads; general JSON Schema does not express these YAML-specific checks."
             },
-            "maxProperties": 10000
+            "maxProperties": 10000,
+            "description": "Native fields for one client schema identifier. Keys and values remain client data; portable field ownership and deployment support are checked by the consuming operation."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Client-schema identifiers mapped to native field mappings. Omission or an empty mapping supplies no native fields. Values are data, never environment/secret bindings: strings, representable integers, finite decimals, booleans, null, arrays and objects. Core preserves integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly retains decimal identity, which general JSON Schema cannot validate. Objects have unordered domain semantics and << is an ordinary key."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Required relative component name, retained as its symbolic identity. Nested names use / separators; empty, . and .. segments are not allowed."
         },
         "description": {
-          "type": "string"
+          "type": "string",
+          "description": "User-facing explanation of when to use this subagent."
         },
         "prompt": {
-          "$ref": "#/$defs/prompt"
+          "$ref": "#/$defs/prompt",
+          "description": "Required inline prompt or prompt-file reference. File contents are not read during declaration parsing."
         },
         "model": {
-          "type": "string"
+          "type": "string",
+          "description": "Optional target-client model identifier. Omission leaves model selection unspecified."
         },
         "tools": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Optional target-client tool names. Omission leaves the tool list unspecified; an empty sequence is an explicit empty list."
         }
       },
       "required": [
@@ -852,50 +1051,61 @@
         "description",
         "prompt"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Declare a named subagent with a description and prompt body."
     },
     "component_command": {
       "type": "object",
       "properties": {
         "kind": {
-          "const": "command"
+          "const": "command",
+          "description": "Selects the command component shape."
         },
         "agents": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Explicit component recipients. Omission inherits the declaring document's defaultAgents; an empty list selects none. Conditions further restrict effective recipients."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions intersected with enclosing group/use conditions. Omission imposes no additional restriction; inactive components remain validated and preserved."
         },
         "native": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": {
-              "x-agents-native-value": true
+              "x-agents-native-value": true,
+              "description": "Arbitrary native data. Core preserves numeric kind and decimal lexical identity, including explicit !!float scalar payloads; general JSON Schema does not express these YAML-specific checks."
             },
-            "maxProperties": 10000
+            "maxProperties": 10000,
+            "description": "Native fields for one client schema identifier. Keys and values remain client data; portable field ownership and deployment support are checked by the consuming operation."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Client-schema identifiers mapped to native field mappings. Omission or an empty mapping supplies no native fields. Values are data, never environment/secret bindings: strings, representable integers, finite decimals, booleans, null, arrays and objects. Core preserves integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly retains decimal identity, which general JSON Schema cannot validate. Objects have unordered domain semantics and << is an ordinary key."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Required relative component name, retained as its symbolic identity. Nested names use / separators; empty, . and .. segments are not allowed."
         },
         "description": {
-          "type": "string"
+          "type": "string",
+          "description": "User-facing explanation of this prompt command."
         },
         "prompt": {
-          "$ref": "#/$defs/prompt"
+          "$ref": "#/$defs/prompt",
+          "description": "Required inline prompt or prompt-file reference. ${input:name} refers to a declared parameter; $${input:name} is literal text."
         },
         "parameters": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/parameter"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Inputs in declaration order. Omission or an empty sequence declares none. Names must be unique and inline prompt tokens must refer to these names."
         }
       },
       "required": [
@@ -904,54 +1114,71 @@
         "description",
         "prompt"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Declare a named prompt command and its input parameters."
     },
     "component_lspServer": {
       "type": "object",
       "properties": {
         "kind": {
-          "const": "lspServer"
+          "const": "lspServer",
+          "description": "Selects the lspServer component shape."
         },
         "agents": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Explicit component recipients. Omission inherits the declaring document's defaultAgents; an empty list selects none. Conditions further restrict effective recipients."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions intersected with enclosing group/use conditions. Omission imposes no additional restriction; inactive components remain validated and preserved."
         },
         "native": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": {
-              "x-agents-native-value": true
+              "x-agents-native-value": true,
+              "description": "Arbitrary native data. Core preserves numeric kind and decimal lexical identity, including explicit !!float scalar payloads; general JSON Schema does not express these YAML-specific checks."
             },
-            "maxProperties": 10000
+            "maxProperties": 10000,
+            "description": "Native fields for one client schema identifier. Keys and values remain client data; portable field ownership and deployment support are checked by the consuming operation."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Client-schema identifiers mapped to native field mappings. Omission or an empty mapping supplies no native fields. Values are data, never environment/secret bindings: strings, representable integers, finite decimals, booleans, null, arrays and objects. Core preserves integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly retains decimal identity, which general JSON Schema cannot validate. Objects have unordered domain semantics and << is an ordinary key."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Required relative component name, retained as its symbolic identity. Nested names use / separators; empty, . and .. segments are not allowed."
         },
         "run": {
-          "$ref": "#/$defs/run"
+          "$ref": "#/$defs/run",
+          "description": "Required language server invocation, retained as data until used by the consuming operation."
         },
         "languages": {
           "type": "object",
           "additionalProperties": {
             "type": "string"
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "File extensions, including a leading dot, mapped to nonempty language identifiers. An empty mapping declares no extension associations.",
+          "examples": [
+            {
+              ".swift": "swift"
+            }
+          ]
         },
         "initializationOptions": {
           "type": "object",
           "additionalProperties": {
-            "x-agents-native-value": true
+            "x-agents-native-value": true,
+            "description": "Arbitrary native data, including null, nested arrays/objects and decimals with exact lexical identity. Bindings are not evaluated here."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Native values passed as language server initialization options. Omission or an empty mapping supplies none. Values retain Core integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly marks a decimal. Null and nested arrays/objects are data, not runtime bindings."
         }
       },
       "required": [
@@ -960,44 +1187,53 @@
         "run",
         "languages"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Declare a named language server invocation and extension-to-language mapping."
     },
     "component_permissions": {
       "type": "object",
       "properties": {
         "kind": {
-          "const": "permissions"
+          "const": "permissions",
+          "description": "Selects the permissions component shape."
         },
         "agents": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Explicit component recipients. Omission inherits the declaring document's defaultAgents; an empty list selects none. Conditions further restrict effective recipients."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions intersected with enclosing group/use conditions. Omission imposes no additional restriction; inactive components remain validated and preserved."
         },
         "native": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": {
-              "x-agents-native-value": true
+              "x-agents-native-value": true,
+              "description": "Arbitrary native data. Core preserves numeric kind and decimal lexical identity, including explicit !!float scalar payloads; general JSON Schema does not express these YAML-specific checks."
             },
-            "maxProperties": 10000
+            "maxProperties": 10000,
+            "description": "Native fields for one client schema identifier. Keys and values remain client data; portable field ownership and deployment support are checked by the consuming operation."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Client-schema identifiers mapped to native field mappings. Omission or an empty mapping supplies no native fields. Values are data, never environment/secret bindings: strings, representable integers, finite decimals, booleans, null, arrays and objects. Core preserves integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly retains decimal identity, which general JSON Schema cannot validate. Objects have unordered domain semantics and << is an ordinary key."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Required relative component name, retained as its symbolic identity. Nested names use / separators; empty, . and .. segments are not allowed."
         },
         "rules": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/rule"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Permission rules in declaration order. An empty sequence declares no rules. Enforcement belongs to the target client."
         }
       },
       "required": [
@@ -1005,51 +1241,61 @@
         "name",
         "rules"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Declare a named ordered collection of client permission rules."
     },
     "component_ignore": {
       "type": "object",
       "properties": {
         "kind": {
-          "const": "ignore"
+          "const": "ignore",
+          "description": "Selects the ignore component shape."
         },
         "agents": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Explicit component recipients. Omission inherits the declaring document's defaultAgents; an empty list selects none. Conditions further restrict effective recipients."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions intersected with enclosing group/use conditions. Omission imposes no additional restriction; inactive components remain validated and preserved."
         },
         "native": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": {
-              "x-agents-native-value": true
+              "x-agents-native-value": true,
+              "description": "Arbitrary native data. Core preserves numeric kind and decimal lexical identity, including explicit !!float scalar payloads; general JSON Schema does not express these YAML-specific checks."
             },
-            "maxProperties": 10000
+            "maxProperties": 10000,
+            "description": "Native fields for one client schema identifier. Keys and values remain client data; portable field ownership and deployment support are checked by the consuming operation."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Client-schema identifiers mapped to native field mappings. Omission or an empty mapping supplies no native fields. Values are data, never environment/secret bindings: strings, representable integers, finite decimals, booleans, null, arrays and objects. Core preserves integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly retains decimal identity, which general JSON Schema cannot validate. Objects have unordered domain semantics and << is an ordinary key."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Required relative component name, retained as its symbolic identity. Nested names use / separators; empty, . and .. segments are not allowed."
         },
         "patterns": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Ignore patterns in declaration order, interpreted by the target client for the selected purpose. An empty sequence declares none."
         },
         "purpose": {
           "type": "string",
           "enum": [
             "context",
             "indexing"
-          ]
+          ],
+          "description": "context excludes content from model context; indexing excludes it from indexing. Omission defaults to context; support is checked by the consuming adapter."
         }
       },
       "required": [
@@ -1057,50 +1303,61 @@
         "name",
         "patterns"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Declare a named collection of context or indexing ignore patterns."
     },
     "component_plugin": {
       "type": "object",
       "properties": {
         "kind": {
-          "const": "plugin"
+          "const": "plugin",
+          "description": "Selects the plugin component shape."
         },
         "agents": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agent"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Explicit component recipients. Omission inherits the declaring document's defaultAgents; an empty list selects none. Conditions further restrict effective recipients."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions intersected with enclosing group/use conditions. Omission imposes no additional restriction; inactive components remain validated and preserved."
         },
         "native": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": {
-              "x-agents-native-value": true
+              "x-agents-native-value": true,
+              "description": "Arbitrary native data. Core preserves numeric kind and decimal lexical identity, including explicit !!float scalar payloads; general JSON Schema does not express these YAML-specific checks."
             },
-            "maxProperties": 10000
+            "maxProperties": 10000,
+            "description": "Native fields for one client schema identifier. Keys and values remain client data; portable field ownership and deployment support are checked by the consuming operation."
           },
-          "maxProperties": 10000
+          "maxProperties": 10000,
+          "description": "Client-schema identifiers mapped to native field mappings. Omission or an empty mapping supplies no native fields. Values are data, never environment/secret bindings: strings, representable integers, finite decimals, booleans, null, arrays and objects. Core preserves integer/decimal kind and exact decimal text; !!float \"1.00\" explicitly retains decimal identity, which general JSON Schema cannot validate. Objects have unordered domain semantics and << is an ordinary key."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Required relative component name, retained as its symbolic identity. Nested names use / separators; empty, . and .. segments are not allowed."
         },
         "source": {
-          "type": "string"
+          "type": "string",
+          "description": "Required source alias, or . for the declaring source, containing the plugin resource."
         },
         "path": {
-          "type": "string"
+          "type": "string",
+          "description": "Required safe relative plugin resource path within the selected source."
         },
         "mode": {
           "type": "string",
           "enum": [
             "native",
             "components"
-          ]
+          ],
+          "description": "components (the default) expands plugin members. native installs the vendor plugin for exactly one explicit recipient and forbids select and nonempty exclude."
         },
         "select": {
           "type": "array",
@@ -1119,14 +1376,16 @@
               "plugin"
             ]
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Component kinds to include during components-mode expansion. Omission leaves kinds unrestricted; an empty sequence selects none. Duplicate kinds are errors."
         },
         "exclude": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/componentReference"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Typed individual members removed from components-mode expansion. Omission or an empty sequence excludes none. Each kind/name pair must be unique."
         }
       },
       "required": [
@@ -1135,7 +1394,8 @@
         "source",
         "path"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Declare a plugin resource for native installation or component expansion."
     },
     "component": {
       "oneOf": [
@@ -1169,25 +1429,39 @@
         {
           "$ref": "#/$defs/component_plugin"
         }
-      ]
+      ],
+      "description": "One component declaration, selected by its required kind. All fields are checked even when the component is inactive; target-client support is evaluated by the consuming operation."
     },
     "use": {
       "type": "object",
       "properties": {
         "group": {
-          "type": "string"
+          "type": "string",
+          "description": "Required group name. Without source it must name a local group; a named source must export the group before linking can use it."
         },
         "source": {
-          "type": "string"
+          "type": "string",
+          "description": "Alias of the producer exporting this group. Omission selects a local group; . addresses the current source. Remote source aliases are not rebound in the importing document."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Additional restrictions for this expansion, intersected with group and enclosing conditions. Omission imposes no additional restriction."
         }
       },
       "required": [
         "group"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Activate a local group or an exported group from a source. Uses retain order and occurrences; nested conditions intersect and source aliases remain local to their declaring document.",
+      "examples": [
+        {
+          "group": "checks"
+        },
+        {
+          "group": "checks",
+          "source": "team"
+        }
+      ]
     },
     "group": {
       "type": "object",
@@ -1197,21 +1471,25 @@
           "items": {
             "$ref": "#/$defs/component"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Direct components retained in declaration order. Omission or an empty sequence contributes none."
         },
         "uses": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/use"
           },
-          "maxItems": 10000
+          "maxItems": 10000,
+          "description": "Nested group uses expanded in declaration order. Omission or an empty sequence references none."
         },
         "condition": {
-          "$ref": "#/$defs/condition"
+          "$ref": "#/$defs/condition",
+          "description": "Restrictions intersected with each importing use and nested component/section condition. Omission imposes no additional restriction."
         }
       },
       "required": [],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "A reusable group of direct components and nested uses. Definition alone does not activate it. Local use cycles are rejected, and unused or inactive contents are still validated."
     }
   }
 }
