@@ -22,6 +22,22 @@ let package = Package(
     .package(url: "https://github.com/tree-sitter/tree-sitter", exact: "0.25.10"),
   ],
   targets: [
+    .target(
+      name: "TOMLSemantics",
+      exclude: ["LICENSE", "provenance.json", "PATCHES.md", "upstream.patch"]),
+    .target(
+      name: "TreeSitterTOML", exclude: ["LICENSE", "provenance.json"],
+      sources: ["parser.c", "scanner.c"], publicHeadersPath: "include",
+      cSettings: [.headerSearchPath(".")]),
+    .target(
+      name: "NativeDocuments",
+      dependencies: [
+        "AgentsCore", "TOMLSemantics", "TreeSitterTOML",
+        .product(name: "TreeSitter", package: "tree-sitter"),
+      ]),
+    .testTarget(
+      name: "NativeDocumentsTests",
+      dependencies: ["NativeDocuments", "TOMLSemantics", "AgentsCore"]),
     .target(name: "CPlatform"),
     .target(
       name: "TreeSitterYAML", exclude: ["LICENSE", "provenance.json"],

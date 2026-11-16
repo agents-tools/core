@@ -1,0 +1,48 @@
+{
+  "upstream": "https://github.com/dduan/TOMLDecoder.git",
+  "revision": "a2bbd2796fe3064e107de18cb56031052c4fa899",
+  "files": {
+    "Parsing/Parser.swift": {
+      "source": "Sources/TOMLDecoder/Parsing/Parser.swift",
+      "sha256": "262c1a417325008fc2cefb0ce449bb6bb5189310ff154322bf1ff3a5cf837da5"
+    },
+    "Parsing/Parser+Finish.swift": {
+      "source": "Sources/TOMLDecoder/Parsing/Parser+Finish.swift",
+      "sha256": "8e1ce8317624b9f2b9544399e09dfd4df944400bfe0c8a24e6577d4241f04f36"
+    },
+    "Parsing/Token.swift": {
+      "source": "Sources/TOMLDecoder/Parsing/Token.swift",
+      "sha256": "f78a3e37ab5991195f3b82e092aae2d12f69c137f88447ce15ee49b8da7b0385"
+    },
+    "Parsing/TOMLDocument.swift": {
+      "source": "Sources/TOMLDecoder/Parsing/TOMLDocument.swift",
+      "sha256": "9b92cc3127bcdba696fa51e3983da8d9fd25c16b9ae5aea0cd87569a058bf57d"
+    },
+    "Parsing/Constants.swift": {
+      "source": "Sources/TOMLDecoder/Parsing/Constants.swift",
+      "sha256": "47adaa2e74ae68094fbd3d0da44fd0db28846b60a587e98cb95ce3f112485612"
+    },
+    "DateTime.swift": {
+      "source": "Sources/TOMLDecoder/DateTime.swift",
+      "sha256": "c22cc93a4ea0ce8b7dac5c00c916ab24974b5df23d1c2645ca96ac61ebdeb6aa"
+    },
+    "TOMLKey.swift": {
+      "source": "Sources/TOMLDecoder/TOMLKey.swift",
+      "sha256": "ccf76e6622ab7e585fb7e0fb2e812c48c42b96d5761a9970866f3d8bf90b4f1e"
+    },
+    "TOMLError.swift": {
+      "source": "Sources/TOMLDecoder/TOMLError.swift",
+      "sha256": "b7f18d5a666d4e64fa9c12c0de73a0a53a506262be093e99d7f50b52156c6417"
+    },
+    "LICENSE": {
+      "source": "LICENSE.md",
+      "sha256": "ee59f20a0a5550b0b071a0d9edb31c29629ce4bad2d8f5d0467ee7d574b541cf"
+    }
+  },
+  "patches": {
+    "description": "PATCHES.md",
+    "diff": "upstream.patch",
+    "sha256": "b7522712c6d4879493b89f84596452a6e2b2a2b2cc3cac7fa4a13ca1bdc6c986",
+    "context_lines": 0
+  }
+}

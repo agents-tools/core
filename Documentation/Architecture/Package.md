@@ -15,12 +15,26 @@ AgentsSkills → AgentsCore, AgentsManifest, Yams
 AgentsInstructions → AgentsCore, AgentsManifest, Markdown
 Components → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions
 AgentsUpdates → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions
+NativeDocuments → AgentsCore, TOMLSemantics, TreeSitterTOML, TreeSitter
+TOMLSemantics → Foundation
+TreeSitterTOML → (vendored C grammar)
 AgentsCore → CPlatform, Crypto
 ```
 
 `TreeSitterYAML` is an internal C target containing the pinned, unmodified YAML
 parser/scanner and headers, with upstream license and per-file provenance.
 The runtime is a normal SwiftPM dependency. Consumers never receive parser types.
+
+## NativeDocuments
+
+`NativeDocuments` inspects provided JSON, JSONC and TOML bytes and prepares
+ownership-checked regional changes. It preserves no-op bytes, unmanaged content,
+comments and exact native semantics, and reparses each complete candidate.
+`TOMLSemantics` owns bounded standard TOML validation; `TreeSitterTOML` supplies
+pinned concrete locations through the existing Tree-sitter runtime dependency.
+These targets are package-only, with no library product or filesystem provider.
+See [native documents](NativeDocuments.md) for typed regions, observations,
+creation evidence, read-only syntax and cumulative operation budgets.
 
 ## AgentsManifest
 
