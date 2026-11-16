@@ -138,3 +138,122 @@ package enum CapabilityRegistry {
       evidence: evidence)
   }
 }
+
+package struct NativeComponentDescriptor {
+  package let request: NativeComponentRequest
+  package let kind: DeclaredComponentKind
+  package let format: String
+  package let evidence: NativeSchemaEvidence
+  package var knownReaders: Set<AgentID> { [request.surface.agent] }
+}
+
+extension CapabilityRegistry {
+  package static func component(
+    _ request: NativeComponentRequest,
+    kind: DeclaredComponentKind, name: String
+  ) throws -> NativeComponentDescriptor {
+    func issue(_ field: String, _ reason: NativeAdapterIssue.Reason, _ detail: String)
+      -> NativeComponentIssue
+    {
+      .init(
+        request: request, kind: kind.rawValue, component: name, field: [field], reason: reason,
+        detail: detail)
+    }
+    guard ![.skills, .instructions, .mcpServer].contains(kind) else {
+      throw issue("kind", .invalid, "component belongs to its existing domain renderer")
+    }
+    guard request.surface != .cursorCloud else {
+      throw issue(
+        "surface", .unverified, "Cloud deployment/loading requires a separate registered surface")
+    }
+    if request.surface == .claudeCode && kind != .plugin {
+      throw issue(
+        "kind", .unverified,
+        "captured Claude evidence lacks this component's complete fixed native schema")
+    }
+    if kind == .command {
+      if request.surface == .codexCLI {
+        throw issue(
+          "kind", .unsupported,
+          "the pinned TUI dispatch does not register persistent named prompt files")
+      }
+      if request.surface == .cursorCLI
+        || (request.surface == .cursorEditor && request.scope == .user)
+      {
+        throw issue(
+          "scope", .unverified,
+          "named-command registration is not established for this surface/scope")
+      }
+    }
+    if kind == .lspServer && request.surface != .openCodeCLI {
+      throw issue(
+        "kind", .unverified, "no complete LSP registration schema is captured for this surface")
+    }
+    if kind == .ignore {
+      guard request.scope == .project else {
+        throw issue("scope", .unverified, "no standalone user ignore file contract is established")
+      }
+      guard request.surface == .geminiCLI || request.surface == .cursorEditor else {
+        throw issue(
+          "purpose", .unverified,
+          "file search/watcher filters do not establish context or indexing exclusion")
+      }
+    }
+    if kind == .hook && request.surface == .openCodeCLI {
+      throw issue(
+        "event", .unverified,
+        "OpenCode hooks require executable plugin API adaptation; equivalent event I/O is not established"
+      )
+    }
+    if kind == .permissions && request.surface != .openCodeCLI {
+      throw issue(
+        "rules", .unverified,
+        "native policy precedence differs from ordered last-match semantics; exact translation is not established"
+      )
+    }
+    let pinned = try mcp(
+      .init(
+        surface: request.surface,
+        scope: request.scope == .user ? .user : .project), component: name
+    ).evidence
+    let sources: [String]
+    switch request.surface {
+    case .geminiCLI:
+      sources = [
+        "docs/cli/custom-commands.md", "packages/core/src/agents/agentLoader.ts",
+        "docs/hooks/reference.md", "packages/core/src/hooks/hookRunner.ts",
+        "packages/cli/src/config/settings.ts", "packages/cli/src/utils/envVarResolver.ts",
+        "docs/cli/gemini-ignore.md", "packages/cli/src/config/extension-manager.ts",
+      ]
+    case .openCodeCLI:
+      sources = [
+        "packages/schema/src/config/command.ts", "packages/schema/src/config/agent.ts",
+        "packages/core/src/config/plugin/command.ts", "packages/schema/src/permission.ts",
+        "packages/core/src/permission.ts", "packages/schema/src/config/lsp.ts",
+      ]
+    case .codexCLI:
+      sources = [
+        "codex-rs/config/src/config_toml.rs", "codex-rs/agent-roles/src/agent_role_config.rs",
+        "codex-rs/agent-roles/src/loader.rs", "codex-rs/config/src/hook_config.rs",
+        "codex-rs/hooks/src/engine/command_runner.rs",
+      ]
+    case .cursorEditor, .cursorCLI, .cursorCloud:
+      sources = [
+        "https://cursor.com/docs/subagents", "https://docs.cursor.com/en/agent/chat/commands",
+        "https://cursor.com/docs/reference/ignore-file",
+        "https://cursor.com/docs/reference/plugins",
+      ]
+    case .claudeCode: sources = ["claude-plugin-discovery.json", "route-evidence.md"]
+    }
+    let revision: String
+    switch request.surface {
+    case .cursorEditor, .cursorCLI, .cursorCloud:
+      revision = "sha256:b5e03f48d099bce7b10892b57934b9b611a54b3d4c9cf64e309071760e1c163b"
+    default: revision = pinned.revision
+    }
+    let evidence = NativeSchemaEvidence(revision: revision, sources: sources)
+    return .init(
+      request: request, kind: kind, format: NativeComponentLayoutsV1.format(request.surface),
+      evidence: evidence)
+  }
+}

@@ -54,10 +54,14 @@ package enum NativePathStep: Equatable {
 package struct NativeOccurrenceEvidence: Equatable {
   package let idKey: String?
   package let id: String?
-  let snapshot: Data?
-  let ordinal: Int?
-  let previous: Data?
-  let next: Data?
+  /// Versioned format owners may retain these semantic fingerprints and neighbor evidence.
+  /// They contain no byte offsets and do not authorize adoption of an observed occurrence.
+  /// Fingerprints contain value bytes: secret-bearing matches stay in E/D's private plan,
+  /// while only non-secret semantic evidence may enter a versioned locked layout.
+  package let snapshot: Data?
+  package let ordinal: Int?
+  package let previous: Data?
+  package let next: Data?
   package init(idKey: String, id: String) {
     self.idKey = idKey
     self.id = id
@@ -66,7 +70,7 @@ package struct NativeOccurrenceEvidence: Equatable {
     previous = nil
     next = nil
   }
-  init(snapshot: Data, ordinal: Int, previous: Data?, next: Data?) {
+  package init(snapshot: Data, ordinal: Int, previous: Data?, next: Data?) {
     idKey = nil
     id = nil
     self.snapshot = snapshot
