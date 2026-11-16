@@ -1,9 +1,10 @@
 import AgentsCore
 import AgentsManifest
-import Components
 import Foundation
 import NativeDocuments
 import Testing
+
+@testable import Components
 
 @Suite("Native MCP mapping and replay")
 struct NativeMCPTests {
@@ -266,11 +267,161 @@ struct NativeMCPTests {
         contribution.value
           == .init(object: [
             "type": .init("remote"), "url": .init("https://example.invalid/mcp"),
-            "headers": .init(object: ["X-Token": .init("{env:REMOTE_TOKEN}")]),
+            "headers": .init(object: ["X-Token": .init("REMOTE_TOKEN", kind: .environment)]),
             "protocol": .init("legacy"), "codemode": .init(boolean: false),
             "oauth": .init(boolean: false),
           ]))
-      _ = try contribution.referenceValue()
+      #expect(throws: NativeAdapterIssue.self) { try contribution.referenceValue() }
+    }
+  }
+
+  @Test(arguments: [false, true])
+  func openCodeEnvironmentValuesRequireStagedRendering(_ remote: Bool) throws {
+    let transport: [String: Any] =
+      remote
+      ? [
+        "kind": "streamableHTTP", "url": "https://example.invalid/mcp",
+        "headers": ["X-Token": ["env": "EXACT_VALUE"]],
+      ]
+      : stdio(environment: ["TOKEN": ["env": "EXACT_VALUE"]])
+    try withMCP(
+      [server("exact", transport: transport, agents: ["opencode"])],
+      request: .init(surface: .openCodeCLI, scope: .project)
+    ) { contribution, ledger, fixture in
+      let field = remote ? "headers" : "environment"
+      let key = remote ? "X-Token" : "TOKEN"
+      #expect(
+        contribution.value.object?[field]?.object?[key] == .init("EXACT_VALUE", kind: .environment))
+      #expect(contribution.bindings.map(\.reference) == [false])
+      #expect(throws: NativeAdapterIssue.self) { try contribution.referenceValue() }
+      var candidate = ledger
+      candidate.lowerings = [
+        contribution.lowering(id: "exact", artifact: "exact", platform: platform)
+      ]
+      candidate = try LedgerReplay.prepareLowerings(
+        candidate, store: fixture.store, roots: [:], limits: .standard)
+      let restored = try ResolvedLedgerCodec.decode(
+        ResolvedLedgerCodec.encode(candidate, limits: .standard), limits: .standard)
+      let replayed = try MCPLayoutV1.contribution(restored.lowerings[0], ledger: restored)
+      #expect(replayed.bindings == contribution.bindings)
+      #expect(replayed.value == contribution.value)
+      #expect(throws: NativeAdapterIssue.self) { try replayed.referenceValue() }
+      var unsafeReference = restored.lowerings[0]
+      unsafeReference.layout.object?["bindings"]?.array?[0].object?["reference"] = .init(
+        boolean: true)
+      unsafeReference.layout.object?["value"]?.object?[field]?.object?[key] = .init(
+        "{env:EXACT_VALUE}")
+      #expect(throws: CoreError.self) {
+        try MCPLayoutV1.contribution(unsafeReference, ledger: restored)
+      }
+    }
+  }
+
+  @Test(arguments: [false, true])
+  func equalPayloadsCannotCrossFrozenSourceOwners(_ resource: Bool) throws {
+    let a = try LinkFixture()
+    let b = try LinkFixture()
+    var run = stdio()
+    if resource {
+      run["executable"] = "./server"
+      for fixture in [a, b] {
+        try fixture.write("same executable bytes", to: "server", base: fixture.project)
+      }
+    }
+    let declaration: [String: Any] = [
+      "version": 1, "components": [server("same", transport: run, agents: ["codex"])],
+    ]
+    let (_, frozenA) = try freeze(declaration, a)
+    let (linkedB, _) = try freeze(declaration, b)
+    #expect(throws: NativeAdapterIssue.self) {
+      try NativeMCPLowering.lower(
+        try #require(linkedB.first), frozen: frozenA,
+        request: .init(surface: .codexCLI, scope: .project))
+    }
+  }
+
+  @Test func frozenSnapshotsAndResourceProvenanceRemainExact() throws {
+    let fixture = try LinkFixture()
+    let producer = fixture.root.appendingPathComponent("producer")
+    try fixture.initialize(producer)
+    try fixture.write("same bytes", to: "server", base: producer)
+    let producerDeclaration: [String: Any] = [
+      "version": 1, "exports": ["tools"],
+      "groups": [
+        "tools": [
+          "components": [
+            server(
+              "same", transport: ["kind": "stdio", "executable": "./server"], agents: ["codex"])
+          ]
+        ]
+      ],
+    ]
+    try fixture.write(
+      String(decoding: JSONSerialization.data(withJSONObject: producerDeclaration), as: UTF8.self),
+      to: ".agent/agents.yaml", base: producer)
+    try fixture.commit(producer, tag: "1.0.0")
+    try fixture.write("unrelated revision", to: "README.md", base: producer)
+    try fixture.commit(producer, tag: "2.0.0")
+    func declaration(_ version: String) -> [String: Any] {
+      [
+        "version": 1,
+        "sources": [
+          "p": [
+            "url": "file://localhost" + producer.path,
+            "requirement": ["exact": version],
+          ]
+        ], "uses": [["source": "p", "group": "tools"]],
+      ]
+    }
+    let (linkedA, frozenA) = try freeze(declaration("1.0.0"), fixture)
+    let (linkedB, frozenB) = try freeze(declaration("2.0.0"), fixture)
+    let a = try #require(linkedA.first)
+    let b = try #require(linkedB.first)
+    #expect(a.snapshot.source == b.snapshot.source)
+    #expect(a.snapshot.revision != b.snapshot.revision)
+    #expect(a.payload == b.payload)
+    #expect(a.resources.map(\.hash) == b.resources.map(\.hash))
+    let request = NativeMCPRequest(surface: .codexCLI, scope: .project)
+    _ = try NativeMCPLowering.lower(a, frozen: frozenA, request: request)
+    _ = try NativeMCPLowering.lower(b, frozen: frozenB, request: request)
+    #expect(throws: NativeAdapterIssue.self) {
+      try NativeMCPLowering.lower(b, frozen: frozenA, request: request)
+    }
+    let mixedResources = LinkedComponent(
+      key: a.key, declaringSnapshot: a.declaringSnapshot,
+      snapshot: a.snapshot, pin: a.pin, payload: a.payload, conditions: a.conditions,
+      recipients: a.recipients, chatGPT: a.chatGPT, resources: b.resources, origins: a.origins)
+    #expect(throws: NativeAdapterIssue.self) {
+      try NativeMCPLowering.lower(mixedResources, frozen: frozenA, request: request)
+    }
+  }
+
+  @Test(arguments: ["startup_timeout_sec", "tool_timeout_sec"])
+  func codexTimeoutMatchesNativeDurationRange(_ field: String) throws {
+    for (value, accepted) in [
+      ("0", true), ("-0.0", true), ("1e-100", true),
+      ("9223372036854775807", true), ("18446744073709549568.0", true),
+      ("18446744073709551615.0", false), ("18446744073709551616.0", false), ("1e100", false),
+    ] {
+      do {
+        try withMCP(
+          [
+            server(
+              "exact", transport: stdio(), agents: ["codex"],
+              native: ["codex": [field: Double(value)!]])
+          ],
+          request: .init(surface: .codexCLI, scope: .project)
+        ) { _, _, _ in
+          #expect(accepted)
+        }
+      } catch let issue as NativeAdapterIssue {
+        #expect(!accepted)
+        #expect(issue.reason == .invalid)
+        #expect(issue.request == .init(surface: .codexCLI, scope: .project))
+        #expect(issue.component == "exact")
+        #expect(issue.field == ["native", "codex", field])
+        #expect(!issue.description.contains(value))
+      }
     }
   }
 
@@ -330,7 +481,7 @@ struct NativeMCPTests {
     ]
     let (linked, frozen) = try freeze(declaration, fixture)
     #expect(linked.count == 3)
-    #expect(frozen.components.count == 2)
+    #expect(frozen.ledger.components.count == 2)
     let contributions = try linked.map {
       try NativeMCPLowering.lower(
         $0, frozen: frozen, request: .init(surface: .claudeCode, scope: .local))
@@ -338,7 +489,7 @@ struct NativeMCPTests {
     #expect(contributions[0].component != contributions[1].component)
     #expect(contributions[0].component == contributions[2].component)
     #expect(contributions.map(\.occurrences) == linked.map { $0.origins.map(\.occurrence) })
-    var candidate = frozen
+    var candidate = frozen.ledger
     candidate.lowerings = contributions.enumerated().map { index, contribution in
       contribution.lowering(id: "lower-\(index)", artifact: "entry-\(index)", platform: platform)
     }
@@ -400,7 +551,7 @@ struct NativeMCPTests {
     #expect(contribution.resourcePlacements.map(\.path) == [[.key("command")], [.key("cwd")]])
     #expect(contribution.resourcePlacements.map(\.resource) == contribution.resources)
     #expect(throws: NativeAdapterIssue.self) { try contribution.referenceValue() }
-    var candidate = frozen
+    var candidate = frozen.ledger
     candidate.lowerings = [
       contribution.lowering(id: "frozen", artifact: "frozen", platform: platform)
     ]
@@ -487,7 +638,8 @@ struct NativeMCPTests {
         component, frozen: ledger, request: .init(surface: surface, scope: .project))
       #expect(contribution.recipients == [surface.agent])
       #expect(contribution.descriptor.knownReaders == [surface.agent])
-      #expect(Set(ledger.components[contribution.component]!.recipients) == [.claudeCode, .codex])
+      #expect(
+        Set(ledger.ledger.components[contribution.component]!.recipients) == [.claudeCode, .codex])
       #expect(contribution.occurrences == component.origins.map(\.occurrence))
     }
   }
@@ -533,7 +685,7 @@ struct NativeMCPTests {
         component, frozen: frozen, request: .init(surface: .claudeCode, scope: .user))
     }
     var changed = frozen
-    changed.occurrences[0].consumerEditable = false
+    changed.ledger.occurrences[0].consumerEditable = false
     #expect(throws: NativeAdapterIssue.self) {
       try NativeMCPLowering.lower(
         component, frozen: changed, request: .init(surface: .claudeCode, scope: .project))
@@ -569,11 +721,11 @@ struct NativeMCPTests {
     let (linked, ledger) = try freeze(["version": 1, "components": components], fixture)
     let contribution = try NativeMCPLowering.lower(
       try #require(linked.first), frozen: ledger, request: request)
-    try body(contribution, ledger, fixture)
+    try body(contribution, ledger.ledger, fixture)
   }
 
   private func freeze(_ declaration: [String: Any], _ fixture: LinkFixture) throws -> (
-    [LinkedComponent], ResolvedLedger
+    [LinkedComponent], LedgerFreeze.Result
   ) {
     let bytes = try JSONSerialization.data(withJSONObject: declaration, options: [.sortedKeys])
     let document = try DeclarationDocument(
@@ -581,7 +733,7 @@ struct NativeMCPTests {
     return try ComponentLinker.withLinkedComponents(
       document: document, store: fixture.store, platform: platform
     ) { linked, session in
-      let frozen = try LedgerFreeze.freeze(
+      let frozen = try LedgerFreeze.freezeWithSources(
         linked, session: session,
         locations: .init(sources: [
           "local:" + fixture.project.path: .init(kind: .registered, root: "project", path: ".")

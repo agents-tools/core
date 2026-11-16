@@ -101,8 +101,10 @@ package enum NativeMCPLowering {
   /// The frozen occurrence graph connects the linked identity to its exact durable component.
   /// Call once per requested recipient; this method never aggregates equal native values.
   package static func lower(
-    _ linked: LinkedComponent, frozen ledger: ResolvedLedger, request: NativeMCPRequest
+    _ linked: LinkedComponent, frozen: LedgerFreeze.Result, request: NativeMCPRequest
   ) throws -> NativeMCPContribution {
+    let ledger = frozen.ledger
+    let sourceIDs = frozen.sources
     let descriptor = try CapabilityRegistry.mcp(request, component: linked.key.name)
     func invalid(_ detail: String) -> NativeAdapterIssue {
       .init(
@@ -119,6 +121,9 @@ package enum NativeMCPLowering {
     guard !ids.isEmpty, occurrences.count == ids.count, owners.count == 1,
       let id = owners.first, let record = ledger.components[id],
       record.kind == DeclaredComponentKind.mcpServer.rawValue, record.name == name,
+      record.declaringSource == sourceIDs[linked.declaringSnapshot],
+      record.source == sourceIDs[linked.snapshot], linked.key.source == linked.snapshot.source,
+      record.revision == linked.pin?.revision, record.version == linked.pin?.version,
       record.root == linked.key.root, record.group == linked.key.group,
       record.payload == (try LedgerPayload.component(declaration)),
       record.conditions == linked.conditions.map(LedgerCondition.init),
@@ -128,6 +133,11 @@ package enum NativeMCPLowering {
     for (origin, frozen) in zip(linked.origins, occurrences) {
       let audience: InstallScope = request.scope == .user ? .user : .project
       guard origin.occurrence == frozen.id, origin.reference == frozen.reference,
+        frozen.declaringSource == record.declaringSource,
+        origin.provenance.sourceIdentity == linked.declaringSnapshot.source,
+        origin.dependencies.compactMap({ sourceIDs[$0] }) == frozen.dependencies,
+        origin.dependencies.allSatisfy({ sourceIDs[$0] != nil }),
+        LedgerCondition(origin.condition) == frozen.condition,
         origin.condition.scopes?.contains(audience) ?? true,
         origin.condition.agents?.contains(request.surface.agent) ?? true,
         origin.provenance.relativePath == frozen.manifestPath,
@@ -138,6 +148,7 @@ package enum NativeMCPLowering {
     }
     for (resource, frozen) in zip(linked.resources, record.resources) {
       guard let item = ledger.resources[frozen], item.path == resource.path,
+        item.source == sourceIDs[resource.snapshot], item.artifact == resource.artifact,
         item.hash == resource.hash
       else { throw invalid("linked resource and frozen evidence do not match") }
     }
@@ -206,7 +217,7 @@ struct MCPInput {
 }
 
 enum MCPReferenceSyntax {
-  case claude, gemini, openCode
+  case claude, gemini
   static func isName(_ name: String) -> Bool {
     let bytes = Array(name.utf8)
     guard let first = bytes.first,
@@ -220,13 +231,12 @@ enum MCPReferenceSyntax {
   func render(_ name: String) -> String {
     switch self {
     case .claude, .gemini: "${" + name + "}"
-    case .openCode: "{env:" + name + "}"
     }
   }
 }
 
 enum MCPNativeField {
-  case boolean, falseOnly, string, strings, positiveNumber, nonnegativeNumber, environmentName
+  case boolean, falseOnly, string, strings, positiveNumber, durationSeconds, environmentName
   case oneOf(Set<String>)
   case positiveIntegerObject(Set<String>)
 
@@ -237,9 +247,11 @@ enum MCPNativeField {
     case (.string, .string), (.environmentName, .string): true
     case (.strings, .array(let array)):
       array.allSatisfy { if case .string = $0 { true } else { false } }
-    case (.nonnegativeNumber, .integer(let number)): number >= 0
-    case (.nonnegativeNumber, .decimal(let number)):
-      Double(number).map { $0.isFinite && $0 >= 0 } ?? false
+    case (.durationSeconds, .integer(let number)): number >= 0
+    case (.durationSeconds, .decimal(let number)):
+      // Rust Duration uses u64 seconds. The f64 immediately below 2^64 is 2048 seconds
+      // smaller, so fractional nanosecond rounding cannot overflow an accepted f64.
+      Double(number).map { $0 >= 0 && $0 < 0x1p64 } ?? false
     case (.positiveNumber, .integer(let number)): number > 0
     case (.positiveNumber, .decimal(let number)):
       Double(number).map { $0.isFinite && $0 > 0 } ?? false

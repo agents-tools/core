@@ -48,7 +48,7 @@ enum CodexAdapter {
     }
     var rules: [String: MCPNativeField] = [
       "enabled": .boolean, "required": .boolean,
-      "startup_timeout_sec": .nonnegativeNumber, "tool_timeout_sec": .nonnegativeNumber,
+      "startup_timeout_sec": .durationSeconds, "tool_timeout_sec": .durationSeconds,
     ]
     if case .streamableHTTP = input.transport { rules["bearer_token_env_var"] = .environmentName }
     try entry.nativeFields(rules)

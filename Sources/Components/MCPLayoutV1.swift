@@ -80,9 +80,8 @@ package enum MCPLayoutV1 {
         switch surface {
         case .claudeCode: expected = .init(MCPReferenceSyntax.claude.render(name))
         case .geminiCLI: expected = .init(MCPReferenceSyntax.gemini.render(name))
-        case .openCodeCLI: expected = .init(MCPReferenceSyntax.openCode.render(name))
         case .codexCLI: expected = .init(name)
-        case .cursorEditor, .cursorCLI, .cursorCloud: throw invalid()
+        case .openCodeCLI, .cursorEditor, .cursorCLI, .cursorCloud: throw invalid()
         }
         guard slot == expected else { throw invalid() }
       } else {

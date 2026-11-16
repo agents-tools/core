@@ -10,11 +10,11 @@ enum OpenCodeAdapter {
       entry.fields["type"] = .init("local")
       try entry.command(run, argv: true)
       try entry.workingDirectory(run)
-      try entry.bindings(run.environment, field: "environment", reference: .openCode)
+      try entry.bindings(run.environment, field: "environment", reference: nil)
     case .streamableHTTP(let url, let headers):
       entry.fields["type"] = .init("remote")
       try entry.url(url)
-      try entry.bindings(headers, field: "headers", reference: .openCode)
+      try entry.bindings(headers, field: "headers", reference: nil)
     case .sse:
       throw input.issue(
         ["transport", "kind"], .unsupported,
