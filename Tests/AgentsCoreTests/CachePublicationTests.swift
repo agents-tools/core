@@ -230,9 +230,18 @@ private final class CacheFixture {
         destination = store.cacheDirectory.appendingPathComponent(
           "artifact-content/" + digest.dropFirst(7))
       }
-      try store.save(
-        declaration: Declaration(),
-        resolved: ResolvedState(sources: [sourceID: source], skills: ["demo": skill]))
+      var ledger = ResolvedLedger()
+      ledger.sources["source"] = LedgerSource(
+        kind: source.kind,
+        transport: source.kind == .wellKnown ? sourceID : source.url,
+        location: source.kind == .local
+          ? .init(kind: .absolute, path: String(sourceID.dropFirst(6))) : nil,
+        revision: revision ?? digest)
+      ledger.resources["resource"] = LedgerResource(
+        kind: revision == nil ? .artifact : .git,
+        source: "source", path: ".", hash: skill.hash!,
+        entries: [.init(path: ".", kind: .directory, executable: false)], artifact: skill.artifact)
+      try store.save(declaration: Declaration(), ledger: ledger)
       lockBytes = try Data(contentsOf: store.resolvedURL)
     } catch {
       removeTemporaryDirectory(root)

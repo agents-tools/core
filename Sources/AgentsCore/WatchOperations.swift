@@ -33,7 +33,7 @@ public struct WatchOperations: Sendable {
       let baseline = try StatePrecondition(store: store)
       let previous = try declarations.read(store, baseline)
       var declaration = previous
-      let lock = try store.readResolved(prepared: baseline)
+      let lock = try store.readLedger(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       var argument = try SourceArgument(source)
       guard argument.name == nil else {
@@ -78,7 +78,7 @@ public struct WatchOperations: Sendable {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
       let declaration = try declarations.read(store, nil)
-      _ = try store.readResolved()
+      _ = try store.readLedger()
       let watch = try store.readWatch()
       return try (declaration.watch ?? []).sorted().map { alias in
         try inspect(alias: alias, declaration: declaration, watch: watch, store: store)
@@ -94,7 +94,7 @@ public struct WatchOperations: Sendable {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
       let declaration = try declarations.read(store, nil)
-      _ = try store.readResolved()
+      _ = try store.readLedger()
       let watch = try store.readWatch()
       let alias = try subscription(source, declaration: declaration, environment: environment)
       var result = try inspect(alias: alias, declaration: declaration, watch: watch, store: store)
@@ -107,23 +107,42 @@ public struct WatchOperations: Sendable {
 
   @discardableResult
   public func seen(
-    _ source: String, revision: String? = nil, scope: InstallScope = .project,
+    _ source: String, revision: String? = nil, ifCurrentIs expected: WatchSeen? = nil,
+    ifSourceIs expectedSource: String? = nil,
+    scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> WatchChange {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withLock(checkpoint: checkpoint) {
       let baseline = try StatePrecondition(store: store)
       let declaration = try declarations.read(store, baseline)
-      let lock = try store.readResolved(prepared: baseline)
+      let lock = try store.readLedger(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
       let declared = declaration.sources[alias]!
       let id = try declared.identity(environment: environment)
-      let current = try acknowledge(declared, revision: revision, store: store)
+      guard expectedSource == nil || expectedSource == id else {
+        throw CoreError.invalidState("watch source changed; refresh before acknowledging")
+      }
+      let current = try acknowledge(declared, revision: revision, expected: expected, store: store)
+      guard expected == nil || expected == current else {
+        throw CoreError.invalidState("watch content changed; refresh before acknowledging")
+      }
       watch.sources[id] = WatchSourceState(seen: current)
       try commit(nil, watch: watch, lock: lock, store: store, baseline: baseline)
       return WatchChange(alias: alias, sourceID: id, seen: current)
     }
+  }
+
+  /// Acknowledges exactly the displayed source/content pair, revalidated under the writer lock.
+  @discardableResult
+  public func seen(
+    _ status: WatchStatus, scope: InstallScope = .project,
+    environment: RuntimeEnvironment = RuntimeEnvironment()
+  ) throws -> WatchChange {
+    try seen(
+      status.alias, ifCurrentIs: status.current, ifSourceIs: status.sourceID,
+      scope: scope, environment: environment)
   }
 
   /// Removes only the subscription and baseline. Source declarations and installations remain.
@@ -137,7 +156,7 @@ public struct WatchOperations: Sendable {
       let baseline = try StatePrecondition(store: store)
       let previous = try declarations.read(store, baseline)
       var declaration = previous
-      let lock = try store.readResolved(prepared: baseline)
+      let lock = try store.readLedger(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
       let id = try declaration.sources[alias]!.identity(environment: environment)
@@ -181,7 +200,7 @@ public struct WatchOperations: Sendable {
   /// The prepared generation, captured before any network acknowledgment, is the journal's
   /// preimage evidence and also guards the lock that pruning follows.
   private func commit(
-    _ change: DeclarationChange?, watch: WatchState, lock: ResolvedState, store: StateStore,
+    _ change: DeclarationChange?, watch: WatchState, lock: ResolvedLedger, store: StateStore,
     baseline: StatePrecondition
   ) throws {
     try watch.validate()
@@ -191,17 +210,22 @@ public struct WatchOperations: Sendable {
     try transaction.replace(
       store.watchURL, with: .data(StateStore.encode(watch)),
       expecting: baseline.evidence(for: store.watchURL))
-    try SourceCache(store: store).prune(referencedBy: lock, watch: watch, transaction: transaction)
+    var references = try RetentionReferences(ledger: lock, roots: store.ledgerRoots)
+    try references.include(watch: watch)
+    try SourceCache(store: store).prune(references: references, transaction: transaction)
     try transaction.commit()
   }
 
   private func acknowledge(
-    _ source: SourceDeclaration, revision: String?, store: StateStore
+    _ source: SourceDeclaration, revision: String?, expected: WatchSeen? = nil, store: StateStore
   ) throws -> WatchSeen {
     let cache = SourceCache(store: store, checkpoint: checkpoint)
     let id = try source.identity(environment: store.environment)
     if source.kind != .wellKnown {
       let head = try cache.watchRevision(source, revision: revision)
+      guard expected == nil || expected == .revision(head) else {
+        throw CoreError.invalidState("watch content changed; refresh before acknowledging")
+      }
       try checkpoint("watch.mirror.fetched")
       try cache.retainWatchRevision(sourceID: id, source: source.location, revision: head)
       return .revision(head)
@@ -210,6 +234,11 @@ public struct WatchOperations: Sendable {
       throw CoreError.invalidSource("well-known subscriptions do not accept Git revisions")
     }
     let artifacts = try artifacts(source)
+    let current = WatchSeen.artifacts(
+      Dictionary(uniqueKeysWithValues: artifacts.map { ($0.name, $0.artifact.digest) }))
+    guard expected == nil || expected == current else {
+      throw CoreError.invalidState("watch content changed; refresh before acknowledging")
+    }
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "agents-watch-" + UUID().uuidString)
     try FileSystem.createDirectory(at: root)

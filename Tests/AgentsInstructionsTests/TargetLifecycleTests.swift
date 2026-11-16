@@ -1,6 +1,7 @@
 import AgentsCore
 import AgentsInstructions
 import AgentsManifest
+import AgentsUpdates
 import Foundation
 import Testing
 
@@ -48,9 +49,9 @@ struct TargetLifecycleTests {
       try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
         $0.kind == .ownChanged
       })
-    #expect(throws: InstructionError.ownChanged(name: "guide")) {
-      try InstructionOperations.installResolvedReport(environment: fixture.environment)
-    }
+    let locked = try fixture.bytes()
+    _ = try InstructionOperations.installResolvedReport(environment: fixture.environment)
+    #expect(try fixture.bytes() == locked)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(try fixture.text().contains("# Project Guide\n\nEdited"))
     #expect(

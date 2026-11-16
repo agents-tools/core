@@ -1,4 +1,5 @@
 import AgentsManifest
+import AgentsUpdates
 import Foundation
 import Testing
 
@@ -121,10 +122,9 @@ struct InstalledInventoryTests {
         _ = try SkillOperations.doctor(scope: scope, environment: fixture.environment)
       }
       #expect(try Data(contentsOf: file) == bytes)
-      // The declaration is parsed under the scope lock, which a first writer creates.
       #expect(
         try Set(FileManager.default.contentsOfDirectory(atPath: store.directory.path))
-          == Set([file.lastPathComponent] + (corruptDeclaration ? [".agents.lock"] : [])))
+          == Set([file.lastPathComponent]))
       #expect(!FileManager.default.fileExists(atPath: store.cacheDirectory.path))
       #expect(
         !FileManager.default.fileExists(

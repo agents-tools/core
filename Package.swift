@@ -83,7 +83,9 @@ let package = Package(
       ], resources: [.copy("Fixtures")]),
     .executableTarget(
       name: "MCPTestProcess", dependencies: ["CPlatform"], path: "Tests/MCPTestProcess"),
-    .target(name: "StateTestSupport", path: "Tests/StateTestSupport"),
+    .target(
+      name: "StateTestSupport", dependencies: ["AgentsCore", "AgentsManifest"],
+      path: "Tests/StateTestSupport"),
     .executableTarget(
       name: "StateTestProcess",
       dependencies: [
@@ -97,7 +99,10 @@ let package = Package(
         "AgentsCore", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
       ]),
     .testTarget(
-      name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions", "AgentsManifest"]),
+      name: "AgentsInstructionsTests",
+      dependencies: [
+        "AgentsInstructions", "AgentsSkills", "AgentsManifest", "AgentsUpdates", "StateTestSupport",
+      ]),
     .target(
       name: "ManifestTestSupport", dependencies: ["AgentsManifest"],
       path: "Tests/ManifestTestSupport"),
@@ -120,7 +125,8 @@ let package = Package(
     .testTarget(
       name: "AgentsSkillsTests",
       dependencies: [
-        "AgentsSkills", "AgentsCore", "AgentsManifest", "AgentsInstructions", "Yams",
+        "AgentsSkills", "AgentsCore", "AgentsManifest", "AgentsInstructions", "AgentsUpdates",
+        "Yams",
         "StateTestProcess", "StateTestSupport", "CPlatform",
       ]),
   ],

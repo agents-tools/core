@@ -51,9 +51,7 @@ public struct StateStore: Sendable {
   }
 
   package func readResolved(prepared: StatePrecondition? = nil) throws -> ResolvedState {
-    let lock: ResolvedState = try load(resolvedURL, prepared: prepared) ?? ResolvedState()
-    try lock.validate()
-    return lock
+    try readLedger(prepared: prepared).domainProjection(roots: ledgerRoots)
   }
 
   /// Reads watch state under a shared lock, without recovery or creating files.
@@ -108,9 +106,9 @@ public struct StateStore: Sendable {
     if ![".agents.lock", TransactionJournal.fileName, "watch-refs.pending"].contains(where: {
       FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
     }) {
-      _ = try readResolved()
-      _ = try readWatch()
       _ = try declarationBytes()
+      _ = try readLedger()
+      _ = try readWatch()
     }
     let base = scope == .project ? environment.projectDirectory : environment.homeDirectory
     let physicalDirectory = base.resolvingSymlinksInPath().appendingPathComponent(

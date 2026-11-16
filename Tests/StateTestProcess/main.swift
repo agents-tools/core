@@ -317,21 +317,26 @@ if arguments[2].hasPrefix("ledger-") {
       || arguments[2] == "cache-bytes"
     {
       let cache = SourceCache(store: store) { try stop($0) }
-      let lock = try store.readResolved()
-      guard let skill = lock.skills["demo"], let hash = skill.hash else {
-        throw CoreError.invalidState("missing fixture skill")
+      let ledger = try store.readLedger()
+      guard let resource = ledger.resources["resource"],
+        let source = ledger.sources[resource.source]
+      else {
+        throw CoreError.invalidState("missing fixture resource")
       }
-      if arguments[2] == "cache-content", let artifact = skill.artifact {
+      if arguments[2] == "cache-content", let artifact = resource.artifact {
         _ = try cache.materializeArtifact(
-          root.appendingPathComponent("new"), digest: artifact.digest, hash: hash)
-      } else if arguments[2] == "cache-bytes", let artifact = skill.artifact {
+          root.appendingPathComponent("new"), digest: artifact.digest, hash: resource.hash)
+      } else if arguments[2] == "cache-bytes", let artifact = resource.artifact {
         _ = try cache.storeArtifact(
           Data(contentsOf: root.appendingPathComponent("payload")), digest: artifact.digest)
-      } else if let revision = skill.revision, let source = lock.sources[skill.source] {
-        _ = try cache.materialize(sourceID: skill.source, source: source, revision: revision)
+      } else if let location = source.location {
+        let identity = "local:" + (try location.resolve(roots: store.ledgerRoots).path)
+        _ = try cache.materialize(
+          sourceID: identity, source: LockedSource(kind: .local), revision: source.revision)
       } else {
         throw CoreError.invalidState("missing fixture pin")
       }
+
     } else if arguments[2] == "inspection-transaction" {
       let transaction = FileTransaction(store: store) { try stop($0) }
       try transaction.replace(
@@ -345,7 +350,9 @@ if arguments[2].hasPrefix("ledger-") {
         with: .data(Data("New instructions\n".utf8)))
       try transaction.replace(
         store.declarationURL, with: .data(manifestText("defaultAgents: [\"cursor\"]\n")))
-      try transaction.replace(store.resolvedURL, with: .data(StateStore.encode(ResolvedState())))
+      try transaction.replace(
+        store.resolvedURL,
+        with: .data(try ResolvedLedgerCodec.encode(ResolvedLedger(), limits: .standard)))
       try transaction.commit()
     } else if arguments[2] == "watch-crash" {
       let baseline = try StatePrecondition(store: store)

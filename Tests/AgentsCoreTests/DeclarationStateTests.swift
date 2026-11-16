@@ -109,7 +109,7 @@ struct DeclarationStateTests {
           projectDirectory: store.environment.projectDirectory,
           homeDirectory: store.environment.homeDirectory))
     #expect(try store.loadManifest()?.bytes == Array(bytes))
-    #expect(throws: ManifestFailure.self) { try store.readDeploymentDeclaration() }
+    #expect(try store.readDeclaration() == declaration)
     #expect(try FileHash.folderHash(fixture.root) == before)
   }
 

@@ -1,3 +1,4 @@
+import AgentsUpdates
 import Foundation
 import Testing
 
@@ -36,10 +37,7 @@ struct ArchiveSafetyTests {
           ? "subpath must be relative: \(path)" : "subpath contains path traversal segment: \(path)"
       )
     #expect(throws: expected) {
-      try SkillOperations.add(
-        AddOptions(
-          source: "https://zip.test", agents: [.codex], all: true, environment: fixture.environment),
-        provider: provider)
+      _ = try provider.fetchAllSkills(from: "https://zip.test")
     }
     #expect(try fixture.stateAndTargetBytes() == before)
   }

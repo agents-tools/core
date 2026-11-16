@@ -171,7 +171,7 @@ final class WatchGitFixture {
       try store.save(
         declaration: Declaration(sources: [
           "source": SourceDeclaration(kind: .local, location: repo.path)
-        ]), resolved: ResolvedState())
+        ]), ledger: ResolvedLedger())
     } catch {
       try? FileManager.default.removeItem(at: root)
       throw error

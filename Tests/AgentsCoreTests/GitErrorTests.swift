@@ -1,5 +1,6 @@
 import AgentsManifest
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -147,9 +148,14 @@ struct GitErrorTests {
     let source = SourceDeclaration(kind: .local, location: upstream.path)
     let id = try source.identity(environment: store.environment)
     // Recovery knows a source location from the lock or watch state, never the declaration.
-    try store.save(
-      declaration: Declaration(sources: ["source": source]),
-      resolved: ResolvedState(sources: [id: LockedSource(kind: .local)]))
+    let head = try ProcessRunner.git(
+      ["-C", upstream.path, "rev-parse", "HEAD"], operation: .resolveRevision(revision: "HEAD"),
+      source: upstream.path
+    ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    var ledger = ResolvedLedger()
+    ledger.sources[id] = .init(
+      kind: .local, location: .init(kind: .absolute, path: upstream.path), revision: head)
+    try store.save(declaration: Declaration(sources: ["source": source]), ledger: ledger)
     let cache = SourceCache(store: store)
     _ = try cache.resolve(source)
     try cache.beginWatchReferenceUpdate()

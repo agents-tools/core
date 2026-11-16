@@ -1,7 +1,10 @@
 import AgentsCore
+import AgentsInstructions
 import AgentsManifest
 import AgentsSkills
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Watch subscriptions")
@@ -14,7 +17,7 @@ struct WatchSubscriptionTests {
     try writeInstruction("removed", body: "old", fixture: fixture)
     try fixture.commit()
     let initial = try fixture.head()
-    try fixture.store().save(declaration: Declaration(), resolved: ResolvedState())
+    try fixture.store().save(declaration: Declaration(), ledger: ResolvedLedger())
     let watch = SkillOperations.watchOperations()
     let id = try SourceDeclaration(kind: .local, location: fixture.repo.path).identity(
       environment: fixture.environment)
@@ -113,7 +116,7 @@ struct WatchSubscriptionTests {
         "source": SourceDeclaration(
           kind: .local, location: fixture.repo.path,
           requirement: .exact("1.0.0"))
-      ]), resolved: ResolvedState())
+      ]), ledger: ResolvedLedger())
     try fixture.skill("demo", body: "head")
     try fixture.commit()
     let watch = SkillOperations.watchOperations()
@@ -329,7 +332,7 @@ struct WatchSubscriptionTests {
       { _ = try SkillOperations.remove(skillNames: ["demo"], environment: fixture.environment) },
       {
         try fixture.store().save(
-          declaration: Declaration(), resolved: ResolvedState(), watch: WatchState())
+          declaration: Declaration(), ledger: ResolvedLedger(), watch: WatchState())
       },
     ]
     for mutate in mutations {
@@ -346,19 +349,18 @@ struct WatchSubscriptionTests {
       try watch.add(fixture.repo.path, environment: fixture.environment)
     }
     #expect(!FileManager.default.fileExists(atPath: fixture.store().declarationURL.path))
+    let instructions = fixture.repo.appendingPathComponent("instructions")
+    try FileManager.default.createDirectory(at: instructions, withIntermediateDirectories: true)
+    try Data("---\ndescription: Canonical rules\n---\n# Rules\nCanonical\n".utf8).write(
+      to: instructions.appendingPathComponent("canonical.md"))
     try fixture.commit()
-    let declaration = Declaration(
-      sources: ["rules": SourceDeclaration(kind: .local, location: fixture.repo.path)],
-      instructions: InstructionsDeclaration(sections: ["rules:canonical"]))
-    let lock = ResolvedState(
-      sources: ["local:" + fixture.repo.path: LockedSource(kind: .local)],
-      instructions: LockedInstructions(sections: [
-        LockedSection(
-          name: "canonical", source: "local:" + fixture.repo.path,
-          revision: try fixture.head(), path: "instructions/canonical.md",
-          hash: "sha256:" + String(repeating: "a", count: 64))
-      ]))
-    try fixture.store().save(declaration: declaration, resolved: lock)
+    _ = try InstructionOperations.add(
+      InstructionAddOptions(
+        source: fixture.repo.path, alias: "rules", names: ["canonical"], agents: [.codex],
+        environment: fixture.environment))
+    let declaration = try fixture.store().loadDeclaration()
+    #expect(
+      try fixture.store().loadLedger().components.values.contains { $0.kind == "instructions" })
     let lockBytes = try Data(contentsOf: fixture.store().resolvedURL)
     try watch.add("rules", environment: fixture.environment)
     try watch.seen("rules", environment: fixture.environment)

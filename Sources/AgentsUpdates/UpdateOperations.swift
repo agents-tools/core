@@ -1,54 +1,130 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 
+struct RequiredBindingProvider: RuntimeBindingProvider {
+  func value(for binding: String, environment: RuntimeEnvironment) throws -> Data {
+    throw CoreError.invalidState("this materialization requires a runtime binding provider")
+  }
+}
+
 public enum UpdateOperations {
-  /// Resolves a fresh, read-only report under one shared scope lock. Pending recovery stops inspection.
   public static func preview(
-    scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
+    _ request: UpdateRequest = UpdateRequest(), scope: InstallScope = .project,
+    environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> CombinedUpdateReport {
-    try preview(scope: scope, environment: environment, checkpoint: { _ in })
+    try preview(request, scope: scope, environment: environment, checkpoint: { _ in })
   }
 
   package static func preview(
-    scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment(),
+    _ request: UpdateRequest = UpdateRequest(), scope: InstallScope = .project,
+    environment: RuntimeEnvironment = RuntimeEnvironment(),
     checkpoint: @escaping (String) throws -> Void
   ) throws -> CombinedUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withReadLock { try UpdatePlan(store: store, checkpoint: checkpoint).report }
+    var admitted = Set<NativeTargetRoute>()
+    while true {
+      do {
+        return try store.withReadLock(footprint: admitted) {
+          try UpdatePlan.withPlan(
+            request: request, store: store, admitted: admitted,
+            checkpoint: checkpoint, provider: RequiredBindingProvider()
+          ) { $0.report }
+        }
+      } catch let required as RequiredRoutes { admitted.formUnion(required.routes) }
+    }
   }
 
-  /// Holds the writer lock through preparation, synchronous rendering and optional application.
-  /// Returning or throwing before apply cancels. A caller error after apply does not undo the commit.
+  /// Holds admitted locks and borrowed resources through this synchronous, same-thread closure.
   public static func withPreparedUpdate<Result>(
-    scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment(),
+    _ request: UpdateRequest = UpdateRequest(), scope: InstallScope = .project,
+    environment: RuntimeEnvironment = RuntimeEnvironment(),
+    bindingProvider: (any RuntimeBindingProvider)? = nil,
     _ body: (PreparedUpdate) throws -> Result
   ) throws -> Result {
-    try withPreparedUpdate(scope: scope, environment: environment, checkpoint: { _ in }, body)
+    try prepare(
+      request, scope: scope, environment: environment, checkpoint: { _ in },
+      provider: bindingProvider ?? RequiredBindingProvider(), body)
   }
 
   package static func withPreparedUpdate<Result>(
-    scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment(),
+    _ request: UpdateRequest = UpdateRequest(), scope: InstallScope = .project,
+    environment: RuntimeEnvironment = RuntimeEnvironment(),
     checkpoint: @escaping (String) throws -> Void,
+    _ body: (PreparedUpdate) throws -> Result
+  ) throws -> Result {
+    try prepare(
+      request, scope: scope, environment: environment, checkpoint: checkpoint,
+      provider: RequiredBindingProvider(), body)
+  }
+
+  package static func prepare<Result>(
+    _ request: UpdateRequest, scope: InstallScope, environment: RuntimeEnvironment,
+    checkpoint: @escaping (String) throws -> Void, provider: any RuntimeBindingProvider,
+    completion: ((TransactionOutcome) -> Void)? = nil,
     _ body: (PreparedUpdate) throws -> Result
   ) throws -> Result {
     let store = StateStore(scope: scope, environment: environment)
     let outcome = TransactionOutcome()
+    defer { completion?(outcome) }
+    var delivered = false
     var returned = false
+    var admitted = Set<NativeTargetRoute>()
+    while true {
+      do {
+        return try store.withLock(checkpoint: checkpoint, outcome: outcome, footprint: admitted) {
+          try UpdatePlan.withPlan(
+            request: request, store: store, admitted: admitted,
+            checkpoint: checkpoint, provider: provider
+          ) { plan in
+            try plan.requireSkillOwnership()
+            let update = PreparedUpdate(plan: plan, outcome: outcome)
+            defer { update.invalidate() }
+            delivered = true
+            let result = try body(update)
+            returned = true
+            return result
+          }
+        }
+      } catch let required as RequiredRoutes where !delivered {
+        admitted.formUnion(required.routes)
+      } catch {
+        if returned || error is UpdateApplyError {
+          throw UpdateApplyError(outcome: outcome, underlyingError: error)
+        }
+        throw error
+      }
+    }
+  }
+
+  static func withDomainUpdate<Result>(
+    _ request: UpdateRequest, scope: InstallScope, environment: RuntimeEnvironment,
+    checkpoint: @escaping (String) throws -> Void = { _ in },
+    _ body: (PreparedUpdate) throws -> Result
+  ) throws -> Result {
     do {
-      return try store.withLock(checkpoint: checkpoint, outcome: outcome) {
-        let plan = try UpdatePlan(store: store, checkpoint: checkpoint)
-        try plan.validateOwnership()
-        let update = PreparedUpdate(plan: plan, outcome: outcome)
-        defer { update.invalidate() }
-        let result = try body(update)
-        returned = true
-        return result
-      }
-    } catch {
-      if returned || error is UpdateApplyError {
-        throw UpdateApplyError(outcome: outcome, underlyingError: error)
-      }
+      return try withPreparedUpdate(
+        request, scope: scope, environment: environment, checkpoint: checkpoint, body)
+    } catch let error as UpdateApplyError {
+      if case .unchanged = error.disposition { throw error.underlyingError }
       throw error
     }
+  }
+
+  static func declarationSnapshot(_ store: StateStore) throws -> (Declaration, String) {
+    try store.withReadLock {
+      let document = try store.declarationDocument(prepared: nil)
+      return (try store.readDeclaration(), document?.digest ?? "absent")
+    }
+  }
+
+  public static func restore(
+    scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment(),
+    bindingProvider: (any RuntimeBindingProvider)? = nil
+  ) throws -> UpdateApplyResult {
+    try withPreparedUpdate(
+      UpdateRequest(operation: .restore), scope: scope, environment: environment,
+      bindingProvider: bindingProvider
+    ) { try $0.apply() }
   }
 }

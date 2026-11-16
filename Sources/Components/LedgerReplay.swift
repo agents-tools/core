@@ -87,7 +87,29 @@ package enum LedgerReplay {
     try run(
       ledger, store: store, roots: roots, limits: limits, renderers: renderers,
       recording: false
-    ) { artifacts, _ in try body(artifacts) }
+    ) { artifacts, _, _, _ in try body(artifacts) }
+  }
+
+  package static func withPreparedLowerings<T>(
+    _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
+    _ body: (ResolvedLedger, [ReplayedArtifact], [String: URL], URL) throws -> T
+  ) throws -> T {
+    try run(ledger, store: store, roots: roots, limits: limits, renderers: nil, recording: true) {
+      artifacts, lowerings, resources, workspace in
+      var candidate = ledger
+      candidate.lowerings = lowerings
+      try candidate.validate()
+      return try body(candidate, artifacts, resources, workspace)
+    }
+  }
+
+  package static func withLockedResources<T>(
+    _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
+    _ body: ([ReplayedArtifact], [String: URL], URL) throws -> T
+  ) throws -> T {
+    try run(ledger, store: store, roots: roots, limits: limits, renderers: nil, recording: false) {
+      artifacts, _, resources, workspace in try body(artifacts, resources, workspace)
+    }
   }
 
   /// Seals renderer output identities into a candidate before encoding or publication.
@@ -98,7 +120,7 @@ package enum LedgerReplay {
     try run(
       ledger, store: store, roots: roots, limits: limits, renderers: renderers,
       recording: true
-    ) { _, lowerings in
+    ) { _, lowerings, _, _ in
       var candidate = ledger
       candidate.lowerings = lowerings
       try candidate.validate()
@@ -109,7 +131,7 @@ package enum LedgerReplay {
   private static func run<T>(
     _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
     renderers: [String: LedgerRenderer]?, recording: Bool,
-    _ body: ([ReplayedArtifact], [LockedLowering]) throws -> T
+    _ body: ([ReplayedArtifact], [LockedLowering], [String: URL], URL) throws -> T
   ) throws -> T {
     try ResolvedLedgerCodec.checkModel(ledger, limits: limits)
     try ledger.validate()
@@ -241,7 +263,7 @@ package enum LedgerReplay {
         sealed.append(locked)
         result += rendered
       }
-      return try body(result, sealed)
+      return try body(result, sealed, acquired, workspace)
     }
   }
 

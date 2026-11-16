@@ -6,5 +6,7 @@ package final class TransactionOutcome {
   package var disposition: Disposition = .unchanged
   var journalID: UUID?
 
+  package var publicationStarted: Bool { journalID != nil }
+
   package init() {}
 }
