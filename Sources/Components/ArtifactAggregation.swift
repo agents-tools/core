@@ -12,6 +12,7 @@ package struct AggregatedChange {
   package let native: Bool
   package var afterLink: URL? = nil
   package var accessChange: PrivateAccessChange? = nil
+  package var effectiveReaders: [AgentID] = []
   package var privateMaterialization = false
   package var requiredBindings: [String] = []
   package var symbolicBefore: LedgerValue? = nil
@@ -256,12 +257,17 @@ package final class ArtifactAggregation: PreparedEvidence {
   }
 
   private func resourceDestination(_ id: String, in selected: ResolvedLedger? = nil) throws -> URL {
-    let ledger = selected ?? self.ledger
+    try Self.resourceDestination(id, ledger: selected ?? ledger, store: store)
+  }
+
+  package static func resourceDestination(_ id: String, ledger: ResolvedLedger, store: StateStore)
+    throws -> URL
+  {
     guard let resource = ledger.resources[id] else {
       throw CoreError.invalidState("missing deployment resource")
     }
     if let location = resource.location { return try location.resolve(roots: store.ledgerRoots) }
-    if let root = try gitDestination(resource, ledger: ledger) {
+    if let root = try gitDestination(resource, ledger: ledger, store: store) {
       return root.appendingPathComponent(resource.path)
     }
     let base = store.cacheDirectory.appendingPathComponent(
@@ -270,6 +276,12 @@ package final class ArtifactAggregation: PreparedEvidence {
   }
 
   private func gitDestination(_ resource: LedgerResource, ledger: ResolvedLedger) throws -> URL? {
+    try Self.gitDestination(resource, ledger: ledger, store: store)
+  }
+
+  private static func gitDestination(
+    _ resource: LedgerResource, ledger: ResolvedLedger, store: StateStore
+  ) throws -> URL? {
     guard resource.kind == .git else { return nil }
     var sourceID = resource.source
     while let parent = ledger.sources[sourceID]?.container { sourceID = parent }
@@ -298,7 +310,7 @@ package final class ArtifactAggregation: PreparedEvidence {
       return
     }
     let document = try NativeDocument(
-      bytes: capture.bytes ?? Data("{}\n".utf8),
+      bytes: capture.bytes ?? Data((descriptor.documentFormat == .toml ? "" : "{}\n").utf8),
       format: descriptor.documentFormat,
       budget: NativeDocumentBudget(
         limits: .init(
@@ -317,7 +329,12 @@ package final class ArtifactAggregation: PreparedEvidence {
     }
     let oldByName = Dictionary(old.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
     let names = Set(desired.keys).union(oldByName.keys).sorted()
-    let sensitive = (old + contributions.map(\.1)).contains {
+    let effectiveReaders = Array(
+      (old + contributions.map(\.1)).reduce(into: Set<AgentID>()) {
+        $0.formUnion($1.descriptor.knownReaders)
+      }
+    ).sorted { $0.rawValue < $1.rawValue }
+    let hasBindings = (old + contributions.map(\.1)).contains {
       $0.bindings.contains { !$0.reference }
     }
     let target: MaterializationTarget
@@ -326,6 +343,7 @@ package final class ArtifactAggregation: PreparedEvidence {
     } else {
       target = try store.nativeTarget(for: DeploymentConstruction.route(old[0]))
     }
+    let sensitive = try hasBindings || store.materializationReceipt(for: target) != nil
     let privatePlan =
       try sensitive
       ? store.preparePrivateMaterialization(
@@ -371,7 +389,9 @@ package final class ArtifactAggregation: PreparedEvidence {
     // Symbolic placeholders never leave the private plan. A staged literal render consumes
     // all regions together after Core has verified private staging and resolved bindings.
     let preview = try document.prepare(edits(nil))
-    let changed = preview.bytes != (capture.bytes ?? Data("{}\n".utf8))
+    let changed =
+      preview.bytes
+      != (capture.bytes ?? Data((descriptor.documentFormat == .toml ? "" : "{}\n").utf8))
     if let privatePlan {
       let bindings = Set(
         contributions.flatMap {
@@ -407,7 +427,8 @@ package final class ArtifactAggregation: PreparedEvidence {
       changes.append(
         .init(
           deployment: deployment, url: url, before: nil, after: nil, changed: changed || sensitive,
-          native: true, accessChange: privatePlan?.accessChange, privateMaterialization: sensitive,
+          native: true, accessChange: privatePlan?.accessChange, effectiveReaders: effectiveReaders,
+          privateMaterialization: sensitive,
           requiredBindings: contribution.bindings.filter { !$0.reference }.map {
             switch $0.binding {
             case .environment(let name), .secret(let name): name
@@ -428,6 +449,7 @@ package final class ArtifactAggregation: PreparedEvidence {
           .init(
             deployment: prior, url: url, before: nil, after: nil, changed: removed,
             native: true, accessChange: privatePlan?.accessChange,
+            effectiveReaders: effectiveReaders,
             privateMaterialization: sensitive,
             symbolicBefore: old.value))
       }
@@ -437,11 +459,18 @@ package final class ArtifactAggregation: PreparedEvidence {
   private func nativeValue(
     _ contribution: NativeMCPContribution, values: RuntimeBindingValues?, ledger: ResolvedLedger
   ) throws -> NativeValue {
+    try Self.nativeValue(contribution, values: values, ledger: ledger, store: store)
+  }
+
+  private static func nativeValue(
+    _ contribution: NativeMCPContribution, values: RuntimeBindingValues?, ledger: ResolvedLedger,
+    store: StateStore
+  ) throws -> NativeValue {
     func convert(_ value: LedgerValue, path: [MCPValueStep]) throws -> NativeValue {
       if let resource = contribution.resourcePlacements.first(where: { $0.path == path }),
         ledger.resources[resource.resource] != nil
       {
-        let destination = try resourceDestination(resource.resource, in: ledger)
+        let destination = try resourceDestination(resource.resource, ledger: ledger, store: store)
         return .string(destination.path)
       }
       switch value.kind {
@@ -547,5 +576,97 @@ package final class ArtifactAggregation: PreparedEvidence {
 extension Dictionary {
   fileprivate func mapValuesWithKey<T>(_ transform: (Key, Value) throws -> T) rethrows -> [Key: T] {
     try [Key: T](uniqueKeysWithValues: map { (key, value) in (key, try transform(key, value)) })
+  }
+}
+
+extension ArtifactAggregation {
+  package static func nativeExposure(
+    _ deployment: LedgerDeployment, ledger: ResolvedLedger, store: StateStore
+  ) throws -> (readers: [AgentID]?, sensitive: Bool) {
+    guard deployment.ownership == .ownedValues else { return (nil, false) }
+    let path = try deployment.target.resolve(roots: store.ledgerRoots).path
+    var readers = Set<AgentID>()
+    var sensitive = false
+    for lowering in ledger.lowerings where lowering.format.hasSuffix("-mcp@1") {
+      let c = try MCPLayoutV1.contribution(lowering, ledger: ledger)
+      let target = try store.nativeTarget(for: DeploymentConstruction.route(c))
+      if target.url.path == path {
+        readers.formUnion(c.descriptor.knownReaders)
+        sensitive =
+          try sensitive || c.bindings.contains(where: { !$0.reference })
+          || store.materializationReceipt(for: target) != nil
+      }
+    }
+    return (readers.isEmpty ? nil : readers.sorted { $0.rawValue < $1.rawValue }, sensitive)
+  }
+
+  /// Observes only the owned region. Private receipts validate the entire physical preimage.
+  package static func inspectDeployment(
+    _ deployment: LedgerDeployment, ledger: ResolvedLedger, store: StateStore
+  ) throws -> (status: String, diagnostic: String?) {
+    let url = try deployment.target.resolve(roots: store.ledgerRoots)
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      return ("missing", "managed target is missing")
+    }
+    do {
+      if deployment.route == "agents/skill@1" {
+        let expected = deployment.expectedHash
+        let hash = "sha256:" + (try FileHash.folderHash(url))
+        let flags = try FileHash.executableFlags(url)
+        let resources = deployment.owners.flatMap { ledger.components[$0]?.resources ?? [] }
+        let expectedFlags = resources.first.flatMap { ledger.resources[$0] }.map {
+          Dictionary(
+            uniqueKeysWithValues: $0.entries.filter { $0.kind == .file }.map {
+              ($0.path, $0.executable)
+            })
+        }
+        return hash == expected && (expectedFlags == nil || expectedFlags == flags)
+          ? ("current", nil) : ("drifted", "managed skill content or executable mode changed")
+      }
+      if deployment.ownership == .ownedValues,
+        let lowering = ledger.lowerings.first(where: { $0.deployments.contains(deployment.id) }),
+        lowering.format.hasSuffix("-mcp@1")
+      {
+        let c = try MCPLayoutV1.contribution(lowering, ledger: ledger)
+        let target = try store.nativeTarget(for: DeploymentConstruction.route(c))
+        if try store.materializationReceipt(for: target) != nil { return ("current", nil) }
+        if c.bindings.contains(where: { !$0.reference }) {
+          return (
+            "unverified",
+            "native materialization needs its private receipt or resource placement evidence"
+          )
+        }
+        let document = try NativeDocument(
+          bytes: FileSystem.read(at: url), format: c.descriptor.documentFormat,
+          budget: NativeDocumentBudget(
+            limits: .init(
+              storage: LedgerLimits.standard.resourceBytes,
+              work: LedgerLimits.standard.encodedBytes, nodes: LedgerLimits.standard.nodes,
+              depth: LedgerLimits.standard.depth, uninterruptedBytes: LedgerLimits.standard.keyBytes
+            )))
+        let region = try c.descriptor.region(
+          server: c.name,
+          nativeProjectKey: c.descriptor.request.scope == .local
+            ? store.nativeTarget(for: .claudeMCPProject).url.deletingLastPathComponent().path : nil)
+        guard let observed = try document.read(region) else {
+          return ("missing", "managed native region is missing")
+        }
+        return try observed.value == nativeValue(c, values: nil, ledger: ledger, store: store)
+          ? ("current", nil) : ("drifted", "managed native region changed")
+      }
+      let bytes = try FileSystem.read(at: url)
+      let hash =
+        deployment.ownership == .importBlock
+        ? try InstructionTargets.ownedImportBytes(bytes).map {
+          "sha256:" + FileHash.sha256Hex(data: $0)
+        }
+        : "sha256:" + FileHash.sha256Hex(data: bytes)
+      return hash == deployment.expectedHash
+        ? ("current", nil) : ("drifted", "managed instructions changed")
+    } catch {
+      return (
+        "unverified", "managed target could not be verified; inspect ownership, format and access"
+      )
+    }
   }
 }

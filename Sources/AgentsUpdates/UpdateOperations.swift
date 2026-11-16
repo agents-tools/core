@@ -39,10 +39,12 @@ public enum UpdateOperations {
   public static func withPreparedUpdate<Result>(
     _ request: UpdateRequest = UpdateRequest(), scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment(),
+    bindingProvider: (any RuntimeBindingProvider)? = nil,
     _ body: (PreparedUpdate) throws -> Result
   ) throws -> Result {
-    try withPreparedUpdate(
-      request, scope: scope, environment: environment, checkpoint: { _ in }, body)
+    try prepare(
+      request, scope: scope, environment: environment, checkpoint: { _ in },
+      provider: bindingProvider ?? RequiredBindingProvider(), body)
   }
 
   package static func withPreparedUpdate<Result>(
@@ -59,10 +61,12 @@ public enum UpdateOperations {
   package static func prepare<Result>(
     _ request: UpdateRequest, scope: InstallScope, environment: RuntimeEnvironment,
     checkpoint: @escaping (String) throws -> Void, provider: any RuntimeBindingProvider,
+    completion: ((TransactionOutcome) -> Void)? = nil,
     _ body: (PreparedUpdate) throws -> Result
   ) throws -> Result {
     let store = StateStore(scope: scope, environment: environment)
     let outcome = TransactionOutcome()
+    defer { completion?(outcome) }
     var delivered = false
     var returned = false
     var admitted = Set<NativeTargetRoute>()
@@ -115,10 +119,12 @@ public enum UpdateOperations {
   }
 
   public static func restore(
-    scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
+    scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment(),
+    bindingProvider: (any RuntimeBindingProvider)? = nil
   ) throws -> UpdateApplyResult {
     try withPreparedUpdate(
-      UpdateRequest(operation: .restore), scope: scope, environment: environment
+      UpdateRequest(operation: .restore), scope: scope, environment: environment,
+      bindingProvider: bindingProvider
     ) { try $0.apply() }
   }
 }

@@ -50,6 +50,32 @@ struct UpdateTransactionTests {
     #expect(try !fixture.preview().hasChanges)
   }
 
+  @Test(arguments: [false, true])
+  func outerTerminalReportsTheDurablePublication(_ committed: Bool) throws {
+    let fixture = try UpdateFixture()
+    try fixture.install()
+    let before = try fixture.snapshot()
+    try fixture.advance()
+    let point =
+      committed
+      ? TransactionCheckpoint.phase(.committed).name
+      : TransactionCheckpoint.phase(.preparing).name
+    var interrupted = false
+    let result = UpdateOperations.perform(
+      environment: fixture.environment,
+      checkpoint: { step in
+        if step == point {
+          interrupted = true
+          throw CoreError.invalidState("terminal fixture failure")
+        }
+      }, { try $0.apply() })
+    #expect(interrupted)
+    #expect(result.disposition == (committed ? .committed : .rolledBack))
+    #expect(!result.recovery.pending)
+    #expect(throws: UpdateApplyError.self) { try result.result.get() }
+    if !committed { #expect(try fixture.snapshot() == before) }
+  }
+
   @Test(arguments: [
     "between-kinds", TransactionCheckpoint.phase(.preparing).name,
     TransactionCheckpoint.persisted(.applying, .entry(0, .publishing), .renamed).name,
@@ -120,8 +146,21 @@ struct UpdateTransactionTests {
     #expect(throws: CoreError.recoveryPending(TransactionRecoveryDiagnostic.pendingMessage)) {
       try fixture.preview()
     }
+    let inspection = try UpdateOperations.inspect(environment: fixture.environment)
+    #expect(inspection.recovery.pending)
+    #expect(inspection.components.isEmpty)
+    var delivered = false
+    let recovered: UpdateCompletion<Void> = UpdateOperations.perform(
+      environment: fixture.environment
+    ) { _ in
+      delivered = true
+    }
+    #expect(!delivered)
+    #expect(recovered.recoveredBeforePreparation)
+    #expect(recovered.disposition == .unchanged)
+    #expect(!recovered.recovery.pending)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      try fixture.apply()
+      try recovered.result.get()
     }
     let committed = committedPoints.contains(checkpoint)
     if !committed { #expect(try fixture.snapshot() == before) }

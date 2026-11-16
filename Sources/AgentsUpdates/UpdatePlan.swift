@@ -28,8 +28,11 @@ final class UpdatePlan {
     checkpoint: @escaping (String) throws -> Void, provider: any RuntimeBindingProvider,
     _ body: (UpdatePlan) throws -> T
   ) throws -> T {
+    var request = request
+    let importInputs = try request.importPreparation?.capture() ?? []
     let baseline = try StatePrecondition(store: store)
     let previous = try store.readLedger(prepared: baseline)
+    try resolveSelection(&request, ledger: previous, store: store, baseline: baseline)
     let restoringRequest: Bool
     if case .restore = request.operation {
       restoringRequest = true
@@ -68,7 +71,8 @@ final class UpdatePlan {
       restoring = false
       try LedgerImpact.requireEditable(
         previous, kinds: request.kinds ?? Set(DeclaredComponentKind.allCases),
-        names: Set(request.names), roots: store.ledgerRoots)
+        names: Set(request.names), roots: store.ledgerRoots,
+        selectedIdentities: request.selectedIdentities)
       candidate = try removing(request, from: declaration, ledger: previous, store: store)
       change = try store.planDeclaration(candidate, replacing: declaration, prepared: baseline)
     }
@@ -98,7 +102,11 @@ final class UpdatePlan {
         bytes: Array("version: 1\n".utf8), identity: DocumentIdentity(store.declarationURL.path))
     }
     let updating: Bool
-    if case .update = request.operation { updating = true } else { updating = false }
+    if case .update = request.operation {
+      updating = true
+    } else {
+      updating = request.expectedDiscoveryFingerprint != nil
+    }
     let removing: Bool
     if case .remove = request.operation { removing = true } else { removing = false }
     if removing || (updating && !request.names.isEmpty), request.kinds?.contains(.skills) ?? true {
@@ -140,7 +148,7 @@ final class UpdatePlan {
     let impact = try LedgerImpact(
       ledger: previous, roots: store.ledgerRoots,
       kinds: request.kinds ?? Set(DeclaredComponentKind.allCases), names: Set(request.names),
-      updating: updating)
+      updating: updating, selectedIdentities: request.selectedIdentities)
     #if os(macOS)
       let platform = DeclarationPlatform.macOS
     #else
@@ -163,36 +171,7 @@ final class UpdatePlan {
             "automatic skill selection changed during discovery; retry the command")
         }
       }
-      var locations: [String: LedgerLocation] = [:]
-      let packageRoot =
-        store.scope == .project ? store.environment.projectDirectory : store.directory
-      for evidence in linked.sourceSnapshots + linked.declaringSnapshots
-      where evidence.container == nil && evidence.snapshot.source.hasPrefix("local:") {
-        let path = String(evidence.snapshot.source.dropFirst(6))
-        if path == packageRoot.path {
-          locations[evidence.snapshot.source] = .init(
-            kind: .registered, root: store.scope == .project ? "project" : "state", path: ".")
-        } else if let authored = try candidate.sources.values.first(where: {
-          try $0.identity(environment: store.environment) == evidence.snapshot.source
-        }),
-          !authored.location.hasPrefix("/")
-        {
-          if authored.location == "~" || authored.location.hasPrefix("~/") {
-            locations[evidence.snapshot.source] = .init(
-              kind: .authoringRelative, root: "home",
-              path: authored.location == "~" ? "." : String(authored.location.dropFirst(2)))
-          } else if authored.environment?.projectDirectory.path
-            == store.environment.projectDirectory.path || authored.environment == nil
-          {
-            locations[evidence.snapshot.source] = .init(
-              kind: .authoringRelative, root: "project", path: authored.location)
-          } else {
-            locations[evidence.snapshot.source] = .init(kind: .absolute, path: path)
-          }
-        } else {
-          locations[evidence.snapshot.source] = .init(kind: .absolute, path: path)
-        }
-      }
+      let locations = try sourceLocations(linked, declaration: candidate, store: store)
       for component in linked.components {
         if case .skill(let skill, .copy, _) = component.payload {
           try DeploymentConstruction.validateCopiedSkill(
@@ -201,15 +180,21 @@ final class UpdatePlan {
       }
       let frozen = try LedgerFreeze.freezeWithSources(
         linked, session: session, locations: .init(sources: locations), limits: .standard)
+      if let expected = request.expectedDiscoveryFingerprint,
+        expected != (try LedgerImpact.discoveryFingerprint(frozen.ledger, roots: store.ledgerRoots))
+      {
+        throw CoreError.invalidState("discovered source content changed; refresh discovery")
+      }
       let native = try DeploymentConstruction.lowerNative(
         linked: linked, frozen: frozen, scope: store.scope, platform: platform)
       let routes = try DeploymentConstruction.routes(native).union(
         DeploymentConstruction.routes(previous))
       guard routes.isSubset(of: admitted) else { throw RequiredRoutes(routes: routes) }
-      if let kinds = request.kinds {
+      if request.kinds != nil || !request.names.isEmpty || request.selectedIdentities != nil {
+        let kinds = request.kinds ?? Set(DeclaredComponentKind.allCases)
         try LedgerImpact.requireProtected(
           previous: previous, next: native, kinds: kinds, names: Set(request.names),
-          roots: store.ledgerRoots)
+          roots: store.ledgerRoots, selectedIdentities: request.selectedIdentities)
       }
       let complete = try DeploymentConstruction.complete(
         native, linked: linked, store: store, previous: previous, platform: platform)
@@ -228,7 +213,7 @@ final class UpdatePlan {
             request: request, store: store, baseline: baseline, previous: previous, next: next,
             watch: watch, change: change, artifacts: artifacts, resources: resources,
             workspace: workspace,
-            decisionInputs: complete.inputs, originalInputs: originals,
+            decisionInputs: complete.inputs, originalInputs: originals + importInputs,
             checkpoint: checkpoint, provider: provider))
       }
     }
@@ -254,6 +239,26 @@ final class UpdatePlan {
       ledger: next, previous: previous, artifacts: artifacts,
       resources: resources, workspace: workspace, store: store, replace: request.replace,
       changingAccess: request.changingAccess, kinds: request.kinds)
+    if let imported = request.importPreparation {
+      for resource in imported.proposal.resources
+      where resource.selected && resource.requiresStandaloneSource {
+        guard
+          let source = imported.proposal.sources.first(where: { $0.alias == resource.sourceAlias })?
+            .declaration,
+          source.kind == .local
+        else { continue }
+        let sourceEnvironment = source.environment?.runtime ?? store.environment
+        let identity = try source.identity(environment: sourceEnvironment)
+        let root = URL(fileURLWithPath: String(identity.dropFirst(6)))
+        if aggregation.changes.contains(where: {
+          PathSafety.isContained(root, in: $0.url) || PathSafety.isContained($0.url, in: root)
+        }) {
+          throw CoreError.invalidState(
+            "import requires an independent authoring source before replacing its installed content"
+          )
+        }
+      }
+    }
     self.next = aggregation.ledger
     try self.next.validate()
     let lockMissing = try baseline.bytes(for: store.resolvedURL) == nil
@@ -262,7 +267,8 @@ final class UpdatePlan {
     let allResults = try UpdateReporting.skills(
       previous: previous, next: self.next, resources: resources,
       changes: aggregation.changes, store: store, lockMissing: lockMissing,
-      included: request.kinds == nil || request.kinds!.contains(.skills))
+      included: request.kinds == nil || request.kinds!.contains(.skills),
+      selectedIdentities: request.selectedIdentities)
     let results =
       request.names.isEmpty ? allResults : allResults.filter { request.names.contains($0.skill) }
     receipts = results.flatMap(\.installed)
@@ -302,6 +308,7 @@ final class UpdatePlan {
       let scope: InstallScope
       let kinds: [String]?
       let names: [String]
+      let selectedIdentities: [String]?
       let replace: Bool
       let changingAccess: Bool
       let candidate: ResolvedLedger
@@ -312,7 +319,8 @@ final class UpdatePlan {
     let fingerprint = try ResolvedLedgerCodec.digest(
       Fingerprint(
         operation: operation, scope: store.scope, kinds: request.kinds?.map(\.rawValue).sorted(),
-        names: request.names.sorted(), replace: request.replace,
+        names: request.names.sorted(), selectedIdentities: request.selectedIdentities?.sorted(),
+        replace: request.replace,
         changingAccess: request.changingAccess,
         candidate: self.next, baseline: previous,
         declaration: try (change?.bytes ?? baseline.bytes(for: store.declarationURL)).map {
@@ -327,7 +335,16 @@ final class UpdatePlan {
       hasChanges: self.next != previous || change != nil
         || aggregation.changes.contains(where: \.changed),
       displayedFingerprint: fingerprint,
-      components: try aggregation.changes.filter(\.native).map { change in
+      components: try aggregation.changes.filter { change in
+        guard change.native else { return false }
+        guard let identities = request.selectedIdentities else { return true }
+        return try change.deployment.owners.contains { owner in
+          let ledger = finalNext.components[owner] == nil ? previous : finalNext
+          return try identities.contains(
+            LedgerImpact.identity(
+              ledger.components[owner]!, ledger: ledger, roots: store.ledgerRoots))
+        }
+      }.map { change in
         let owner = change.deployment.owners[0]
         let ledger = finalNext.components[owner] == nil ? previous : finalNext
         let component = ledger.components[owner]!
@@ -342,7 +359,7 @@ final class UpdatePlan {
                 uniqueKeysWithValues: resource.entries.filter { $0.kind == .file }.map {
                   ($0.path, $0.executable)
                 }))
-          }, requiredBindings: change.requiredBindings,
+          }, requiredBindings: change.requiredBindings, effectiveReaders: change.effectiveReaders,
           privateMaterialization: change.privateMaterialization,
           permissionChange: change.accessChange.map { access in
             ComponentPermissionChange(
@@ -396,6 +413,111 @@ final class UpdatePlan {
     }
   }
 
+  static func sourceLocations(
+    _ linked: LinkedComponents, declaration: Declaration, store: StateStore
+  ) throws -> [String: LedgerLocation] {
+    var locations: [String: LedgerLocation] = [:]
+    let packageRoot =
+      store.scope == .project ? store.environment.projectDirectory : store.directory
+    for evidence in linked.sourceSnapshots + linked.declaringSnapshots
+    where evidence.container == nil && evidence.snapshot.source.hasPrefix("local:") {
+      let path = String(evidence.snapshot.source.dropFirst(6))
+      if path == packageRoot.path {
+        locations[evidence.snapshot.source] = .init(
+          kind: .registered, root: store.scope == .project ? "project" : "state", path: ".")
+      } else if let authored = try declaration.sources.values.first(where: {
+        try $0.identity(environment: store.environment) == evidence.snapshot.source
+      }),
+        !authored.location.hasPrefix("/")
+      {
+        if authored.location == "~" || authored.location.hasPrefix("~/") {
+          locations[evidence.snapshot.source] = .init(
+            kind: .authoringRelative, root: "home",
+            path: authored.location == "~" ? "." : String(authored.location.dropFirst(2)))
+        } else if authored.environment?.projectDirectory.path
+          == store.environment.projectDirectory.path || authored.environment == nil
+        {
+          locations[evidence.snapshot.source] = .init(
+            kind: .authoringRelative, root: "project", path: authored.location)
+        } else {
+          locations[evidence.snapshot.source] = .init(kind: .absolute, path: path)
+        }
+      } else {
+        locations[evidence.snapshot.source] = .init(kind: .absolute, path: path)
+      }
+    }
+    return locations
+  }
+
+  private static func resolveSelection(
+    _ request: inout UpdateRequest, ledger: ResolvedLedger, store: StateStore,
+    baseline: StatePrecondition
+  ) throws {
+    let kinds = request.kinds ?? Set(DeclaredComponentKind.allCases)
+    func name(_ c: LedgerComponent) -> String {
+      c.kind == "skills" ? PathSafety.sanitizeName(c.name) : c.name
+    }
+    if request.selections.isEmpty {
+      for requested in request.names {
+        let matches = try ledger.components.values.filter {
+          kinds.contains(DeclaredComponentKind(rawValue: $0.kind)!) && name($0) == requested
+        }.map { try LedgerImpact.identity($0, ledger: ledger, roots: store.ledgerRoots) }
+        guard Set(matches).count <= 1 else {
+          throw CoreError.invalidState(
+            "component name is ambiguous; select a component from inspection: " + requested)
+        }
+      }
+      return
+    }
+    guard request.names.isEmpty else {
+      throw CoreError.invalidState("use names or precise selections, not both")
+    }
+    switch request.operation {
+    case .update, .remove: break
+    default: throw CoreError.invalidState("precise selection applies to update or removal")
+    }
+    let documentDigest =
+      try baseline.bytes(for: store.declarationURL).map { "sha256:" + FileHash.sha256Hex(data: $0) }
+      ?? "absent"
+    let generation = try ResolvedLedgerCodec.digest([
+      ResolvedLedgerCodec.digest(ledger), documentDigest,
+    ])
+    var selected = Set<String>()
+    var names = Set<String>()
+    var selectedKinds = Set<DeclaredComponentKind>()
+    for selection in request.selections {
+      guard selection.generation == generation else {
+        throw CoreError.invalidState("inspection changed; refresh component selection")
+      }
+      let entries = try ledger.components.filter {
+        try LedgerImpact.identity($0.value, ledger: ledger, roots: store.ledgerRoots)
+          == selection.identity
+      }
+      guard let entry = entries.first,
+        kinds.contains(DeclaredComponentKind(rawValue: entry.value.kind)!)
+      else {
+        throw CoreError.notFound("selected component")
+      }
+      if let occurrence = selection.occurrence {
+        let occurrences = ledger.occurrences.filter { entries[$0.component] != nil }
+        guard occurrences.contains(where: { $0.id == occurrence }) else {
+          throw CoreError.notFound("selected occurrence")
+        }
+        guard occurrences.count == 1 else {
+          throw CoreError.invalidState(
+            "this component has multiple contributions; select the complete component or edit its declaration reference"
+          )
+        }
+      }
+      selected.insert(selection.identity)
+      names.insert(name(entry.value))
+      selectedKinds.insert(DeclaredComponentKind(rawValue: entry.value.kind)!)
+    }
+    request.selectedIdentities = selected
+    request.names = names.sorted()
+    request.kinds = selectedKinds
+  }
+
   private static func removing(
     _ request: UpdateRequest, from declaration: Declaration, ledger: ResolvedLedger,
     store: StateStore
@@ -412,7 +534,30 @@ final class UpdatePlan {
         return []
       })
     var instructionReferences = Set<String>()
-    if kinds.contains(.instructions) {
+    if kinds.contains(.instructions), let identities = request.selectedIdentities {
+      let sections = declaration.components.flatMap { component -> [SectionDeclaration] in
+        guard case .instructions(let selection) = component else { return [] }
+        return selection.sectionReferences
+          + selection.prompts.flatMap { $0.prompt.sectionReferences }
+      }
+      for section in sections {
+        let source: String
+        if let alias = section.source, alias != "." {
+          guard let declaration = declaration.sources[alias] else { continue }
+          source = try declaration.identity(environment: store.environment)
+        } else {
+          source = "local:" + store.environment.projectDirectory.resolvingSymlinksInPath().path
+        }
+        if try ledger.components.values.contains(where: { c in
+          try c.kind == "instructions" && c.name == section.name
+            && ledger.sourceIdentity(c.source, roots: store.ledgerRoots) == source
+            && identities.contains(
+              LedgerImpact.identity(c, ledger: ledger, roots: store.ledgerRoots))
+        }) {
+          instructionReferences.insert(section.reference)
+        }
+      }
+    } else if kinds.contains(.instructions) {
       for name in names {
         let exact = references.filter { $0 == name }
         let matches =
@@ -427,6 +572,16 @@ final class UpdatePlan {
     result.components = declaration.components.compactMap { component in
       switch component {
       case .skills(let alias, var selection) where kinds.contains(.skills):
+        if let identities = request.selectedIdentities {
+          let source = try? declaration.sources[alias]?.identity(environment: store.environment)
+          let matches = ledger.components.values.contains { c in
+            c.kind == "skills"
+              && (try? ledger.sourceIdentity(c.source, roots: store.ledgerRoots)) == source
+              && (try? LedgerImpact.identity(c, ledger: ledger, roots: store.ledgerRoots)).map(
+                identities.contains) == true
+          }
+          if !matches { return component }
+        }
         if case .all = selection.select {
           selection.exclude = Array(Set(selection.exclude ?? []).union(names)).sorted()
         } else if case .names(let selected) = selection.select {
@@ -440,7 +595,9 @@ final class UpdatePlan {
             var original = selection
             for name in names {
               let current = ledger.components.values.first {
-                $0.name == name && $0.kind == "skills"
+                $0.kind == "skills" && PathSafety.sanitizeName($0.name) == name
+                  && (try? ledger.sourceIdentity($0.source, roots: store.ledgerRoots))
+                    == (try? declaration.sources[alias]?.identity(environment: store.environment))
               }
               var overrides = original.overrides ?? [:]
               overrides[name] = SkillOverride(

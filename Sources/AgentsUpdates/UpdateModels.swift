@@ -48,6 +48,7 @@ public struct ComponentUpdateChange: Codable, Sendable, Equatable {
   public let ownership: String
   public let resources: [ComponentResourceInfo]
   public let requiredBindings: [String]
+  public let effectiveReaders: [AgentID]
   public let privateMaterialization: Bool
   public let permissionChange: ComponentPermissionChange?
   public let symbolicBefore: String?

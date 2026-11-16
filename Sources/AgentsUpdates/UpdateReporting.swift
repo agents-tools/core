@@ -8,7 +8,8 @@ import Foundation
 enum UpdateReporting {
   static func skills(
     previous: ResolvedLedger, next: ResolvedLedger, resources: [String: URL],
-    changes: [AggregatedChange], store: StateStore, lockMissing: Bool, included: Bool
+    changes: [AggregatedChange], store: StateStore, lockMissing: Bool, included: Bool,
+    selectedIdentities: Set<String>? = nil
   ) throws -> [UpdateResult] {
     guard included else { return [] }
     struct Item {
@@ -20,6 +21,12 @@ enum UpdateReporting {
       var result: [String: Item] = [:]
       for component in ledger.components.values
       where component.kind == "skills" && !component.recipients.isEmpty {
+        if let selectedIdentities,
+          !selectedIdentities.contains(
+            try LedgerImpact.identity(component, ledger: ledger, roots: store.ledgerRoots))
+        {
+          continue
+        }
         guard let id = component.resources.first, let resource = ledger.resources[id] else {
           continue
         }
@@ -80,6 +87,9 @@ enum UpdateReporting {
         let retained = members.contains { new?.installs[$0.agent.rawValue] != nil }
         let oldFiles = try entries(URL(fileURLWithPath: target))
         var newFiles = try retained ? content.map(entries) ?? [:] : [:]
+        if !retained, changes.contains(where: { $0.url.path == target && !$0.changed }) {
+          newFiles = oldFiles
+        }
         if let change = changes.first(where: { $0.url.path == target }),
           let destination = change.afterLink
         {

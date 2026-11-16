@@ -3,15 +3,58 @@ import Foundation
 
 /// Selection and protection are projections of the recorded graph, never of mutable producers.
 package struct LedgerImpact {
+  package static func identity(
+    _ c: LedgerComponent, ledger: ResolvedLedger, roots: [String: URL]
+  ) throws -> String {
+    try ResolvedLedgerCodec.digest([
+      ledger.sourceIdentity(c.declaringSource, roots: roots),
+      ledger.sourceIdentity(c.source, roots: roots), c.root, c.group ?? "", c.kind,
+      c.kind == "skills" ? PathSafety.sanitizeName(c.name) : c.name,
+    ])
+  }
+
+  package static func discoveryFingerprint(_ ledger: ResolvedLedger, roots: [String: URL]) throws
+    -> String
+  {
+    struct Component: Encodable {
+      let identity: String
+      let revision: String?
+      let payload: LedgerValue
+      let conditions: [LedgerCondition]
+      let recipients: [AgentID]
+      let resources: [String]
+    }
+    let components = try ledger.components.values.map { c in
+      Component(
+        identity: try identity(c, ledger: ledger, roots: roots), revision: c.revision,
+        payload: c.payload, conditions: c.conditions, recipients: c.recipients,
+        resources: c.resources.map { ledger.resources[$0]!.hash })
+    }.sorted {
+      if $0.identity != $1.identity { return $0.identity < $1.identity }
+      return try ResolvedLedgerCodec.digest($0) < ResolvedLedgerCodec.digest($1)
+    }
+    let sources = try ledger.sources.keys.map { id in
+      [try ledger.sourceIdentity(id, roots: roots), ledger.sources[id]!.revision]
+    }.sorted { $0.lexicographicallyPrecedes($1) }
+    return try ResolvedLedgerCodec.digest([
+      ResolvedLedgerCodec.digest(components), ResolvedLedgerCodec.digest(sources),
+      ResolvedLedgerCodec.digest(ledger.groups.map(\.manifestHash)),
+    ])
+  }
+
   package let pins: [String: SourceRevision]
   package let directPins: [ComponentKey: SourceRevision]
 
   package init(
     ledger: ResolvedLedger, roots: [String: URL], kinds: Set<DeclaredComponentKind>,
-    names: Set<String>, updating: Bool
+    names: Set<String>, updating: Bool, selectedIdentities: Set<String>? = nil
   ) throws {
     func selected(_ c: LedgerComponent) -> Bool {
-      kinds.contains(DeclaredComponentKind(rawValue: c.kind)!)
+      if let selectedIdentities {
+        return (try? Self.identity(c, ledger: ledger, roots: roots)).map(
+          selectedIdentities.contains) == true
+      }
+      return kinds.contains(DeclaredComponentKind(rawValue: c.kind)!)
         && (names.isEmpty
           || names.contains(c.kind == "skills" ? PathSafety.sanitizeName(c.name) : c.name))
     }
@@ -48,7 +91,7 @@ package struct LedgerImpact {
 
   package static func requireProtected(
     previous: ResolvedLedger, next: ResolvedLedger, kinds: Set<DeclaredComponentKind>,
-    names: Set<String> = [], roots: [String: URL]
+    names: Set<String> = [], roots: [String: URL], selectedIdentities: Set<String>? = nil
   ) throws {
     struct Projection: Encodable {
       let component: LedgerComponent
@@ -58,10 +101,16 @@ package struct LedgerImpact {
     func streams(_ ledger: ResolvedLedger) throws -> [String: [String]] {
       var result: [String: [String]] = [:]
       for occurrence in ledger.occurrences {
-        guard var c = ledger.components[occurrence.component],
-          !kinds.contains(DeclaredComponentKind(rawValue: c.kind)!)
-            || (!names.isEmpty
-              && !names.contains(c.kind == "skills" ? PathSafety.sanitizeName(c.name) : c.name))
+        guard var c = ledger.components[occurrence.component] else { continue }
+        let selected = try selectedIdentities.map {
+          try $0.contains(identity(c, ledger: ledger, roots: roots))
+        }
+        guard
+          selected == false
+            || (selected == nil
+              && (!kinds.contains(DeclaredComponentKind(rawValue: c.kind)!)
+                || (!names.isEmpty
+                  && !names.contains(c.kind == "skills" ? PathSafety.sanitizeName(c.name) : c.name))))
         else { continue }
         func sourceChain(_ id: String) throws -> [LedgerSource] {
           var result: [LedgerSource] = []
@@ -163,10 +212,15 @@ package struct LedgerImpact {
 
   package static func requireEditable(
     _ ledger: ResolvedLedger, kinds: Set<DeclaredComponentKind>, names: Set<String>,
-    roots: [String: URL]
+    roots: [String: URL], selectedIdentities: Set<String>? = nil
   ) throws {
     for occurrence in ledger.occurrences where !occurrence.consumerEditable {
       let c = ledger.components[occurrence.component]!
+      if let selectedIdentities,
+        !selectedIdentities.contains(try identity(c, ledger: ledger, roots: roots))
+      {
+        continue
+      }
       if kinds.contains(DeclaredComponentKind(rawValue: c.kind)!),
         names.contains(c.kind == "skills" ? PathSafety.sanitizeName(c.name) : c.name)
       {

@@ -30,15 +30,22 @@ package enum DeploymentConstruction {
   }
 
   package static func route(_ contribution: NativeMCPContribution) throws -> NativeTargetRoute {
-    guard contribution.descriptor.request.surface == .claudeCode else {
+    let project = contribution.descriptor.request.scope == .project
+    switch contribution.descriptor.request.surface {
+    case .claudeCode:
+      switch contribution.descriptor.request.scope {
+      case .project: return .claudeMCPProject
+      case .local: return .claudeMCPLocal
+      case .user: return .claudeMCPUser
+      }
+    case .codexCLI: return project ? .codexMCPProject : .codexMCPUser
+    case .geminiCLI: return project ? .geminiMCPProject : .geminiMCPUser
+    case .cursorEditor: return project ? .cursorMCPProject : .cursorMCPUser
+    case .openCodeCLI: return project ? .openCodeMCPProjectJSON : .openCodeMCPUserJSON
+    case .cursorCLI, .cursorCloud:
       throw NativeAdapterIssue(
         request: contribution.descriptor.request, component: contribution.name, field: ["route"],
-        reason: .integrationRequired, detail: "Core registered route is pending integration")
-    }
-    switch contribution.descriptor.request.scope {
-    case .project: return .claudeMCPProject
-    case .local: return .claudeMCPLocal
-    case .user: return .claudeMCPUser
+        reason: .integrationRequired, detail: "this surface has no accepted registered route")
     }
   }
 

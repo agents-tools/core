@@ -4,6 +4,7 @@ import AgentsManifest
 import AgentsSkills
 import Foundation
 import StateTestSupport
+import Synchronization
 import Testing
 
 @testable import AgentsUpdates
@@ -171,11 +172,17 @@ struct LifecycleCompositionTests {
 }
 
 private final class FixtureBindings: RuntimeBindingProvider {
-  var calls = 0
-  var value = "private literal sentinel"
+  private let state = Mutex((calls: 0, value: "private literal sentinel"))
+  var calls: Int { state.withLock { $0.calls } }
+  var value: String {
+    get { state.withLock { $0.value } }
+    set { state.withLock { $0.value = newValue } }
+  }
   func value(for binding: String, environment: RuntimeEnvironment) throws -> Data {
-    calls += 1
-    return Data(value.utf8)
+    state.withLock {
+      $0.calls += 1
+      return Data($0.value.utf8)
+    }
   }
 }
 

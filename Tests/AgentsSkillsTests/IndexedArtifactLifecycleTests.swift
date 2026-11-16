@@ -185,3 +185,43 @@ private final class ArtifactHTTPServer {
     try? output.fileHandleForReading.close()
   }
 }
+
+extension IndexedArtifactLifecycleTests {
+  @Test func acknowledgmentRevalidatesTheDisplayedArtifactDigests() throws {
+    let fixture = try SkillFixture()
+    let web = fixture.root.appendingPathComponent("watch-web")
+    try FileManager.default.createDirectory(at: web, withIntermediateDirectories: true)
+    let server = try ArtifactHTTPServer(root: web)
+    defer { server.stop() }
+    func publish(_ body: String) throws {
+      let bytes = Data("---\nname: watched\ndescription: Watch\n---\n\(body)\n".utf8)
+      try bytes.write(to: web.appendingPathComponent("watched.md"))
+      let index = web.appendingPathComponent(".well-known/agent-skills/index.json")
+      try FileManager.default.createDirectory(
+        at: index.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try JSONSerialization.data(withJSONObject: [
+        "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
+        "skills": [
+          [
+            "name": "watched", "description": "Watch", "type": "skill-md", "url": "/watched.md",
+            "digest": "sha256:" + FileHash.sha256Hex(data: bytes),
+          ]
+        ],
+      ]).write(to: index)
+    }
+    try publish("original")
+    let watch = SkillOperations.watchOperations()
+    _ = try watch.add(server.url, alias: "watched", environment: fixture.environment)
+    let displayed = try #require(watch.status(environment: fixture.environment).first)
+    let baseline = try Data(contentsOf: fixture.store().watchURL)
+    try publish("advanced")
+    #expect(throws: (any Error).self) {
+      try watch.seen(displayed, environment: fixture.environment)
+    }
+    #expect(try Data(contentsOf: fixture.store().watchURL) == baseline)
+    let current = try #require(watch.status(environment: fixture.environment).first)
+    _ = try watch.seen(current, environment: fixture.environment)
+    #expect(try fixture.store().loadWatch().sources[current.sourceID]?.seen == current.current)
+    #expect(try fixture.store().loadLedger().components.isEmpty)
+  }
+}

@@ -125,3 +125,80 @@ renderCompletion(receipt)
 
 `render` and `renderCompletion` belong to the consumer. Completion is reported only
 after the closure returns.
+
+## Public Inspection and Interactive Consumers
+
+`UpdateOperations.inspect` captures the Manifest document (including typed values,
+source maps and NodeIDs), complete declaration, v2 source/component/occurrence/group
+and resource descriptions, deployments, watch state and recovery diagnostics under
+one admitted read footprint. Public record IDs join these immutable descriptions;
+logical selections remain independent of revisions and temporary directories.
+The report excludes retained content objects and complete native file bytes.
+Deployment drift compares owned content or validates the physical private receipt.
+An unverified observation is explicit. `readLocations` contains actual state,
+source, retained resource and deployment URLs, including missing leaves.
+
+A pending journal returns recovery diagnostics without reading inconsistent
+configuration. Inspection does not recover, resolve sources, call a provider or
+create persistent files. It is suitable for App refresh and filesystem invalidation.
+
+Pass a component's `selection` in `UpdateRequest.selections` to update or remove
+that logical component. An occurrence selects that contribution when it is the
+sole contribution; a coalesced component requires complete-component selection or
+a typed declaration-reference edit. The captured document/ledger generation is
+revalidated before linking. Bare names that match multiple logical components
+report ambiguity. Unselected components keep their recorded projection and pins.
+
+`UpdateOperations.discover` resolves an explicit complete declaration, including
+exported groups, in B's temporary source session without native lowering. It
+returns symbolic descriptions, all exact source revisions, stable identities and
+actual local read locations. `ComponentDiscovery.updateRequest()` carries the
+captured declaration identity and discovered graph fingerprint into preparation;
+a changed source fails before callback delivery. File enumeration and native input
+conversion remain with their domain/import owners.
+
+`SourceImportOperations.inspect` consumes an explicit existing importer profile,
+root, document, selection and supplied resource locations. Its immutable report
+preserves producer coordinates, pins/integrity, ordered sources, selections,
+bindings, unconverted diagnostics, resource preservation obligations and foreign
+deployment claims. `updateRequest(in:)` merges admitted canonical intent into the
+captured scope declaration. Preparation rereads the same inputs, compares the
+proposal, captures their private freshness evidence and validates it again around
+publication. Unresolved conversion/binding diagnostics stop submission; foreign
+claims do not establish ownership. Input content that would overwrite its own
+local authoring source requires independent preservation before submission.
+
+Pass D's `RuntimeBindingProvider` as `bindingProvider:` to public
+`withPreparedUpdate`, `perform` or full `restore`. Preparation and preview never
+call it. The provider resolves bounded data only during private staging. Native
+reports separate intended recipients from the verified physical object's reader
+union and retain sensitivity from an existing shared receipt, including when the
+selected change has no bindings.
+
+`UpdateOperations.perform` returns `UpdateCompletion` after the whole synchronous
+operation and outer cleanup have returned. It preserves the result/error and
+`unchanged`, `rolledBack`, `committed` or `recoveryRequired` disposition, reports
+recovery before callback delivery, and includes pending recovery/cleanup evidence.
+A durable commit remains committed when cleanup is pending. Render the disposition
+before deciding whether to retry. The terminal value is Sendable when its consumer
+result is Sendable; the prepared handle is always invalidated before it returns.
+
+```swift
+let displayed = try UpdateOperations.preview(request, environment: environment)
+let completion = UpdateOperations.perform(request, environment: environment,
+  bindingProvider: bindings
+) { prepared in
+  try prepared.apply(ifUnchangedFrom: displayed.displayedFingerprint)
+}
+```
+
+The closure runs on one thread and must not await. A UI may await the completed
+operation's result, refresh a changed candidate and reprepare for confirmation.
+Agents CLI restores the full scope once with `UpdateOperations.restore`; domain
+consumers continue using their restricted lifecycle methods.
+
+Watch consumers can pass a displayed `WatchStatus` to `WatchOperations.seen`.
+The existing writer revalidates both normalized source identity and the exact Git
+commit or artifact digest map before retention and watch-state publication. A
+redirected alias or changed content requires refresh. Status and diff never deploy
+configuration.

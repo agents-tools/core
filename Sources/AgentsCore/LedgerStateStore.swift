@@ -45,6 +45,9 @@ extension StateStore {
         roots["instructions-" + agent.rawValue] = file.deletingLastPathComponent()
       }
     }
+    for route in NativeTargetRoute.allCases {
+      roots[route.root] = try? route.logicalDirectory(environment).resolvingSymlinksInPath()
+    }
     return roots
   }
 
