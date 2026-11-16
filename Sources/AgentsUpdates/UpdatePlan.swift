@@ -9,6 +9,8 @@ struct RequiredRoutes: Error { let routes: Set<NativeTargetRoute> }
 
 /// The composition plan borrows both source/replay resources and the admitted writer scope.
 final class UpdatePlan {
+  func requireSkillOwnership() throws { try aggregation.requireSkillOwnership() }
+
   let report: CombinedUpdateReport
   private let store: StateStore
   private let baseline: StatePrecondition
@@ -97,7 +99,9 @@ final class UpdatePlan {
     }
     let updating: Bool
     if case .update = request.operation { updating = true } else { updating = false }
-    if updating, !request.names.isEmpty, request.kinds?.contains(.skills) ?? true {
+    let removing: Bool
+    if case .remove = request.operation { removing = true } else { removing = false }
+    if removing || (updating && !request.names.isEmpty), request.kinds?.contains(.skills) ?? true {
       var linkingDeclaration = candidate
       for index in linkingDeclaration.components.indices {
         guard case .skills(let alias, var selection) = linkingDeclaration.components[index],
@@ -107,13 +111,24 @@ final class UpdatePlan {
         let existing = try previous.components.values.filter { component in
           guard component.kind == "skills", component.group == nil else { return false }
           return try previous.sourceIdentity(component.source, roots: store.ledgerRoots) == identity
-        }.map { PathSafety.sanitizeName($0.name) }
+        }.map { PathSafety.sanitizeName($0.name) }.sorted()
         let selected = request.names.filter { name in
           !previous.components.values.contains { $0.kind == "skills" && $0.name == name }
             || existing.contains(name)
         }
-        selection.select = .names(Array(Set(existing + selected)).sorted())
+        selection.select = .names(
+          removing
+            ? existing.filter { !(selection.exclude ?? []).contains($0) }
+            : Array(Set(existing + selected)).sorted())
         linkingDeclaration.components[index] = .skills(source: alias, selection)
+      }
+      if removing {
+        linkingDeclaration.components.removeAll {
+          if case .skills(_, let selection) = $0, case .names(let names) = selection.select {
+            return names.isEmpty
+          }
+          return false
+        }
       }
       if let bytes = try store.planDeclaration(
         linkingDeclaration, replacing: declaration, prepared: baseline)?.bytes
@@ -176,6 +191,12 @@ final class UpdatePlan {
           }
         } else {
           locations[evidence.snapshot.source] = .init(kind: .absolute, path: path)
+        }
+      }
+      for component in linked.components {
+        if case .skill(let skill, .copy, _) = component.payload {
+          try DeploymentConstruction.validateCopiedSkill(
+            session.resource(snapshot: component.snapshot, path: skill.path))
         }
       }
       let frozen = try LedgerFreeze.freezeWithSources(

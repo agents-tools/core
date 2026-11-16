@@ -121,7 +121,7 @@ struct ReadOnlyInspectionTests {
       projectDirectory: root, homeDirectory: root.appendingPathComponent("home"),
       environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path])
     let store = StateStore(scope: scope, environment: environment)
-    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    try store.save(declaration: Declaration(), ledger: ResolvedLedger())
     let target = AgentRegistry.installSkillsDirectory(
       for: .codex, scope: scope, environment: environment
     ).appendingPathComponent("target")
@@ -247,7 +247,7 @@ struct ReadOnlyInspectionTests {
     try fixture.store().save(
       declaration: Declaration(sources: [
         source: SourceDeclaration(kind: .git, location: "file://localhost" + fixture.repo.path)
-      ]), resolved: ResolvedState())
+      ]), ledger: ResolvedLedger())
     _ = try SkillOperations.add(
       AddOptions(source: source, agents: [.codex], all: true, environment: fixture.environment))
     // A cached immutable pin remains inspectable when upstream no longer provides it.
@@ -281,7 +281,7 @@ struct ReadOnlyInspectionTests {
     try fixture.store().save(
       declaration: Declaration(
         agents: [.codex], sources: ["fixture": source],
-        skills: ["fixture": SkillDeclaration(select: .all)]), resolved: ResolvedState())
+        skills: ["fixture": SkillDeclaration(select: .all)]), ledger: ResolvedLedger())
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
     try fixture.skill("demo", body: "Upstream")
     try fixture.commit()
@@ -335,9 +335,8 @@ struct ReadOnlyInspectionTests {
         agents: [.codex], sources: ["fixture": source],
         skills: ["fixture": SkillDeclaration(select: .all)],
         instructions: InstructionsDeclaration(sections: ["fixture:rules"])),
-      resolved: ResolvedState())
-    _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
-    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+      ledger: ResolvedLedger())
+    _ = try UpdateOperations.withPreparedUpdate(environment: fixture.environment) { try $0.apply() }
     let locks = fixture.store().cacheDirectory.appendingPathComponent("locks")
     let files = try FileManager.default.contentsOfDirectory(
       at: locks, includingPropertiesForKeys: nil)

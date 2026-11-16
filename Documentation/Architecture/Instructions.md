@@ -167,7 +167,7 @@ bytes/presence, target ancestry and all Claude forwarding decision inputs
 before and after retention. Lifecycle methods are public extensions in
 `AgentsUpdates`, which owns the complete linked ledger and one transaction for
 selected deployments, declaration, resources and pruning. Consumers import that
-product for lifecycle and locked ChatGPT rendering; pure text APIs remain here.
+product for lifecycle and ChatGPT export; pure text APIs remain here.
 See [Updates](Updates.md) for selection, prepared handles and exact restore.
 
 Mutations hold the scope writer lock and use the durable journal for instruction
@@ -204,8 +204,11 @@ prompt with ordered `sections` and an optional scope-relative `append` file.
 Update locks prompt sections with file targets. Reports list prompts whose
 section content, order, membership or append path changed. A
 revision change with identical section hashes alone does not mark a prompt
-changed. Append files remain live owner content; their independent edits do not
-require a lock update.
+changed. Consumer-owned append files remain live owner content; their independent
+edits do not require a lock update. Update and install may run before the append
+file exists. Public export resolves the current file against the declaring project
+or user home, and rejects missing, unreadable or escaping files. Append resources
+owned by an immutable producer remain frozen and anchored to that selected source.
 
 Render verifies locked hashes, renders sections as in targets without the
 notice, and appends the custom file's bytes. It fails without locked sections or

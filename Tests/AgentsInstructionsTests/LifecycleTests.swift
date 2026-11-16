@@ -66,7 +66,7 @@ struct InstructionLifecycleTests {
     let store = fixture.store(.user)
     var declaration = try store.loadDeclaration()
     try declaration.updateInstructions { $0?.sections.reverse() }
-    try store.save(declaration: declaration, resolved: store.loadResolved())
+    try store.save(declaration: declaration, ledger: store.loadLedger())
     let report = try InstructionOperations.updateInstalled(
       scope: .user, environment: fixture.environment)
     #expect(report.sections.isEmpty && report.targets.isEmpty && report.changedPrompts.isEmpty)
@@ -89,7 +89,7 @@ struct InstructionLifecycleTests {
         sources: ["rules": SourceDeclaration(kind: .local, location: fixture.repo.path)],
         instructions: InstructionsDeclaration(
           chatgpt: ["daily": PromptDeclaration(sections: ["rules:rules"])])),
-      resolved: ResolvedState())
+      ledger: ResolvedLedger())
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     let original = try InstructionOperations.renderChatGPT(
       prompt: "daily", environment: fixture.environment)
@@ -225,7 +225,7 @@ struct InstructionLifecycleTests {
     }
     try fixture.write(
       "Custom prompt.\r\n", to: fixture.project.appendingPathComponent(".agent/custom.md"))
-    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
+    try fixture.store().save(declaration: declaration, ledger: fixture.store().loadLedger())
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     let old = try fixture.snapshot(fixture.project, excludingCache: true)
     try fixture.section("one", body: "Changed")

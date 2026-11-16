@@ -103,7 +103,7 @@ struct UpdateReportingTests {
       declaration: Declaration(
         sources: ["fixture": SourceDeclaration(kind: .local, location: fixture.repo.path)],
         skills: ["fixture": SkillDeclaration(select: .all, agents: agents, mode: .edit)]),
-      resolved: ResolvedState())
+      ledger: ResolvedLedger())
     let initial = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(initial.membership.count == agents.count)
@@ -138,7 +138,7 @@ struct UpdateReportingTests {
     #expect(repair.membership.allSatisfy { $0.before == $0.after } && !repair.changes.isEmpty)
     var declaration = try store.loadDeclaration()
     try declaration.setSkills(nil)
-    try store.save(declaration: declaration, resolved: store.loadResolved())
+    try store.save(declaration: declaration, ledger: store.loadLedger())
     let removed = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(removed.changed && removed.changes.isEmpty && removed.newVersion == nil)
@@ -158,7 +158,7 @@ struct UpdateReportingTests {
     let store = fixture.store()
     var declaration = try store.loadDeclaration()
     try declaration.updateSkills { $0?["fixture"]?.agents = [.codex, .cursor, .claudeCode] }
-    try store.save(declaration: declaration, resolved: store.loadResolved())
+    try store.save(declaration: declaration, ledger: store.loadLedger())
     let added = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(added.membership.first { $0.agent == .codex }?.before == .installed(mode: .edit))
@@ -166,7 +166,7 @@ struct UpdateReportingTests {
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
     try declaration.updateSkills { $0?["fixture"]?.agents = [.codex, .cursor] }
     try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
-    try store.save(declaration: declaration, resolved: store.loadResolved())
+    try store.save(declaration: declaration, ledger: store.loadLedger())
     let changed = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(changed.membership.first { $0.agent == .claudeCode }?.after == .absent)
@@ -176,6 +176,14 @@ struct UpdateReportingTests {
       })
     #expect(Set(changed.changes.map(\.path)).count == changed.changes.count)
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
+    let partial = try #require(
+      UpdateOperations.preview(
+        UpdateRequest(operation: .remove, kinds: [.skills], names: ["demo"], agents: [.codex]),
+        environment: fixture.environment
+      ).skills.first)
+    #expect(partial.changes.isEmpty)
+    #expect(partial.membership.first { $0.agent == .cursor }?.after == .installed(mode: .copy))
+    #expect(try fixture.body(fixture.target("demo")).contains("live"))
   }
 
   @Test func lossOfRecordAndSelectionDoesNotInventRemoval() throws {
@@ -183,7 +191,7 @@ struct UpdateReportingTests {
     try fixture.skill("demo", body: "live")
     _ = try fixture.add(mode: .edit)
     let store = fixture.store()
-    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    try store.save(declaration: Declaration(), ledger: ResolvedLedger())
     try FileManager.default.removeItem(at: store.resolvedURL)
     #expect(try SkillOperations.updateInstalled(environment: fixture.environment).isEmpty)
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)

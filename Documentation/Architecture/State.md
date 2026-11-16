@@ -76,9 +76,10 @@ then a number is appended.
 A skill selection is all members, when `select` is omitted or `all`, or an
 explicit name array, with optional exclusions, recipients, mode and per-skill
 overrides. An all-member selection follows discovery membership on an unnamed
-update. Removing a member adds an exclusion. Explicitly named updates resolve
-only those members and fail if a requested member is missing. Skill filesystem
-identities are unique within a scope across sources.
+update. Removing a member adds an exclusion and uses recorded membership without
+installing newly discovered members. Explicitly named updates resolve only those
+members and fail if a requested member is missing. Physical skill targets have one
+compatible owner; distinct sources may serve the same name at disjoint targets.
 
 Requirements are `branch:`, `revision:`, `exact:`, `from:` (up to the next
 major version), `upToNextMinor:` or `{from:, to:}`. Ranges include
@@ -751,13 +752,14 @@ that content as a directory and rejects links escaping the installed subtree.
 Links to content within the same project or user state root are relative, so
 moving that root preserves them; external live edit links are absolute. `edit`
 points directly at a live local skill without pin or hash and requires a source
-without a requirement. Local non-Git directories support edit mode. Git-backed
-link and copy operations read committed trees, including when the source has
-uncommitted changes.
+without a requirement. Link and copy freeze non-Git local directories into embedded
+resources that support cold restore; an explicit Git requirement needs a Git source.
+Git-backed link and copy operations read committed trees, including when the source
+has uncommitted changes.
 
-Source listing can fetch into a mirror. Configuration previews use temporary acquisition and never mutate persistent mirrors, refs, cache contents or locks. Inspection
-snapshots are disposable and do not move an installed tree or write state or
-targets. Skill and instruction `add` discover choices through the read path when
+Source listing and configuration previews use temporary acquisition and never
+mutate persistent mirrors, refs, cache contents or locks. Inspection snapshots are
+disposable and do not move an installed tree or write state or targets. Skill and instruction `add` discover choices through the read path when
 no names or `all` are supplied, and for `listOnly`. Their discovery uses
 disposable mirrors and locks, leaving the scope unchanged. Exact cached commits
 can be extracted under an existing mirror lock without fetching. Pending
@@ -766,23 +768,20 @@ single-item addition carries the normalized source ID and exact discovered name
 into the writer path separately from user-entered names. Rediscovery must match
 that identity or fail with an error asking the caller to retry; its content and
 pin can refresh. Explicit names and `all` enter the writer path directly.
-Applying prepares all selected content, computes differences, stages
-replacements, and commits target changes and state under the scope lock.
-Combined updates share a source-resolution session and baseline across skills
-and instructions. The coordinator merges their owned records and rejects
-incompatible source records and overlapping targets before exposing an apply
-handle. It holds the writer lock while the consumer renders, revalidates
-state-file bytes/presence and target/source identities, then retains pinned
-content before the combined journal starts. Live edit content remains live; its
-source identity and usable metadata are checked instead of a content pin.
+Applying captures the complete declaration, ledger and watch baseline under the
+admitted locks. One source session links the graph with independent retained pins;
+freeze keeps its ledger and source mapping paired through real lowering. Physical
+aggregation rejects incompatible contributions and prepares shared native documents
+once. The synchronous prepared handle retains these borrowed resources and writer
+locks while the consumer renders its report and applies it. Live edit content stays
+live; its identity and usable metadata are checked instead of a content pin.
 
-After retention, preconditions are checked again. One transaction queues
-physical skill targets, instruction/forwarding targets, changed declaration and
-lock files, and pruning against the merged lock and existing watch state. Paths
-are sorted within target groups. No-change combined apply returns receipts
-without rewriting state. Cancellation before apply publishes no targets, state
-or retained trees; fetched mirror objects and the scope container/lock may
-remain.
+Apply validates state, targets and source evidence, retains the complete ledger/watch
+reference closure, and validates again. One transaction stages resource trees and
+capsules, selected physical targets, declaration, ledger, receipts and cache pruning.
+No-change apply returns receipts without rewriting state. Exiting before apply
+publishes no targets, state or retained trees; writer lock containers may remain.
+Temporary source and replay resources are released at closure exit.
 
 Commit outcome tracking is bound to the combined journal's UUID. Recovering a
 separate cache publication cannot claim that the combined generation committed.

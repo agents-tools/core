@@ -17,8 +17,8 @@ struct PublicLifecycleTests {
     #expect(Set(added.installed.map(\.agent)) == [.codex, .claudeCode])
     var declaration = try fixture.store().loadDeclaration()
     declaration.agents = [.cursor]
-    let lock = try fixture.store().loadResolved()
-    try fixture.store().save(declaration: declaration, resolved: lock)
+    let lock = try fixture.store().loadLedger()
+    try fixture.store().save(declaration: declaration, ledger: lock)
     for install in added.installed { try FileManager.default.removeItem(atPath: install.path) }
     let restored = try SkillOperations.installResolvedReport(environment: fixture.environment)
     #expect(Set(restored.installed.map(\.agent)) == [.codex, .claudeCode])
@@ -125,6 +125,48 @@ struct PublicLifecycleTests {
       try SkillOperations.installResolvedReport(environment: fixture.environment)
     }
     #expect(try fixture.stateAndTargetBytes() == bytes)
+  }
+
+  @Test func removalFingerprintPreservesRemainingIndependentMembers() throws {
+    let fixture = try SkillFixture()
+    for name in ["demo", "keep-b", "keep-a"] { try fixture.skill(name, body: name) }
+    try fixture.commit()
+    _ = try fixture.add(mode: .copy)
+    let pin = try fixture.head()
+    let request = UpdateRequest(operation: .remove, kinds: [.skills], names: ["demo"])
+    let first = try UpdateOperations.preview(request, environment: fixture.environment)
+    let second = try UpdateOperations.preview(request, environment: fixture.environment)
+    #expect(first.displayedFingerprint == second.displayedFingerprint)
+    _ = try UpdateOperations.withPreparedUpdate(request, environment: fixture.environment) {
+      try $0.apply(ifUnchangedFrom: first.displayedFingerprint)
+    }
+    let ledger = try fixture.store().loadLedger()
+    #expect(
+      Set(ledger.components.values.filter { $0.kind == "skills" }.map(\.name)) == [
+        "keep-a", "keep-b",
+      ])
+    #expect(
+      ledger.components.values.filter { $0.kind == "skills" }.allSatisfy { $0.revision == pin })
+    #expect(try fixture.body(fixture.target("keep-a")).contains("keep-a"))
+    #expect(try fixture.body(fixture.target("keep-b")).contains("keep-b"))
+    #expect(!FileManager.default.fileExists(atPath: fixture.target("demo").path))
+  }
+
+  @Test func removalDoesNotDiscoverNewAllMembers() throws {
+    let fixture = try SkillFixture()
+    try fixture.skill("demo", body: "Original")
+    try fixture.commit()
+    _ = try fixture.add(mode: .copy)
+    try fixture.skill("new-member", body: "Current")
+    try fixture.commit()
+    try SkillOperations.remove(skillNames: ["demo"], environment: fixture.environment)
+    #expect(try fixture.store().loadResolved().skills.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: fixture.target("new-member").path))
+    #expect(try fixture.store().loadDeclaration().skills?["fixture"]?.select == .all)
+    #expect(try fixture.store().loadDeclaration().skills?["fixture"]?.exclude == ["demo"])
+    _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
+    #expect(try fixture.store().loadResolved().skills.keys.sorted() == ["new-member"])
+    #expect(try fixture.body(fixture.target("new-member")).contains("Current"))
   }
 
   @Test func emptyNamedSelectionDoesNotRequireSourceAccess() throws {

@@ -17,7 +17,7 @@ struct CombinedUpdateTests {
     var declaration = try fixture.store.loadDeclaration()
     try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     declaration.sources["fixture"]?.requirement = .branch("main")
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     let before = try fixture.snapshot()
     let preview = try fixture.preview()
     let skill = try #require(preview.skills.first)
@@ -57,7 +57,7 @@ struct CombinedUpdateTests {
     try fixture.write("Hand written.\n", to: fixture.instruction(.geminiCLI))
     var declaration = try fixture.store.loadDeclaration()
     try declaration.updateInstructions { $0?.agents = [.codex, .geminiCLI] }
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     let preview = try fixture.preview()
     #expect(preview.instructions.targets.contains { $0.target == "GEMINI.md" && $0.foreign })
     let before = try fixture.snapshot()
@@ -78,7 +78,7 @@ struct CombinedUpdateTests {
     var declaration = try fixture.store.loadDeclaration()
     try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     declaration.sources["fixture"]?.requirement = .branch("main")
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     let before = try fixture.snapshot()
     var called = false
     #expect(throws: CoreError.self) {
@@ -100,7 +100,7 @@ struct CombinedUpdateTests {
     var declaration = try fixture.store.loadDeclaration()
     try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     declaration.sources["fixture"]?.requirement = .branch("main")
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     let before = try fixture.snapshot()
     var called = false
     #expect(throws: CoreError.self) {
@@ -181,7 +181,7 @@ struct CombinedUpdateTests {
         seen: .artifacts(["observed": "sha256:" + String(repeating: "b", count: 64)]))
     ])
     try fixture.store.save(
-      declaration: declaration, resolved: fixture.store.loadResolved(), watch: watch)
+      declaration: declaration, ledger: fixture.store.loadLedger(), watch: watch)
     try fixture.advance()
     let before = try fixture.snapshot()
     #expect(throws: UpdateApplyError.self) {
@@ -238,7 +238,7 @@ struct CombinedUpdateTests {
                   sources: ["fixture": SourceDeclaration(kind: .local, location: source)],
                   skills: ["fixture": SkillDeclaration(select: .all, agents: [.codex], mode: .copy)]
                 ),
-                resolved: ResolvedState())
+                ledger: ResolvedLedger())
             } catch { Issue.record(error) }
           }
           try #require(finished.wait(timeout: .now() + 10) == .success)
@@ -259,7 +259,7 @@ struct CombinedUpdateTests {
     declaration.sources["rules"] = SourceDeclaration(kind: .local, location: other.repo.path)
     try declaration.updateInstructions { $0?.sections = ["rules:rules"] }
     try declaration.updateInstructions { $0?.chatgpt?["weekly"]?.sections = ["rules:rules"] }
-    try fixture.store.save(declaration: declaration, resolved: ResolvedState())
+    try fixture.store.save(declaration: declaration, ledger: ResolvedLedger())
     _ = try fixture.apply()
     try fixture.advance()
     try other.advance()
@@ -282,7 +282,7 @@ struct CombinedUpdateTests {
         sources: ["fixture": SourceDeclaration(kind: .local, location: fixture.repo.path)],
         skills: ["fixture": SkillDeclaration(select: .all, agents: [.codex], mode: .copy)],
         instructions: InstructionsDeclaration(agents: [.claudeCode], sections: ["fixture:rules"])),
-      resolved: ResolvedState())
+      ledger: ResolvedLedger())
     var called = false
     #expect(throws: CoreError.self) {
       try UpdateOperations.withPreparedUpdate(scope: .user, environment: environment) { _ in
@@ -441,7 +441,7 @@ struct CombinedUpdateTests {
       try fixture.write("invalid", to: fixture.repo.appendingPathComponent("skills/demo/SKILL.md"))
       var declaration = try fixture.store.loadDeclaration()
       try declaration.updateSkills { $0?["fixture"]?.select = .names(["demo"]) }
-      try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+      try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
       try fixture.commit()
     } else if kind == "instructions" {
       try fixture.write("invalid", to: fixture.repo.appendingPathComponent("instructions/rules.md"))
@@ -569,13 +569,13 @@ struct CombinedUpdateTests {
     try fixture.declare()
     var declaration = try fixture.store.loadDeclaration()
     try declaration.setSkills(nil)
-    try fixture.store.save(declaration: declaration, resolved: ResolvedState())
+    try fixture.store.save(declaration: declaration, ledger: ResolvedLedger())
     #expect(try fixture.apply().report.skills.isEmpty)
     try declaration.setInstructions(nil)
     try declaration.setSkills([
       "fixture": SkillDeclaration(select: .all, agents: [.codex], mode: .copy)
     ])
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     _ = try fixture.apply()
     #expect(try fixture.store.loadResolved().instructions == LockedInstructions())
     #expect(try !fixture.preview().hasChanges)
@@ -587,7 +587,7 @@ struct CombinedUpdateTests {
     var declaration = try fixture.store.loadDeclaration()
     try declaration.setSkills(nil)
     try declaration.updateInstructions { $0?.sections = [] }
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     _ = try fixture.apply()
     try fixture.git(["commit", "--allow-empty", "-m", "repin"])
     let prompt = try fixture.preview()
@@ -602,10 +602,10 @@ struct CombinedUpdateTests {
     try declaration.updateInstructions {
       $0?.chatgpt?["weekly"]?.sections = ["fixture:rules", "fixture:second"]
     }
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     _ = try fixture.apply()
     try declaration.updateInstructions { $0?.chatgpt?["weekly"]?.sections.reverse() }
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     #expect(try fixture.preview().hasChanges)
     _ = try fixture.apply()
     #expect(try !fixture.preview().hasChanges)

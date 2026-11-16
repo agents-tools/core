@@ -3,6 +3,19 @@ import AgentsInstructions
 import Foundation
 
 package enum DeploymentConstruction {
+  package static func validateCopiedSkill(_ tree: URL) throws {
+    guard let real = PathSafety.realPath(tree.path),
+      let children = FileManager.default.enumerator(
+        at: tree, includingPropertiesForKeys: [.isSymbolicLinkKey])
+    else { return }
+    for case let child as URL in children
+    where try child.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+      guard try PathSafety.linkStaysInside(child, root: real) else {
+        throw CoreError.unsafePath("copied skill link escapes its installed subtree")
+      }
+    }
+  }
+
   package struct Result {
     package let ledger: ResolvedLedger
     package let inputs: [TargetPrecondition]

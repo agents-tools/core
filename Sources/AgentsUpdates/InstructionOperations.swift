@@ -89,14 +89,27 @@ extension InstructionOperations {
       instructions.sectionReferences = references
       next.components.append(.instructions(instructions))
     }
-    return try UpdateOperations.withDomainUpdate(
-      UpdateRequest(
-        operation: .declaration(next), kinds: [.instructions], replace: options.replace,
-        expectedDeclarationDigest: digest), scope: options.scope, environment: options.environment
-    ) { prepared in
-      try beforeApply?(prepared.report.instructions)
-      return InstructionAddOutcome(
-        sourceID: id, available: available, result: try prepared.apply().report.instructions)
+    var delivered = false
+    do {
+      return try UpdateOperations.withDomainUpdate(
+        UpdateRequest(
+          operation: .declaration(next), kinds: [.instructions], replace: options.replace,
+          expectedDeclarationDigest: digest), scope: options.scope, environment: options.environment
+      ) { prepared in
+        delivered = true
+        try beforeApply?(prepared.report.instructions)
+        return InstructionAddOutcome(
+          sourceID: id, available: available, result: try prepared.apply().report.instructions)
+      }
+    } catch let error as LinkError {
+      if !delivered, options.names.isEmpty, !options.all,
+        case .missing(let missing, _) = error,
+        missing == "instruction '\(selected[0].record.name)'"
+      {
+        throw CoreError.invalidState(
+          "automatic instruction selection changed during discovery; retry the command")
+      }
+      throw error
     }
   }
 

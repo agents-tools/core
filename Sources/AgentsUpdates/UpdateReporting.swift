@@ -72,16 +72,20 @@ enum UpdateReporting {
       }
       let content = after[identity].flatMap { resources[$0.resource] }
       var diffs: [SkillFileChange] = []
-      for member in membership {
-        let oldFiles = try entries(URL(fileURLWithPath: member.path))
-        var newFiles =
-          try new?.installs[member.agent.rawValue] == nil ? [:] : content.map(entries) ?? [:]
-        if let change = changes.first(where: { $0.url.path == member.path }),
+      let physicalMembers = Dictionary(grouping: membership) {
+        InstructionLocations.physical(URL(fileURLWithPath: $0.path)).path
+      }
+      for target in physicalMembers.keys.sorted() {
+        let members = physicalMembers[target]!
+        let retained = members.contains { new?.installs[$0.agent.rawValue] != nil }
+        let oldFiles = try entries(URL(fileURLWithPath: target))
+        var newFiles = try retained ? content.map(entries) ?? [:] : [:]
+        if let change = changes.first(where: { $0.url.path == target }),
           let destination = change.afterLink
         {
           newFiles["."] = .symbolicLink(
             FileTransaction.linkDestination(
-              destination, parent: URL(fileURLWithPath: member.path).deletingLastPathComponent(),
+              destination, parent: URL(fileURLWithPath: target).deletingLastPathComponent(),
               store: store))
         }
         for path in Set(oldFiles.keys).union(newFiles.keys).sorted()
@@ -89,11 +93,11 @@ enum UpdateReporting {
           diffs.append(
             SkillFileChange(
               path: path == "."
-                ? member.path : URL(fileURLWithPath: member.path).appendingPathComponent(path).path,
+                ? target : URL(fileURLWithPath: target).appendingPathComponent(path).path,
               before: oldFiles[path], after: newFiles[path]))
         }
       }
-      let paths = Set(membership.map(\.path))
+      let paths = Set(physicalMembers.keys)
       let physical = changes.contains {
         $0.deployment.route == "agents/skill@1" && paths.contains($0.url.path) && $0.changed
       }

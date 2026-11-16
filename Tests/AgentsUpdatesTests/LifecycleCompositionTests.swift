@@ -27,7 +27,7 @@ struct LifecycleCompositionTests {
       declaration: Declaration(
         sources: ["local": .init(kind: .local, location: source.path)],
         skills: ["local": .init(select: .all, agents: [.claudeCode], mode: mode)],
-        instructions: .init(agents: [.codex], sections: ["frozen"])), resolved: ResolvedState())
+        instructions: .init(agents: [.codex], sections: ["frozen"])), ledger: ResolvedLedger())
     _ = try fixture.apply()
     let instruction = try fixture.bytes(fixture.instruction())
     let skill = try fixture.bytes(
@@ -106,7 +106,7 @@ struct LifecycleCompositionTests {
         name: "server", transport: .stdio(.init(executable: "fixture-server")),
         agents: [.claudeCode])
     ])
-    try fixture.store.save(declaration: declaration, resolved: ResolvedState())
+    try fixture.store.save(declaration: declaration, ledger: ResolvedLedger())
     let native = fixture.root.appendingPathComponent(".mcp.json")
     try fixture.write("{\"unmanaged\":{\"secret\":\"private sibling sentinel\"}}\n", to: native)
     let report = try fixture.preview()
@@ -138,7 +138,7 @@ struct LifecycleCompositionTests {
     declaration.components.append(
       .mcpServer(
         name: "server", transport: .stdio(.init(executable: "before")), agents: [.claudeCode]))
-    try fixture.store.save(declaration: declaration, resolved: ResolvedState())
+    try fixture.store.save(declaration: declaration, ledger: ResolvedLedger())
     _ = try fixture.apply()
     let native = fixture.root.appendingPathComponent(".mcp.json")
     let oldNative = try fixture.bytes(native)
@@ -146,7 +146,7 @@ struct LifecycleCompositionTests {
     try fixture.advance()
     declaration.components[declaration.components.count - 1] = .mcpServer(
       name: "server", transport: .stdio(.init(executable: "after")), agents: [.claudeCode])
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     let state = try fixture.snapshot()
     struct Interrupted: Error {}
     var interrupted = false
@@ -189,7 +189,7 @@ extension LifecycleCompositionTests {
           transport: .stdio(
             .init(executable: "fixture-server", environment: ["TOKEN": .secret("fixture-token")])),
           agents: [.claudeCode])
-      ]), resolved: ResolvedState())
+      ]), ledger: ResolvedLedger())
     var environment = fixture.environment
     environment.environment["CLAUDE_CONFIG_DIR"] = nil
     let provider = FixtureBindings()
@@ -226,17 +226,23 @@ extension LifecycleCompositionTests {
     #expect(mode?.intValue == 0o600)
   }
 
-  @Test func producerOwnedSkillCannotBeRemovedAndChangedProtectedGroupRequiresCombinedUpdate()
-    throws
-  {
+  @Test(arguments: [false, true])
+  func producerOwnedSkillCannotBeRemovedAndChangedProtectedGroupRequiresCombinedUpdate(
+    nonCanonical: Bool
+  ) throws {
     let fixture = try UpdateFixture()
+    if nonCanonical {
+      try fixture.write(
+        "---\nname: Demo Skill\ndescription: Producer skill\n---\nOriginal\n",
+        to: fixture.repo.appendingPathComponent("skills/demo/SKILL.md"))
+    }
     try fixture.write(
       """
       version: 1
       components: []
       groups:
         skills:
-          components: [{kind: skills, source: ., select: [demo], mode: copy, agents: [claude-code]}]
+          components: [{kind: skills, source: ., select: all, mode: copy, agents: [claude-code]}]
         tools:
           components: [{kind: mcpServer, name: server, transport: {kind: stdio, executable: before}, agents: [claude-code]}]
       exports: [skills, tools]
@@ -253,8 +259,13 @@ extension LifecycleCompositionTests {
       """, to: fixture.store.declarationURL)
     _ = try fixture.apply()
     let before = try fixture.snapshot()
-    #expect(throws: (any Error).self) {
-      try SkillOperations.remove(skillNames: ["demo"], environment: fixture.environment)
+    #expect {
+      try SkillOperations.remove(
+        skillNames: [nonCanonical ? "demo-skill" : "demo"], environment: fixture.environment)
+    } throws: { error in
+      guard case CoreError.invalidState(let reason) = error else { return false }
+      return reason.contains("notEditableHere") && reason.contains(fixture.repo.path)
+        && reason.contains("#skills")
     }
     #expect(try fixture.snapshot() == before)
     let manifest = fixture.repo.appendingPathComponent(".agent/agents.yaml")
@@ -358,7 +369,7 @@ extension LifecycleCompositionTests {
         components: [
           .skills(source: "first", .init(select: .all, agents: [.codex], mode: .copy)),
           .skills(source: "second", .init(select: .all, agents: [.claudeCode], mode: .copy)),
-        ]), resolved: ResolvedState())
+        ]), ledger: ResolvedLedger())
     let report = try fixture.preview()
     #expect(report.skills.count == 2)
     #expect(Set(report.skills.map(\.sourceIdentity)).count == 2)
@@ -392,5 +403,39 @@ extension LifecycleCompositionTests {
       try before.write(to: file)
       #expect(throws: UpdateApplyError.self) { try update.apply() }
     }
+  }
+}
+
+extension LifecycleCompositionTests {
+  @Test func unusedDeclarationEditsInvalidateASelectedSkillPreparation() throws {
+    let fixture = try UpdateFixture()
+    try fixture.install(agents: [.codex])
+    let authored =
+      String(decoding: try fixture.bytes(fixture.store.declarationURL), as: UTF8.self)
+      + "\ngroups:\n  unused: {components: [{kind: ignore, name: draft, patterns: [build]}]}\n"
+    try fixture.write(authored, to: fixture.store.declarationURL)
+    try fixture.advance()
+    let ledger = try fixture.bytes(fixture.store.resolvedURL)
+    let target = try FileHash.folderHash(fixture.target())
+    var edited = Data()
+    try UpdateOperations.withPreparedUpdate(
+      UpdateRequest(kinds: [.skills]), environment: fixture.environment
+    ) { prepared in
+      edited = Data(
+        authored.replacingOccurrences(of: "patterns: [build]", with: "patterns: [cache]").utf8)
+      try edited.write(to: fixture.store.declarationURL)
+      #expect { try prepared.apply() } throws: { error in
+        guard let failure = error as? UpdateApplyError,
+          case .unchanged = failure.disposition,
+          case CoreError.invalidState(let reason) = failure.underlyingError
+        else { return false }
+        return reason.contains("changed during preparation")
+      }
+    }
+    #expect(try fixture.bytes(fixture.store.declarationURL) == edited)
+    #expect(try fixture.bytes(fixture.store.resolvedURL) == ledger)
+    #expect(try FileHash.folderHash(fixture.target()) == target)
+    #expect(try fixture.store.loadDeclaration().groups.count == 1)
+    #expect(try fixture.store.loadLedger().version == 2)
   }
 }

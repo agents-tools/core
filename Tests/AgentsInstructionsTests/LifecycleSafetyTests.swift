@@ -173,34 +173,54 @@ struct InstructionLifecycleSafetyTests {
     #expect(try String(contentsOf: outside, encoding: .utf8) == "Owner content.\n")
   }
 
-  @Test func frozenPromptAppendIgnoresSubsequentEscapingSymlink() throws {
+  @Test(arguments: [InstallScope.project, .user])
+  func localPromptAppendUsesCurrentScopedContentOnlyAtExport(_ scope: InstallScope) throws {
     let fixture = try InstructionFixture()
     try fixture.section("rules")
     try fixture.commit()
-    try fixture.add()
-    var declaration = try fixture.store().loadDeclaration()
+    try fixture.add(scope: scope, agents: [.codex])
+    let store = fixture.store(scope)
+    var declaration = try store.loadDeclaration()
     try declaration.updateInstructions {
       $0?.chatgpt = [
         "prompt": PromptDeclaration(sections: ["rules:rules"], append: "custom.md")
       ]
     }
-    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
-    let append = fixture.project.appendingPathComponent("custom.md")
-    try fixture.write("Frozen custom text.\n", to: append)
-    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
-    let rendered = try InstructionOperations.renderChatGPT(
-      prompt: "prompt", environment: fixture.environment)
+    try store.save(declaration: declaration, ledger: store.loadLedger())
+    _ = try InstructionOperations.updateInstalled(
+      scope: scope, environment: fixture.environment, apply: true)
+    let lock = try Data(contentsOf: store.resolvedURL)
+    #expect(throws: (any Error).self) {
+      try InstructionOperations.renderChatGPT(
+        prompt: "prompt", scope: scope, environment: fixture.environment)
+    }
+    let root = scope == .project ? fixture.project : fixture.home
+    let other = scope == .project ? fixture.home : fixture.project
+    let append = root.appendingPathComponent("custom.md")
+    try fixture.write("Wrong scope.\n", to: other.appendingPathComponent("custom.md"))
+    try fixture.write("First custom text.\n", to: append)
+    let first = try InstructionOperations.renderChatGPT(
+      prompt: "prompt", scope: scope, environment: fixture.environment)
+    #expect(String(decoding: first, as: UTF8.self).hasSuffix("First custom text.\n"))
+    try fixture.write("Current custom text.\n", to: append)
+    try fixture.section("rules", body: "Changed upstream")
+    let current = try InstructionOperations.renderChatGPT(
+      prompt: "prompt", scope: scope, environment: fixture.environment)
+    let text = String(decoding: current, as: UTF8.self)
+    #expect(text.contains("Original") && text.hasSuffix("Current custom text.\n"))
+    #expect(!text.contains("Changed upstream") && !text.contains("Wrong scope"))
+    #expect(try Data(contentsOf: store.resolvedURL) == lock)
     try FileManager.default.removeItem(at: append)
     let outside = fixture.root.appendingPathComponent("outside.md")
     try fixture.write("Owner content.\n", to: outside)
-    try FileManager.default.createSymbolicLink(
-      at: fixture.project.appendingPathComponent("custom.md"), withDestinationURL: outside)
-    #expect(
-      try InstructionOperations.renderChatGPT(prompt: "prompt", environment: fixture.environment)
-        == rendered)
+    try FileManager.default.createSymbolicLink(at: append, withDestinationURL: outside)
     #expect(throws: (any Error).self) {
-      try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+      try InstructionOperations.renderChatGPT(
+        prompt: "prompt", scope: scope, environment: fixture.environment)
     }
+    _ = try InstructionOperations.installResolvedReport(
+      scope: scope, environment: fixture.environment)
+    #expect(try Data(contentsOf: store.resolvedURL) == lock)
   }
 
   @Test func sourceInstructionsDirectoryCannotBeATarget() throws {

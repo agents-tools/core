@@ -64,7 +64,7 @@ struct SourceShorthandTests {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "A")
     try fixture.commit()
-    try fixture.store().save(declaration: Declaration(), resolved: ResolvedState())
+    try fixture.store().save(declaration: Declaration(), ledger: ResolvedLedger())
     let watch = SkillOperations.watchOperations()
     #expect(throws: CoreError.self) {
       try watch.add(fixture.repo.path + "@skill:demo", environment: fixture.environment)

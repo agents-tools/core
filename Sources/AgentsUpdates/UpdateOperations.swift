@@ -73,6 +73,7 @@ public enum UpdateOperations {
             request: request, store: store, admitted: admitted,
             checkpoint: checkpoint, provider: provider
           ) { plan in
+            try plan.requireSkillOwnership()
             let update = PreparedUpdate(plan: plan, outcome: outcome)
             defer { update.invalidate() }
             delivered = true

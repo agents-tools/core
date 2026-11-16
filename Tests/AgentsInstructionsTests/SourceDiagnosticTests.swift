@@ -48,7 +48,7 @@ struct InstructionSourceDiagnosticTests {
     let object = try fixture.git(["rev-parse", "release"])
     var declaration = try fixture.store().loadDeclaration()
     declaration.sources["rules"]?.requirement = .revision(object)
-    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
+    try fixture.store().save(declaration: declaration, ledger: fixture.store().loadLedger())
     let mirrors = fixture.store().cacheDirectory.appendingPathComponent("mirrors")
     if retainMirror {
       try fixture.section("prompt", body: "New branch content")
@@ -83,7 +83,7 @@ struct InstructionSourceDiagnosticTests {
     }
     var declaration = try fixture.store().loadDeclaration()
     declaration.sources["rules"]?.requirement = .revision(object)
-    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
+    try fixture.store().save(declaration: declaration, ledger: fixture.store().loadLedger())
     let before = try fixture.snapshot()
     let report = try InstructionOperations.doctor(environment: fixture.environment)
     #expect(
@@ -165,7 +165,7 @@ struct InstructionSourceDiagnosticTests {
     try install(fixture, kind: kind, requirement: .branch("main"), files: [])
     var declaration = try fixture.store().loadDeclaration()
     declaration.sources["rules"]?.requirement = .branch("missing")
-    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
+    try fixture.store().save(declaration: declaration, ledger: fixture.store().loadLedger())
     let before = try fixture.snapshot()
     let report = try InstructionOperations.doctor(environment: fixture.environment)
     let failure = try #require(report.diagnostics.first { $0.kind == .sourceResolutionFailed })
@@ -211,7 +211,7 @@ struct InstructionSourceDiagnosticTests {
         instructions: InstructionsDeclaration(
           sections: files.map { "rules:" + $0 },
           chatgpt: ["daily": PromptDeclaration(sections: ["rules:prompt"])])),
-      resolved: ResolvedState())
+      ledger: ResolvedLedger())
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
   }
 }

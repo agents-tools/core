@@ -39,8 +39,13 @@ extension StateStore {
 }
 
 extension StateStore {
-  package func save(declaration: Declaration, ledger: ResolvedLedger) throws {
+  package func save(
+    declaration: Declaration, ledger: ResolvedLedger, watch: WatchState? = nil
+  ) throws {
     try withLock {
+      try declaration.validate(environment: environment)
+      try watch?.validate()
+      _ = try readWatch()
       let baseline = try StatePrecondition(store: self)
       let previous = try readDeclaration(prepared: baseline)
       let change =
@@ -51,6 +56,11 @@ extension StateStore {
       transaction.requireUnchanged(since: baseline)
       try stageDeclaration(change, in: transaction, prepared: baseline)
       try stageLedger(ledger, limits: .standard, transaction: transaction, prepared: baseline)
+      if let watch {
+        try transaction.replace(
+          watchURL, with: .data(StateStore.encode(watch)),
+          expecting: baseline.evidence(for: watchURL))
+      }
       try transaction.commit()
     }
   }

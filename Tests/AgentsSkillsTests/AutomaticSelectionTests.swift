@@ -45,11 +45,15 @@ struct AutomaticSelectionTests {
       let replacement = fixture.root.appendingPathComponent("replacement-source")
       try ProcessRunner.run(
         "/usr/bin/git", arguments: ["clone", "--no-local", fixture.repo.path, replacement.path])
+      for (key, value) in [("maintenance.auto", "false"), ("gc.auto", "0")] {
+        try ProcessRunner.run(
+          "/usr/bin/git", arguments: ["-C", replacement.path, "config", key, value])
+      }
       declaration.sources["source"] = SourceDeclaration(kind: .local, location: replacement.path)
-      try store.save(declaration: declaration, resolved: ResolvedState())
+      try store.save(declaration: declaration, ledger: ResolvedLedger())
     } else if change == "removed-source" {
       declaration.sources.removeValue(forKey: "source")
-      try store.save(declaration: declaration, resolved: ResolvedState())
+      try store.save(declaration: declaration, ledger: ResolvedLedger())
     } else {
       if kind == "skill" {
         let name = change == "rename" ? "replacement" : "demo"

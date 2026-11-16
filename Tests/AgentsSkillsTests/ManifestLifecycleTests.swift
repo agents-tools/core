@@ -178,9 +178,7 @@ struct ManifestLifecycleTests {
     #expect(try Data(contentsOf: store.declarationURL) == declaration)
   }
 
-  /// Components outside the deployable subset are reported, never dropped; the complete
-  /// document stays readable.
-  @Test func undeployableComponentsAreReportedAndStillReadable() throws {
+  @Test func fullDeclarationSurvivesSkillAndWatchWrites() throws {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "A")
     try fixture.commit()
@@ -188,35 +186,54 @@ struct ManifestLifecycleTests {
     try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
     let declaration = Data(
       """
+      # All declaration families remain owned by this document.
       version: 1
-      sources: {"fixture": {"path": "\(fixture.repo.path)"}}
-      components: [{"kind": "skills", "source": "fixture"}, {"kind": "mcpServer", "name": "tools", "transport": {"kind": "stdio", "executable": "server"}}]
+      sources:
+        fixture: {path: "\(fixture.repo.path)"}
+        unused: {path: ./not-present}
+      groups:
+        unused: {components: [{kind: skills, source: unused, select: [draft]}]}
+      components:
+        - {kind: skills, source: fixture, agents: [codex], mode: copy}
+        # A valid inactive declaration needs no native target.
+        - {kind: mcpServer, name: tools, agents: [], transport: {kind: stdio, executable: never-run}}
+
       """.utf8)
     try declaration.write(to: store.declarationURL)
+    #expect(try SkillOperations.listManaged(environment: fixture.environment).isEmpty)
+    _ = try UpdateOperations.withPreparedUpdate(environment: fixture.environment) { try $0.apply() }
+    _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
+    let ledger = try store.loadLedger()
+    #expect(ledger.version == 2)
+    #expect(ledger.components.values.contains { $0.kind == "mcpServer" && $0.recipients.isEmpty })
+    #expect(try Data(contentsOf: store.declarationURL) == declaration)
+    try fixture.skill("other", body: "B")
+    try fixture.commit()
+    _ = try SkillOperations.add(
+      AddOptions(
+        source: "fixture", agents: [.codex], skillNames: ["other"], mode: .copy,
+        environment: fixture.environment))
+    let watch = SkillOperations.watchOperations()
+    try watch.add("fixture", environment: fixture.environment)
+    let lock = try Data(contentsOf: store.resolvedURL)
     let before = try snapshot(fixture.root)
-    for operation in ["update", "add", "list"] {
-      #expect {
-        switch operation {
-        case "update":
-          _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
-        case "add":
-          _ = try SkillOperations.add(
-            AddOptions(source: "fixture", all: true, environment: fixture.environment))
-        default: _ = try SkillOperations.listManaged(environment: fixture.environment)
-        }
-      } throws: { error in
-        guard let failure = error as? ManifestFailure,
-          let diagnostic = failure.diagnostics.first
-        else { return false }
-        return diagnostic.code == "manifest.unsupported"
-          && diagnostic.span.document.rawValue == store.declarationURL.path
-      }
-    }
+    #expect(
+      try SkillOperations.listManaged(environment: fixture.environment).map(\.name).sorted() == [
+        "demo", "other",
+      ])
+    _ = try SkillOperations.doctor(environment: fixture.environment)
+    _ = try watch.status(environment: fixture.environment)
+    #expect(try snapshot(fixture.root) == before)
+    try watch.remove("fixture", environment: fixture.environment)
+    #expect(try Data(contentsOf: store.resolvedURL) == lock)
     let document = try #require(try store.loadManifest())
-    #expect(document.bytes == Array(declaration))
+    #expect(document.declaration.groups.count == 1)
     #expect(document.declaration.components.contains { $0.kind == "mcpServer" })
-    #expect(try snapshot(fixture.root).filter { !$0.key.hasSuffix(".agents.lock") } == before)
+    #expect(try store.loadDeclaration().sources["unused"]?.location == "./not-present")
+    #expect(
+      String(decoding: document.bytes, as: UTF8.self).contains("# A valid inactive declaration"))
   }
+
 }
 
 /// Checkpoint callbacks run synchronously in the calling test.

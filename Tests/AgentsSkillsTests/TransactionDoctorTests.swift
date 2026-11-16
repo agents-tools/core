@@ -13,7 +13,7 @@ struct TransactionDoctorTests {
   @Test func bothDoctorsReportOwnerActionAndPreservedLocationsWithoutReplay() throws {
     let fixture = try SkillFixture()
     let store = fixture.store()
-    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    try store.save(declaration: Declaration(), ledger: ResolvedLedger())
     let target = fixture.environment.projectDirectory.appendingPathComponent("AGENTS.md")
     try Data("original".utf8).write(to: target)
     let saved = fixture.root.appendingPathComponent("saved-original")

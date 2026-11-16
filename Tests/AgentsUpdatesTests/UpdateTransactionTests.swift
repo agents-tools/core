@@ -219,6 +219,11 @@ private func launch(_ fixture: UpdateFixture, command: String, argument: String)
   process.arguments = [
     fixture.root.path, command, argument, "--scope", fixture.store.scope.rawValue,
   ]
+  let scratch = fixture.root.appendingPathComponent("process-temporary")
+  try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+  var environment = ProcessInfo.processInfo.environment
+  environment["TMPDIR"] = scratch.path + "/"
+  process.environment = environment
   try process.run()
   return process
 }

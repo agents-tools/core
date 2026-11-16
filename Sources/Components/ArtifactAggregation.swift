@@ -27,6 +27,7 @@ package final class ArtifactAggregation: PreparedEvidence {
   private let resources: [String: URL]
   private let replace: Bool
   private var unownedInstructions: [String] = []
+  private var unownedSkills: [String] = []
   private var targets: [String: TargetPrecondition] = [:]
   private var writes: [String: FileTransaction.Source] = [:]
   private var deletes = Set<String>()
@@ -182,11 +183,8 @@ package final class ArtifactAggregation: PreparedEvidence {
         {
           resourceEvidence.append(try TargetPrecondition(url.resolvingSymlinksInPath()))
         }
-        guard
-          !old.isEmpty
-            || !FileManager.default.fileExists(atPath: path)
-        else {
-          throw CoreError.invalidSkill(
+        if old.isEmpty, FileManager.default.fileExists(atPath: path) {
+          unownedSkills.append(
             "skill '\(ledger.components[deployment.owners[0]]!.name)' in \(store.scope.rawValue) scope has unmanaged content at \(path); move or remove it first"
           )
         }
@@ -197,17 +195,7 @@ package final class ArtifactAggregation: PreparedEvidence {
         } else if mode == InstallMode.link.rawValue {
           source = .link(try resourceDestination(first.2.resources[0]))
         } else if let tree = artifact.tree {
-          if let real = PathSafety.realPath(tree.path),
-            let children = FileManager.default.enumerator(
-              at: tree, includingPropertiesForKeys: [.isSymbolicLinkKey])
-          {
-            for case let child as URL in children
-            where try child.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
-              guard try PathSafety.linkStaysInside(child, root: real) else {
-                throw CoreError.unsafePath("copied skill link escapes its installed subtree")
-              }
-            }
-          }
+          try DeploymentConstruction.validateCopiedSkill(tree)
           source = .copy(tree)
         } else {
           throw CoreError.invalidState("skill artifact has no content")
@@ -500,7 +488,12 @@ package final class ArtifactAggregation: PreparedEvidence {
     }) { try evidence.validate() }
   }
 
+  package func requireSkillOwnership() throws {
+    if let reason = unownedSkills.sorted().first { throw CoreError.invalidSkill(reason) }
+  }
+
   package func requireOwnership() throws {
+    try requireSkillOwnership()
     guard replace || unownedInstructions.isEmpty else {
       throw InstructionError.unownedTargets(unownedInstructions.sorted())
     }

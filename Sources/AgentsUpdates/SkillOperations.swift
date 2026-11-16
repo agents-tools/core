@@ -19,11 +19,11 @@ extension SkillOperations {
       if !options.skillNames.contains(name) { options.skillNames.append(name) }
     }
     let store = StateStore(scope: options.scope, environment: options.environment)
-    let (declaration, digest, source, id, available) = try store.withReadLock {
+    let (declaration, digest, ledger, source, id, available) = try store.withReadLock {
       let declaration = try store.readDeclaration()
       let digest = try store.declarationDocument(prepared: nil)?.digest ?? "absent"
       let (source, id, available) = try SkillOperations.inspect(options, declaration: declaration)
-      return (declaration, digest, source, id, available)
+      return (declaration, digest, try store.readLedger(), source, id, available)
     }
     if options.listOnly || (options.skillNames.isEmpty && !options.all && available.count > 1) {
       return AddOutcome(source: source, sourceID: id, availableSkills: available, installed: [])
@@ -41,8 +41,37 @@ extension SkillOperations {
     {
       throw CoreError.invalidSource("source alias already refers to another source")
     }
-    next.sources[alias] = source
     let names = available.map { PathSafety.sanitizeName($0.name) }
+    let recipients = options.agents ?? declaration.defaultAgents
+    for deployment in ledger.deployments.sorted(by: { $0.id < $1.id })
+    where deployment.route == "agents/skill@1" {
+      let target = InstructionLocations.physical(
+        try deployment.target.resolve(roots: store.ledgerRoots))
+      guard let owner = deployment.owners.first.flatMap({ ledger.components[$0] }),
+        names.contains(PathSafety.sanitizeName(owner.name))
+      else { continue }
+      let ownerID = try ledger.sourceIdentity(owner.source, roots: store.ledgerRoots)
+      guard ownerID != id else { continue }
+      let paths = names.flatMap { name in
+        recipients.map { agent in
+          (
+            agent,
+            InstructionLocations.physical(
+              SkillLifecycle.target(name: name, agent: agent, store: store))
+          )
+        }
+      }
+      guard paths.contains(where: { $0.1 == target }) else { continue }
+      let ownerAlias =
+        try declaration.sources.keys.sorted().first {
+          try declaration.sources[$0]!.identity(environment: options.environment) == ownerID
+        } ?? owner.group ?? ownerID
+      let destinations = paths.map { "\($0.0.rawValue) at \($0.1.path)" }.joined(separator: ", ")
+      throw CoreError.invalidSkill(
+        "skill '\(PathSafety.sanitizeName(owner.name))' in \(options.scope.rawValue) scope is owned by '\(ownerAlias)' (\(ownerID)); '\(alias)' (\(id)) requests the same installation: \(destinations)"
+      )
+    }
+    next.sources[alias] = source
     var updated = false
     for index in next.components.indices {
       guard case .skills(let selectedAlias, var selection) = next.components[index],

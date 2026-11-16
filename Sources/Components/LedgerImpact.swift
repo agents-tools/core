@@ -38,7 +38,8 @@ package struct LedgerImpact {
       direct[
         ComponentKey(
           source: try ledger.sourceIdentity(c.declaringSource, roots: roots), root: c.root,
-          group: nil, kind: DeclaredComponentKind(rawValue: c.kind)!, name: c.name
+          group: nil, kind: DeclaredComponentKind(rawValue: c.kind)!,
+          name: c.kind == "skills" ? PathSafety.sanitizeName(c.name) : c.name
         )] = SourceRevision(revision: revision, version: c.version)
     }
     self.pins = pins
@@ -166,7 +167,9 @@ package struct LedgerImpact {
   ) throws {
     for occurrence in ledger.occurrences where !occurrence.consumerEditable {
       let c = ledger.components[occurrence.component]!
-      if kinds.contains(DeclaredComponentKind(rawValue: c.kind)!), names.contains(c.name) {
+      if kinds.contains(DeclaredComponentKind(rawValue: c.kind)!),
+        names.contains(c.kind == "skills" ? PathSafety.sanitizeName(c.name) : c.name)
+      {
         let producer = try ledger.sourceIdentity(occurrence.declaringSource, roots: roots)
         let groups = Dictionary(uniqueKeysWithValues: ledger.groups.map { ($0.id, $0) })
         var chain: [String] = []

@@ -14,7 +14,9 @@ recorded components' pins, payloads, resources and effective recipients. A chang
 that requires a wider operation reports `requiresCombinedUpdate` before publishing.
 Producer-owned children cannot be edited as consumer declarations; their diagnostic
 identifies the producer and group reference. Root occurrence edits use
-`ManifestEdit` and digest-scoped document handles.
+`ManifestEdit` and digest-scoped document handles. Skill removal uses recorded
+membership while preserving authored all-member selections and their exclusions;
+new upstream members are admitted by update, not by removal.
 
 `UpdateOperations.preview(_:scope:environment:)` returns a serializable
 `CombinedUpdateReport`. It uses existing shared locks and never creates persistent
@@ -87,7 +89,9 @@ Their add, update, remove and restore methods are public extensions in
 `AgentsUpdates`; consumers calling them must depend on and import `AgentsUpdates`
 as well as the domain product. Discovery, frontmatter and text rendering stay in
 the domain modules. Skill-only restore and update apply only the skill domain.
-`InstructionOperations.renderChatGPT` renders the locked prompt resources.
+`InstructionOperations.renderChatGPT` verifies locked sections and reads the current
+consumer-owned append file at export. Update and install do not require that file;
+producer-owned append resources remain frozen at their selected source.
 Watch remains a separate subscription API. Add inspection returns source-relative `Skill.path` and `Skill.skillFile` coordinates, never paths into a released snapshot.
 
 ## Failure and Recovery
