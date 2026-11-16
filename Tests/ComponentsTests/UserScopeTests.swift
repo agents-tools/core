@@ -73,16 +73,19 @@ struct UserScopeTests {
       components: [{"kind": "instructions", "sections": [{"name": "rules", "source": "rules"}], "chatgpt": {"p": {"sections": [{"name": "rules", "source": "rules"}], "append": "append.md"}}}]
       """)
     try ComponentLinker.withLinkedComponents(document: document, store: store, platform: .macOS) {
-      graph, session in
+      graph, _ in
       #expect(graph.components.map(\.key.name) == ["rules", "rules"])
       #expect(graph.components[0].snapshot.source == "local:" + source.path)
       #expect(graph.components[1].chatGPT)
-      let append = try #require(graph.components[1].resources.last)
-      let file = try session.resource(snapshot: append.snapshot, path: append.path)
-      #expect(try String(contentsOf: file, encoding: .utf8) == "home append")
-      #expect(append.snapshot.source == "local:" + fixture.home.path)
-      #expect(append.path == "append.md")
-      #expect(graph.components[1].origins[0].dependencies.contains(append.snapshot))
+      #expect(graph.components[1].resources.count == 1)
+      let append = try #require(graph.components[1].localAppend)
+      #expect(append == LedgerLocation(kind: .registered, root: "home", path: "append.md"))
+      #expect(
+        try append.readContainedFile(roots: ["home": fixture.home]) == Data("home append".utf8))
+      #expect(
+        !graph.components[1].origins[0].dependencies.contains {
+          $0.source == "local:" + fixture.home.path
+        })
       #expect(graph.components[1].origins[0].provenance.relativePath == "agents.yaml")
     }
   }
@@ -112,7 +115,7 @@ struct UserScopeTests {
     let producer = fixture.project.appendingPathComponent("producer")
     try fixture.initialize(producer)
     try fixture.instruction("producer", at: producer)
-    try fixture.write("producer append shadow", to: "append.md", base: producer)
+    try fixture.write("producer append", to: "append.md", base: producer)
     try fixture.write("package append shadow", to: "append.md", base: store.directory)
     try fixture.write("home append", to: "append.md", base: fixture.home)
     try fixture.manifest(
@@ -141,8 +144,10 @@ struct UserScopeTests {
       #expect(prompt.origins[0].provenance == component.origins[0].provenance)
       let append = try #require(prompt.resources.last)
       let file = try session.resource(snapshot: append.snapshot, path: append.path)
-      #expect(try String(contentsOf: file, encoding: .utf8) == "home append")
-      #expect(append.snapshot.source == "local:" + fixture.home.path)
+      #expect(try String(contentsOf: file, encoding: .utf8) == "producer append")
+      #expect(append.snapshot.source == "local:" + producer.path)
+      #expect(append.snapshot.revision == pin)
+      #expect(prompt.localAppend == nil)
     }
   }
 }

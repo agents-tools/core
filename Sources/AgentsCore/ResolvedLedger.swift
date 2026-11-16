@@ -94,6 +94,39 @@ package struct LedgerLocation: Codable, Equatable, Hashable, Sendable {
     self.root = root
     self.path = path
   }
+
+  package var ledgerValue: LedgerValue {
+    var fields: [String: LedgerValue] = ["kind": .init(kind.rawValue), "path": .init(path)]
+    fields["root"] = root.map { .init($0) }
+    return .init(object: fields)
+  }
+
+  package init(ledgerValue value: LedgerValue) throws {
+    try value.validate()
+    guard let fields = value.object,
+      Set(fields.keys).isSubset(of: ["kind", "root", "path"]),
+      let kind = fields["kind"], kind.kind == .string,
+      let parsed = kind.text.flatMap(Kind.init(rawValue:)),
+      let path = fields["path"], path.kind == .string, let text = path.text,
+      fields["root"] == nil || fields["root"]?.kind == .string
+    else { throw CoreError.invalidState("invalid ledger location payload") }
+    self.init(kind: parsed, root: fields["root"]?.text, path: text)
+    try validate()
+  }
+
+  /// Consumer operations read current bytes only after validating lexical and real containment.
+  /// Frozen replay consumes resource records and never calls this operation.
+  package func readContainedFile(roots: [String: URL]) throws -> Data {
+    guard kind == .registered, let root, let base = roots[root] else {
+      throw CoreError.invalidState("current file needs a registered root")
+    }
+    let file = try resolve(roots: roots)
+    guard
+      PathSafety.isContained(
+        file.resolvingSymlinksInPath(), in: base.resolvingSymlinksInPath())
+    else { throw CoreError.unsafePath("current file escapes its registered root") }
+    return try FileSystem.read(at: file)
+  }
 }
 
 /// A closed tagged value vocabulary, independent of Swift's synthesized enum representation.

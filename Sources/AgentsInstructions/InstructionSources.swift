@@ -202,7 +202,7 @@ final class InstructionSources {
   }
 
   /// Rejects a symbolic link at `url` or at any directory between `tree` and it.
-  private static func requireNoLinks(_ url: URL, below tree: URL) throws {
+  static func requireNoLinks(_ url: URL, below tree: URL) throws {
     var cursor = tree
     for component in PathSafety.relativePath(url.path, to: tree.path).split(separator: "/") {
       cursor.appendPathComponent(String(component))

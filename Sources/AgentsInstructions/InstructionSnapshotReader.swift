@@ -10,6 +10,22 @@ package struct SnapshotInstruction: Equatable, Sendable {
 
 /// Reads conventional containers in an exact source view. It does not resolve, cache or render.
 package enum InstructionSnapshotReader {
+  /// Named own selection does not inspect unrelated authoring drafts or entries.
+  package static func read(_ view: SourceSnapshot, own name: String) throws -> SnapshotInstruction?
+  {
+    guard Declaration.isInstructionName(name) else {
+      throw CoreError.invalidSource("invalid instruction name: \(name)")
+    }
+    let root = try view.directory()
+    let container =
+      root.lastPathComponent == ".agent" ? "instructions" : InstructionSources.ownContainer
+    let file = root.appendingPathComponent(container).appendingPathComponent(name + ".md")
+    let path = try view.relativePath(file)
+    try InstructionSources.requireNoLinks(file, below: view.root)
+    guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+    return try read(view, name: name, path: path)
+  }
+
   package static func read(_ view: SourceSnapshot, own: Bool = false) throws
     -> [SnapshotInstruction]
   {
@@ -28,15 +44,18 @@ package enum InstructionSnapshotReader {
           throw CoreError.invalidSource("duplicate instruction name: \(name)")
         }
         let path = try view.relativePath(file)
-        let bytes = try FileSystem.read(at: view.resource(path))
-        let id = view.snapshot.source + ":" + name
-        let section = try Instructions.validateSource(bytes, id: id, allowRestrictions: true)
-        result.append(
-          SnapshotInstruction(
-            name: name, path: path, bytes: bytes,
-            section: section))
+        result.append(try read(view, name: name, path: path))
       }
     }
     return result.sorted { $0.name < $1.name }
+  }
+
+  private static func read(_ view: SourceSnapshot, name: String, path: String) throws
+    -> SnapshotInstruction
+  {
+    let bytes = try FileSystem.read(at: view.resource(path))
+    let section = try Instructions.validateSource(
+      bytes, id: view.snapshot.source + ":" + name, allowRestrictions: true)
+    return SnapshotInstruction(name: name, path: path, bytes: bytes, section: section)
   }
 }

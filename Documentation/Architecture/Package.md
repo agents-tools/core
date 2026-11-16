@@ -322,8 +322,10 @@ retaining their origins. Logical conflicts are checked before artifact lowering.
 Core owns frozen Git candidate evidence, exact snapshots, source containment and
 the scoped temporary-read session. Export constraints share one version variable
 per normalized source; discovery roots remain distinct namespaces. Direct skill
-and section pins are independent. The session reuses existing exact cached
-objects only under existing locks; other mirrors, refs, locks and content remain
+and section pins are independent. Exact annotated Git objects are peeled to commits
+before conjunction, candidate selection and snapshot identity. Acquiring a known
+object does not enumerate mutable refs or refresh the frozen reference mirror.
+The session reuses existing exact cached objects only under existing locks; other mirrors, refs, locks and content remain
 temporary. The caller consumes borrowed resources within the linking closure;
 cleanup runs on success, error and cooperative cancellation. The synchronous Git
 runner completes owned in-flight work before cancellation returns.
@@ -336,9 +338,20 @@ remain subject to lexical and real symlink containment.
 
 `SkillSnapshotReader` and `InstructionSnapshotReader` consume already selected
 views without independently resolving or retaining sources. Actual local edit
-skills preserve their live paths. Remote-contained local sources inherit the
-producer snapshot. Existing skill-index formats supply skill artifacts, and do
-not define an export-package format.
+skills preserve their live paths. Skill keys, exclusions and overrides use canonical
+semantic names while resource paths and display names retain their source spelling.
+An all-selection includes members from their effective override views, admits live-only
+members only when that view is selected, and omits missing effective-view members;
+named selections still require their members. Named own-instruction reads validate only
+the selected path and its ancestors, while full enumeration remains strict.
+Remote-contained local sources inherit the producer snapshot. Existing skill-index
+formats supply skill artifacts, and do not define an export-package format. Indexed
+members have independent artifact-digest pins. A scoped link can retain an admitted
+ledger alongside its direct pins: protected members borrow their exact resource trees
+and content objects, while selected members download only their requested artifacts.
+The recorded index transport and artifact digest must both match; a missing closure
+fails rather than refreshing that member. Nested artifact files and executable flags
+are materialized only inside the source session's disposable workspace.
 
 The linked result records relative resource evidence, source requirements,
 reference and contribution occurrences, provenance and exact dependency pins.
@@ -355,8 +368,13 @@ The existing public lifecycle operations still enforce their deployment subset.
 Root package resources use the project directory in project scope and the
 user-state directory in user scope. Explicit sources retain their declaring
 environment. Root user instructions require named sources, while imported
-producer groups retain their own sections. User prompt append content is
-read relative to the runtime home.
+producer groups retain their own sections. Consumer-owned prompt append references
+are metadata anchored to the project or, for root user declarations, runtime home.
+Linking and freezing do not open these export-only inputs. Public export reads their
+current bytes with lexical and real containment checks; missing or unreadable content
+fails export without a frozen-byte fallback. Producer-owned append content remains
+anchored to the selected immutable source and is a frozen replay resource. Installation
+replay reads only its recorded resources and does not open consumer append references.
 
 The package-only `MCPConnectionRunner` performs one explicit connection test on
 already-bound ephemeral values. Only Components links the exact official MCP SDK;
