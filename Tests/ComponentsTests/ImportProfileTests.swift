@@ -382,6 +382,69 @@ struct ImportProfileTests {
       !result.diagnostics.contains { $0.code == .ambiguousSource || $0.code == .incompletePin })
   }
 
+  @Test(arguments: ["empty", "valid", "selection"])
+  func sourceOccurrencesStayAlignedWithCompleteProducerList(_ first: String) throws {
+    let fixture = try ImportProfileFixture()
+    try fixture.directory(".rulesync")
+    let firstSource = first == "selection" ? "github:acme/repo" : "acme/repo"
+    let firstSkills = first == "empty" ? "[]" : #"["*"]"#
+    try fixture.write(
+      "config.jsonc",
+      """
+      {"sources":[{"source":"\(firstSource)","skills":\(firstSkills)},
+        {"source":"acme/repo","skills":["*"]}]}
+      """)
+    let commitA = String(repeating: "a", count: 40)
+    let commitB = String(repeating: "b", count: 40)
+    let integrityA = "sha256-" + String(repeating: "c", count: 64)
+    let integrityB = "sha256-" + String(repeating: "d", count: 64)
+    try fixture.write(
+      "lock.json",
+      """
+      {"lockfileVersion":1,"sources":{
+        "acme/repo":{"resolvedRef":"\(commitA)","skillsPath":"skills","skillSelection":["*"],
+          "skills":{"from-a":{"integrity":"\(integrityA)"}}},
+        "acme/repo#entry=2":{"resolvedRef":"\(commitB)","skillsPath":"skills","skillSelection":["*"],
+          "skills":{"from-b":{"integrity":"\(integrityB)"}}}}}
+      """)
+    var config = fixture.input(.rulesyncConfig, "config.jsonc")
+    if first == "selection" { config.selection = ["acme/repo"] }
+    let before = try fixture.hash()
+    let result = try SourceImport.previewRulesync(
+      configs: [config], locks: [fixture.input(.rulesyncSourcesV1, "lock.json")])
+    let acceptedBoth = first == "valid"
+    let sources = result.sources.filter { !$0.alias.contains("-skill-") }
+    #expect(sources.map(\.pin.commit) == (acceptedBoth ? [commitA, commitB] : [commitB]))
+    #expect(sources.last?.alias == "rulesync-source-1")
+    #expect(sources.last?.declaration?.requirement == .revision(commitB))
+    #expect(
+      result.orderedSources.map(\.origin.pointer)
+        == (acceptedBoth ? ["/sources/0", "/sources/1"] : ["/sources/1"]))
+    #expect(
+      result.resources.map(\.producerName) == (acceptedBoth ? ["from-a", "from-b"] : ["from-b"]))
+    #expect(
+      result.resources.map(\.path)
+        == (acceptedBoth ? ["skills/from-a", "skills/from-b"] : ["skills/from-b"]))
+    #expect(result.resources.last?.sourceAlias == "rulesync-source-1")
+    #expect(result.resources.last?.producerIntegrity?.value == integrityB)
+    #expect(result.resources.allSatisfy { $0.requiresStandaloneSource })
+    #expect(
+      result.components.last?.declaration
+        == .skills(source: "rulesync-source-1-skill-0", .init(select: .names(["from-b"]))))
+    #expect(result.components.count == (acceptedBoth ? 2 : 1))
+    #expect(
+      result.diagnostics.contains {
+        $0.code == .invalidInput && $0.location.document == "config.jsonc"
+          && $0.location.pointer == "/sources/0/skills"
+      } == (first == "empty"))
+    #expect(
+      !result.diagnostics.contains {
+        $0.code == .incompletePin && $0.location.document == "config.jsonc"
+          && $0.location.pointer == "/sources/1"
+      })
+    #expect(try fixture.hash() == before)
+  }
+
   @Test func embeddedRulesyncSelectorPreservesExplicitSourceAndLockedResources() throws {
     let fixture = try ImportProfileFixture()
     try fixture.directory(".rulesync")

@@ -135,13 +135,15 @@ enum RulesyncConfigImport {
         "Object-form targets cannot be combined with features.")
       return
     }
-    var entries: [(ImportOrderedSource, SourceDeclaration?, [String: NativeValue])] = []
+    var entries: [(ImportOrderedSource, SourceDeclaration?, String)] = []
     if let (value, parsed) = effective["sources"] {
       guard case .array(let sources) = value else { throw ImportReadFailure.invalid }
+      // Producer occurrence keys belong to the complete declaration order, before filtering.
+      let keys = lockKeys(sources)
       for (index, source) in sources.enumerated() {
         let location = parsed.location("sources").appending(String(index))
         guard let object = source.importObject, let raw = object["source"]?.importString,
-          !raw.isEmpty
+          !raw.isEmpty, let key = keys[index]
         else {
           diagnostics.add(.invalidInput, location, "Expected a producer source entry.")
           continue
@@ -279,17 +281,16 @@ enum RulesyncConfigImport {
           rules: object["rules"]?.importStrings?.map {
             $0.hasSuffix(".md") ? String($0.dropLast(3)) : $0
           })
-        entries.append((intent, declaration, object))
+        entries.append((intent, declaration, key))
         diagnostics.proposal.orderedSources.append(intent)
       }
     }
-    let keys = lockKeys(entries)
     var locked: [String: (ImportedSource, [ImportResourceProposal], [String: Any])] = [:]
     for lock in locks {
       var request = lock
-      for (index, entry) in entries.enumerated()
+      for entry in entries
       where (entry.0.transport == "npm") == (lock.profile == .rulesyncNpmV1) {
-        if let declaration = entry.1 { request.sourceDeclarations[keys[index]] = declaration }
+        if let declaration = entry.1 { request.sourceDeclarations[entry.2] = declaration }
       }
       var result = ImportDiagnostics(proposal: .init(profile: lock.profile))
       let fields = try ImportInput.document(request, limits: limits)
@@ -315,18 +316,15 @@ enum RulesyncConfigImport {
       }
     }
     let declaredKeys = Set(
-      entries.enumerated().map {
-        ($0.element.0.transport == "npm" ? "npm:" : "git:") + keys[$0.offset]
-      })
+      entries.map { ($0.0.transport == "npm" ? "npm:" : "git:") + $0.2 })
     for key in locked.keys.sorted() where !declaredKeys.contains(key) {
       diagnostics.add(
         .unconverted, locked[key]!.0.origin,
         "Lock entry is absent from the effective ordered source config.")
     }
     var winners: Set<String> = []
-    for (index, entry) in entries.enumerated() {
-      let (intent, declaration, _) = entry
-      let key = (intent.transport == "npm" ? "npm:" : "git:") + keys[index]
+    for (intent, declaration, lockKey) in entries {
+      let key = (intent.transport == "npm" ? "npm:" : "git:") + lockKey
       var match = locked[key]
       if let candidate = match {
         let pathMatches =
@@ -519,29 +517,29 @@ enum RulesyncConfigImport {
     if result.hasSuffix(".git") { result.removeLast(4) }
     return result.lowercased()
   }
-  private static func lockKeys(
-    _ entries: [(ImportOrderedSource, SourceDeclaration?, [String: NativeValue])]
-  ) -> [String] {
-    let bare = entries.map { normalizedKey($0.0.identity) }
+  private static func lockKeys(_ sources: [NativeValue]) -> [String?] {
+    let fields = sources.map(\.importObject)
+    let bare = fields.map { $0?["source"]?.importString.map(normalizedKey) }
     var counts: [String: Int] = [:]
-    for (index, entry) in entries.enumerated() where entry.0.transport != "npm" {
-      counts[bare[index], default: 0] += 1
+    for index in sources.indices where fields[index]?["transport"]?.importString != "npm" {
+      if let key = bare[index] { counts[key, default: 0] += 1 }
     }
     var occurrences: [String: Int] = [:]
     let allowed = CharacterSet(
       charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()/")
-    return entries.enumerated().map { index, entry in
-      guard entry.0.transport != "npm", counts[bare[index], default: 0] > 1 else {
-        return bare[index]
+    return sources.indices.map { index in
+      guard let object = fields[index], let key = bare[index] else { return nil }
+      guard object["transport"]?.importString != "npm", counts[key, default: 0] > 1 else {
+        return key
       }
       var qualifiers: [String] = []
       for field in ["path", "rulesPath", "ref"] {
-        guard var value = entry.2[field]?.importString else { continue }
+        guard var value = object[field]?.importString else { continue }
         if field != "ref" { value = (try? ImportInput.path(value)) ?? value }
         qualifiers.append(
           field + "=" + (value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""))
       }
-      let base = bare[index] + (qualifiers.isEmpty ? "" : "#" + qualifiers.joined(separator: "&"))
+      let base = key + (qualifiers.isEmpty ? "" : "#" + qualifiers.joined(separator: "&"))
       occurrences[base, default: 0] += 1
       let occurrence = occurrences[base]!
       return occurrence == 1
