@@ -46,9 +46,9 @@ struct ImplicitReadFootprintTests {
     let selected = try #require(inspection.components.first { $0.kind == .mcpServer })
     let connection = try MCPConnectionOperations.snapshot(
       selection: selected.selection, scope: scope, environment: f.environment)
-    #expect(connection.readLocations.map(\.path).contains(tool.path))
+    #expect(connection.readDependencies.map { $0.url.path }.contains(tool.path))
     if scope == .user {
-      #expect(!connection.readLocations.map(\.path).contains(root.path))
+      #expect(!connection.readDependencies.map { $0.url.path }.contains(root.path))
     }
     #expect(
       Set(inspection.readLocations.map(\.path)).isSuperset(

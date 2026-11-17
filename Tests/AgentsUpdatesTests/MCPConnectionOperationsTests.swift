@@ -166,8 +166,16 @@ final class MCPFacadeFixture {
     #expect(!description.workingDirectoryIsCaptured && !description.executableIsCaptured)
     #expect(description.endpoint == nil && description.startsOwnedProcess)
     #expect(description.requiredBindings == ["named-secret"])
-    #expect(description.readLocations == snapshot.readLocations)
-    #expect(snapshot.readLocations.contains { $0.path == fixture.root.path })
+    #expect(description.readDependencies == snapshot.readDependencies)
+    #expect(snapshot.readDependencies.contains { $0.url.path == fixture.root.path })
+    #expect(snapshot.readDependencies.allSatisfy { if case .entry = $0 { true } else { false } })
+    let encoded = try JSONEncoder().encode(description)
+    #expect(try JSONDecoder().decode(MCPConnectionDescription.self, from: encoded) == description)
+    let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    #expect(object["readLocations"] == nil)
+    let dependencies = try #require(object["readDependencies"] as? [[String: [String: String]]])
+    #expect(
+      dependencies == description.readDependencies.map { ["entry": ["_0": $0.url.absoluteString]] })
     #expect(try FileHash.folderHash(fixture.root) == before && fixture.text("pid") == nil)
     for transport: MCPTransportDeclaration in [
       .sse(
@@ -182,7 +190,7 @@ final class MCPFacadeFixture {
       let info = MCPConnectionOperations.describe(remote)
       #expect(info.endpoint == "http://127.0.0.1:1/[redacted]")
       #expect(!info.startsOwnedProcess && info.executable == nil && info.arguments == nil)
-      #expect(info.workingDirectory == nil && info.readLocations.isEmpty)
+      #expect(info.workingDirectory == nil && info.readDependencies.isEmpty)
       let text = String(decoding: try JSONEncoder().encode(info), as: UTF8.self)
       for hidden in ["private-path", "query-canary", "header-canary"] {
         #expect(!text.contains(hidden))
@@ -234,11 +242,11 @@ final class MCPFacadeFixture {
     let liveDescription = MCPConnectionOperations.describe(live)
     #expect(liveDescription.executable == file.path && !liveDescription.executableIsCaptured)
     #expect(liveDescription.arguments == ["fixed-argument"])
-    #expect(liveDescription.readLocations.contains { $0.path == file.path })
+    #expect(liveDescription.readDependencies.contains { $0.url.path == file.path })
     let capturedDescription = MCPConnectionOperations.describe(captured)
     #expect(capturedDescription.executable == "selected-executable")
     #expect(capturedDescription.executableIsCaptured)
-    #expect(!capturedDescription.readLocations.contains { $0.path == file.path })
+    #expect(!capturedDescription.readDependencies.contains { $0.url.path == file.path })
     let path = try MCPConnectionOperations.snapshot(
       selectionID: "path-command", transport: .stdio(.init(executable: "path-command")),
       workingDirectory: cwd)
@@ -365,6 +373,46 @@ final class MCPFacadeFixture {
     let pid = try #require(Int32(fixture.text("pid") ?? ""))
     #expect(kill(pid, 0) == -1 && errno == ESRCH)
     #expect(spy.calls.isEmpty)
+    try fixture.unchanged()
+  }
+
+  @Test func liveAliasChildrenStayLiveAndRetargetingRefusesBeforeBinding() async throws {
+    let fixture = try MCPFacadeFixture()
+    let logical = fixture.root.appendingPathComponent("live-alias")
+    let first = fixture.root.appendingPathComponent("physical-first").resolvingSymlinksInPath()
+    let second = fixture.root.appendingPathComponent("physical-second").resolvingSymlinksInPath()
+    for directory in [first, second] {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    }
+    try FileManager.default.createSymbolicLink(at: logical, withDestinationURL: first)
+    let marker = first.appendingPathComponent("live-marker")
+    try Data("before".utf8).write(to: marker)
+    let snapshot = try MCPConnectionOperations.snapshot(
+      selectionID: "live-alias",
+      transport: .stdio(
+        .init(
+          executable: "MCPTestProcess",
+          arguments: ["normal", fixture.observation.path],
+          environment: ["TOKEN": .secret("wanted")])), workingDirectory: .live(logical))
+    #expect(Set(snapshot.readDependencies.map { $0.url.path }) == Set([logical.path, first.path]))
+    #expect(snapshot.readDependencies.allSatisfy { if case .entry = $0 { true } else { false } })
+    try Data("after".utf8).write(to: marker)
+    let spy = MCPBindingSpy(["wanted": Data("value".utf8)])
+    let live = await MCPConnectionOperations.test(
+      snapshot, environment: fixture.environment, bindings: spy)
+    #expect(live.outcome == .discovered && live.cleanupComplete && spy.calls == ["wanted"])
+    let wire = try String(
+      contentsOf: fixture.observation.appendingPathComponent("wire.jsonl"), encoding: .utf8)
+    let startup = try #require(wire.split(separator: "\n").first)
+    let record = try #require(
+      JSONSerialization.jsonObject(with: Data(startup.utf8)) as? [String: Any])
+    #expect(record["liveMarker"] as? String == "after")
+    try FileManager.default.removeItem(at: logical)
+    try FileManager.default.createSymbolicLink(at: logical, withDestinationURL: second)
+    let forbidden = MCPBindingSpy(["wanted": Data("unused".utf8)])
+    let stale = await MCPConnectionOperations.test(
+      snapshot, environment: fixture.environment, bindings: forbidden)
+    #expect(stale.issue == .resourceChanged && stale.cleanupComplete && forbidden.calls.isEmpty)
     try fixture.unchanged()
   }
 

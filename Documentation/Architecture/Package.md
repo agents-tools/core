@@ -376,6 +376,16 @@ fails export without a frozen-byte fallback. Producer-owned append content remai
 anchored to the selected immutable source and is a frozen replay resource. Installation
 replay reads only its recorded resources and does not open consumer append references.
 
+`ReadDependency` in AgentsCore distinguishes entry/access interests from recursive
+subtree interests. `MCPConnectionSnapshot.readDependencies` and the Codable
+`MCPConnectionDescription.readDependencies` expose logical and resolved entry
+paths for live resources. Live directories retain live content semantics and
+revalidate their identity before binding and start. Captured resources expose no
+borrowed or staging paths. Managed selections additionally preserve the existing
+ledger/source read footprint as subtree dependencies; an independent subtree
+interest remains recursive when it overlaps a live entry. These monitoring fields
+do not change CLI reports, which use their existing report types and binding list.
+
 The package-only `MCPConnectionRunner` performs one explicit connection test on
 already-bound ephemeral values. Only Components links the exact official MCP SDK;
 SDK models do not enter public APIs. The SDK Client owns automatic initialization
