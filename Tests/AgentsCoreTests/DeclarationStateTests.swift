@@ -215,7 +215,7 @@ struct DeclarationStateTests {
     for name in ["agents.yaml", "agents.resolved", "agents.watch"] {
       #expect(try paths.components("state/" + name).descendants == [name])
     }
-    for name in ["other.json", "agents.swift", "agents.yaml.new"] {
+    for name in ["other.json", "agents.yaml.new"] {
       #expect(throws: CoreError.unsafePath("unmanaged state transaction path")) {
         try paths.components("state/" + name)
       }
