@@ -200,3 +200,54 @@ package enum AgentRegistry {
   }
 
 }
+
+extension AgentRegistry {
+  package struct ClientCommand: Sendable {
+    package let name: String
+    package let role: String
+  }
+
+  package static func clientCommands(for agent: AgentID) -> [ClientCommand] {
+    switch agent {
+    case .codex: [.init(name: "codex", role: "agentCLI")]
+    case .claudeCode: [.init(name: "claude", role: "agentCLI")]
+    case .geminiCLI: [.init(name: "gemini", role: "agentCLI")]
+    case .opencode: [.init(name: "opencode", role: "agentCLI")]
+    case .cursor:
+      [
+        .init(name: "cursor", role: "editorLauncher"),
+        .init(name: "cursor-agent", role: "agentCLI"),
+      ]
+    }
+  }
+
+  // Registered editor bundle identity; the agent CLI has independent metadata.
+  package static func clientBundleIdentifier(for agent: AgentID) -> String? {
+    agent == .cursor ? "com.todesktop.230313mzl4w4u92" : nil
+  }
+
+  package static func clientSkillLocations(
+    for agent: AgentID, scope: InstallScope, environment: RuntimeEnvironment
+  ) -> [(String, URL)] {
+    let scans =
+      scope == .user
+      ? nativeUserScanDirectories(for: agent, environment: environment)
+      : projectScanDirectories(for: agent, environment: environment)
+    return [
+      ("skills.install", installSkillsDirectory(for: agent, scope: scope, environment: environment))
+    ]
+      + scans.enumerated().map { ("skills.scan.\($0.offset)", $0.element) }
+  }
+}
+
+extension AgentRegistry {
+  /// Only the bundled editor launcher carries this bundle metadata association.
+  package static func clientBundle(for command: String, resolvedExecutable: URL) -> URL? {
+    guard command == "cursor",
+      resolvedExecutable.path.hasSuffix("/Contents/Resources/app/bin/cursor")
+    else { return nil }
+    var bundle = resolvedExecutable
+    for _ in 0..<5 { bundle.deleteLastPathComponent() }
+    return bundle
+  }
+}

@@ -76,6 +76,83 @@ struct ConsumerLifecycleRegressionTests {
     #expect(try f.snapshot() == before)
   }
 
+  @Test func ordinaryPartialRemovalKeepsSharedInstructionTargetAndSurvivingPins() throws {
+    let f = try UpdateFixture()
+    try f.write(
+      "---\ndescription: Other.\n---\n# Other\n\nFrozen survivor\n",
+      to: f.repo.appendingPathComponent("instructions/other.md"))
+    try f.commit()
+    try f.declare(agents: [.codex])
+    var declaration = try f.store.loadDeclaration()
+    try declaration.updateInstructions { $0?.sections.append("fixture:other") }
+    try f.store.save(declaration: declaration, ledger: ResolvedLedger())
+    _ = try f.apply()
+    let previous = try f.store.readLedger()
+    let skillBytes = try f.bytes(f.target().appendingPathComponent("SKILL.md"))
+    try f.advance()
+    try f.write(
+      "---\ndescription: Other.\n---\n# Other\n\nMutable producer changed\n",
+      to: f.repo.appendingPathComponent("instructions/other.md"))
+    try f.commit()
+    let before = try f.snapshot()
+    let preview = try UpdateOperations.preview(
+      .init(operation: .remove, kinds: [.instructions], names: ["rules"]),
+      environment: f.environment)
+    let target = try #require(preview.instructions.targets.first { $0.url == f.instruction() })
+    let after = try #require(target.after)
+    #expect(String(decoding: after, as: UTF8.self).contains("Frozen survivor"))
+    #expect(!String(decoding: after, as: UTF8.self).contains("# Rules"))
+    #expect(target.afterAgents == [.codex])
+    #expect(try f.snapshot() == before)
+    _ = try InstructionOperations.remove(names: ["rules"], environment: f.environment)
+    #expect(try f.bytes(f.instruction()) == after)
+    #expect(try f.bytes(f.target().appendingPathComponent("SKILL.md")) == skillBytes)
+    let next = try f.store.readLedger()
+    for (id, component) in previous.components
+    where component.kind == "skills" || component.name == "other" {
+      #expect(next.components[id] == component)
+      #expect(next.sources[component.source] == previous.sources[component.source])
+    }
+    let deployment = try #require(
+      next.deployments.first {
+        $0.route == "agents/instructions@1" && $0.target.path == "AGENTS.md"
+      })
+    #expect(deployment.expectedHash == "sha256:" + FileHash.sha256Hex(data: after))
+    #expect(
+      try UpdateOperations.inspect(environment: f.environment).deployments.filter {
+        $0.location == f.instruction()
+      }.allSatisfy { $0.status == .current })
+  }
+
+  @Test func handwrittenSharedInstructionPartialRemovalRefusesBeforeCallback() throws {
+    let f = try UpdateFixture()
+    try f.write(
+      "---\ndescription: Other.\n---\n# Other\n",
+      to: f.repo.appendingPathComponent("instructions/other.md"))
+    try f.commit()
+    try f.declare(agents: [.codex])
+    var declaration = try f.store.loadDeclaration()
+    try declaration.updateInstructions { $0?.sections.append("fixture:other") }
+    try f.store.save(declaration: declaration, ledger: ResolvedLedger())
+    _ = try f.apply()
+    try f.write("Handwritten shared destination", to: f.instruction())
+    let before = try f.snapshot()
+    let preview = try UpdateOperations.preview(
+      .init(operation: .remove, kinds: [.instructions], names: ["rules"]),
+      environment: f.environment)
+    let target = try #require(preview.instructions.targets.first { $0.url == f.instruction() })
+    #expect(target.foreign)
+    #expect(target.after != nil)
+    var callbacks = 0
+    #expect(throws: InstructionError.self) {
+      try InstructionOperations.remove(names: ["rules"], environment: f.environment) { _ in
+        callbacks += 1
+      }
+    }
+    #expect(callbacks == 0)
+    #expect(try f.snapshot() == before)
+  }
+
   @Test func explicitRemovalRetargetsSurvivorsAndKeepsSkillPin() throws {
     let f = try UpdateFixture()
     try f.write(
@@ -177,10 +254,6 @@ struct ConsumerLifecycleRegressionTests {
     let f = try UpdateFixture()
     try f.declare(mode: .edit, agents: [.codex])
     var declaration = try f.store.loadDeclaration()
-    declaration.components.removeAll {
-      if case .instructions = $0 { return true }
-      return false
-    }
     declaration.components.append(
       .command(
         name: "review", description: "Review", prompt: .literal("Frozen review"),

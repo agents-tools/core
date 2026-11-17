@@ -55,10 +55,10 @@ public struct ComponentUpdateChange: Codable, Sendable, Equatable {
   public let effectiveReaders: [AgentID]
   public let privateMaterialization: Bool
   public let permissionChange: ComponentPermissionChange?
-  /// Readable selected configuration JSON with symbolic environment/secret references.
+  /// Readable selected native configuration/files with symbolic environment/secret references.
   /// Nil means the old selected value is unavailable; native sibling values are never included.
   public let symbolicBefore: String?
-  /// Readable selected configuration JSON, using the same symbolic projection as inspection.
+  /// Readable selected native configuration/files, including generated member content and targets.
   public let symbolicAfter: String?
   public let kind: String
   public let name: String

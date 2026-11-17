@@ -31,9 +31,12 @@ and prompts, selected native changes, missing-lock status, `hasChanges` and a
 `displayedFingerprint`. Native reports contain the owned symbolic values; complete
 shared documents, unrelated siblings, runtime secret values and private freshness
 evidence remain internal. `ComponentUpdateChange.symbolicBefore` and `symbolicAfter`
-are readable selected configuration JSON, rendered through the native JSON owner.
-Environment and secret references remain symbolic objects; `nil` means the selected
-value is unavailable. Consumers can display these strings directly. Equal unmanaged
+are readable selected configuration, rendered through the native document owner.
+Generated-plugin text includes the final target, selected native files and member
+content, and frozen resource paths and executable flags. Binding values remain
+symbolic references; private deployed bytes and unrelated members are never read
+for display. `nil` means the selected value is unavailable; unavailable recorded
+skill content is labelled in the projection. Consumers display these strings directly. Equal unmanaged
 values do not establish ownership.
 `hasChanges` includes declaration and ledger changes even when target bytes agree.
 

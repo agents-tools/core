@@ -18,7 +18,8 @@ enum NativeCatalogImport {
     else {
       throw ImportReadFailure.invalid
     }
-    guard let selection = input.selection else {
+    let enumerated = Set(entries.compactMap { $0.importObject?["name"]?.importString })
+    guard let selection = input.enumerateChoices ? enumerated : input.selection else {
       diagnostics.add(
         .unconverted, parsed.location(["plugins"]),
         "Catalog coordinates require an explicit entry selection; no catalog is installed or resolved."
@@ -43,6 +44,8 @@ enum NativeCatalogImport {
         NativeImportInput.unconverted(value, at: origin, into: &diagnostics)
         continue
       }
+      let choice = diagnostics.beginChoice(name, at: origin)
+      defer { diagnostics.endChoice(choice) }
       guard selection.contains(name) else { continue }
       if counts[name, default: 0] > 1 {
         diagnostics.add(

@@ -49,7 +49,7 @@ package struct LedgerImpact {
     ledger: ResolvedLedger, roots: [String: URL], kinds: Set<DeclaredComponentKind>,
     names: Set<String>, updating: Bool, selectedIdentities: Set<String>? = nil
   ) throws {
-    func selected(_ c: LedgerComponent) -> Bool {
+    func explicitlySelected(_ c: LedgerComponent) -> Bool {
       if let selectedIdentities {
         return (try? Self.identity(c, ledger: ledger, roots: roots)).map(
           selectedIdentities.contains) == true
@@ -57,6 +57,24 @@ package struct LedgerImpact {
       return kinds.contains(DeclaredComponentKind(rawValue: c.kind)!)
         && (names.isEmpty
           || names.contains(c.kind == "skills" ? PathSafety.sanitizeName(c.name) : c.name))
+    }
+    let parents = Set(
+      ledger.occurrences.filter { occurrence in
+        ledger.components[occurrence.component].map {
+          $0.kind == "plugin" && explicitlySelected($0)
+        } ?? false
+      }.map(\.id))
+    let members = try Set(
+      Dictionary(grouping: ledger.occurrences, by: \.component).compactMap {
+        id, occurrences -> String? in
+        guard !occurrences.isEmpty,
+          occurrences.allSatisfy({ $0.pluginMember.map { parents.contains($0.parent) } ?? false })
+        else { return nil }
+        return try Self.identity(ledger.components[id]!, ledger: ledger, roots: roots)
+      })
+    func selected(_ c: LedgerComponent) -> Bool {
+      explicitlySelected(c)
+        || ((try? Self.identity(c, ledger: ledger, roots: roots)).map(members.contains) ?? false)
     }
     var affected = Set<String>()
     if updating {
@@ -103,7 +121,20 @@ package struct LedgerImpact {
     }
     func streams(_ ledger: ResolvedLedger) throws -> [String: [String]] {
       var result: [String: [String]] = [:]
+      let selectedParents = try Set(
+        ledger.occurrences.filter { occurrence in
+          guard let component = ledger.components[occurrence.component], component.kind == "plugin"
+          else { return false }
+          if let selectedIdentities {
+            return try selectedIdentities.contains(
+              identity(component, ledger: ledger, roots: roots))
+          }
+          return kinds.contains(.plugin) && (names.isEmpty || names.contains(component.name))
+        }.map(\.id))
       for occurrence in ledger.occurrences {
+        if let member = occurrence.pluginMember, selectedParents.contains(member.parent) {
+          continue
+        }
         guard var c = ledger.components[occurrence.component] else { continue }
         let retargeted =
           try c.kind == "instructions" && !c.chatGPT

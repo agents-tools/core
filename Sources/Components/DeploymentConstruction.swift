@@ -72,6 +72,53 @@ package enum DeploymentConstruction {
       default: throw CoreError.invalidState("native surface has no integrated closed route")
       }
     }
+    for lowering in ledger.lowerings where lowering.format.hasSuffix("-generated-plugin@1") {
+      result.insert(try generatedRoute(lowering, ledger: ledger))
+    }
+    return result
+  }
+
+  package static func generatedRoute(_ lowering: LockedLowering, ledger: ResolvedLedger) throws
+    -> NativeTargetRoute
+  {
+    guard let surface = lowering.layout.object?["surface"]?.text,
+      let scopeText = lowering.layout.object?["scope"]?.text,
+      let scope = InstallScope(rawValue: scopeText),
+      let id = lowering.inputs.first, let component = ledger.components[id]
+    else {
+      throw CoreError.invalidState("invalid generated native route")
+    }
+    switch NativeClientSurface(rawValue: surface) {
+    case .claudeCode: return try .named(.claudeSkillPlugin, scope: scope, name: component.name)
+    case .cursorEditor: return try .named(.cursorLocalPlugin, scope: scope, name: component.name)
+    case .geminiCLI: return try .named(.geminiExtension, scope: scope, name: component.name)
+    default: throw CoreError.invalidState("unregistered generated native route")
+    }
+  }
+
+  private static func surface(_ agent: AgentID) -> NativeClientSurface {
+    switch agent {
+    case .claudeCode: .claudeCode
+    case .codex: .codexCLI
+    case .cursor: .cursorEditor
+    case .geminiCLI: .geminiCLI
+    case .opencode: .openCodeCLI
+    }
+  }
+
+  private static func direct(_ component: LinkedComponent, ledger: ResolvedLedger, agent: AgentID)
+    -> LinkedComponent
+  {
+    let parents = Set(
+      ledger.lowerings.filter {
+        $0.format.hasSuffix("-generated-plugin@1")
+          && $0.layout.object?["surface"]?.text == surface(agent).rawValue
+      }.flatMap { $0.layout.object?["occurrences"]?.array?.compactMap(\.integer) ?? [] })
+    let consumed = Set(
+      ledger.occurrences.filter { $0.pluginMember.map { parents.contains($0.parent) } ?? false }
+        .map(\.id))
+    var result = component
+    result.origins.removeAll { consumed.contains($0.occurrence) }
     return result
   }
 
@@ -159,9 +206,37 @@ package enum DeploymentConstruction {
     platform: DeclarationPlatform
   ) throws -> ResolvedLedger {
     var ledger = frozen.ledger
-    for component in linked.components {
-      guard case .declaration = component.payload else { continue }
-      for agent in component.recipients.sorted(by: { $0.rawValue < $1.rawValue }) {
+    for parent in linked.components where parent.key.kind == .plugin {
+      guard case .declaration = parent.payload,
+        let id = frozen.ledger.occurrences.first(where: { $0.id == parent.origins[0].occurrence })?
+          .component,
+        let record = frozen.ledger.components[id],
+        record.payload.object?["mode"] == .init("components")
+      else { continue }
+      _ = record
+      for agent in parent.recipients.sorted(by: { $0.rawValue < $1.rawValue }) {
+        ledger.lowerings.append(
+          try NativeGeneratedPluginLayoutV1.lower(
+            parent, members: linked.components, frozen: frozen,
+            request: .init(surface: surface(agent), scope: scope),
+            id: "plugin:" + String(parent.origins[0].occurrence) + ":" + agent.rawValue,
+            platform: platform))
+      }
+    }
+    for original in linked.components {
+      guard case .declaration = original.payload else { continue }
+      if original.key.kind == .plugin,
+        ledger.lowerings.contains(where: {
+          $0.format.hasSuffix("-generated-plugin@1")
+            && $0.layout.object?["occurrences"]?.array?.contains(
+              .init(integer: original.origins[0].occurrence)) == true
+        })
+      {
+        continue
+      }
+      for agent in original.recipients.sorted(by: { $0.rawValue < $1.rawValue }) {
+        let component = direct(original, ledger: ledger, agent: agent)
+        guard !component.origins.isEmpty else { continue }
         let surface: NativeClientSurface
         switch agent {
         case .claudeCode: surface = .claudeCode
@@ -228,7 +303,9 @@ package enum DeploymentConstruction {
       let record = ledger.components[key]!
       let resource = ledger.resources[record.resources[0]]!
       for agent in component.recipients.sorted(by: { $0.rawValue < $1.rawValue }) {
-        let id = "skill:" + String(component.origins[0].occurrence) + ":" + agent.rawValue
+        let directComponent = direct(component, ledger: ledger, agent: agent)
+        guard let origin = directComponent.origins.first else { continue }
+        let id = "skill:" + String(origin.occurrence) + ":" + agent.rawValue
         add(
           id: id, format: "agents/skill@1", inputs: [key], resources: record.resources,
           location: .init(

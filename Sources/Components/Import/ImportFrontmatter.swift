@@ -12,6 +12,7 @@ enum ImportFrontmatter {
     let parsed = try read(bytes, document: document, limits: limits)
     var diagnostics = ImportDiagnostics(proposal: .init(profile: profile))
     parsed.header?.unknown(converted, into: &diagnostics)
+    diagnostics.finalizeBindings()
     return (diagnostics.proposal.diagnostics, diagnostics.proposal.bindings)
   }
 
