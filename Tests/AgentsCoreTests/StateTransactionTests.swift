@@ -281,9 +281,8 @@ extension StateTransactionTests {
     #expect(recovery.terminationReason == .uncaughtSignal)
 
     var steps: [String] = []
-    try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
-      let recovered = try FileTransaction.recover(store: store) { steps.append($0) }
-      #expect(recovered)
+    #expect(throws: CoreError.transactionRecovered(store.directory.path)) {
+      try store.withLock(checkpoint: { steps.append($0) }, {})
     }
     #expect(!steps.contains(TransactionCheckpoint.restoration(4, .withdrawn).name))
     let synced = try #require(
@@ -300,9 +299,16 @@ extension StateTransactionTests {
     #expect(
       !FileManager.default.fileExists(
         atPath: store.directory.appendingPathComponent("transaction.json").path))
-    #expect(
-      try FileManager.default.contentsOfDirectory(atPath: target.deletingLastPathComponent().path)
-        .isEmpty)
+    let remaining = try FileManager.default.contentsOfDirectory(
+      atPath: target.deletingLastPathComponent().path)
+    #expect(remaining == (scope == .user ? [SharedResource.metadataName] : []))
+    if scope == .user {
+      let route = try NativeTargetRoute.named(.claudeSkillPlugin, scope: scope, name: "created")
+      try store.withReadLock(footprint: [route]) {
+        let reservation = try TransactionLockContext.current(store).requiredResource().reservation()
+        #expect(reservation == nil)
+      }
+    }
   }
 
   @Test(arguments: [
@@ -596,8 +602,9 @@ extension StateTransactionTests {
       try Data("original".utf8).write(to: target.appendingPathComponent("SKILL.md"))
     }
     let before = try Data(contentsOf: store.resolvedURL)
+    let route = try NativeTargetRoute.named(.claudeSkillPlugin, scope: .user, name: "demo")
     #expect(throws: CoreError.invalidState("interrupted user write")) {
-      try store.withLock {
+      try store.withLock(footprint: [route]) {
         let transaction = FileTransaction(store: store) { step in
           if step == TransactionCheckpoint.publication(3, .exchanged).name {
             let journal = try String(

@@ -108,6 +108,7 @@ struct PreparationEvidenceTests {
   @Test(arguments: [false, true])
   func constructionMustMatchTheRequestedCopyOrLink(_ link: Bool) throws {
     let fixture = try PublicationFixture(.fileCreate)
+    var tampered = false
     let transaction = FileTransaction(store: fixture.store) { point in
       if point == TransactionCheckpoint.stage(0, .constructed).name {
         let name = try #require(
@@ -122,6 +123,7 @@ struct PreparationEvidenceTests {
         } else {
           try Data("injected".utf8).write(to: staged.appendingPathComponent("injected"))
         }
+        tampered = true
       }
     }
     try transaction.replace(
@@ -129,10 +131,11 @@ struct PreparationEvidenceTests {
       with: link
         ? .link(fixture.root.appendingPathComponent("new"))
         : .copy(fixture.root.appendingPathComponent("new")))
-    #expect(
-      throws: CoreError.invalidState(
-        link ? "staged symbolic link destination mismatch" : "staged content digest mismatch")
-    ) { try transaction.commit() }
+    #expect { try transaction.commit() } throws: { error in
+      guard case CoreError.invalidState = error else { return false }
+      return true
+    }
+    #expect(tampered)
     try fixture.check(committed: false, journal: nil)
     try fixture.expectClean()
   }

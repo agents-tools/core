@@ -132,7 +132,7 @@ struct PublicationTests {
   }
 
   @Test(arguments: [false, true])
-  func exchangedUnexpectedPreimageIsNeverDiscarded(_ inPlace: Bool) throws {
+  func changedPreimageBeforeExchangeKeepsExternalBytesAndInode(_ inPlace: Bool) throws {
     let fixture = try PublicationFixture(.fileReplace)
     let child = try fixture.pause(
       "publication", at: TransactionCheckpoint.publication(1, .validated).name)
@@ -143,9 +143,33 @@ struct PublicationTests {
     }
     try Data("external preimage".utf8).write(to: fixture.target)
     let external = try FileSnapshot.read(at: fixture.target)
-    try fixture.restop(child, at: TransactionCheckpoint.publication(1, .exchanged).name)
-    terminateProcess(child)
+    try fixture.resume(child)
+    #expect(try fixture.result("publication-result").hasPrefix("unchanged\n"))
+    #expect(try FileSnapshot.read(at: fixture.target) == external)
+    #expect(try FileSnapshot.read(at: fixture.auxiliary) == fixture.beforeAuxiliary)
+    if !inPlace {
+      #expect(
+        try FileSnapshot.read(at: fixture.root.appendingPathComponent("original"))
+          == fixture.beforeTarget)
+    }
+    try fixture.expectClean()
+  }
+
+  @Test(arguments: [false, true])
+  func exchangedUnexpectedPreimageIsNeverDiscarded(_ inPlace: Bool) throws {
+    let fixture = try PublicationFixture(.fileReplace)
+    let child = try fixture.pause(
+      "publication", at: TransactionCheckpoint.publication(1, .exchanged).name)
+    defer { terminateProcess(child) }
     let journal = try #require(try fixture.lastJournal())
+    let exchanged = fixture.slot(.exchanged, entry: 1, journal: journal)
+    if !inPlace {
+      try FileManager.default.moveItem(
+        at: exchanged, to: fixture.root.appendingPathComponent("original"))
+    }
+    try Data("external preimage".utf8).write(to: exchanged)
+    let external = try FileSnapshot.read(at: exchanged)
+    terminateProcess(child)
     let postimage = try #require(journal.entries[1].staged)
     #expect(try FileSnapshot.read(at: fixture.target) == postimage)
     #expect(
