@@ -13,6 +13,9 @@ public struct MCPConnectionSnapshot: Sendable, CustomStringConvertible,
 {
   public let id: UUID
   public let selectionID: String
+  var durableReadLocations: [URL]
+  /// Durable invalidation inputs; never borrowed or per-test staging directories.
+  public var readLocations: [URL] { durableReadLocations }
   fileprivate let inputBytes: Int
   fileprivate let transport: MCPTransportDeclaration
   fileprivate let directory: MCPConnectionResource?
@@ -29,6 +32,16 @@ public struct MCPConnectionDescription: Codable, Sendable, Equatable {
   public let startsOwnedProcess: Bool
   public let requiredBindings: [String]
   public let environmentBindings: [String]
+  /// Display text only; never reconstruct a command from this redacted projection.
+  public let executable: String?
+  public let arguments: [String]?
+  public let workingDirectory: String?
+  /// Captured paths identify fixed source content, not a future staging location.
+  public let executableIsCaptured: Bool
+  public let workingDirectoryIsCaptured: Bool
+  /// Origin with path/query withheld; no header or credential values are exposed.
+  public let endpoint: String?
+  public let readLocations: [URL]
 }
 
 /// Protocol time excludes the separately bounded owned cleanup. The total timer
@@ -165,6 +178,11 @@ public enum MCPConnectionOperations {
     }
     return MCPConnectionSnapshot(
       id: UUID(), selectionID: selectionID,
+      durableReadLocations: Array(
+        Set(
+          (workingDirectory?.readLocations ?? []) + (executable?.readLocations ?? [])
+        )
+      ).sorted { $0.path < $1.path },
       inputBytes: MCPConnectionLimits().inputBytes - remaining,
       transport: transport,
       directory: workingDirectory, executable: executable)
@@ -173,6 +191,33 @@ public enum MCPConnectionOperations {
   /// Pure metadata projection: no filesystem, provider, process or network access.
   public static func describe(_ snapshot: MCPConnectionSnapshot) -> MCPConnectionDescription {
     let bindings = snapshot.transport.bindings.values
+    var privateValues = bindings.compactMap {
+      if case .literal(let value) = $0 { value } else { nil }
+    }
+    if snapshot.transport.kind != .stdio {
+      privateValues += privateValues.flatMap {
+        $0.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+      }
+    }
+    let redaction = MCPConnectionRedaction(
+      privateValues: privateValues, byteLimit: MCPConnectionLimits().textBytes)
+    var executable: String?
+    var arguments: [String]?
+    var directory: String?
+    var endpoint: String?
+    switch snapshot.transport {
+    case .stdio(let run):
+      executable = redaction.text(run.executable)
+      arguments = run.arguments.map(redaction.text)
+      directory = snapshot.directory.map { redaction.text($0.displayPath) }
+    case .streamableHTTP(let url, _), .sse(let url, _):
+      if var origin = URLComponents(string: url) {
+        let withheld = !origin.percentEncodedPath.isEmpty || origin.percentEncodedQuery != nil
+        origin.percentEncodedPath = ""
+        origin.percentEncodedQuery = nil
+        endpoint = redaction.text((origin.string ?? "[redacted]") + (withheld ? "/[redacted]" : ""))
+      }
+    }
     return MCPConnectionDescription(
       snapshotID: snapshot.id, transport: snapshot.transport.kind,
       startsOwnedProcess: snapshot.transport.kind == .stdio,
@@ -181,7 +226,11 @@ public enum MCPConnectionOperations {
       ).sorted(),
       environmentBindings: Set(
         bindings.compactMap { if case .environment(let name) = $0 { name } else { nil } }
-      ).sorted())
+      ).sorted(),
+      executable: executable, arguments: arguments, workingDirectory: directory,
+      executableIsCaptured: snapshot.executable?.isCaptured ?? false,
+      workingDirectoryIsCaptured: snapshot.directory?.isCaptured ?? false,
+      endpoint: endpoint, readLocations: snapshot.readLocations)
   }
 
   /// Tests only this selected value, never a refreshed source or matching name.
@@ -330,33 +379,12 @@ public enum MCPConnectionOperations {
         outcome = .failed
         issue = .init(rawValue: error.rawValue)
       }
-      func withoutControls(_ value: String) -> String {
-        String(value.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
-      }
-      // Match the final text projection, including private values containing
-      // controls. No character removal may join text after this masking pass.
-      let redactions = Set(privateValues.map(withoutControls).filter { !$0.isEmpty }).sorted {
-        $0.count > $1.count
-      }
-      let expression = try NSRegularExpression(
-        pattern: redactions.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|"))
-      func redact(_ value: String) -> String {
-        let filtered = withoutControls(value)
-        let text =
-          redactions.isEmpty
-          ? filtered
-          : expression.stringByReplacingMatches(
-            in: filtered, range: NSRange(filtered.startIndex..., in: filtered),
-            withTemplate: "[redacted]")
-        var bytes = Data(text.utf8.prefix(options.limits.textBytes))
-        // A byte cap may split the last Unicode scalar; remove only that suffix.
-        while String(data: bytes, encoding: .utf8) == nil { bytes.removeLast() }
-        return String(decoding: bytes, as: UTF8.self)
-      }
+      let redaction = MCPConnectionRedaction(
+        privateValues: privateValues, byteLimit: options.limits.textBytes)
       tools = result.tools.map {
         .init(
-          name: redact($0.name), title: $0.title.map(redact),
-          description: $0.description.map(redact))
+          name: redaction.text($0.name), title: $0.title.map(redaction.text),
+          description: $0.description.map(redaction.text))
       }
     } catch is CancellationError {
       issue = .cancelled
