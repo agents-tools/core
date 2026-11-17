@@ -29,6 +29,21 @@ final class TransactionSession {
   }
 
   var privateTreeBytes = 0
+  var privateNativeArrays: [Int: [PrivateNativeArrayRecord]] = [:]
+
+  func sealNativeArrays(_ arrays: [PrivateNativeArrayRecord]?, for index: Int) throws {
+    var candidate = privateNativeArrays
+    candidate[index] = arrays
+    var count = 0
+    for records in candidate.values {
+      guard records.count <= LedgerLimits.standard.entries - count else {
+        throw CoreError.invalidState("private array candidate exceeds limits")
+      }
+      count += records.count
+    }
+    try LedgerAdmission.check(StateStore.encode(candidate), limits: .standard)
+    privateNativeArrays = candidate
+  }
 
   func emit(_ point: TransactionCheckpoint) throws { try checkpoint(point.name) }
 

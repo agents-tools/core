@@ -48,11 +48,12 @@ package struct PrivateTreeAccessChange {
   package let mode: UInt32
 }
 
-/// A local receipt view has no payload digest or serializable binding data.
+/// Package-only physical evidence. Array semantic digests remain private to the materializer.
 package struct MaterializationReceipt {
   package let generation: UUID
   package let access: FileAccessEvidence
   package let treeAccess: [TreeMemberAccess]?
+  package let nativeArrays: [PrivateNativeArrayRecord]?
 }
 
 package struct PreparedPrivateMaterialization {
@@ -72,7 +73,7 @@ package struct PreparedPrivateMaterialization {
     let input = PrivateAccessFingerprint(
       target: target.path, owner: owner,
       publicationAccess: try evidence.displayEvidence(includeContent: false),
-      permissionChange: accessChange != nil, receiptGeneration: receiptGeneration,
+      permissionChange: accessChange != nil,
       members: preimageTreeAccess)
     return "sha256:" + FileHash.sha256Hex(data: try StateStore.encode(input))
   }
@@ -84,7 +85,6 @@ private struct PrivateAccessFingerprint: Encodable {
   let owner: UInt32
   let publicationAccess: String
   let permissionChange: Bool
-  let receiptGeneration: UUID?
   let members: [TreeMemberAccess]?
 }
 
@@ -121,7 +121,8 @@ extension StateStore {
     }
     _ = try preparePrivateMaterialization(target, expecting: record.generation)
     return MaterializationReceipt(
-      generation: record.generation, access: record.access, treeAccess: record.treeAccess)
+      generation: record.generation, access: record.access, treeAccess: record.treeAccess,
+      nativeArrays: record.nativeArrays)
   }
 
   /// Under the caller's scope lock, preparation never calls a provider or renderer.
@@ -246,10 +247,55 @@ struct MaterializationReceipts: Codable {
     let digest: String
     let access: FileAccessEvidence
     var treeAccess: [TreeMemberAccess]? = nil
+    var nativeArrays: [PrivateNativeArrayRecord]? = nil
+
+    private enum CodingKeys: String, CodingKey {
+      case generation, rootIdentity, digest, access, treeAccess, nativeArrays
+    }
+    init(
+      generation: UUID, rootIdentity: String, digest: String, access: FileAccessEvidence,
+      treeAccess: [TreeMemberAccess]? = nil, nativeArrays: [PrivateNativeArrayRecord]? = nil
+    ) {
+      self.generation = generation
+      self.rootIdentity = rootIdentity
+      self.digest = digest
+      self.access = access
+      self.treeAccess = treeAccess
+      self.nativeArrays = nativeArrays
+    }
+    init(from decoder: any Decoder) throws {
+      try ReceiptFields.require(
+        decoder, ["generation", "rootIdentity", "digest", "access", "treeAccess", "nativeArrays"])
+      let c = try decoder.container(keyedBy: CodingKeys.self)
+      generation = try c.decode(UUID.self, forKey: .generation)
+      rootIdentity = try c.decode(String.self, forKey: .rootIdentity)
+      digest = try c.decode(String.self, forKey: .digest)
+      access = try c.decode(FileAccessEvidence.self, forKey: .access)
+      treeAccess = try c.decodeIfPresent([TreeMemberAccess].self, forKey: .treeAccess)
+      nativeArrays = try c.decodeIfPresent([PrivateNativeArrayRecord].self, forKey: .nativeArrays)
+      if c.contains(.nativeArrays), nativeArrays == nil {
+        throw CoreError.invalidState("invalid private array records")
+      }
+    }
+  }
+  private enum CodingKeys: String, CodingKey { case version, targets }
+  init() {}
+  init(from decoder: any Decoder) throws {
+    try ReceiptFields.require(decoder, ["version", "targets"])
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    version = try c.decode(Int.self, forKey: .version)
+    targets = try c.decode([String: Record].self, forKey: .targets)
+    guard version == 1 || version == 2,
+      version != 1 || targets.values.allSatisfy({ $0.nativeArrays == nil })
+    else {
+      throw CoreError.invalidState("unsupported materialization receipt")
+    }
   }
 
   func validate(store: StateStore) throws {
-    guard version == 1 else { throw CoreError.invalidState("unsupported materialization receipt") }
+    guard version == 1 || version == 2 else {
+      throw CoreError.invalidState("unsupported materialization receipt")
+    }
     for (path, record) in targets {
       let paths = TransactionPaths(store: store)
       let parts: (root: String, descendants: [String])
@@ -274,6 +320,12 @@ struct MaterializationReceipts: Codable {
           == (NativeTargetRoute.targetRoute(path)?.isContainer == true),
         !record.rootIdentity.isEmpty
       else { throw CoreError.invalidState("invalid materialization receipt target") }
+      if let arrays = record.nativeArrays {
+        guard version == 2, record.access.identity.kind == S_IFREG,
+          let route = NativeTargetRoute.targetRoute(path), !route.isContainer
+        else { throw CoreError.invalidState("private arrays require a registered native file") }
+        try PrivateNativeArrayRecord.validate(arrays)
+      }
       if let members = record.treeAccess { try TreeMemberAccess.validateStructure(members) }
       try StateValidation.digest("sha256:" + record.digest)
     }

@@ -31,7 +31,7 @@ package final class FileTransaction {
     let source: Source?
     let expectation: Expectation
     let security: TransactionSecurity
-    let privateData: (() throws -> Data)?
+    let privateData: (() throws -> PrivateMaterializationResult)?
     var privateTree: PrivateTree? = nil
     var installs: Bool { source != nil || security.replacement == .privateMaterialization }
   }
@@ -58,7 +58,8 @@ package final class FileTransaction {
   /// `expectedHash` and `executableFlags` describe the content's tree hash and execute bits.
   package func replace(
     _ destination: URL, with source: Source, expectedHash: String? = nil,
-    executableFlags: [String: Bool]? = nil, expecting: TargetPrecondition? = nil
+    executableFlags: [String: Bool]? = nil, expecting: TargetPrecondition? = nil,
+    nativeArrayTransitions: [PrivateNativeArrayTransition]? = nil
   ) throws {
     if let expectedHash { try StateValidation.digest(expectedHash) }
     let (path, evidence, previous) = try request(destination, expecting: expecting)
@@ -106,8 +107,12 @@ package final class FileTransaction {
       requests.append(
         Request(
           path: path, evidence: evidence, source: nil, expectation: expectation,
-          security: security, privateData: { data }))
+          security: security,
+          privateData: { .init(bytes: data, nativeArrayTransitions: nativeArrayTransitions) }))
     } else {
+      guard nativeArrayTransitions == nil else {
+        throw CoreError.invalidState("array tracking requires private materialization")
+      }
       requests.append(
         Request(
           path: path, evidence: evidence, source: source, expectation: expectation,
@@ -153,7 +158,8 @@ package final class FileTransaction {
   }
 
   package func delete(_ destination: URL, expecting: TargetPrecondition? = nil) throws {
-    let (path, evidence, security) = try request(destination, expecting: expecting)
+    let (path, evidence, security) = try request(
+      destination, expecting: expecting, allowMissingNativeArrays: true)
     requests.append(
       Request(
         path: path, evidence: evidence, source: nil, expectation: .init(), security: security,
@@ -166,6 +172,19 @@ package final class FileTransaction {
     provider: any RuntimeBindingProvider,
     render: @escaping (RuntimeBindingValues) throws -> Data
   ) throws {
+    try replacePrivate(
+      prepared, bindings: bindings, provider: provider,
+      produce: {
+        .init(bytes: try render($0))
+      })
+  }
+
+  /// Actual bytes and same-edit array transitions are resolved only in verified private staging.
+  package func replacePrivate(
+    _ prepared: PreparedPrivateMaterialization, bindings: Set<String> = [],
+    provider: any RuntimeBindingProvider,
+    produce: @escaping (RuntimeBindingValues) throws -> PrivateMaterializationResult
+  ) throws {
     guard NativeTargetRoute.targetRoute(prepared.target.path)?.isContainer != true,
       prepared.target.scope.path == store.directory.path, prepared.owner == geteuid(),
       bindings.allSatisfy({ !$0.isEmpty && !$0.contains("\0") })
@@ -175,7 +194,8 @@ package final class FileTransaction {
         "private publication requires an existing admitted native parent")
     }
     try receiptEvidence.validate()
-    let (path, evidence, previous) = try request(prepared.target.url, expecting: prepared.evidence)
+    let (path, evidence, previous) = try request(
+      prepared.target.url, expecting: prepared.evidence, allowMissingNativeArrays: true)
     guard path == prepared.target.path else {
       throw CoreError.invalidState("materialization registration changed")
     }
@@ -196,7 +216,7 @@ package final class FileTransaction {
             for name in bindings.sorted() {
               values[name] = try provider.value(for: name, environment: environment)
             }
-            return try render(RuntimeBindingValues(values))
+            return try produce(RuntimeBindingValues(values))
           } catch {
             throw CoreError.invalidState(
               "private materialization could not resolve or render its bindings")
@@ -215,7 +235,8 @@ package final class FileTransaction {
     else { throw CoreError.invalidState("private tree requires its prepared registered container") }
     let tree = try PrivateTree(entries: entries, provider: provider, environment: store.environment)
     try receipt.validate()
-    let (path, evidence, previous) = try request(prepared.target.url, expecting: prepared.evidence)
+    let (path, evidence, previous) = try request(
+      prepared.target.url, expecting: prepared.evidence, allowMissingNativeArrays: true)
     guard path.utf8.elementsEqual(prepared.target.path.utf8) else {
       throw CoreError.invalidState("materialization registration changed")
     }
@@ -279,7 +300,9 @@ package final class FileTransaction {
     for evidence in unchanged { try evidence.validate(excludingTargets: targetPaths) }
   }
 
-  private func request(_ destination: URL, expecting: TargetPrecondition?) throws -> (
+  private func request(
+    _ destination: URL, expecting: TargetPrecondition?, allowMissingNativeArrays: Bool = false
+  ) throws -> (
     path: String, evidence: TargetPrecondition, security: TransactionSecurity
   ) {
     let path = try TransactionPaths(store: store).path(
@@ -333,7 +356,12 @@ package final class FileTransaction {
         throw CoreError.invalidState("materialization receipt root changed")
       }
       // A known absence has no sensitive preimage; its receipt is reconciled in this journal.
-      guard evidence.snapshot != nil else { return (path, evidence, security) }
+      guard evidence.snapshot != nil else {
+        guard record.nativeArrays == nil || allowMissingNativeArrays else {
+          throw CoreError.invalidState("tracked native file is missing its receipted preimage")
+        }
+        return (path, evidence, security)
+      }
       guard evidence.snapshot?.digest == record.digest,
         evidence.snapshot?.identity == record.access.identity
       else { throw CoreError.invalidState("materialized preimage differs from its receipt") }
@@ -415,12 +443,15 @@ package final class FileTransaction {
                 previous: state.records,
                 targetRoot: NativeTargetRoute.metadataRoute(state.path)?.root))
             try LedgerAdmission.check(bytes, limits: .standard)
-            return bytes
+            return .init(bytes: bytes)
           }
         } else {
+          let key = try store.materializationReceiptKey(for: request.path)
+          let previous = receiptStates.values.compactMap { $0.records.targets[key] }.first
           try session.stage(
             index, source: request.source, expectation: request.expectation,
-            privateData: request.privateData, privateTree: request.privateTree)
+            privateData: request.privateData, privateTree: request.privateTree,
+            previousReceipt: previous)
         }
       }
       try session.emit(.preconditions)

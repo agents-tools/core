@@ -145,7 +145,12 @@ func sharedMaterializationProbe(
     let transaction = FileTransaction(store: store, checkpoint: checkpoint)
     for route in routes {
       let target = try store.nativeTarget(for: route)
-      if command == "shared-delete" {
+      if command == "shared-array-edit" {
+        let arrays = try store.materializationReceipt(for: target)?.nativeArrays ?? []
+        try transaction.replace(
+          target.url, with: .data(Data(#"{"hooks":["private-value"],"sibling":1}"#.utf8)),
+          nativeArrayTransitions: arrays.map { .init(previous: $0, current: $0) })
+      } else if command == "shared-delete" {
         try transaction.delete(target.url)
       } else if command == "shared-install" {
         let prepared = try store.preparePrivateMaterialization(target, changingAccess: true)
@@ -157,7 +162,7 @@ func sharedMaterializationProbe(
         try transaction.replace(target.url, with: .data(Data("secret sibling; edited region".utf8)))
       }
     }
-    if store.scope == .project {
+    if store.scope == .project && command != "shared-array-edit" {
       try transaction.replace(
         store.environment.projectDirectory.appendingPathComponent("old-data/AGENTS.md"),
         with: .data(Data("ordinary after".utf8)))

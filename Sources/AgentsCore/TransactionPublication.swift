@@ -41,7 +41,9 @@ extension TransactionSession {
 
   func stage(
     _ index: Int, source: FileTransaction.Source?, expectation: FileTransaction.Expectation,
-    privateData: (() throws -> Data)? = nil, privateTree: PrivateTree? = nil
+    privateData: (() throws -> PrivateMaterializationResult)? = nil,
+    privateTree: PrivateTree? = nil,
+    previousReceipt: MaterializationReceipts.Record? = nil
   ) throws {
     let entry = journal.entries[index]
     let parent = parents[index]
@@ -53,7 +55,8 @@ extension TransactionSession {
     if source != nil || entry.security.replacement == .privateMaterialization {
       let sealed = try construct(
         source, expectation: expectation, named: staging.name(index), index: index,
-        container: container, parent: parent, privateData: privateData, privateTree: privateTree)
+        container: container, parent: parent, privateData: privateData, privateTree: privateTree,
+        previousReceipt: previousReceipt)
       try emit(.stage(index, .constructed))
       let capture = try FileSnapshot.capture(staging.name(index), from: container)
       try verify(source, sealed, capture: capture)
@@ -84,7 +87,8 @@ extension TransactionSession {
   private func construct(
     _ source: FileTransaction.Source?, expectation: FileTransaction.Expectation,
     named name: String, index: Int, container: DirectoryHandle, parent: DirectoryHandle,
-    privateData: (() throws -> Data)?, privateTree: PrivateTree?
+    privateData: (() throws -> PrivateMaterializationResult)?, privateTree: PrivateTree?,
+    previousReceipt: MaterializationReceipts.Record?
   ) throws -> FileTransaction.Expectation {
     let entry = journal.entries[index]
     var expectation = expectation
@@ -116,7 +120,13 @@ extension TransactionSession {
       try requirePreimage(index)
       _ = try container.requirePrivateAccess(name, matching: file.evidence)
       // The callback is never given a path or unverified descriptor.
-      let data = try privateData()
+      let result = try privateData()
+      let route = NativeTargetRoute.targetRoute(entry.path)
+      let arrays = try PrivateNativeArrayRecord.applying(
+        result, previous: previousReceipt, admitted: route != nil && route?.isContainer == false,
+        hasPreimage: entry.preimage != nil)
+      try sealNativeArrays(arrays, for: index)
+      let data = result.bytes
       try requireParent(index)
       let hash = "sha256:" + FileHash.sha256Hex(data: data)
       if let expected = expectation.hash, expected != hash {
@@ -283,7 +293,7 @@ extension TransactionSession {
   {
 
     var records = previous
-    for entry in journal.entries
+    for (index, entry) in journal.entries.enumerated()
     where entry.path != "state/" + MaterializationReceipts.fileName
       && NativeTargetRoute.metadataRoute(entry.path) == nil
     {
@@ -303,7 +313,9 @@ extension TransactionSession {
         records.targets[recordPath] = .init(
           generation: journal.id,
           rootIdentity: resource?.identity.orderingKey ?? identity,
-          digest: snapshot.digest, access: access, treeAccess: entry.security.stagedTreeAccess)
+          digest: snapshot.digest, access: access, treeAccess: entry.security.stagedTreeAccess,
+          nativeArrays: privateNativeArrays[index])
+        if privateNativeArrays[index] != nil { records.version = 2 }
       } else {
         records.targets.removeValue(forKey: recordPath)
       }
