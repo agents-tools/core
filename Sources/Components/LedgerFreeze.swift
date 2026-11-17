@@ -96,9 +96,13 @@ package enum LedgerFreeze {
           let captured = try LedgerResources.capture(
             url, embed: kind != .git, limits: limits,
             sourceRoot: try session.resource(snapshot: resource.snapshot, path: "."))
+          var directory: ObjCBool = false
+          guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) else {
+            throw CoreError.invalidState("linked resource disappeared before freeze")
+          }
           let flags =
-            captured.entries.count == 1 && captured.entries[0].kind != .directory
-            ? [resource.path: captured.flags["."] ?? false] : captured.flags
+            directory.boolValue
+            ? captured.flags : [resource.path: captured.flags["."] ?? false]
           guard captured.hash == resource.hash,
             resource.executableFlags.isEmpty || flags == resource.executableFlags
           else {
