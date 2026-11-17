@@ -160,7 +160,7 @@ extension CapabilityRegistry {
   }
   package static func component(
     _ request: NativeComponentRequest,
-    kind: DeclaredComponentKind, name: String
+    kind: DeclaredComponentKind, name: String, inPlugin: Bool = false
   ) throws -> NativeComponentDescriptor {
     func issue(_ field: String, _ reason: NativeAdapterIssue.Reason, _ detail: String)
       -> NativeComponentIssue
@@ -183,7 +183,7 @@ extension CapabilityRegistry {
           "the pinned TUI dispatch does not register persistent named prompt files")
       }
       if request.surface == .cursorCLI
-        || (request.surface == .cursorEditor && request.scope == .user)
+        || (request.surface == .cursorEditor && request.scope == .user && !inPlugin)
       {
         throw issue(
           "scope", .unverified,

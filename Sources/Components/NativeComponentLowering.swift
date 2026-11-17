@@ -100,10 +100,13 @@ struct ComponentRenderInput {
   let ledger: ResolvedLedger
   let limits: LedgerLimits
   let budget: NativeDocumentBudget
+  let inPlugin: Bool
   init(
     record: LedgerComponent, component: String, request: NativeComponentRequest,
-    occurrences: [Int], resources: [String: URL], ledger: ResolvedLedger, limits: LedgerLimits
+    occurrences: [Int], resources: [String: URL], ledger: ResolvedLedger, limits: LedgerLimits,
+    inPlugin: Bool = false
   ) {
+    self.inPlugin = inPlugin
     self.record = record
     self.component = component
     self.request = request
@@ -184,7 +187,7 @@ struct ComponentRenderInput {
     guard let kind = DeclaredComponentKind(rawValue: record.kind) else {
       throw issue(["kind"], .invalid, "invalid frozen component kind")
     }
-    _ = try CapabilityRegistry.component(request, kind: kind, name: record.name)
+    _ = try CapabilityRegistry.component(request, kind: kind, name: record.name, inPlugin: inPlugin)
     if kind == .ignore, fields["purpose"]?.text != "context" {
       throw issue(
         ["purpose"], .unverified, "a distinct current indexing-only contract is not established")
