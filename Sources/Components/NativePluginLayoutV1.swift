@@ -12,7 +12,7 @@ enum NativePluginLayoutV1 {
     guard input.fields["mode"]?.text == "native" else {
       throw input.issue(
         ["mode"], .integrationRequired,
-        "decomposed plugins require G's typed child declarations linked/frozen with their source provenance"
+        "decomposed plugins require the frozen-member generated plugin renderer format"
       )
     }
     guard input.record.recipients == [input.request.surface.agent] else {
