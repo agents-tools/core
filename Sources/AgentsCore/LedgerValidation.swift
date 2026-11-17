@@ -250,7 +250,12 @@ extension ResolvedLedger {
     }
     for occurrence in occurrences {
       if let provenance = occurrence.input { try input(provenance) }
-      guard let member = occurrence.pluginMember else { continue }
+      guard let member = occurrence.pluginMember else {
+        guard components[occurrence.component]?.containerRoot == nil else {
+          throw CoreError.invalidState("container occurrence lacks plugin member relation")
+        }
+        continue
+      }
       guard !member.name.isEmpty, !member.name.contains("\0"),
         member.parent >= 0, member.parent < occurrence.id,
         let parent = index[member.parent], let expansion = parent.pluginExpansion,
@@ -284,6 +289,7 @@ extension ResolvedLedger {
       guard let expansion = occurrence.pluginExpansion else { continue }
       guard let component = components[occurrence.component], component.kind == "plugin",
         component.payload.object?["mode"]?.text == "components",
+        exact(expansion.source, component.source),
         occurrence.dependencies.contains(expansion.source),
         expansion.children == (children[occurrence.id] ?? []).sorted()
       else { throw CoreError.invalidState("invalid plugin expansion closure") }
