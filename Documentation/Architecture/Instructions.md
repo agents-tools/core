@@ -143,10 +143,13 @@ source reference. Removal also removes those sections from prompts. Empty
 prompts are removed. Other source declarations and skill records remain
 available to their owners.
 
-Export maps a user target to every locked section from the lock alone. A
-project section's placement needs its `paths`, read from the working tree or
-the cache without fetching; a section whose content is unavailable is listed as
-unplaced.
+Export maps each scope's locked deployments and prompt sections from ledger
+metadata alone. Each `InstructionMapping.readLocations` includes the scope's
+declaration, resolved and watch-state leaves, scope directory, scope lock and
+recovery markers, including absent entries. These locations remain available
+for missing-lock, pending-recovery and unavailable statuses. Mapping does not
+read section bodies, append content or deployed target bytes; content inspection
+operations supply their own dependencies.
 
 Planning validates required content before applying. Reports include old and
 new section records, target before/after bytes and recipients, drift, foreign

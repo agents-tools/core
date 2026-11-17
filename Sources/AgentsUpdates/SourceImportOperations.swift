@@ -195,10 +195,8 @@ public struct SourceImportInspection: Sendable {
   /// semantics and required bindings must be resolved through supported inputs. Preserved
   /// resources requiring a binding rewrite need corrected content, even after slot resolution.
   public func updateRequest(in inspection: ScopeInspection) throws -> UpdateRequest {
-    guard !inspection.recovery.pending, var declaration = inspection.declaration else {
-      throw CoreError.invalidState("inspect the committed scope before preparing an import")
-    }
     try preparation.validateConversion()
+    var additions = Declaration()
     for source in preparation.proposal.sources {
       guard var imported = source.declaration else {
         throw CoreError.invalidState("import lacks exact canonical source coordinates")
@@ -211,27 +209,14 @@ public struct SourceImportInspection: Sendable {
         imported.location = String(identity.dropFirst("local:".count))
         imported.environment = nil
       }
-      if let existing = declaration.sources[source.alias] {
-        let oldIdentity = try existing.identity(environment: RuntimeEnvironment(environment: [:]))
-        let newIdentity = try imported.identity(environment: RuntimeEnvironment(environment: [:]))
-        guard existing.kind == imported.kind, existing.requirement == imported.requirement,
-          existing.path == imported.path, oldIdentity == newIdentity
-        else {
-          throw CoreError.invalidState(
-            "import source alias conflicts with the captured declaration: " + source.alias)
-        }
-      }
-      declaration.sources[source.alias] = imported
+      additions.sourceDeclarations.append(.init(name: source.alias, source: imported))
     }
-    for component in preparation.proposal.components
-    where !declaration.components.contains(component.declaration) {
-      declaration.components.append(component.declaration)
-    }
-    var request = UpdateRequest(
-      operation: .declaration(declaration),
-      expectedDeclarationDigest: inspection.document?.digest ?? "absent")
-    request.importPreparation = preparation
-    return request
+    additions.components = preparation.proposal.components.map(\.declaration)
+    guard
+      let discovery = try UpdateOperations.captureAddition(
+        additions, in: inspection, importPreparation: preparation)
+    else { throw CoreError.invalidState("import selection contains no new additions") }
+    return discovery.updateRequest()
   }
 
   /// Revalidates the captured inputs, then reruns the same adapter with owner-issued choices.

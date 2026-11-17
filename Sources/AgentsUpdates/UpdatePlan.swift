@@ -33,6 +33,7 @@ final class UpdatePlan {
     _ body: (UpdatePlan) throws -> T
   ) throws -> T {
     var request = request
+    try request.capturedAddition?.validate(request, in: store)
     let importInputs = try request.importPreparation?.capture() ?? []
     let baseline = try StatePrecondition(store: store)
     let previous = try store.readLedger(prepared: baseline)
@@ -126,7 +127,7 @@ final class UpdatePlan {
     if case .update = request.operation {
       updating = true
     } else {
-      updating = request.expectedDiscoveryFingerprint != nil
+      updating = request.expectedDiscoveryFingerprint != nil && request.capturedAddition == nil
     }
     let removing: Bool
     if case .remove = request.operation { removing = true } else { removing = false }

@@ -166,6 +166,19 @@ captured declaration identity and discovered graph fingerprint into preparation;
 a changed source fails before callback delivery. File enumeration and native input
 conversion remain with their domain/import owners.
 
+Finite source and import additions use the package `UpdateOperations.captureAddition`
+seam. It accepts explicit declaration additions and a captured `ScopeInspection`,
+returning no candidate for an empty or source-only selection. Composition preserves
+existing source aliases, groups, uses, defaults and direct occurrences. Alias/group
+conflicts and pending authored changes require resolution rather than a broader
+update. All existing pins and protected projections remain fixed while the selected
+addition links; its fingerprint is captured after composition. The request retains
+Core path identity, scope/root mappings, declaration absence or digest and baseline
+state evidence. Another destination, changed evidence or a modified candidate
+requires a refreshed inspection. Ordinary preparation repeats these checks before
+offering its synchronous handle. Existing authored whole-graph discovery remains
+an explicit complete-graph workflow.
+
 `SourceImportOperations.inspect` consumes an explicit existing importer profile,
 root, document, selection and supplied resource locations. Its immutable report
 preserves producer coordinates, pins/integrity, ordered sources, selections,
@@ -174,7 +187,9 @@ deployment claims. `updateRequest(in:)` merges admitted canonical intent into th
 captured scope declaration. Preparation rereads the same inputs, compares the
 proposal, captures their private freshness evidence and validates it again around
 publication. Unresolved conversion/binding diagnostics stop submission; foreign
-claims do not establish ownership. Input content that would overwrite its own
+claims do not establish ownership. Import requests use destination-bound finite
+addition protection; admitted canonical bindings cannot clear independent raw
+preservation/rewrite requirements. Input content that would overwrite its own
 local authoring source requires independent preservation before submission.
 
 Pass D's `RuntimeBindingProvider` as `bindingProvider:` to public

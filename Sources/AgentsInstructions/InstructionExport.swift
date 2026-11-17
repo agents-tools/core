@@ -25,10 +25,13 @@ public struct InstructionMapping: Sendable, Equatable {
   public let root: URL
   public let status: Status
   public let targets: [Target]
-  /// Project sections whose placement needs content that is not available without fetching: an
-  /// own file changed since the lock, or a source section missing from the cache.
+  /// Locked sections without a target assignment.
   public let unplaced: [LockedSection]
   public let prompts: [String: [LockedSection]]
+  /// Durable scope-state and read-admission dependencies, including absent leaves and their
+  /// scope directory. Retained for every status; section bodies, append files and target bytes
+  /// are not read by this mapping operation.
+  public let readLocations: [URL]
 }
 
 extension InstructionOperations {
@@ -52,13 +55,19 @@ extension InstructionOperations {
   {
     let store = StateStore(scope: scope, environment: environment)
     let root = scope == .project ? environment.projectDirectory : environment.homeDirectory
+    var readLocations = Set(
+      (store.readLockLocations + [store.declarationURL, store.resolvedURL, store.watchURL])
+        .map(\.standardizedFileURL))
+    func locations() -> [URL] { readLocations.sorted { $0.path < $1.path } }
     func empty(_ status: InstructionMapping.Status) -> InstructionMapping {
       InstructionMapping(
-        scope: scope, root: root, status: status, targets: [], unplaced: [], prompts: [:])
+        scope: scope, root: root, status: status, targets: [], unplaced: [], prompts: [:],
+        readLocations: locations())
     }
     do {
       return try store.withReadLock(
         onPendingRecovery: { empty(.pendingRecovery) },
+        onReadLocation: { readLocations.insert($0.standardizedFileURL) },
         {
           _ = try store.readDeclaration()
           guard try store.existingData(store.resolvedURL) != nil else {
@@ -95,7 +104,7 @@ extension InstructionOperations {
 
           return InstructionMapping(
             scope: scope, root: root, status: .locked, targets: targets, unplaced: [],
-            prompts: lock.instructions.chatgpt.mapValues(\.sections))
+            prompts: lock.instructions.chatgpt.mapValues(\.sections), readLocations: locations())
         })
     } catch {
       return empty(.unavailable(String(describing: error)))

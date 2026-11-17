@@ -23,6 +23,7 @@ public enum UpdateOperations {
     checkpoint: @escaping (String) throws -> Void
   ) throws -> CombinedUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
+    try request.capturedAddition?.validate(request, in: store)
     var admitted = Set<NativeTargetRoute>()
     var installations: [String: SkillInstallationTarget] = [:]
     while true {
@@ -72,6 +73,7 @@ public enum UpdateOperations {
     _ body: (PreparedUpdate) throws -> Result
   ) throws -> Result {
     let store = StateStore(scope: scope, environment: environment)
+    try request.capturedAddition?.validate(request, in: store)
     let outcome = TransactionOutcome()
     defer { completion?(outcome) }
     var delivered = false

@@ -121,6 +121,7 @@ public struct RecoveryInspection: Sendable {
 
 /// One read generation. No native bytes, retained content objects, provider calls or recovery.
 public struct ScopeInspection: Sendable {
+  package let additionDestination: AdditionDestination?
   public let scope: InstallScope
   public let document: DeclarationDocument?
   public let declaration: Declaration?
@@ -150,7 +151,8 @@ extension UpdateOperations {
           onPendingRecovery: {
             let diagnostic = FileTransaction.recoveryDiagnostic(store: store)
             return ScopeInspection(
-              scope: scope, document: nil, declaration: nil, generation: nil,
+              additionDestination: nil, scope: scope, document: nil, declaration: nil,
+              generation: nil,
               sources: [], components: [], groups: [], resources: [], deployments: [], watch: nil,
               recovery: .init(
                 pending: true, requiresOwner: diagnostic.requiresOwner,
@@ -230,6 +232,8 @@ extension UpdateOperations {
               + installations.values.map(\.url)
             try baseline.validate()
             return ScopeInspection(
+              additionDestination: try AdditionDestination(
+                store: store, declaration: declaration, baseline: baseline),
               scope: scope, document: document, declaration: declaration, generation: generation,
               sources: sources, components: components, groups: groups, resources: resources,
               deployments: deployments, watch: watch,
