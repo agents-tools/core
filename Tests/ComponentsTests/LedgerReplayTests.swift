@@ -79,6 +79,41 @@ struct LedgerReplayTests {
     }
   }
 
+  @Test(arguments: ["content", "executable", "escape"])
+  func linkedDirectoryResourceMutationIsRejectedBeforeFreeze(_ mutation: String) throws {
+    let fixture = try LinkFixture()
+    try fixture.write("support", to: "working/check", base: fixture.project)
+    let check = fixture.project.appendingPathComponent("working/check")
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: check.path)
+    let alias = fixture.project.appendingPathComponent("working-alias")
+    try FileManager.default.createSymbolicLink(atPath: alias.path, withDestinationPath: "working")
+    let document = try fixture.document(
+      """
+      version: 1
+      components: [{"kind": "mcpServer", "name": "server", "transport": {"kind": "stdio", "executable": "server", "workingDirectory": {"path": "working-alias"}}}]
+      """
+    )
+    try ComponentLinker.withLinkedComponents(
+      document: document, store: fixture.store, platform: .macOS
+    ) { graph, session in
+      if mutation == "content" {
+        try Data("changed".utf8).write(to: check)
+      } else if mutation == "executable" {
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: check.path)
+      } else {
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: fixture.home)
+      }
+      #expect(throws: CoreError.self) {
+        _ = try LedgerFreeze.freeze(
+          graph, session: session,
+          locations: .init(sources: [
+            "local:" + fixture.project.path: .init(kind: .registered, root: "project", path: ".")
+          ]), limits: .standard)
+      }
+    }
+  }
+
   private func run(_ action: String, root: URL) throws {
     var directory = Bundle(for: LedgerTestBundle.self).bundleURL
     while directory.path != "/",

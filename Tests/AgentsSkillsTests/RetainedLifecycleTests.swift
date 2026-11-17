@@ -60,8 +60,9 @@ struct RetainedLifecycleTests {
       named: "internal", directory: fixture.repo.appendingPathComponent("skills"))
     try Data("---\nname: internal\ndescription: Internal\nmetadata:\n  internal: true\n---".utf8)
       .write(to: internalDirectory.appendingPathComponent("SKILL.md"))
-    _ = try SkillOperations.initializeSkill(
-      named: "deep", directory: fixture.repo.appendingPathComponent("skills/level/level"))
+    let deepDirectory = fixture.repo.appendingPathComponent("skills/level/level")
+    try FileManager.default.createDirectory(at: deepDirectory, withIntermediateDirectories: true)
+    _ = try SkillOperations.initializeSkill(named: "deep", directory: deepDirectory)
     for value in ["", "false", "TRUE", "yes", "true", "1"] {
       var environment = fixture.environment
       environment.environment["INSTALL_INTERNAL_SKILLS"] = value
