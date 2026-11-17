@@ -16,7 +16,9 @@ struct GeneratedPluginTests {
       document: fixture.document(expression), store: store, platform: .macOS
     ) { graph, session in
       let locations = Dictionary(
-        (graph.sourceSnapshots + graph.declaringSnapshots).map {
+        (graph.sourceSnapshots + graph.declaringSnapshots).filter {
+          $0.source?.kind == .local && $0.container == nil
+        }.map {
           (
             $0.snapshot.source,
             LedgerLocation(kind: .absolute, path: String($0.snapshot.source.dropFirst(6)))
@@ -280,11 +282,17 @@ struct GeneratedPluginTests {
     }
   }
 
-  @Test func geminiUsesFrozenExplicitVersionAndNativeExtensionFiles() throws {
+  @Test(arguments: [String?.none, "1.2.3"], [false, true])
+  func geminiUsesFrozenVersionAndNativeExtensionFiles(
+    authoredVersion: String?, emptySelection: Bool
+  ) throws {
     let fixture = try LinkFixture()
     let store = StateStore(scope: .user, environment: fixture.environment)
+    let producerVersion = "9.0.0-e\u{301}"
     try fixture.write(
-      #"{"name":"upstream","version":"9.0.0","mcpServers":{"native":{"command":"fixture-server"}}}"#,
+      """
+      {"name":"upstream","version":"\(producerVersion)","mcpServers":{"native":{"command":"fixture-server"}}}
+      """,
       to: "extension/gemini-extension.json", base: store.directory)
     try fixture.write(
       "description = \"Native review\"\nprompt = \"Literal review body\"\n".replacingOccurrences(
@@ -300,11 +308,24 @@ struct GeneratedPluginTests {
           source: "."
           path: extension
           agents: [gemini-cli]
-          native: {gemini-cli: {version: "1.2.3"}}
+          \(emptySelection ? "select: []" : "")
+          native:
+            gemini-cli:
+              description: Consumer description
+              \(authoredVersion.map { "version: \"\($0)\"" } ?? "")
       """, scope: .user)
+    let expectedVersion = authoredVersion ?? producerVersion
+    let parent = try #require(frozen.ledger.components.values.first { $0.kind == "plugin" })
+    let effective = try #require(
+      parent.payload.object?["native"]?.object?["gemini-cli"]?
+        .object?["version"]?.text)
+    #expect(effective.utf8.elementsEqual(expectedVersion.utf8))
     var ledger = frozen.ledger
     ledger.lowerings = [try lower(components, frozen, surface: .geminiCLI, scope: .user)]
     ledger = try LedgerReplay.prepareLowerings(ledger, store: store, roots: [:], limits: .standard)
+    let encoded = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+    try FileManager.default.removeItem(at: store.directory.appendingPathComponent("extension"))
+    ledger = try ResolvedLedgerCodec.decode(encoded, limits: .standard)
     try LedgerReplay.withReplay(ledger, store: store, roots: [:], limits: .standard) { artifacts in
       let result = try NativeGeneratedPluginContribution.decode(
         ledger.lowerings[0], ledger: ledger,
@@ -317,10 +338,84 @@ struct GeneratedPluginTests {
         Issue.record("missing extension")
         return
       }
-      #expect(manifest["version"] == .string("1.2.3"))
-      #expect(bundle.files["commands/review.toml"] != nil)
-      #expect(manifest["mcpServers"] != nil)
+      guard case .string(let version) = manifest["version"] else {
+        Issue.record("missing extension version")
+        return
+      }
+      #expect(version.utf8.elementsEqual(expectedVersion.utf8))
+      #expect(manifest["description"] == .string("Consumer description"))
+      #expect((bundle.files["commands/review.toml"] == nil) == emptySelection)
+      #expect((manifest["mcpServers"] == nil) == emptySelection)
     }
+  }
+
+  @Test func geminiUnavailableVersionKeepsImportRefusalAndBindingBoundary() throws {
+    let fixture = try LinkFixture()
+    let declaration = """
+      version: 1
+      components:
+        - {kind: plugin, name: selected, source: ".", path: extension, select: [], agents: [gemini-cli]}
+      """
+    for field in ["", ", \"version\": \"\"", ", \"version\": 7"] {
+      try fixture.write(
+        "{\"name\":\"upstream\"\(field)}", to: "extension/gemini-extension.json",
+        base: fixture.project)
+      do {
+        _ = try freeze(fixture, declaration)
+        Issue.record("Invalid producer version was admitted")
+      } catch {
+        #expect(String(describing: error).contains("native plugin invalidInput"))
+      }
+    }
+    try fixture.write(
+      #"{"name":"upstream","version":"https://user:PRIVATE_VERSION_CANARY@example.test"}"#,
+      to: "extension/gemini-extension.json", base: fixture.project)
+    let (components, frozen) = try freeze(fixture, declaration)
+    let parent = try #require(frozen.ledger.components.values.first { $0.kind == "plugin" })
+    #expect(parent.payload.object?["native"]?.object?["gemini-cli"]?.object?["version"] == nil)
+    let encoded = try ResolvedLedgerCodec.encode(frozen.ledger, limits: .standard)
+    #expect(!String(decoding: encoded, as: UTF8.self).contains("PRIVATE_VERSION_CANARY"))
+    var ledger = frozen.ledger
+    ledger.lowerings = [try lower(components, frozen, surface: .geminiCLI, scope: .user)]
+    ledger = try LedgerReplay.prepareLowerings(
+      ledger, store: fixture.store, roots: [:], limits: .standard)
+    _ = try LedgerReplay.withReplay(ledger, store: fixture.store, roots: [:], limits: .standard) {
+      artifacts in
+      #expect(throws: (any Error).self) {
+        try NativeGeneratedPluginContribution.decode(
+          ledger.lowerings[0], ledger: ledger, artifacts: artifacts, limits: .standard)
+      }
+    }
+  }
+
+  @Test func geminiVersionComesFromSelectedProducerCommitAndContainer() throws {
+    let fixture = try LinkFixture()
+    let repository = fixture.root.appendingPathComponent("producer")
+    try fixture.initialize(repository)
+    try fixture.write(
+      #"{"name":"selected","version":"2.0.0"}"#,
+      to: "chosen/gemini-extension.json", base: repository)
+    try fixture.write(
+      #"{"name":"other","version":"3.0.0"}"#,
+      to: "other/gemini-extension.json", base: repository)
+    let commit = try fixture.commit(repository, tag: "1.0.0")
+    try fixture.write(
+      #"{"name":"selected","version":"99.0.0"}"#,
+      to: "chosen/gemini-extension.json", base: repository)
+    let (_, frozen) = try freeze(
+      fixture,
+      """
+      version: 1
+      sources: {p: {url: "file://localhost\(repository.path)", requirement: {exact: "1.0.0"}}}
+      components:
+        - {kind: plugin, name: consumer, source: p, path: chosen, select: [], agents: [gemini-cli]}
+      """)
+    let parent = try #require(frozen.ledger.components.values.first { $0.kind == "plugin" })
+    #expect(
+      parent.payload.object?["native"]?.object?["gemini-cli"]?.object?["version"] == .init("2.0.0"))
+    let expansion = try #require(frozen.ledger.occurrences.first?.pluginExpansion)
+    #expect(expansion.document == "chosen/gemini-extension.json")
+    #expect(frozen.ledger.sources[expansion.source]?.revision == commit)
   }
 
 }
