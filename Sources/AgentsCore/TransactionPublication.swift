@@ -286,23 +286,26 @@ extension TransactionSession {
     for entry in journal.entries
     where entry.path != "state/" + MaterializationReceipts.fileName
       && NativeTargetRoute.metadataRoute(entry.path) == nil
-      && NativeTargetRoute.sharedRoute(entry.path)?.root == targetRoot
     {
+      let resource = entry.coordination.flatMap { index in
+        resources.first { $0.identity == journal.footprint[index] }
+      }
+      guard resource?.route.root == targetRoot else { continue }
+      let recordPath = resource.map { $0.route.root + "/" + entry.name } ?? entry.path
       if entry.security.replacement == .privateMaterialization {
         guard let snapshot = entry.staged, let access = entry.security.stagedAccess,
           let root = entry.path.split(separator: "/").first,
           let identity = journal.roots[String(root)]
         else { throw CoreError.invalidState("materialization is missing sealed receipt evidence") }
-        let resource = resources.first { $0.route.root == String(root) }
         if targetRoot != nil, resource == nil {
           throw CoreError.invalidState("receipt resource is outside the transaction footprint")
         }
-        records.targets[entry.path] = .init(
+        records.targets[recordPath] = .init(
           generation: journal.id,
           rootIdentity: resource?.identity.orderingKey ?? identity,
           digest: snapshot.digest, access: access, treeAccess: entry.security.stagedTreeAccess)
       } else {
-        records.targets.removeValue(forKey: entry.path)
+        records.targets.removeValue(forKey: recordPath)
       }
     }
     return records

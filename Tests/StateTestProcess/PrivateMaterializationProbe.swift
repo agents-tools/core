@@ -9,6 +9,16 @@ func privateMaterializationProbe(
   _ command: String, store: StateStore, checkpoint: @escaping (String) throws -> Void
 ) throws {
   let root = store.environment.projectDirectory
+  if command.hasPrefix("private-legacy-") {
+    let target = try store.skillInstallationTarget(for: .claudeCode, named: "private-fixture")
+    try store.withLock(checkpoint: checkpoint, installations: [target]) {
+      try Data().write(to: root.appendingPathComponent("legacy-callback"))
+      let transaction = FileTransaction(store: store, checkpoint: checkpoint)
+      try transaction.replaceSkill(target, with: .copy(root.appendingPathComponent("new")))
+      try transaction.commit()
+    }
+    return
+  }
   if command.hasPrefix("private-tree-") {
     if command == "private-tree-recover" {
       do { try store.withLock(checkpoint: checkpoint, {}) } catch CoreError.transactionRecovered {}

@@ -40,6 +40,7 @@ package final class FileTransaction {
   private let outcome: TransactionOutcome
   private var requests: [Request] = []
   private var skillInitialization: SkillInitializationTarget?
+  private var skillInstallation: SkillInstallationTarget?
   private var receiptStates: [String: MaterializationReceiptState] = [:]
   private var receiptIndices: [Int: MaterializationReceiptState] = [:]
   private var unchanged: [any PreparedEvidence] = []
@@ -84,6 +85,19 @@ package final class FileTransaction {
       }
       expectation.kind = requiredKind
     }
+    if skillInstallation != nil {
+      switch source {
+      case .data:
+        throw CoreError.unsafePath("skill installation requires a directory or live link")
+      case .link:
+        expectation.kind = S_IFLNK
+      case .copy, .prepared:
+        guard expectation.kind == nil || expectation.kind == S_IFDIR else {
+          throw CoreError.unsafePath("skill copy requires a directory")
+        }
+        expectation.kind = S_IFDIR
+      }
+    }
     if security.preimage == .privateMaterialization {
       guard case .data(let data) = source else {
         throw CoreError.invalidState("sensitive replacement requires private byte construction")
@@ -113,6 +127,29 @@ package final class FileTransaction {
     skillInitialization = target
     defer { skillInitialization = nil }
     try replace(target.file, with: .data(bytes), expecting: target.evidence)
+  }
+
+  package func replaceSkill(
+    _ target: SkillInstallationTarget, with source: Source,
+    expectedHash: String? = nil, expecting: TargetPrecondition? = nil
+  ) throws {
+    guard target.scope.path.utf8.elementsEqual(store.directory.path.utf8) else {
+      throw CoreError.invalidState("installation target belongs to another scope")
+    }
+    skillInstallation = target
+    defer { skillInstallation = nil }
+    try replace(target.url, with: source, expectedHash: expectedHash, expecting: expecting)
+  }
+
+  package func deleteSkill(_ target: SkillInstallationTarget, expecting: TargetPrecondition? = nil)
+    throws
+  {
+    guard target.scope.path.utf8.elementsEqual(store.directory.path.utf8) else {
+      throw CoreError.invalidState("installation target belongs to another scope")
+    }
+    skillInstallation = target
+    defer { skillInstallation = nil }
+    try delete(target.url, expecting: expecting)
   }
 
   package func delete(_ destination: URL, expecting: TargetPrecondition? = nil) throws {
@@ -199,17 +236,22 @@ package final class FileTransaction {
     for state in receiptStates.values.sorted(by: { $0.path < $1.path }) {
       let receiptRoute = NativeTargetRoute.metadataRoute(state.path)
       let shared = receiptRoute != nil
-      let affected = originals.filter {
-        NativeTargetRoute.sharedRoute($0.path)?.root == receiptRoute?.root
-          && ($0.security.isPrivate || state.records.targets[$0.path] != nil)
+      let affected = try originals.filter {
+        let route = try TransactionPaths(store: store).coordinationRoute(for: $0.path)
+        let root = try route.map {
+          try TransactionLockContext.current(store).requiredResourceForRoute($0).route.root
+        }
+        let key = try store.materializationReceiptKey(for: $0.path)
+        return root == receiptRoute?.root
+          && ($0.security.isPrivate || state.records.targets[key] != nil)
       }
       guard !affected.isEmpty else { continue }
       var sensitiveTargets = Set(state.records.targets.keys)
       for request in affected {
         if request.security.replacement == .privateMaterialization {
-          sensitiveTargets.insert(request.path)
+          sensitiveTargets.insert(try store.materializationReceiptKey(for: request.path))
         } else {
-          sensitiveTargets.remove(request.path)
+          sensitiveTargets.remove(try store.materializationReceiptKey(for: request.path))
         }
       }
       var security = TransactionSecurity()
@@ -241,11 +283,11 @@ package final class FileTransaction {
     path: String, evidence: TargetPrecondition, security: TransactionSecurity
   ) {
     let path = try TransactionPaths(store: store).path(
-      for: destination, skillInitialization: skillInitialization)
+      for: destination, skillInitialization: skillInitialization, installation: skillInstallation)
     guard path != "state/" + MaterializationReceipts.fileName else {
       throw CoreError.unsafePath("materialization receipts are transaction-owned")
     }
-    if NativeTargetRoute.sharedRoute(path) != nil {
+    if try TransactionPaths(store: store).coordinationRoute(for: path) != nil {
       guard TransactionLockContext.current(store)?.writable == true else {
         throw CoreError.invalidState("shared writes require the held writer footprint")
       }
@@ -286,10 +328,8 @@ package final class FileTransaction {
       }
     }
     var security = TransactionSecurity()
-    if let record = receiptState.records.targets[path] {
-      let paths = TransactionPaths(store: store)
-      let key = try paths.components(path).root
-      guard try store.materializationRootIdentity(key) == record.rootIdentity else {
+    if let record = receiptState.records.targets[try store.materializationReceiptKey(for: path)] {
+      guard try store.materializationRootIdentity(path) == record.rootIdentity else {
         throw CoreError.invalidState("materialization receipt root changed")
       }
       // A known absence has no sensitive preimage; its receipt is reconciled in this journal.
@@ -325,14 +365,17 @@ package final class FileTransaction {
 
   package func commit() throws {
     guard !requests.isEmpty else { return }
-    let shared = requests.filter { NativeTargetRoute.sharedRoute($0.path) != nil }
+    let shared = try requests.filter {
+      try TransactionPaths(store: store).coordinationRoute(for: $0.path) != nil
+    }
     if !shared.isEmpty {
       guard let context = TransactionLockContext.current(store), context.writable else {
         throw CoreError.invalidState("shared commit requires its held writer footprint")
       }
       try context.requireWriterScope()
       for request in shared {
-        let resource = try context.resource(for: NativeTargetRoute.sharedRoute(request.path)!)
+        let resource = try context.resource(
+          for: TransactionPaths(store: store).coordinationRoute(for: request.path)!)
         let parent = try DirectoryHandle(
           at: request.evidence.physicalURL.deletingLastPathComponent())
         guard try parent.objectIdentity == resource.identity.parent else {
@@ -482,8 +525,8 @@ package final class FileTransaction {
           security: security))
     }
     let sharedRoutes = Set(
-      roots.keys.compactMap { key in
-        NativeTargetRoute.sharedRoute(key) ?? NativeTargetRoute.metadataRoute(key)
+      try entries.compactMap {
+        try paths.coordinationRoute(for: $0.path)
       })
     let admittedResources = try sharedRoutes.map { route in
       guard let context = TransactionLockContext.current(store) else {
@@ -497,11 +540,10 @@ package final class FileTransaction {
       resources.append(resource)
     }
     for index in entries.indices {
-      if let route = NativeTargetRoute.sharedRoute(entries[index].path)
-        ?? NativeTargetRoute.metadataRoute(entries[index].path)
-      {
+      if let route = try paths.coordinationRoute(for: entries[index].path) {
         let resource = try TransactionLockContext.current(store)!.resource(for: route)
         entries[index].coordination = resources.firstIndex { $0.identity == resource.identity }
+        entries[index].coordinationRoot = resource.route.root
       }
     }
     let journal = TransactionJournal(

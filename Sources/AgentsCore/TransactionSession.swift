@@ -95,13 +95,10 @@ final class TransactionSession {
 
   func requireParent(_ index: Int) throws {
     try requireScope()
-    if let route = NativeTargetRoute.targetRoute(journal.entries[index].path), !route.shared {
-      guard let logical = nativeRoots[route.root],
-        try DirectoryHandle(at: logical.physicalDirectory()).identity
-          == journal.roots[route.root]
-      else {
-        throw conflict(index, "registered native root changed after preparation")
-      }
+    let root = String(journal.entries[index].path.split(separator: "/").first!)
+    if let logical = nativeRoots[root] {
+      guard try DirectoryHandle(at: logical.physicalDirectory()).identity == journal.roots[root]
+      else { throw conflict(index, "registered root changed after preparation") }
     }
     try journal.entries[index].security.ancestry?.validate(at: parents[index].url)
     guard
@@ -171,6 +168,9 @@ final class TransactionSession {
       try requireParent(index)
       try entry.security.validate(entry: entry)
       let target = parents[index].url.appendingPathComponent(entry.name)
+      if try paths.coordinationRoute(for: entry.path) != nil, entry.coordination == nil {
+        throw CoreError.invalidState("shared target lacks physical coordination")
+      }
       if let coordination = entry.coordination {
         let identity = journal.footprint[coordination]
         if let route = NativeTargetRoute.metadataRoute(entry.path) {

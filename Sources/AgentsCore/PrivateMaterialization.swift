@@ -108,12 +108,14 @@ extension StateStore {
     guard target.scope.path == directory.path,
       try TransactionPaths(store: self).path(for: target.url) == target.path
     else { throw CoreError.invalidState("materialization target belongs to another scope") }
-    if let route = NativeTargetRoute.sharedRoute(target.path),
+    if let route = try TransactionPaths(store: self).coordinationRoute(for: target.path),
       try TransactionLockContext.current(self)?.absentRoot(for: route) != nil
     {
       return nil
     }
-    guard let record = try materializationReceipts(for: target.path).records.targets[target.path]
+    guard
+      let record = try materializationReceipts(for: target.path).records.targets[
+        materializationReceiptKey(for: target.path)]
     else {
       return nil
     }
@@ -130,7 +132,7 @@ extension StateStore {
     guard target.scope.path == directory.path,
       try TransactionPaths(store: self).path(for: target.url) == target.path
     else { throw CoreError.invalidState("materialization target belongs to another scope") }
-    if let route = NativeTargetRoute.sharedRoute(target.path),
+    if let route = try TransactionPaths(store: self).coordinationRoute(for: target.path),
       try TransactionLockContext.current(self)?.absentRoot(for: route) != nil
     {
       guard generation == nil else {
@@ -142,7 +144,7 @@ extension StateStore {
         evidence: evidence, receiptEvidence: nil, memberAccessChanges: [], preimageTreeAccess: nil)
     }
     let receipt = try materializationReceipts(for: target.path)
-    let record = receipt.records.targets[target.path]
+    let record = receipt.records.targets[try materializationReceiptKey(for: target.path)]
     if let generation, record?.generation != generation {
       throw CoreError.invalidState("materialization receipt generation changed or is missing")
     }
@@ -205,10 +207,8 @@ extension StateStore {
           before: beforeAccess, owner: UInt32(geteuid()), mode: UInt32(privateMode))
       }
     }
-    if let record = receipt.records.targets[target.path] {
-      let paths = TransactionPaths(store: self)
-      let key = try paths.components(target.path).root
-      guard try materializationRootIdentity(key) == record.rootIdentity else {
+    if let record = receipt.records.targets[try materializationReceiptKey(for: target.path)] {
+      guard try materializationRootIdentity(target.path) == record.rootIdentity else {
         throw CoreError.invalidState("materialization receipt root changed")
       }
       if evidence.snapshot != nil {
@@ -286,17 +286,19 @@ extension StateStore {
   }
 
   func materializationRootIdentity(_ root: String) throws -> String {
-    if let route = NativeTargetRoute.sharedRoute(root) {
+    if let route = try TransactionPaths(store: self).coordinationRoute(for: root) {
       guard let context = TransactionLockContext.current(self) else {
         throw CoreError.invalidState("shared receipt requires its held footprint")
       }
       return try context.resource(for: route).identity.orderingKey
     }
-    return try TransactionPaths(store: self).root(root).identity
+    return try TransactionPaths(store: self).root(
+      root.split(separator: "/").first.map(String.init) ?? root
+    ).identity
   }
 
   func materializationReceipts(for path: String = "") throws -> MaterializationReceiptState {
-    let route = NativeTargetRoute.sharedRoute(path)
+    let route = try TransactionPaths(store: self).coordinationRoute(for: path)
     let shared = route != nil
     let resource: SharedResource?
     if let route {

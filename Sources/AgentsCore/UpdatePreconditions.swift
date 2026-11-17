@@ -255,7 +255,9 @@ package struct SkillInitializationTarget {
       }) ?? true
     else { throw CoreError.unsafePath("invalid local skill initialization target") }
     scope = store.directory
-    descendants = ((selectedDirectory ?? name).map { [$0] } ?? []) + ["SKILL.md"]
+    descendants =
+      (selectedDirectory.map { [$0] } ?? [])
+      + (name.map { [$0] } ?? []) + ["SKILL.md"]
     file = descendants.reduce(store.environment.projectDirectory.resolvingSymlinksInPath()) {
       $0.appendingPathComponent($1)
     }
@@ -274,9 +276,11 @@ extension StateStore {
   }
 
   /// Preserves an explicitly selected directory spelling below the observed existing parent.
-  package func skillInitializationTarget(inChildDirectory directory: String) throws
+  package func skillInitializationTarget(
+    inChildDirectory directory: String, named name: String? = nil
+  ) throws
     -> SkillInitializationTarget
   {
-    try SkillInitializationTarget(store: self, name: nil, selectedDirectory: directory)
+    try SkillInitializationTarget(store: self, name: name, selectedDirectory: directory)
   }
 }
