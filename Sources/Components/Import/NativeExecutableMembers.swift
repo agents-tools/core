@@ -134,16 +134,30 @@ extension NativeSourceImport {
         NativeImportInput.unconverted(servers[name]!, at: origin, into: &diagnostics)
         continue
       }
-      let allowed: Set<String> =
-        agent == .claudeCode
-        ? ["command", "args", "env", "extensionToLanguage", "initializationOptions"]
-        : ["command", "env", "extensions", "disabled", "initialization"]
-      NativeImportInput.unknown(fields, allowed: allowed, at: origin, into: &diagnostics)
-      guard Set(fields.keys).isSubset(of: allowed) else { continue }
-      let executable: String
+      do {
+        _ = try NativeComponentFieldsV1.lsp(
+          surface: NativeImportSemantics.surface(parsed.input.profile),
+          document: parsed.input.document, fieldPrefix: keys + [name], fields: fields,
+          budget: parsed.admission.parser)
+      } catch let issue as NativeComponentFieldIssue {
+        guard issue.document == parsed.input.document else { throw ImportReadFailure.invalid }
+        NativeImportSemantics.report(
+          issue, at: parsed.fieldLocation(issue.field), into: &diagnostics)
+        continue
+      }
+      var executable: String
       let arguments: [String]
       var languages: [String: String] = [:]
-      var native: NativeConfiguration = [:]
+      let converted: Set<String> = [
+        "command", "args", "env", "extensionToLanguage", "initializationOptions", "initialization",
+      ]
+      let extras = fields.filter { !converted.contains($0.key) }
+      var native: NativeConfiguration = extras.isEmpty ? [:] : [agent.rawValue: extras]
+      var classification = ImportDiagnostics(proposal: .init(profile: parsed.input.profile))
+      if NativeImportInput.sensitive(.object(extras), at: origin, into: &classification) {
+        diagnostics.add(.unconverted, origin, "Native LSP extras require symbolic reconstruction.")
+        continue
+      }
       if agent == .claudeCode {
         guard let command = fields["command"]?.importString,
           let mapping = fields["extensionToLanguage"]?.importObject, !mapping.isEmpty,
@@ -163,7 +177,8 @@ extension NativeSourceImport {
           fields["extensions"] == nil || MCPNativeField.strings.accepts(fields["extensions"]!),
           fields["disabled"] == nil || MCPNativeField.boolean.accepts(fields["disabled"]!)
         else {
-          diagnostics.add(.invalidInput, origin, "Native LSP argv/extensions are malformed.")
+          diagnostics.add(
+            .unconverted, origin, "Native LSP entry has no executable declaration to convert.")
           continue
         }
         executable = command
@@ -171,6 +186,9 @@ extension NativeSourceImport {
         for key in ["extensions", "disabled"] where fields[key] != nil {
           native[agent.rawValue, default: [:]][key] = fields[key]
         }
+      }
+      if parsed.input.profile == .claudePluginV1, executable.hasPrefix("${CLAUDE_PLUGIN_ROOT}/") {
+        executable = "./" + executable.dropFirst("${CLAUDE_PLUGIN_ROOT}/".count)
       }
       guard !executable.isEmpty, !executable.contains("\0"), !executable.contains("${"),
         !arguments.contains(where: {

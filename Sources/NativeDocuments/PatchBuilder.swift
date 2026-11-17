@@ -268,6 +268,17 @@ struct PatchBuilder {
     }
     throw NativeDocumentError.ownershipMismatch(region)
   }
+  mutating func appendOccurrence(_ value: Node, path: [NativePathStep]) throws {
+    guard let array = try document.resolve(NativeRegion(path), on: document.root),
+      array.kind == .array
+    else { throw NativeDocumentError.ownershipMismatch(region) }
+    if array.aot {
+      try appendTables([value], path: path)
+    } else {
+      try appendValues([value], in: array)
+    }
+  }
+
   private mutating func arrayAssignment(path: [NativePathStep], rendered: String = "[]") throws {
     guard case .key(let key) = path.last,
       let parent = try document.resolve(NativeRegion(Array(path.dropLast())), on: document.root)

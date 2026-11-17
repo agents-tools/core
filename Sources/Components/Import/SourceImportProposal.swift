@@ -138,6 +138,27 @@ package struct ImportMemberCoordinate: Equatable, Sendable {
   package let selector: ComponentReferenceDeclaration
   package let profile: SourceImportProfile
   package let formatVersion: Int
+
+  /// Producer identifiers are byte identities, including canonically equivalent Unicode names.
+  package static func == (lhs: Self, rhs: Self) -> Bool {
+    guard lhs.containerRoot.utf8.elementsEqual(rhs.containerRoot.utf8),
+      lhs.profile == rhs.profile, lhs.formatVersion == rhs.formatVersion
+    else { return false }
+    switch (lhs.selector, rhs.selector) {
+    case (.skill(let left), .skill(let right)),
+      (.instruction(let left), .instruction(let right)),
+      (.mcpServer(let left), .mcpServer(let right)),
+      (.hook(let left), .hook(let right)),
+      (.subagent(let left), .subagent(let right)),
+      (.command(let left), .command(let right)),
+      (.lspServer(let left), .lspServer(let right)),
+      (.permissions(let left), .permissions(let right)),
+      (.ignore(let left), .ignore(let right)),
+      (.plugin(let left), .plugin(let right)):
+      return left.utf8.elementsEqual(right.utf8)
+    default: return false
+    }
+  }
 }
 
 package struct ImportedComponent: Equatable, Sendable {
@@ -156,7 +177,7 @@ package struct ImportResourceProposal: Equatable, Sendable {
   /// Relative to the corresponding source root. Nil means exact producer coordinates are absent.
   package let path: String?
   package let producerIntegrity: ImportPin.Integrity?
-  package let observedHash: String?
+  package var observedHash: String?
   package let executableFlags: [String: Bool]
   package let requiresStandaloneSource: Bool
   package var kind: DeclaredComponentKind? = nil
