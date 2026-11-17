@@ -272,7 +272,7 @@ package struct SourceCatalog: Sendable {
           name: nativeName ?? alias, path: ".", source: alias, mode: .native, agents: [agent])
         try resolved(
           .nativePlugin(native), component: native, label: "Native \(agent.rawValue) registration",
-          origin: .init(document: document, pointer: ""),
+          origin: proposal.packageMetadata?.nameLocation ?? .init(document: document, pointer: ""),
           unavailable: nativeName == nil
             ? "native registration requires adapter-issued container name metadata" : nil)
         nativeBindings += proposal.bindings

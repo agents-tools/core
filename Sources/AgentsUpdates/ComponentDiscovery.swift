@@ -5,6 +5,7 @@ import Foundation
 
 /// A linked authored graph or finite addition resolved in a temporary source session before deployment.
 public struct ComponentDiscovery: Sendable {
+  package var catalogPreparation: CatalogPreparation? = nil
   public let components: [ComponentInspection]
   public let sourceRevisions: [String: [String]]
   public let fingerprint: String
@@ -19,6 +20,7 @@ public struct ComponentDiscovery: Sendable {
       operation: .declaration(declaration),
       expectedDeclarationDigest: declarationDigest)
     request.expectedDiscoveryFingerprint = fingerprint
+    request.catalogPreparation = catalogPreparation
     request.capturedAddition = addition
     request.selectedIdentities = addition?.selectedIdentities
     request.importPreparation = addition?.importPreparation

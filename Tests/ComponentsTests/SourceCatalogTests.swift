@@ -88,8 +88,24 @@ struct SourceCatalogTests {
     for choice in catalog.choices {
       switch choice.unit {
       case .nativePlugin(let declaration):
-        #expect(choice.unavailableReason?.contains("adapter-issued container name") == true)
-        #expect(throws: (any Error).self) { try catalog.selected([choice.id]) }
+        let metadata = try SourceImport.preview(
+          .init(
+            profile: .claudePluginV1, root: fixture.project,
+            document: "bundle/.claude-plugin/plugin.json")
+        ).packageMetadata
+        if let metadata {
+          guard case .plugin(let name, _, _, _, _, _, _, _, _) = declaration else {
+            Issue.record("wrong native unit")
+            continue
+          }
+          #expect(name.utf8.elementsEqual(metadata.name.utf8))
+          #expect(choice.origin == metadata.nameLocation)
+          #expect(choice.unavailableReason == nil)
+          #expect(try catalog.selected([choice.id])?.count == 1)
+        } else {
+          #expect(choice.unavailableReason?.contains("adapter-issued container name") == true)
+          #expect(throws: (any Error).self) { try catalog.selected([choice.id]) }
+        }
         guard
           case .plugin(_, _, _, let mode, let select, let exclude, let agents, _, _) = declaration
         else {

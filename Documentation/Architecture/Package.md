@@ -422,6 +422,19 @@ the package catalog does not create update requests.
 
 ## AgentsUpdates
 
+`UpdateOperations.inspectSource` exposes inspection-bound source choices, linked
+closures, adapter key effects, fixed contributions and typed missing inputs.
+`SourceCatalogInspection.select` composes a finite addition through the captured
+scope destination. Empty selection returns nil without acquiring a source or
+creating a request. Exported groups remain symbolic; plugin member selections
+compose into one components declaration per container, and native registration
+remains indivisible. Adapter selections rerun the owning converter with its real
+keys and retain independent raw-resource admission. Source evidence is revalidated
+at selection and preparation, including original documents behind inline imported
+intent. Public inspection values contain no borrowed extraction URLs or runtime
+environment/private freshness observations. The ordinary request retains exact
+protected pins and destination identity through preview, reprepare and apply.
+
 `UpdateOperations.preview` plans all declared skills, instruction targets and
 prompts under one shared scope lock. `withPreparedUpdate` holds one writer
 lock through preparation and the synchronous consumer closure. Its
