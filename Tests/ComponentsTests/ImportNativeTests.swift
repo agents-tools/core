@@ -145,6 +145,54 @@ struct ImportNativeTests {
     #expect(gemini.components.first?.origin.document == "extension/commands/gcs/sync.toml")
   }
 
+  @Test func geminiPackageMetadataKeepsExactFieldsAndOriginalCoordinates() throws {
+    let fixture = try NativeImportFixture()
+    let file = "extension/gemini-extension.json"
+    let name = "cafe\u{301}"
+    let version = "1.2.3-e\u{301}"
+    let manifest =
+      "{\n  \"version\": \"\(version)\",\n  \"name\": \"\(name)\",\n  \"contextFileName\": \"extra.md\"\n}"
+    try fixture.write(file, manifest)
+    try fixture.write("extension/commands/review.toml", "description='Review'\nprompt='Review'\n")
+    var input = fixture.input(.geminiExtensionV1, file)
+    input.selection = []
+    let before = try fixture.hash()
+    let proposal = try SourceImport.preview(input)
+    let metadata = try #require(proposal.packageMetadata)
+    #expect(metadata.name.utf8.elementsEqual(name.utf8))
+    #expect(metadata.version.utf8.elementsEqual(version.utf8))
+    #expect(metadata.nameLocation.document == file)
+    #expect(metadata.nameLocation.pointer == "/member[1]")
+    #expect(metadata.nameLocation.span?.line == 3)
+    #expect(metadata.versionLocation.document == file)
+    #expect(metadata.versionLocation.pointer == "/member[2]")
+    #expect(metadata.versionLocation.span?.line == 2)
+    #expect(proposal.components.map(\.member?.selector) == [.command(name: "review")])
+    #expect(proposal.diagnostics.contains { $0.code == .unconverted })
+    #expect(try fixture.hash() == before)
+
+    for field in ["", ", \"version\": \"\"", ", \"version\": 7", ", \"version\": null"] {
+      try fixture.write(file, "{\"name\":\"review\"\(field)}")
+      let invalidBefore = try fixture.hash()
+      let invalid = try SourceImport.preview(input)
+      #expect(invalid.packageMetadata == nil)
+      #expect(invalid.components.isEmpty)
+      #expect(
+        invalid.diagnostics.contains {
+          $0.code == .invalidInput && $0.location.document == file
+            && $0.message == "Native extension requires a version string."
+        })
+      #expect(try fixture.hash() == invalidBefore)
+    }
+    try fixture.write(
+      file, #"{"name":"review","version":"https://user:PRIVATE_VERSION_CANARY@example.test"}"#)
+    let sensitive = try SourceImport.preview(input)
+    #expect(sensitive.packageMetadata == nil)
+    #expect(!sensitive.bindings.isEmpty)
+    #expect(sensitive.components.count == 1)
+    #expect(!String(reflecting: sensitive).contains("PRIVATE_VERSION_CANARY"))
+  }
+
   @Test func codexRoleRelativeFileAndOpenCodeOrderedPolicyBecomeTypedIntent() throws {
     let fixture = try NativeImportFixture()
     try fixture.write(
