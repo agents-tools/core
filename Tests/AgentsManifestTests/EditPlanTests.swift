@@ -73,6 +73,66 @@ struct EditPlanTests {
       ])
     }
   }
+
+  @Test(arguments: ["", "  ", "flow"], ["", "\n", "\r\n"])
+  func removingSoleComponentKeepsMappingTriviaAndEOF(_ style: String, _ ending: String) throws {
+    let newline = ending == "\r\n" ? ending : "\n"
+    for nested in [false, true] {
+      for comments in [false, true] {
+        for sibling in [false, true] {
+          let owner = nested ? "    " : ""
+          let indent = owner + (style == "flow" ? "" : style)
+          let prefix =
+            "# Preserve this comment\nversion: 1\nsources: {s: {path: ./keep}}\n"
+            + (nested ? "groups:\n  local:\n" : "")
+          let field = owner + "components:"
+          let component =
+            "{kind: command, name: review, description: Review, prompt: Review sources., agents: [claude-code]}"
+          let retained = comments ? indent + "# entry\n" + indent + "# prompt\n" : ""
+          let collection: String
+          let empty: String
+          if style == "flow" {
+            collection = field + " [" + component + "]" + (comments ? " # field" : "")
+            empty = field + " []" + (comments ? " # field" : "")
+          } else {
+            let header = field + (comments ? " # field" : "") + "\n"
+            collection =
+              header + (comments ? indent + "# entry\n" : "")
+              + indent + "- kind: command\n" + indent + "  name: review\n"
+              + indent + "  description: Review\n" + indent + "  prompt: Review sources."
+              + (comments ? " # prompt" : "") + "\n" + indent + "  agents: [claude-code]"
+            empty = header + owner + "  []" + (comments ? "\n" + retained.dropLast() : "")
+          }
+          let suffix = sibling ? "\n# unrelated tail\nwatch: []" : ""
+          let input =
+            (prefix + collection + suffix).replacingOccurrences(of: "\n", with: newline)
+            + ending
+          let expected =
+            (prefix + empty + suffix).replacingOccurrences(of: "\n", with: newline)
+            + ending
+          let doc = try document(input)
+          let pointer = nested ? "/groups/0/components/0" : "/components/0"
+          let change = try doc.preparing([.removeComponent(#require(doc.node(at: pointer)))])
+          #expect(String(decoding: change.bytes, as: UTF8.self) == expected)
+          let result = try DeclarationDocument(
+            bytes: change.bytes, identity: DocumentIdentity("manifest"))
+          #expect(result.declaration == change.expectedDeclaration)
+          let previous = try projected(input)
+          var next = previous
+          if nested {
+            next.groups[0].components = []
+          } else {
+            next.components = []
+          }
+          #expect(
+            try ManifestProjection.declaration(of: result, environment: projectionEnvironment)
+              == next)
+          #expect(try planned(previous, next, in: input) == change.bytes)
+          #expect(try planned(next, next, in: expected) == nil)
+        }
+      }
+    }
+  }
 }
 
 extension EditPlanTests {
