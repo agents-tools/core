@@ -296,6 +296,28 @@ enum NativeImportInput {
       .init(origin: origin, declaration: declaration, member: member))
   }
 
+  /// A directory may be captured before a later native document reveals a literal binding.
+  /// Reconcile every source-relative overlap before the operation publishes its proposal,
+  /// including partial proposals returned after a parsing failure.
+  static func reconcilePreservation(into diagnostics: inout ImportDiagnostics) {
+    for index in diagnostics.proposal.resources.indices {
+      let resource = diagnostics.proposal.resources[index]
+      guard let path = resource.path,
+        let root = diagnostics.proposal.sources.first(where: {
+          $0.alias == resource.sourceAlias
+        })?.producerPath
+      else { continue }
+      let relative = root == "." ? path : root + (path == "." ? "" : "/" + path)
+      if diagnostics.proposal.bindings.contains(where: {
+        relative == "." || $0.location.document == relative
+          || $0.location.document.hasPrefix(relative + "/")
+      }) {
+        diagnostics.proposal.resources[index].requiresBindingRewrite = true
+        diagnostics.proposal.resources[index].observedHash = nil
+      }
+    }
+  }
+
   static func resource(
     _ path: String, root: String, input: SourceImportInput,
     origin: ImportLocation, limits: SourceImportLimits, rewrite: Bool = false,

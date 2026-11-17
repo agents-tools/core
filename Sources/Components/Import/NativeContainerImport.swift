@@ -32,7 +32,9 @@ enum NativeContainerImport {
     let surface = NativeImportSemantics.surface(input.profile)
     let defaults =
       agent == .geminiCLI
-      ? ["commands": "commands", "agents": "agents", "skills": "skills"]
+      ? [
+        "commands": "commands", "agents": "agents", "skills": "skills", "hooks": "hooks/hooks.json",
+      ]
       : try NativeComponentFieldsV1.pluginDefaults(
         surface: surface, explicitFields: Set(parsed.fields.keys))
     var documents: [String: NativeImportDocument] = [:]

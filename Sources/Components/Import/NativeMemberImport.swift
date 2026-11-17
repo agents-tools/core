@@ -96,6 +96,19 @@ enum NativeMemberImport {
           isAgent ? ["name", "description", "model", "tools"] : ["description"]
         NativeImportInput.unknown(fields, allowed: converted, at: origin, into: &diagnostics)
         guard Set(fields.keys).isSubset(of: converted) else { return }
+        for field in ["name", "description"] where fields[field] != nil {
+          guard fields[field]?.importString != nil else {
+            diagnostics.add(
+              .invalidInput, parsed.header?[field]?.location ?? origin,
+              "Native Markdown field requires a string value.")
+            return
+          }
+        }
+        if let value = fields["model"], value.importString == nil {
+          NativeImportInput.unconverted(
+            value, at: parsed.header?["model"]?.location ?? origin, into: &diagnostics)
+          return
+        }
       }
       name = fields["name"]?.importString ?? name
       model = fields["model"]?.importString

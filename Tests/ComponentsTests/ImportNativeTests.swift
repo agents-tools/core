@@ -670,6 +670,112 @@ struct ImportNativeTests {
       })
   }
 
+  @Test func overlappingPreservationResourcesUseCompleteBindingClassification() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write(
+      "opencode.jsonc",
+      #"{"mcp":{"servers":{"clean":{"type":"local","command":["tool"],"cwd":"."}}},"lsp":{"language":{"command":["language-server"],"env":{"TOKEN":"LATE_LITERAL_CANARY"}}}}"#
+    )
+    let before = try fixture.hash()
+    let result = try SourceImport.preview(fixture.input(.openCodeConfigV2, "opencode.jsonc"))
+    #expect(result.components.count == 2)
+    let directory = try #require(result.resources.first { $0.path == "." })
+    #expect(directory.requiresBindingRewrite)
+    #expect(directory.observedHash == nil)
+    #expect(!String(reflecting: result).contains("LATE_LITERAL_CANARY"))
+    #expect(try fixture.hash() == before)
+
+    try fixture.write(
+      "bundle/.claude-plugin/plugin.json",
+      #"{"name":"bundle","lspServers":"./skills/audit/language.json"}"#)
+    try fixture.write(
+      "bundle/skills/audit/SKILL.md", "---\nname: audit\ndescription: Audit\n---\nBody\n")
+    try fixture.write(
+      "bundle/skills/audit/language.json",
+      #"{"language":{"command":"language-server","extensionToLanguage":{".x":"x"},"env":{"TOKEN":"LATE_SKILL_CANARY"}}}"#
+    )
+    let bundleBefore = try fixture.hash()
+    let bundle = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json"))
+    #expect(bundle.components.contains { $0.declaration.kind == .skills })
+    let skill = try #require(bundle.resources.first { $0.kind == .skills })
+    #expect(skill.requiresBindingRewrite)
+    #expect(skill.observedHash == nil)
+    #expect(!String(reflecting: bundle).contains("LATE_SKILL_CANARY"))
+    #expect(try fixture.hash() == bundleBefore)
+  }
+
+  @Test(arguments: [SourceImportProfile.openCodeCommandV2, .openCodeAgentV2])
+  func openCodeMarkdownRejectsInvalidDescriptionAtOriginalField(_ profile: SourceImportProfile)
+    throws
+  {
+    let fixture = try NativeImportFixture()
+    try fixture.write("review.md", "---\ndescription: [invalid]\n---\nBody\n")
+    let before = try fixture.hash()
+    let result = try SourceImport.preview(fixture.input(profile, "review.md"))
+    #expect(result.components.isEmpty)
+    #expect(
+      result.diagnostics.contains {
+        $0.code == .invalidInput && $0.location.document == "review.md"
+          && $0.location.span?.line == 2
+      })
+    #expect(try fixture.hash() == before)
+    try fixture.write("review.md", "---\ndescription: Review\n---\nBody\n")
+    let valid = try SourceImport.preview(fixture.input(profile, "review.md"))
+    #expect(valid.components.count == 1)
+    #expect(valid.diagnostics.isEmpty)
+  }
+
+  @Test func geminiExtensionHooksRemainVisibleAndPrivatelyPreserved() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write("bundle/gemini-extension.json", #"{"name":"bundle","version":"1"}"#)
+    try fixture.write(
+      "bundle/commands/review.toml", "description='Review'\nprompt='Review changes'\n")
+    try fixture.write(
+      "bundle/hooks/hooks.json",
+      #"{"hooks":{"BeforeTool":[{"hooks":[{"type":"command","command":"./check","token":"HOOK_LITERAL_CANARY"}]}]}}"#
+    )
+    let before = try fixture.hash()
+    let result = try SourceImport.preview(
+      fixture.input(.geminiExtensionV1, "bundle/gemini-extension.json"))
+    #expect(result.components.count == 1)
+    #expect(result.components.first?.declaration.kind == .command)
+    #expect(
+      result.diagnostics.contains {
+        $0.code == .unconverted && $0.location.document == "bundle/hooks/hooks.json"
+      })
+    #expect(result.bindings.contains { $0.location.document == "bundle/hooks/hooks.json" })
+    let hooks = try #require(result.resources.first { $0.path == "hooks/hooks.json" })
+    #expect(hooks.requiresBindingRewrite && hooks.observedHash == nil)
+    #expect(!String(reflecting: result).contains("HOOK_LITERAL_CANARY"))
+    #expect(try fixture.hash() == before)
+  }
+
+  @Test func nativeMemberCoordinatesPreserveExactUTF8Selectors() throws {
+    let fixture = try NativeImportFixture()
+    try fixture.write("unicode/.claude-plugin/plugin.json", #"{"name":"unicode"}"#)
+    for (path, name) in [("first", "\u{e9}"), ("second", "e\u{301}")] {
+      try fixture.write(
+        "unicode/agents/" + path + ".md",
+        "---\nname: \(name)\ndescription: Agent\n---\nBody\n")
+    }
+    let result = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "unicode/.claude-plugin/plugin.json"))
+    #expect(result.components.count == 2)
+    let members = result.components.compactMap(\.member)
+    #expect(members.count == 2)
+    #expect(members.first != members.last)
+    #expect(!result.diagnostics.contains { $0.code == .ambiguousSource })
+    let first = try #require(members.first)
+    #expect(first == first)
+    try fixture.write(
+      "unicode/agents/second.md", "---\nname: \u{e9}\ndescription: Agent\n---\nBody\n")
+    let duplicate = try SourceImport.preview(
+      fixture.input(.claudePluginV1, "unicode/.claude-plugin/plugin.json"))
+    #expect(duplicate.components.isEmpty)
+    #expect(duplicate.diagnostics.contains { $0.code == .ambiguousSource })
+  }
+
   @Test func typedMembersStayStableWhenCallerMovesTheInputRoot() throws {
     let one = try NativeImportFixture()
     let two = try NativeImportFixture()

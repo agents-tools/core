@@ -7,6 +7,7 @@ enum NativeSourceImport {
     _ input: SourceImportInput, limits: SourceImportLimits,
     into diagnostics: inout ImportDiagnostics
   ) throws {
+    defer { NativeImportInput.reconcilePreservation(into: &diagnostics) }
     switch input.profile {
     case .geminiIgnoreV1, .cursorIgnoreV1:
       let bytes = try ImportInput.bytes(input, limits: limits)
