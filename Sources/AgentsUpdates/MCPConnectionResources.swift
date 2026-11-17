@@ -29,8 +29,8 @@ public struct MCPConnectionResource: Sendable, CustomStringConvertible,
     if case .captured = storage { true } else { false }
   }
   var displayPath: String { sourcePath }
-  var readLocations: [URL] {
-    sensitivePaths.map { URL(fileURLWithPath: $0).standardizedFileURL }
+  var readDependencies: [ReadDependency] {
+    sensitivePaths.map { .entry(URL(fileURLWithPath: $0).standardizedFileURL) }
   }
   public var description: String { "<MCP connection resource>" }
   public var debugDescription: String { description }

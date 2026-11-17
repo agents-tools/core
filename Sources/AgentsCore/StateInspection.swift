@@ -2,14 +2,21 @@ import CPlatform
 import Foundation
 
 extension StateStore {
-  /// Durable admission dependencies for a scope inspection, including absent entries whose
-  /// creation changes whether the scope can be read. State-file dependencies belong to the caller.
-  package var readLockLocations: [URL] {
-    [directory]
-      + [
-        ".agents.lock", TransactionJournal.fileName, TransactionJournal.incompleteFileName,
-        "watch-refs.pending",
-      ].map { directory.appendingPathComponent($0) }
+  /// Metadata and admission entries, including absent paths. Only the supplied scope root
+  /// resolves through links; state-directory and lock links do not grant new path authority.
+  package var metadataReadLocations: [URL] {
+    let root = scope == .project ? environment.projectDirectory : environment.homeDirectory
+    let roots = [root, root.resolvingSymlinksInPath()]
+    return roots
+      + roots.flatMap { root in
+        let directory = root.appendingPathComponent(self.directory.lastPathComponent)
+        return [directory]
+          + [
+            Self.declarationFileName, Self.resolvedFileName, Self.watchFileName, ".agents.lock",
+            TransactionJournal.fileName, TransactionJournal.incompleteFileName,
+            "watch-refs.pending",
+          ].map { directory.appendingPathComponent($0) }
+      }
   }
 
   /// Takes an existing scope lock without creating files or replaying recovery.

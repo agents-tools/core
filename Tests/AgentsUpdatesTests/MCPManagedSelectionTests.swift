@@ -122,11 +122,25 @@ private struct ManagedMCPFixture {
     let description = MCPConnectionOperations.describe(snapshot)
     #expect(description.executable == "tool" && description.executableIsCaptured)
     #expect(description.workingDirectory == "cwd" && description.workingDirectoryIsCaptured)
-    #expect(snapshot.readLocations.contains(f.store.declarationURL))
-    #expect(snapshot.readLocations.contains(f.store.resolvedURL))
-    #expect(snapshot.readLocations.contains(f.store.watchURL))
-    #expect(description.readLocations == snapshot.readLocations)
-    #expect(!snapshot.readLocations.contains { $0.path.contains("agents-mcp-capture-") })
+    #expect(snapshot.readDependencies.contains(.subtree(f.store.declarationURL)))
+    #expect(snapshot.readDependencies.contains(.subtree(f.store.resolvedURL)))
+    #expect(snapshot.readDependencies.contains(.subtree(f.store.watchURL)))
+    #expect(description.readDependencies == snapshot.readDependencies)
+    #expect(snapshot.readDependencies.allSatisfy { if case .subtree = $0 { true } else { false } })
+    let encoded = try JSONEncoder().encode(description)
+    #expect(try JSONDecoder().decode(MCPConnectionDescription.self, from: encoded) == description)
+    let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    let dependencies = try #require(object["readDependencies"] as? [[String: [String: String]]])
+    #expect(
+      dependencies
+        == description.readDependencies.map { ["subtree": ["_0": $0.url.absoluteString]] })
+    if !remote {
+      #expect(
+        snapshot.readDependencies.contains {
+          if case .subtree(let url) = $0 { url.path == f.producer.path } else { false }
+        })
+    }
+    #expect(!snapshot.readDependencies.contains { $0.url.path.contains("agents-mcp-capture-") })
     let spy = MCPBindingSpy(["wanted": Data("provider-canary".utf8)])
     #expect(MCPConnectionOperations.describe(snapshot).requiredBindings == ["wanted"])
     #expect(spy.calls.isEmpty)
@@ -232,6 +246,14 @@ private struct ManagedMCPFixture {
     let selection = try f.inspection().selection
     let snapshot = try MCPConnectionOperations.snapshot(
       selection: selection, scope: .project, environment: f.fixture.environment)
+    #expect(
+      snapshot.readDependencies.contains {
+        if case .entry(let url) = $0 { url.path == f.fixture.root.path } else { false }
+      })
+    #expect(
+      snapshot.readDependencies.contains {
+        if case .subtree(let url) = $0 { url.path == f.producer.path } else { false }
+      })
     try Data("after".utf8).write(to: marker)
     let spy = MCPBindingSpy()
     let result = await MCPConnectionOperations.test(

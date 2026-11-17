@@ -144,11 +144,16 @@ prompts are removed. Other source declarations and skill records remain
 available to their owners.
 
 Export maps each scope's locked deployments and prompt sections from ledger
-metadata alone. Each `InstructionMapping.readLocations` includes the scope's
-declaration, resolved and watch-state leaves, scope directory, scope lock and
-recovery markers, including absent entries. These locations remain available
-for missing-lock, pending-recovery and unavailable statuses. Mapping does not
-read section bodies, append content or deployed target bytes; content inspection
+metadata alone. `InstructionMapping.readDependencies` contains `ReadDependency.entry`
+values for declaration, resolved and watch-state leaves, the scope root and state
+directory, scope lock, recovery markers and attempted external admission paths.
+Absent paths and failed admission anchors remain available for missing-lock,
+pending-recovery and unavailable statuses. Permitted scope-root aliases retain
+both logical and physical paths; forbidden state-directory and lock links do not
+introduce their destinations as authority. Entry dependencies observe the named
+path and its ancestors, including creation, replacement and access changes; they
+do not observe unrelated descendants of directory entries. Mapping does not read
+section bodies, append content or deployed target bytes; content inspection
 operations supply their own dependencies.
 
 Planning validates required content before applying. Reports include old and

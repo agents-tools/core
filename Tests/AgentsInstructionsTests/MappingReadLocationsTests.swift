@@ -6,7 +6,7 @@ import Foundation
 import StateTestSupport
 import Testing
 
-@Suite("Instruction mapping read locations")
+@Suite("Instruction mapping read dependencies")
 struct MappingReadLocationsTests {
   @Test(arguments: [
     "base-absent", "metadata-absent", "lock-absent", "base-access", "metadata-access",
@@ -53,7 +53,9 @@ struct MappingReadLocationsTests {
         at: base, includingPropertiesForKeys: nil
       ).first)
     let lock = metadata.appendingPathComponent("lock")
-    let externalPaths = Set([config, base, metadata, lock].map { $0.standardizedFileURL.path })
+    let externalPaths = Set(
+      [config, base, metadata, lock, URL(fileURLWithPath: "/")]
+        .map { $0.standardizedFileURL.path })
     let damaged = damage.hasPrefix("base") ? base : damage.hasPrefix("metadata") ? metadata : lock
     let backup = f.root.appendingPathComponent("metadata-backup")
     let scopeBefore = try f.snapshot(store.directory)
@@ -68,8 +70,9 @@ struct MappingReadLocationsTests {
       Issue.record("Expected failed shared admission, got \(unavailable.status)")
       return
     }
+    #expect(unavailable.readDependencies.allSatisfy { if case .entry = $0 { true } else { false } })
     #expect(
-      Set(unavailable.readLocations.map(\.path)).isSuperset(of: externalPaths))
+      Set(unavailable.readDependencies.map { $0.url.path }).isSuperset(of: externalPaths))
     #expect(try f.snapshot() == beforeInspection)
     #expect(try f.snapshot(store.directory) == scopeBefore)
     if damage.hasSuffix("absent") {
@@ -82,8 +85,9 @@ struct MappingReadLocationsTests {
     let repairedBeforeInspection = try f.snapshot()
     let repaired = try mapping()
     #expect(repaired.status == .pendingRecovery)
+    #expect(repaired.readDependencies.allSatisfy { if case .entry = $0 { true } else { false } })
     #expect(
-      Set(repaired.readLocations.map(\.path)).isSuperset(of: externalPaths))
+      Set(repaired.readDependencies.map { $0.url.path }).isSuperset(of: externalPaths))
     #expect(try f.snapshot(store.directory) == scopeBefore)
     #expect(try f.snapshot() == repairedBeforeInspection)
   }
@@ -117,7 +121,7 @@ struct MappingReadLocationsTests {
     #expect(mapping.prompts["daily"]?.map(\.name) == ["shared", "own"])
     #expect(mapping.unplaced.isEmpty)
     expectStateLocations(mapping, store: store)
-    let paths = Set(mapping.readLocations.map(\.path))
+    let paths = Set(mapping.readDependencies.map { $0.url.path })
     #expect(!paths.contains(own.path))
     #expect(!paths.contains(target.path))
     #expect(!paths.contains(f.project.appendingPathComponent("append.md").path))
@@ -181,15 +185,101 @@ struct MappingReadLocationsTests {
     #expect(try f.snapshot() == before)
   }
 
+  @Test(arguments: [InstallScope.project, .user])
+  func allowedRootAliasesRetainLogicalAndPhysicalEntries(_ scope: InstallScope) throws {
+    let f = try InstructionFixture()
+    let logical = f.root.appendingPathComponent("scope-alias")
+    let first = f.root.appendingPathComponent("physical-first").resolvingSymlinksInPath()
+    let second = f.root.appendingPathComponent("physical-second").resolvingSymlinksInPath()
+    for root in [first, second] {
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    }
+    try FileManager.default.createSymbolicLink(at: logical, withDestinationURL: first)
+    var environment = f.environment
+    if scope == .project {
+      environment.projectDirectory = logical
+    } else {
+      environment.homeDirectory = logical
+    }
+    let stateName = scope == .project ? ".agent" : ".agents"
+    func mapping() throws -> InstructionMapping {
+      let values = InstructionOperations.export(
+        projectRoots: scope == .project ? [logical] : [], environment: environment)
+      return try #require(scope == .project ? values.last : values.first)
+    }
+    let absent = try mapping()
+    #expect(absent.status == .missingLock)
+    let expected = Set(
+      [
+        logical, first, logical.appendingPathComponent(stateName),
+        first.appendingPathComponent(stateName),
+        first.appendingPathComponent(stateName + "/agents.resolved"),
+      ].map(\.path))
+    #expect(Set(absent.readDependencies.map { $0.url.path }).isSuperset(of: expected))
+    #expect(absent.readDependencies.allSatisfy { if case .entry = $0 { true } else { false } })
+    let physicalMarker = first.appendingPathComponent(stateName + "/transaction.new")
+    try f.write("", to: physicalMarker)
+    let before = try f.snapshot()
+    let pending = try mapping()
+    #expect(pending.status == .pendingRecovery)
+    #expect(pending.readDependencies.map { $0.url.path }.contains(physicalMarker.path))
+    #expect(try f.snapshot() == before)
+    try FileManager.default.removeItem(at: logical)
+    try FileManager.default.createSymbolicLink(at: logical, withDestinationURL: second)
+    let retargetedBefore = try f.snapshot()
+    let retargeted = try mapping()
+    #expect(retargeted.status == .missingLock)
+    #expect(retargeted.readDependencies.map { $0.url.path }.contains(logical.path))
+    #expect(retargeted.readDependencies.map { $0.url.path }.contains(second.path))
+    #expect(!retargeted.readDependencies.map { $0.url.path }.contains(first.path))
+    #expect(try f.snapshot() == retargetedBefore)
+  }
+
+  @Test(arguments: ["state", "lock"])
+  func forbiddenLinksDoNotIntroduceTargetAuthority(_ kind: String) throws {
+    let f = try InstructionFixture()
+    let store = f.store()
+    let external = f.root.appendingPathComponent("forbidden-target")
+    if kind == "state" {
+      try FileManager.default.createDirectory(at: external, withIntermediateDirectories: false)
+      try FileManager.default.createSymbolicLink(at: store.directory, withDestinationURL: external)
+    } else {
+      try f.write("", to: external)
+      try FileManager.default.createDirectory(
+        at: store.directory, withIntermediateDirectories: false)
+      try FileManager.default.createSymbolicLink(
+        at: store.directory.appendingPathComponent(".agents.lock"), withDestinationURL: external)
+    }
+    let before = try f.snapshot()
+    let mapping = try #require(
+      InstructionOperations.export(
+        projectRoots: [f.project], environment: f.environment
+      ).last)
+    guard case .unavailable = mapping.status else {
+      Issue.record("Forbidden link was admitted")
+      return
+    }
+    #expect(!mapping.readDependencies.map { $0.url.path }.contains(external.path))
+    #expect(mapping.readDependencies.allSatisfy { if case .entry = $0 { true } else { false } })
+    #expect(try f.snapshot() == before)
+  }
+
   private func expectStateLocations(_ mapping: InstructionMapping, store: StateStore) {
-    let expected = [
-      store.directory, store.declarationURL, store.resolvedURL, store.watchURL,
-      store.directory.appendingPathComponent(".agents.lock"),
-      store.directory.appendingPathComponent("transaction.json"),
-      store.directory.appendingPathComponent("transaction.new"),
-      store.directory.appendingPathComponent("watch-refs.pending"),
-    ].map(\.path).sorted()
-    #expect(mapping.readLocations.map(\.path) == expected)
+    let root =
+      store.scope == .project
+      ? store.environment.projectDirectory : store.environment.homeDirectory
+    let expected = Set(
+      [root, root.resolvingSymlinksInPath()].flatMap { root in
+        let state = root.appendingPathComponent(store.scope == .project ? ".agent" : ".agents")
+        return [root, state]
+          + [
+            "agents.yaml", "agents.resolved", "agents.watch", ".agents.lock",
+            "transaction.json", "transaction.new", "watch-refs.pending",
+          ].map { state.appendingPathComponent($0) }
+      }.map(\.path)
+    ).sorted()
+    #expect(mapping.readDependencies.map { $0.url.path } == expected)
+    #expect(mapping.readDependencies.allSatisfy { if case .entry = $0 { true } else { false } })
   }
 }
 

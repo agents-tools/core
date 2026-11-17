@@ -13,9 +13,10 @@ public struct MCPConnectionSnapshot: Sendable, CustomStringConvertible,
 {
   public let id: UUID
   public let selectionID: String
-  var durableReadLocations: [URL]
-  /// Durable invalidation inputs; never borrowed or per-test staging directories.
-  public var readLocations: [URL] { durableReadLocations }
+  var durableReadDependencies: [ReadDependency]
+  /// Durable invalidation interests. Live resources observe entries; independently required
+  /// source inputs may observe subtrees. Borrowed and per-test staging paths are never exposed.
+  public var readDependencies: [ReadDependency] { durableReadDependencies }
   fileprivate let inputBytes: Int
   fileprivate let transport: MCPTransportDeclaration
   fileprivate let directory: MCPConnectionResource?
@@ -41,7 +42,7 @@ public struct MCPConnectionDescription: Codable, Sendable, Equatable {
   public let workingDirectoryIsCaptured: Bool
   /// Origin with path/query withheld; no header or credential values are exposed.
   public let endpoint: String?
-  public let readLocations: [URL]
+  public let readDependencies: [ReadDependency]
 }
 
 /// Protocol time excludes the separately bounded owned cleanup. The total timer
@@ -178,11 +179,11 @@ public enum MCPConnectionOperations {
     }
     return MCPConnectionSnapshot(
       id: UUID(), selectionID: selectionID,
-      durableReadLocations: Array(
+      durableReadDependencies: Array(
         Set(
-          (workingDirectory?.readLocations ?? []) + (executable?.readLocations ?? [])
+          (workingDirectory?.readDependencies ?? []) + (executable?.readDependencies ?? [])
         )
-      ).sorted { $0.path < $1.path },
+      ).sorted { $0.url.path < $1.url.path },
       inputBytes: MCPConnectionLimits().inputBytes - remaining,
       transport: transport,
       directory: workingDirectory, executable: executable)
@@ -230,7 +231,7 @@ public enum MCPConnectionOperations {
       executable: executable, arguments: arguments, workingDirectory: directory,
       executableIsCaptured: snapshot.executable?.isCaptured ?? false,
       workingDirectoryIsCaptured: snapshot.directory?.isCaptured ?? false,
-      endpoint: endpoint, readLocations: snapshot.readLocations)
+      endpoint: endpoint, readDependencies: snapshot.readDependencies)
   }
 
   /// Tests only this selected value, never a refreshed source or matching name.

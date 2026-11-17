@@ -28,10 +28,9 @@ public struct InstructionMapping: Sendable, Equatable {
   /// Locked sections without a target assignment.
   public let unplaced: [LockedSection]
   public let prompts: [String: [LockedSection]]
-  /// Durable scope-state and read-admission dependencies, including absent leaves and their
-  /// scope directory. Retained for every status; section bodies, append files and target bytes
-  /// are not read by this mapping operation.
-  public let readLocations: [URL]
+  /// Scope metadata and read-admission entries, including absent paths and logical/physical
+  /// root aliases. Retained for every status; bodies, append files and target bytes are not read.
+  public let readDependencies: [ReadDependency]
 }
 
 extension InstructionOperations {
@@ -55,14 +54,14 @@ extension InstructionOperations {
   {
     let store = StateStore(scope: scope, environment: environment)
     let root = scope == .project ? environment.projectDirectory : environment.homeDirectory
-    var readLocations = Set(
-      (store.readLockLocations + [store.declarationURL, store.resolvedURL, store.watchURL])
-        .map(\.standardizedFileURL))
-    func locations() -> [URL] { readLocations.sorted { $0.path < $1.path } }
+    var readLocations = Set(store.metadataReadLocations.map(\.standardizedFileURL))
+    func dependencies() -> [ReadDependency] {
+      readLocations.sorted { $0.path < $1.path }.map(ReadDependency.entry)
+    }
     func empty(_ status: InstructionMapping.Status) -> InstructionMapping {
       InstructionMapping(
         scope: scope, root: root, status: status, targets: [], unplaced: [], prompts: [:],
-        readLocations: locations())
+        readDependencies: dependencies())
     }
     do {
       return try store.withReadLock(
@@ -104,7 +103,8 @@ extension InstructionOperations {
 
           return InstructionMapping(
             scope: scope, root: root, status: .locked, targets: targets, unplaced: [],
-            prompts: lock.instructions.chatgpt.mapValues(\.sections), readLocations: locations())
+            prompts: lock.instructions.chatgpt.mapValues(\.sections),
+            readDependencies: dependencies())
         })
     } catch {
       return empty(.unavailable(String(describing: error)))

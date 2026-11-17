@@ -88,13 +88,18 @@ extension MCPConnectionOperations {
         var result = try snapshot(
           selectionID: selection.identity, transport: transport,
           workingDirectory: directory, executable: executable)
-        result.durableReadLocations = Array(
+        result.durableReadDependencies = Array(
           Set(
-            result.readLocations
+            result.readDependencies
               + (try UpdateOperations.readLocations(
-                declarations: [], ledgers: [ledger], store: store))
+                declarations: [], ledgers: [ledger], store: store)).map(ReadDependency.subtree)
           )
-        ).sorted { $0.path < $1.path }
+        ).sorted {
+          if $0.url.path != $1.url.path { return $0.url.path < $1.url.path }
+          if case .entry = $0 { return false }
+          if case .entry = $1 { return true }
+          return false
+        }
         try baseline.validate()
         return result
       }
