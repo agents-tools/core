@@ -211,6 +211,21 @@ struct DocumentEditor {
     case .setDefaultAgents(let agents):
       return [.set("/defaultAgents", YAMLConstruction.agents(agents))]
     case .upsertSource(let source): return try upsert("/sources", YAMLConstruction.source(source))
+    case .replaceSource(let id, let replacement):
+      let path = try pointer(id)
+      let segments = IRTree.segments(path)
+      guard segments.count == 2, segments[0] == "sources", let index = Int(segments[1]),
+        current.declaration.sources.indices.contains(index)
+      else { throw failure("manifest.edit.readOnly", "expected a source occurrence") }
+      guard
+        !current.declaration.sources.enumerated().contains(where: {
+          $0.offset != index && $0.element["name"]?.string == replacement.name
+        })
+      else { throw failure("manifest.domain", "duplicate source alias") }
+      let alias = current.declaration.sources[index]["name"]!.string!
+      return [.set(path, .record(YAMLConstruction.source(replacement)))]
+        + (alias == replacement.name
+          ? [] : SourceReferenceEdits.replacing(alias, with: replacement.name, in: root))
     case .removeSource(let alias): return try removeNamed("/sources", alias)
     case .insertComponent(let value, let owner, let position):
       let path = try container(owner, "components")
