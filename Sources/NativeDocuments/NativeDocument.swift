@@ -63,7 +63,53 @@ package struct NativeDocument {
     }
   }
 
-  package func prepare(_ edits: [NativeRegionEdit]) throws -> PreparedNativeChange {
+  /// Hashes the full native array with bounded, versioned semantics. No value-bearing
+  /// fingerprint bytes escape this operation; callers must keep private digests private.
+  package func arrayDigest(_ region: NativeRegion) throws -> NativeArrayDigest {
+    try translated {
+      guard let array = try resolve(region, on: root), array.kind == .array else {
+        throw NativeDocumentError.ownershipMismatch(region)
+      }
+      return try array.arrayDigest(budget)
+    }
+  }
+
+  /// Validates the entire same-preimage array before selecting any persisted ordinal.
+  /// Returned selectors contain private snapshots and remain ephemeral, never ledger data.
+  package func validatedOccurrences(
+    in region: NativeRegion, matching digest: NativeArrayDigest, ordinals: [Int]
+  ) throws -> [NativeRegion] {
+    try translated {
+      try budget.check()
+      guard digest.format.utf8.elementsEqual(NativeArrayDigest.currentFormat.utf8),
+        digest.digest.utf8.count == 64,
+        digest.digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+        let array = try resolve(region, on: root), array.kind == .array,
+        try array.arrayDigest(budget) == digest
+      else { throw NativeDocumentError.ownershipMismatch(region) }
+      for ordinal in ordinals {
+        try budget.step()
+        guard ordinal >= 0 && ordinal < array.elements.count else {
+          throw NativeDocumentError.ownershipMismatch(region)
+        }
+      }
+      let snapshot = try array.fingerprint(budget)
+      var result: [NativeRegion] = []
+      for ordinal in ordinals {
+        try budget.allocate(region.steps.count + 2, stage: "validated occurrence")
+        let evidence = try insertionEvidence(in: array, ordinal: ordinal, arraySnapshot: snapshot)
+        result.append(NativeRegion(region.steps + [.occurrence(evidence)]))
+      }
+      return result
+    }
+  }
+
+  /// retaining contains fresh, already authorized observations; trackingArrays contains
+  /// every admitted receipt array, including foreign scopes. Neither input grants authority.
+  package func prepare(
+    _ edits: [NativeRegionEdit], retaining: [NativeObservation] = [],
+    trackingArrays: [NativeRegion] = []
+  ) throws -> PreparedNativeChange {
     try translated {
       try budget.check()
       var addresses: [[AddressStep]] = []
@@ -116,6 +162,30 @@ package struct NativeDocument {
         }
         addresses.append(address)
       }
+      var retainedAddresses: [[AddressStep]] = []
+      for observation in retaining {
+        try budget.step(observation.fingerprint.count)
+        guard let node = try resolve(observation.region, on: root),
+          try node.fingerprint(budget) == observation.fingerprint
+        else { throw NativeDocumentError.ownershipMismatch(observation.region) }
+        try budget.allocate(1, stage: "retained region address")
+        retainedAddresses.append(try address(observation.region))
+      }
+      var arrayAddresses: [[AddressStep]] = []
+      var arrayDigests: [NativeArrayDigest] = []
+      for region in trackingArrays {
+        let path = try address(region)
+        for previous in arrayAddresses {
+          try budget.step(path.reduce(0) { $0 + $1.work } + previous.reduce(0) { $0 + $1.work })
+          guard path != previous else { throw NativeDocumentError.ownershipMismatch(region) }
+        }
+        guard let array = try resolve(region, on: root), array.kind == .array else {
+          throw NativeDocumentError.ownershipMismatch(region)
+        }
+        try budget.allocate(path.count + 2, stage: "tracked array")
+        arrayAddresses.append(path)
+        arrayDigests.append(try array.arrayDigest(budget))
+      }
       if !edits.isEmpty && !located {
         throw NativeDocumentError.unsupportedEdit(.syntaxNotLocated, edits[0].region, [])
       }
@@ -125,6 +195,7 @@ package struct NativeDocument {
       var observed: [Int] = []
       var appended: [(editIndex: Int, ordinal: Int)] = []
       var removed: [([AddressStep], Int)] = []
+      var effects: [(address: [AddressStep], removal: Bool, append: Bool)] = []
       try budget.allocate(edits.count, stage: "native edit order")
       var prunes: [Int] = []
       var appends: [Int] = []
@@ -285,6 +356,8 @@ package struct NativeDocument {
         } else if desired != nil {
           observed.append(editIndex)
         }
+        try budget.allocate(addresses[editIndex].count + 1, stage: "native structural transition")
+        effects.append((addresses[editIndex], desired == nil, edit.isAppend))
         removed = nextRemoved
         current = checked
         changed.append(edit.region)
@@ -340,9 +413,73 @@ package struct NativeDocument {
           createdContainers.append(region)
         }
       }
+      var survivingRegions: [NativeRegionRemap] = []
+      for (index, observation) in retaining.enumerated() {
+        let path = retainedAddresses[index]
+        let lost = try effects.contains { effect in
+          try budget.step(
+            path.reduce(0) { $0 + $1.work } + effect.address.reduce(0) { $0 + $1.work })
+          return !effect.append && path.starts(with: effect.address)
+            && (effect.removal || path.count > effect.address.count)
+        }
+        var final: NativeObservation?
+        if !lost {
+          let region = try current.region(
+            observation.region, at: path, removed: removed, anchored: true)
+          if let node = try current.resolve(region, on: current.root) {
+            final = try current.observation(node, region: region)
+          }
+        }
+        try budget.allocate(1, stage: "surviving region remap")
+        survivingRegions.append(.init(index: index, observation: final))
+      }
+      var arrayTransitions: [NativeArrayTransition] = []
+      for (index, original) in trackingArrays.enumerated() {
+        let path = arrayAddresses[index]
+        var removedAncestor = false
+        var touched = false
+        for effect in effects {
+          try budget.step(
+            path.reduce(0) { $0 + $1.work } + effect.address.reduce(0) { $0 + $1.work })
+          let ancestor = path.starts(with: effect.address)
+          if ancestor || effect.address.starts(with: path) { touched = true }
+          if ancestor && effect.removal { removedAncestor = true }
+        }
+        var region: NativeRegion?
+        var digest: NativeArrayDigest?
+        var sameAddress = true
+        if !removedAncestor {
+          let final: NativeRegion?
+          do {
+            final = try current.region(original, at: path, removed: removed, anchored: true)
+          } catch NativeDocumentError.ownershipMismatch {
+            final = nil
+          }
+          if let final, let node = try current.resolve(final, on: current.root), node.kind == .array
+          {
+            region = final
+            digest = try node.arrayDigest(budget)
+            let finalAddress = try current.address(final)
+            for (stepIndex, step) in original.steps.enumerated() {
+              if case .occurrence(let evidence) = step, evidence.idKey != nil {
+                if step != final.steps[stepIndex] { sameAddress = false }
+              } else if path[stepIndex] != finalAddress[stepIndex] {
+                sameAddress = false
+              }
+            }
+          }
+        }
+        try budget.allocate(1, stage: "array transition result")
+        arrayTransitions.append(
+          .init(
+            index: index, region: region, digest: digest,
+            canRetainToken: region != nil && !touched && sameAddress
+              && digest == arrayDigests[index]))
+      }
       return PreparedNativeChange(
         bytes: current.bytes, changedRegions: changed, observations: observations,
-        createdContainers: createdContainers, appendedOccurrences: appendedOccurrences)
+        createdContainers: createdContainers, appendedOccurrences: appendedOccurrences,
+        survivingRegions: survivingRegions, arrayTransitions: arrayTransitions)
     }
   }
 
@@ -459,7 +596,7 @@ package struct NativeDocument {
   /// Addresses refer to the original snapshot. Only removals can shift other owned occurrences.
   private func region(
     _ original: NativeRegion, at address: [AddressStep], removed: [([AddressStep], Int)],
-    on startingRoot: Node? = nil
+    on startingRoot: Node? = nil, anchored: Bool = false
   ) throws -> NativeRegion {
     var node: Node? = startingRoot ?? root
     var steps: [NativePathStep] = []
@@ -494,7 +631,7 @@ package struct NativeDocument {
         }
         let element = current.elements[i]
         let next: NativeOccurrenceEvidence
-        if evidence.arraySnapshot != nil {
+        if evidence.arraySnapshot != nil || (anchored && evidence.idKey == nil) {
           next = try insertionEvidence(in: current, ordinal: i)
         } else if let key = evidence.idKey, let m = try element.member(key, budget: budget),
           element.members[m].node.kind == .string
@@ -534,13 +671,15 @@ package struct NativeDocument {
     return false
   }
 
-  private func insertionEvidence(in array: Node, ordinal: Int) throws -> NativeOccurrenceEvidence {
+  private func insertionEvidence(in array: Node, ordinal: Int, arraySnapshot: Data? = nil) throws
+    -> NativeOccurrenceEvidence
+  {
     .init(
       snapshot: try array.elements[ordinal].fingerprint(budget), ordinal: ordinal,
       previous: ordinal > 0 ? try array.elements[ordinal - 1].fingerprint(budget) : nil,
       next: ordinal + 1 < array.elements.count
         ? try array.elements[ordinal + 1].fingerprint(budget) : nil,
-      arraySnapshot: try array.fingerprint(budget))
+      arraySnapshot: try arraySnapshot ?? array.fingerprint(budget))
   }
 
   func occurrence(_ evidence: NativeOccurrenceEvidence, in node: Node, region: NativeRegion) throws
