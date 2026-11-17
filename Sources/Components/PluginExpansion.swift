@@ -10,7 +10,7 @@ extension Expansion {
     guard
       case .plugin(
         let name, let path, let alias, let mode, let select, let exclude,
-        let agents, _, _) = declaration
+        let agents, let authoredCondition, let authoredNative) = declaration
     else { return }
     guard active.count + pluginDepth < 64 else { throw LinkError.budget("active references") }
     let componentKey = key(name, kind: .plugin, context: context, group: group)
@@ -62,6 +62,24 @@ extension Expansion {
         "native plugin \(failure.code.rawValue) at \(failure.location.document)\(failure.location.pointer)",
         chain)
     }
+    var effective = declaration
+    if profile == .geminiExtensionV1, let metadata = proposal.packageMetadata {
+      guard proposal.profile == profile,
+        [metadata.nameLocation, metadata.versionLocation].allSatisfy({
+          $0.document.utf8.elementsEqual(document.utf8)
+            && $0.span?.document.rawValue.utf8.elementsEqual(document.utf8) == true
+        })
+      else {
+        throw LinkError.invalid("native package metadata has different producer coordinates", chain)
+      }
+      if authoredNative[AgentID.geminiCLI.rawValue]?["version"] == nil {
+        var native = authoredNative
+        native[AgentID.geminiCLI.rawValue, default: [:]]["version"] = .string(metadata.version)
+        effective = .plugin(
+          name: name, path: path, source: alias, mode: mode, select: select, exclude: exclude,
+          agents: agents, condition: authoredCondition, native: native)
+      }
+    }
     // G's aliases are read coordinates in the already selected immutable producer tree.
     var aliases: [String: SourceSnapshot] = [:]
     for source in proposal.sources {
@@ -80,7 +98,7 @@ extension Expansion {
     let parent = nextOccurrence
     try append(
       key: componentKey, snapshot: view.snapshot, pin: view.pin,
-      payload: .declaration(declaration), context: context, group: group,
+      payload: .declaration(effective), context: context, group: group,
       condition: condition, recipients: recipients, chatGPT: false, resources: [],
       chain: chain, position: position, dependencies: dependencies + [view.snapshot])
     let actualRecipients = components[parentIndex].origins[0].recipients
