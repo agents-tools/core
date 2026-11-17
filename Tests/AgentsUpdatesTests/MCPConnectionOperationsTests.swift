@@ -6,7 +6,7 @@ import Testing
 private final class MCPFacadeBundle: NSObject {}
 
 /// Only the call list mutates, under lock; values are immutable fixture input.
-private final class MCPBindingSpy: RuntimeBindingProvider, @unchecked Sendable {
+final class MCPBindingSpy: RuntimeBindingProvider, @unchecked Sendable {
   private let lock = NSLock()
   private var names: [String] = []
   let values: [String: Data]
@@ -32,7 +32,7 @@ private struct MCPRemovingDirectoryProvider: RuntimeBindingProvider {
   }
 }
 
-private final class MCPFacadeFixture {
+final class MCPFacadeFixture {
   let root: URL
   let observation: URL
   let environment: RuntimeEnvironment
