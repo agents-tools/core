@@ -287,6 +287,11 @@ package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable 
   }
   /// Known readers are a lower bound; plugin/custom-root exclusivity needs reader evidence.
   package var knownReaders: Set<AgentID> {
+    Self.knownReaders(rawValue: rawValue, fixed: fixed, member: member)
+  }
+  private static func knownReaders(
+    rawValue: String, fixed: FixedNativeTargetRoute?, member: Member?
+  ) -> Set<AgentID> {
     if fixed == .claudeSettingsProject || fixed == .claudeSettingsUser || member == .claudeAgent {
       return [.claudeCode, .cursor]
     }
@@ -351,29 +356,75 @@ package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable 
         loader: try fixed.logicalDirectory(
           environment, validateExistingOverride: validateExistingOverride), descendants: [])
     }
+    let recipe = Self.memberRecipe(member!, scope: memberScope!)
+    return NativeRootAuthority(
+      loader: try recipe.base.logicalDirectory(
+        environment, validateExistingOverride: validateExistingOverride),
+      descendants: recipe.container + name!.split(separator: "/").dropLast().map(String.init))
+  }
+
+  private static func memberRecipe(_ member: Member, scope: InstallScope)
+    -> (base: FixedNativeTargetRoute, container: [String])
+  {
     let base: FixedNativeTargetRoute
-    switch member! {
+    switch member {
     case .claudeCommand, .claudeAgent, .claudeSkillPlugin:
-      base = memberScope == .project ? .claudeSettingsProject : .claudeSettingsUser
-    case .codexAgent:
-      base = memberScope == .project ? .codexMCPProject : .codexMCPUser
+      base = scope == .project ? .claudeSettingsProject : .claudeSettingsUser
+    case .codexAgent: base = scope == .project ? .codexMCPProject : .codexMCPUser
     case .geminiCommand, .geminiAgent, .geminiExtension:
-      base = memberScope == .project ? .geminiMCPProject : .geminiMCPUser
+      base = scope == .project ? .geminiMCPProject : .geminiMCPUser
     case .cursorCommand, .cursorAgent, .cursorLocalPlugin:
-      base = memberScope == .project ? .cursorMCPProject : .cursorMCPUser
+      base = scope == .project ? .cursorMCPProject : .cursorMCPUser
     }
     let container: [String]
-    switch member! {
+    switch member {
     case .claudeCommand, .geminiCommand, .cursorCommand: container = ["commands"]
     case .claudeAgent, .codexAgent, .geminiAgent, .cursorAgent: container = ["agents"]
     case .claudeSkillPlugin: container = ["skills"]
     case .cursorLocalPlugin: container = ["plugins", "local"]
     case .geminiExtension: container = ["extensions"]
     }
-    return NativeRootAuthority(
-      loader: try base.logicalDirectory(
-        environment, validateExistingOverride: validateExistingOverride),
-      descendants: container + name!.split(separator: "/").dropLast().map(String.init))
+    return (base, container)
+  }
+
+  package struct ClientLocation {
+    package let identity: String
+    package let agents: Set<AgentID>
+    package let evidenceScope: String
+    package let container: Bool
+    package let location: Result<URL, any Error>
+  }
+
+  package static func clientLocations(scope: InstallScope, environment: RuntimeEnvironment)
+    -> [ClientLocation]
+  {
+    let fixed = FixedNativeTargetRoute.allCases.filter {
+      scope == .user ? $0.shared : !$0.shared || $0 == .claudeMCPLocal
+    }.map { route in
+      return ClientLocation(
+        identity: route.rawValue, agents: Self(route).knownReaders,
+        evidenceScope: route == .claudeMCPLocal ? "local" : scope.rawValue, container: false,
+        location: Result {
+          try route.logicalDirectory(environment, validateExistingOverride: false)
+            .appendingPathComponent(route.basename)
+        })
+    }
+    let members = Member.allCases.filter {
+      !($0 == .cursorCommand && scope != .project)
+        && !([Member.cursorLocalPlugin, .geminiExtension].contains($0) && scope != .user)
+    }.map { member in
+      let recipe = memberRecipe(member, scope: scope)
+      return ClientLocation(
+        identity: member.rawValue + "." + scope.rawValue,
+        agents: knownReaders(rawValue: member.rawValue, fixed: nil, member: member),
+        evidenceScope: scope.rawValue, container: true,
+        location: Result {
+          try recipe.container.reduce(
+            recipe.base.logicalDirectory(environment, validateExistingOverride: false)
+          ) { $0.appendingPathComponent($1) }
+        })
+    }
+    return fixed + members
   }
   func logicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
     try rootAuthority(environment).logicalDirectory
