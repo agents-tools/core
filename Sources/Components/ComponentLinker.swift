@@ -32,6 +32,7 @@ struct LinkingDocument {
   let view: SourceSnapshot
   let manifestPath: String
   let producer: Bool
+  var importedSources: [String: SourceSnapshot] = [:]
 
 }
 
@@ -272,6 +273,11 @@ final class Linking {
       return SourceAddress(
         id: context.view.snapshot.source, source: nil,
         contained: context.view, root: context.view.discoveryPath)
+    }
+    if let view = context.importedSources[alias] {
+      return SourceAddress(
+        id: view.snapshot.source, source: nil, contained: view,
+        root: view.discoveryPath)
     }
     guard let source = context.declaration.sources[alias] else {
       throw LinkError.missing("source alias '\(alias)'", chain)

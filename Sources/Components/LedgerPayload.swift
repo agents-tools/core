@@ -166,7 +166,7 @@ enum LedgerPayload {
     return .init(object: ["action": .init(action), "operation": op, "pattern": .init(pattern)])
   }
 
-  private static func reference(_ reference: ComponentReferenceDeclaration) -> LedgerValue {
+  static func reference(_ reference: ComponentReferenceDeclaration) -> LedgerValue {
     let kind: String
     let name: String
     switch reference {
