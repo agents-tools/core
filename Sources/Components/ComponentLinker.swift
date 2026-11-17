@@ -147,6 +147,16 @@ final class Linking {
 
   func solve(preserving pins: [String: SourceRevision]) throws -> LinkedComponents {
     try budget.step(document.metrics.evaluationSteps)
+    // Recorded commits preserve local Git provenance independently of current working-tree metadata.
+    if let ledger = retainedLedger {
+      for id in ledger.sources.keys.sorted() {
+        try budget.step()
+        let source = ledger.sources[id]!
+        if source.kind == .local, SourceCache.isObjectID(source.revision) {
+          git.insert(try retainedSourceIdentity(id, ledger: ledger))
+        }
+      }
+    }
     let declaration = try ManifestProjection.declaration(
       of: document, environment: store.environment)
     let packageRoot =
