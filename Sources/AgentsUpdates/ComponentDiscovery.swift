@@ -55,7 +55,8 @@ extension UpdateOperations {
 
   private static func discover(
     _ declaration: Declaration, store: StateStore, destination: AdditionDestination?,
-    importPreparation: ImportPreparation?, allowNewIdentities: Bool = true
+    importPreparation: ImportPreparation?, allowNewIdentities: Bool = true,
+    catalogExpectation: CatalogCompositionExpectation? = nil
   ) throws -> ComponentDiscovery {
     return try store.withReadLock {
       try destination?.validate(in: store)
@@ -82,6 +83,7 @@ extension UpdateOperations {
         directPins: destination == nil ? [:] : impact.directPins,
         retaining: destination == nil ? nil : previousLedger
       ) { linked, session in
+        try catalogExpectation?.validate(linked)
         let frozen = try LedgerFreeze.freezeWithSources(
           linked, session: session,
           locations: .init(
@@ -191,7 +193,8 @@ extension UpdateOperations {
   /// return nil, including a source-only selection, and never initialize destination state.
   package static func captureAddition(
     _ additions: Declaration, in inspection: ScopeInspection,
-    importPreparation: ImportPreparation? = nil
+    importPreparation: ImportPreparation? = nil,
+    catalogExpectation: CatalogCompositionExpectation? = nil
   ) throws -> ComponentDiscovery? {
     guard !additions.components.isEmpty || !additions.groups.isEmpty || !additions.uses.isEmpty
     else { return nil }
@@ -236,6 +239,6 @@ extension UpdateOperations {
     for use in additions.uses where !candidate.uses.contains(use) { candidate.uses.append(use) }
     return try discover(
       candidate, store: destination.store, destination: destination,
-      importPreparation: importPreparation)
+      importPreparation: importPreparation, catalogExpectation: catalogExpectation)
   }
 }

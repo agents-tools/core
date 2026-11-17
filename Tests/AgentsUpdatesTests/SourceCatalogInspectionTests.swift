@@ -335,3 +335,91 @@ extension SourceCatalogInspectionTests {
     #expect(try FileHash.executableFlags(tree) == flags)
   }
 }
+
+extension SourceCatalogInspectionTests {
+  @Test func selectionRejectsChangedExternalDependencyWithUnchangedCatalogRoot() throws {
+    let f = try UpdateFixture()
+    let a = f.root.appendingPathComponent("producer-a")
+    let b = f.root.appendingPathComponent("producer-b")
+    try f.write(
+      """
+      version: 1
+      sources: {b: {path: '\(b.path)'}}
+      exports: [outer]
+      groups:
+        outer:
+          uses: [{source: b, group: inner}]
+      """, to: a.appendingPathComponent(".agent/agents.yaml"))
+    func dependency(_ prompt: String) throws {
+      try f.write(
+        """
+        version: 1
+        exports: [inner]
+        groups:
+          inner:
+            components:
+              - {kind: command, name: review, description: Review, prompt: '\(prompt)', agents: [claude-code]}
+        """, to: b.appendingPathComponent(".agent/agents.yaml"))
+    }
+    try dependency("before")
+    let rootHash = try FileHash.folderHash(a)
+    let catalog = try UpdateOperations.inspectSource(
+      alias: "catalog", source: .init(kind: .local, location: a.path), environment: f.environment)
+    let choice = try #require(
+      catalog.availableChoices.first {
+        if case .group = $0.unit { return true }
+        return false
+      })
+    let discovery = try #require(try catalog.select([choice.id]))
+    try dependency("after")
+    #expect(try FileHash.folderHash(a) == rootHash)
+    #expect(throws: (any Error).self) { try catalog.select([choice.id]) }
+    #expect(throws: (any Error).self) {
+      try UpdateOperations.preview(discovery.updateRequest(), environment: f.environment)
+    }
+  }
+}
+
+extension SourceCatalogInspectionTests {
+  @Test func protectedUnrelatedRevisionCannotAttestSelectedSkill() throws {
+    let f = try UpdateFixture()
+    try f.store.save(
+      declaration: Declaration(
+        sources: ["fixture": .init(kind: .local, location: f.repo.path)],
+        skills: ["fixture": .init(select: .names(["demo"]), agents: [.codex], mode: .copy)],
+        instructions: .init(agents: [.claudeCode], sections: ["fixture:rules"])),
+      ledger: ResolvedLedger())
+    _ = try f.apply()
+    try f.writeSource("new")
+    try f.commit()
+    _ = try UpdateOperations.withPreparedUpdate(
+      .init(kinds: [.instructions]), environment: f.environment
+    ) { try $0.apply() }
+    let catalog = try UpdateOperations.inspectSource(
+      alias: "fixture", source: .init(kind: .local, location: f.repo.path),
+      environment: f.environment)
+    let choice = try #require(catalog.availableChoices.first { $0.label == "Skill demo" })
+    let retained = try f.store.loadLedger()
+    #expect(retained.sources.values.contains { $0.revision == catalog.revision })
+    #expect(throws: (any Error).self) {
+      _ = try catalog.select([choice.id], options: .init(agents: [.codex], skillMode: .copy))
+    }
+  }
+}
+
+extension SourceCatalogInspectionTests {
+  @Test(arguments: [InstallMode.copy, .edit])
+  func unchangedSkillCompositionRetainsConsumerModeAndRestrictions(_ mode: InstallMode) throws {
+    let f = try UpdateFixture()
+    let catalog = try UpdateOperations.inspectSource(
+      alias: "catalog", source: .init(kind: .local, location: f.repo.path),
+      environment: f.environment)
+    let choice = try #require(catalog.availableChoices.first { $0.label == "Skill demo" })
+    let discovery = try #require(
+      try catalog.select(
+        [choice.id], options: .init(agents: [.codex], skillMode: mode)))
+    #expect(discovery.components.count == 1)
+    #expect(discovery.components[0].recipients == [.codex])
+    _ = try UpdateOperations.preview(discovery.updateRequest(), environment: f.environment)
+  }
+}

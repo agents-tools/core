@@ -233,12 +233,53 @@ struct ArtifactLinkingTests {
     #expect(throws: LinkError.self) { try freeze(pins: pins, previous: corrupt) }
   }
 
-  private func archive(_ name: String, body: String, fixture: LinkFixture, web: URL) throws
+  @Test func catalogIndexSkillCarriesCapturedRestrictionsAndResourceEffects() throws {
+    let fixture = try LinkFixture()
+    let web = fixture.root.appendingPathComponent("web")
+    try FileManager.default.createDirectory(at: web, withIntermediateDirectories: true)
+    let server = try IndexHTTPServer(root: web)
+    defer { server.stop() }
+    let digest = try archive(
+      "alpha", body: "restricted", fixture: fixture, web: web,
+      restrictions: "agents: [codex]\n")
+    try index([("alpha", digest)], fixture: fixture, web: web)
+    let source = SourceDeclaration(kind: .wellKnown, location: server.url)
+    let catalog = try Components.SourceCatalog.inspect(
+      alias: "web", source: source,
+      store: fixture.store, platform: .macOS)
+    let choice = try #require(catalog.choices.first)
+    let graph = try #require(choice.graph)
+    let effect = try #require(graph.components.first)
+    #expect(effect.recipients == [.codex])
+    #expect(effect.conditions.first?.agents == [.codex])
+    #expect(effect.resources.first?.artifact?.digest == digest)
+    let document = try fixture.document(
+      """
+      version: 1
+      sources: {web: {index: '\(server.url)'}}
+      components: [{kind: skills, source: web, select: [alpha]}]
+      """)
+    try ComponentLinker.withLinkedComponents(
+      document: document, store: fixture.store, platform: .macOS
+    ) { elected, _ in
+      let actual = try #require(elected.components.first)
+      #expect(actual.snapshot == effect.snapshot)
+      #expect(actual.payload == effect.payload)
+      #expect(actual.conditions == effect.conditions)
+      #expect(actual.recipients == effect.recipients)
+      #expect(actual.resources == effect.resources)
+    }
+  }
+
+  private func archive(
+    _ name: String, body: String, fixture: LinkFixture, web: URL, restrictions: String = ""
+  ) throws
     -> String
   {
     let root = fixture.root.appendingPathComponent(name)
     try fixture.write(
-      "---\nname: \(name)\ndescription: Fixture\n---\n\(body)\n", to: "SKILL.md", base: root)
+      "---\nname: \(name)\ndescription: Fixture\n\(restrictions)---\n\(body)\n", to: "SKILL.md",
+      base: root)
     try fixture.write(body + " context", to: "references/context.md", base: root)
     try fixture.write("fixture script", to: "scripts/run", base: root)
     try FileManager.default.setAttributes(

@@ -135,7 +135,9 @@ public struct SourceCatalogInspection: Sendable, CustomReflectable {
     let preparation = CatalogPreparation(
       capture: capture, choices: choices.map(\.index), options: options, inputs: inputs)
     let additions = try preparation.additions()
-    guard var discovery = try UpdateOperations.captureAddition(additions, in: capture.destination)
+    guard
+      var discovery = try UpdateOperations.captureAddition(
+        additions, in: capture.destination, catalogExpectation: preparation.compositionExpectation)
     else { return nil }
     discovery.catalogPreparation = preparation
     return discovery
@@ -341,6 +343,13 @@ package final class CatalogPreparation: @unchecked Sendable, CustomReflectable {
     guard fresh.snapshot == catalog.snapshot, fresh.root.utf8.elementsEqual(catalog.root.utf8),
       fresh.contentHash == catalog.contentHash
     else { throw CoreError.invalidState("catalog source changed; refresh inspection") }
+    for index in choices {
+      guard fresh.choices.indices.contains(index),
+        fresh.choices[index].graph == catalog.choices[index].graph,
+        fresh.choices[index].artifact == catalog.choices[index].artifact,
+        fresh.choices[index].unavailableReason == catalog.choices[index].unavailableReason
+      else { throw CoreError.invalidState("catalog dependency changed; refresh inspection") }
+    }
     try capture.original?.validate()
     let selected = try catalog.selected(choices.map { catalog.choices[$0].id }) ?? []
     if catalog.importDocument == nil {
@@ -355,6 +364,13 @@ package final class CatalogPreparation: @unchecked Sendable, CustomReflectable {
     }
     return try conversion().0
   }
+  fileprivate var compositionExpectation: CatalogCompositionExpectation {
+    .init(
+      components: choices.flatMap { capture.catalog.choices[$0].graph?.components ?? [] },
+      references: choices.flatMap { capture.catalog.choices[$0].graph?.references ?? [] },
+      liveEdits: options.skillMode == .edit)
+  }
+
   private func conversion() throws -> (Declaration, SourceImportProposal) {
     let catalog = capture.catalog
     let selected = try catalog.selected(choices.map { catalog.choices[$0].id }) ?? []
@@ -429,4 +445,73 @@ private func effects(_ value: SourceCatalog.ImportEffects) -> ImportSelectionEff
         code: $0.code.rawValue, document: $0.location.document,
         pointer: $0.location.pointer, span: $0.location.span, message: $0.message)
     })
+}
+
+/// Selected producer evidence is checked against the composed graph before it is frozen.
+/// Consumer restrictions, recipients, modes and container filters remain authored composition.
+package struct CatalogCompositionExpectation {
+  let components: [LinkedComponent]
+  let references: [LinkedReference]
+  let liveEdits: Bool
+
+  func validate(_ linked: LinkedComponents) throws {
+    for reference in references {
+      let candidates = linked.references.filter {
+        $0.group.utf8.elementsEqual(reference.group.utf8)
+          && $0.root.utf8.elementsEqual(reference.root.utf8)
+          && $0.snapshot.source.utf8.elementsEqual(reference.snapshot.source.utf8)
+      }
+      guard !candidates.isEmpty,
+        candidates.allSatisfy({
+          $0.snapshot.revision.utf8.elementsEqual(reference.snapshot.revision.utf8)
+            && $0.manifestHash.utf8.elementsEqual(reference.manifestHash.utf8)
+        })
+      else { throw CoreError.invalidState("catalog group changed dependency; refresh inspection") }
+    }
+    let expected = Dictionary(grouping: components, by: \.key)
+    let actual = Dictionary(grouping: linked.components, by: \.key)
+    for (key, requirements) in expected {
+      let candidates = actual[key] ?? []
+      guard !candidates.isEmpty,
+        try Set(requirements.map(evidence)) == Set(candidates.map(evidence))
+      else {
+        throw CoreError.invalidState("catalog addition changed dependency; refresh inspection")
+      }
+    }
+  }
+
+  private func evidence(_ component: LinkedComponent) throws -> Data {
+    let editing = liveEdits && component.key.kind == .skills
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    func snapshot(_ value: SourceSnapshotID) throws -> Data {
+      try encoder.encode([
+        value.source,
+        editing && value.source.utf8.elementsEqual(component.snapshot.source.utf8)
+          ? "live" : value.revision,
+      ])
+    }
+    var fields = try [snapshot(component.snapshot), snapshot(component.declaringSnapshot)]
+    for resource in component.resources {
+      fields.append(
+        try encoder.encode([
+          snapshot(resource.snapshot), Data(resource.path.utf8), Data(resource.hash.utf8),
+          encoder.encode(resource.executableFlags), encoder.encode(resource.artifact),
+        ]))
+    }
+    // Root occurrence numbers and declaration positions differ after finite composition.
+    // Complete producer dependency clauses remain distinct; their collection order is incidental.
+    let dependencies = try Set(
+      component.origins.map { origin in
+        try encoder.encode(
+          Set(
+            origin.dependencies.filter {
+              $0.revision != "live"
+                && !(editing && $0.source.utf8.elementsEqual(component.snapshot.source.utf8))
+            }.map(snapshot)
+          ).sorted { $0.lexicographicallyPrecedes($1) })
+      })
+    fields.append(try encoder.encode(dependencies.sorted { $0.lexicographicallyPrecedes($1) }))
+    return try encoder.encode(fields)
+  }
 }
