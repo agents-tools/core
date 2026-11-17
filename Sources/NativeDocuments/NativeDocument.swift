@@ -79,13 +79,21 @@ package struct NativeDocument {
               && previous.starts(with: address))
             || (edits[index].isConditionalPrune && address.count > previous.count
               && address.starts(with: previous))
-          if !conditionalAncestor
+          let orderedAppend =
+            (edit.isAppend && previous.starts(with: address)
+              && (previous.count > address.count || edits[index].isAppend))
+            || (edits[index].isAppend && address.count > previous.count
+              && address.starts(with: previous))
+          if !conditionalAncestor && !orderedAppend
             && (address.starts(with: previous) || previous.starts(with: address))
           {
             throw NativeDocumentError.unsupportedEdit(.overlappingEdits, edit.region, [])
           }
         }
         let existing = try resolve(edit.region, on: root)
+        if edit.isAppend, let existing, existing.kind != .array {
+          throw NativeDocumentError.ownershipMismatch(edit.region)
+        }
         if case .createdContainer = edit.expected {
           if edit.isConditionalPrune {
             guard let existing, existing.kind == .object || existing.kind == .array else {
@@ -113,15 +121,23 @@ package struct NativeDocument {
       }
       var current = self
       var changed: [NativeRegion] = []
-      var created: [NativeRegion] = []
+      var created: [(region: NativeRegion, address: [AddressStep])] = []
       var observed: [Int] = []
+      var appended: [(editIndex: Int, ordinal: Int)] = []
       var removed: [([AddressStep], Int)] = []
       try budget.allocate(edits.count, stage: "native edit order")
       var prunes: [Int] = []
+      var appends: [Int] = []
       var order: [Int] = []
       for index in edits.indices {
         try budget.step()
-        if edits[index].isConditionalPrune { prunes.append(index) } else { order.append(index) }
+        if edits[index].isConditionalPrune {
+          prunes.append(index)
+        } else if edits[index].isAppend {
+          appends.append(index)
+        } else {
+          order.append(index)
+        }
       }
       try prunes.sort {
         try budget.step()
@@ -129,6 +145,7 @@ package struct NativeDocument {
           ? $0 < $1 : addresses[$0].count > addresses[$1].count
       }
       try budget.allocate(prunes.count, stage: "conditional prune order")
+      order.append(contentsOf: appends)
       order.append(contentsOf: prunes)
       for editIndex in order {
         let edit = edits[editIndex]
@@ -148,17 +165,31 @@ package struct NativeDocument {
           if try current.hasComments(old) { continue }
         }
         let desired: Node?
+        var appendedValue: Node?
         switch edit {
-        case .put(_, _, let value):
+        case .put(_, _, let value), .append(_, _, let value):
           let text = try NativeRenderer(format: format, budget: budget, region: edit.region).render(
             value)
           if format == .toml {
             let parsed = try NativeDocument(
               bytes: Data(("value = " + text).utf8), format: .toml, budget: budget)
-            desired = parsed.root.members.first?.node
+            appendedValue = parsed.root.members.first?.node
           } else {
             let parsed = try NativeDocument(bytes: Data(text.utf8), format: .json, budget: budget)
-            desired = parsed.root
+            appendedValue = parsed.root
+          }
+          if edit.isAppend {
+            guard let element = appendedValue else {
+              throw NativeDocumentError.ownershipMismatch(edit.region)
+            }
+            if old == nil { try budget.node(depth: effective.steps.count) }
+            let array = try old?.copy(budget) ?? Node(.array)
+            try budget.allocate(1, stage: "appended occurrence")
+            array.elements.append(element)
+            desired = array
+          } else {
+            desired = appendedValue
+            appendedValue = nil
           }
         case .remove, .pruneCreatedContainer:
           desired = nil
@@ -178,15 +209,23 @@ package struct NativeDocument {
             throw NativeDocumentError.unsupportedEdit(.ambiguousTrivia, edit.region, old.headers)
           }
         }
-        try current.createdObjects(old: old, new: desired, path: effective.steps, into: &created)
+        var editCreated: [NativeRegion] = []
+        if edit.isAppend && old == nil {
+          try budget.allocate(effective.steps.count + 1, stage: "created array evidence")
+          editCreated.append(effective)
+        }
+        try current.createdObjects(
+          old: old, new: desired, path: effective.steps, into: &editCreated)
         let expected = try current.root.copy(budget)
         try current.change(
           expected, steps: effective.steps[...], desired: desired, region: effective,
-          created: &created)
+          created: &editCreated)
         var editor = PatchBuilder(document: current, region: effective)
         let checked: NativeDocument
         do {
-          if let old, let desired {
+          if let appendedValue, old != nil {
+            try editor.appendOccurrence(appendedValue, path: effective.steps)
+          } else if let old, let desired {
             try editor.diff(old, desired: desired, path: effective.steps)
           } else if let old {
             try editor.remove(old, path: effective.steps)
@@ -219,7 +258,31 @@ package struct NativeDocument {
           throw NativeDocumentError.unsupportedEdit(
             .wouldRewriteUnownedStructure, edit.region, editor.patches.map(\.range))
         }
-        if desired != nil {
+        // Creation paths share the admitted edit's original address. Any suffix is a
+        // newly created object member, so no snapshot selector is reselected by value.
+        for container in editCreated {
+          let shared = min(container.steps.count, edit.region.steps.count)
+          try budget.allocate(container.steps.count * 2 + 1, stage: "created container address")
+          var address = Array(addresses[editIndex].prefix(shared))
+          let suffix = container.steps.dropFirst(shared)
+          for step in suffix {
+            guard case .key(let key) = step else {
+              throw NativeDocumentError.ownershipMismatch(container)
+            }
+            try budget.allocate(key.utf8.count, stage: "created member address")
+            address.append(.key(Data(key.utf8)))
+          }
+          created.append((NativeRegion(Array(edit.region.steps.prefix(shared)) + suffix), address))
+        }
+        if edit.isAppend {
+          var ordinal = old?.elements.count ?? 0
+          for (path, _) in removed {
+            try budget.step(path.reduce(0) { $0 + $1.work })
+            if path == addresses[editIndex] { ordinal += 1 }
+          }
+          try budget.allocate(1, stage: "insertion identity")
+          appended.append((editIndex, ordinal))
+        } else if desired != nil {
           observed.append(editIndex)
         }
         removed = nextRemoved
@@ -233,9 +296,53 @@ package struct NativeDocument {
           observations.append(try current.observation(node, region: region))
         }
       }
+      var appendedOccurrences: [NativeAppendedOccurrence] = []
+      for insertion in appended {
+        let index = insertion.editIndex
+        let parent = try current.region(edits[index].region, at: addresses[index], removed: removed)
+        guard let array = try current.resolve(parent, on: current.root) else {
+          throw NativeDocumentError.ownershipMismatch(parent)
+        }
+        var ordinal = insertion.ordinal
+        for (path, _) in removed {
+          try budget.step(path.reduce(0) { $0 + $1.work })
+          if path == addresses[index] { ordinal -= 1 }
+        }
+        guard ordinal >= 0 && ordinal < array.elements.count else {
+          throw NativeDocumentError.ownershipMismatch(parent)
+        }
+        let evidence = try current.insertionEvidence(in: array, ordinal: ordinal)
+        let region = NativeRegion(parent.steps + [.occurrence(evidence)])
+        try budget.allocate(region.steps.count + 1, stage: "insertion observation")
+        appendedOccurrences.append(
+          NativeAppendedOccurrence(
+            editIndex: index,
+            observation: try current.observation(array.elements[ordinal], region: region)))
+      }
+      var createdContainers: [NativeRegion] = []
+      for container in created {
+        var deleted = false
+        for (parent, ordinal) in removed {
+          try budget.step(parent.reduce(0) { $0 + $1.work } + container.address.count)
+          if container.address.count > parent.count,
+            container.address.starts(with: parent),
+            container.address[parent.count] == .element(ordinal)
+          {
+            deleted = true
+            break
+          }
+        }
+        if deleted { continue }
+        let region = try current.region(
+          container.region, at: container.address, removed: removed)
+        if try current.resolve(region, on: current.root) != nil {
+          try budget.allocate(region.steps.count + 1, stage: "final created container evidence")
+          createdContainers.append(region)
+        }
+      }
       return PreparedNativeChange(
         bytes: current.bytes, changedRegions: changed, observations: observations,
-        createdContainers: created)
+        createdContainers: createdContainers, appendedOccurrences: appendedOccurrences)
     }
   }
 
@@ -288,9 +395,11 @@ package struct NativeDocument {
       case (.occurrence(let a), .occurrence(let b)):
         let aSize =
           (a.idKey?.utf8.count ?? 0) + (a.id?.utf8.count ?? 0) + (a.snapshot?.count ?? 0)
+          + (a.arraySnapshot?.count ?? 0)
           + (a.previous?.count ?? 0) + (a.next?.count ?? 0)
         let bSize =
           (b.idKey?.utf8.count ?? 0) + (b.id?.utf8.count ?? 0) + (b.snapshot?.count ?? 0)
+          + (b.arraySnapshot?.count ?? 0)
           + (b.previous?.count ?? 0) + (b.next?.count ?? 0)
         try budget.step(aSize + bSize + 1)
         if a != b { return false }
@@ -385,7 +494,9 @@ package struct NativeDocument {
         }
         let element = current.elements[i]
         let next: NativeOccurrenceEvidence
-        if let key = evidence.idKey, let m = try element.member(key, budget: budget),
+        if evidence.arraySnapshot != nil {
+          next = try insertionEvidence(in: current, ordinal: i)
+        } else if let key = evidence.idKey, let m = try element.member(key, budget: budget),
           element.members[m].node.kind == .string
         {
           next = .init(idKey: key, id: element.members[m].node.text)
@@ -423,10 +534,28 @@ package struct NativeDocument {
     return false
   }
 
+  private func insertionEvidence(in array: Node, ordinal: Int) throws -> NativeOccurrenceEvidence {
+    .init(
+      snapshot: try array.elements[ordinal].fingerprint(budget), ordinal: ordinal,
+      previous: ordinal > 0 ? try array.elements[ordinal - 1].fingerprint(budget) : nil,
+      next: ordinal + 1 < array.elements.count
+        ? try array.elements[ordinal + 1].fingerprint(budget) : nil,
+      arraySnapshot: try array.fingerprint(budget))
+  }
+
   func occurrence(_ evidence: NativeOccurrenceEvidence, in node: Node, region: NativeRegion) throws
     -> Int
   {
     guard node.kind == .array else { throw NativeDocumentError.ownershipMismatch(region) }
+    if let arraySnapshot = evidence.arraySnapshot {
+      try budget.step(arraySnapshot.count + (evidence.snapshot?.count ?? 0))
+      guard let ordinal = evidence.ordinal, let snapshot = evidence.snapshot,
+        ordinal >= 0 && ordinal < node.elements.count,
+        try node.fingerprint(budget) == arraySnapshot,
+        try node.elements[ordinal].fingerprint(budget) == snapshot
+      else { throw NativeDocumentError.ownershipMismatch(region) }
+      return ordinal
+    }
     var matches: [Int] = []
     for (i, element) in node.elements.enumerated() {
       try budget.step()

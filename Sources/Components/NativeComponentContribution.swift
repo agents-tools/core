@@ -68,6 +68,12 @@ package struct NativeComponentHook {
   package let layout: Layout
   package let value: NativeComponentValue
   package var keys: [String] { ["hooks", event] }
+
+  /// E supplies the staged value and a fresh array precondition. Ownership comes only from
+  /// prepare's appendedOccurrences result, never from an equal existing handler.
+  package func append(value: NativeValue, expected: NativeExpectedRegion) -> NativeRegionEdit {
+    .append(region: NativeRegion(keys: keys), expected: expected, value: value)
+  }
 }
 
 package struct NativeComponentPermission {

@@ -776,6 +776,28 @@ struct NativeComponentTests {
         bindings: .init(["fixture/hook": Data("staged hook value".utf8)]),
         environment: fixture.environment, resourcePaths: [:], budget: budget(),
         cursorCommandShell: .posix)
+      let existing = try NativeDocument(
+        bytes: Data("{\"version\":1,\"privateSibling\":\"keep\"}".utf8),
+        format: .json, budget: budget())
+      let initial = try existing.prepare([hook.append(value: native, expected: .absent)])
+      let fresh = try NativeDocument(bytes: initial.bytes, format: .json, budget: budget())
+      let arrayRegion = NativeRegion(keys: hook.keys)
+      let append = hook.append(
+        value: native, expected: .owned(try #require(try fresh.read(arrayRegion))))
+      let owner = try #require(initial.appendedOccurrences.first).observation
+      let doubled = try fresh.prepare([
+        .put(region: owner.region, expected: .owned(owner), value: native), append,
+      ])
+      #expect(doubled.appendedOccurrences.map(\.editIndex) == [1])
+      let published = try NativeDocument(bytes: doubled.bytes, format: .json, budget: budget())
+      #expect(try published.read(arrayRegion)?.value == .array([native, native]))
+      #expect(try published.read(.init(keys: ["privateSibling"]))?.value == .string("keep"))
+      let addedOwner = try #require(doubled.appendedOccurrences.first).observation
+      let removed = try published.prepare([
+        .remove(region: addedOwner.region, expected: .owned(addedOwner))
+      ])
+      let afterRemoval = try NativeDocument(bytes: removed.bytes, format: .json, budget: budget())
+      #expect(try afterRemoval.read(arrayRegion)?.value == .array([native]))
       guard case .object(let object) = native else {
         Issue.record("missing native hook")
         return
@@ -1135,7 +1157,7 @@ struct NativeComponentTests {
       _ = try prepared(skipped, fixture)
       Issue.record("accepted a handler type the native event skips")
     } catch let issue as NativeComponentIssue {
-      #expect(issue.field == ["manifest", "hooks", "PermissionRequest", "type"])
+      #expect(issue.field == ["manifest", "hooks", "PermissionRequest", "0", "hooks", "0", "type"])
       #expect(issue.reason == .unsupported)
     }
     invalid["hooks"] = [
@@ -1151,7 +1173,7 @@ struct NativeComponentTests {
       _ = try prepared(ignored, fixture)
       Issue.record("accepted a native failure policy with no effect")
     } catch let issue as NativeComponentIssue {
-      #expect(issue.field == ["manifest", "hooks", "Stop", "onFailure"])
+      #expect(issue.field == ["manifest", "hooks", "Stop", "0", "hooks", "0", "onFailure"])
       #expect(issue.reason == .unsupported)
     }
     let locked = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
@@ -1242,7 +1264,7 @@ struct NativeComponentTests {
       _ = try prepared(bad, fixture)
       Issue.record("accepted a prompt handler in a Cursor plugin")
     } catch let issue as NativeComponentIssue {
-      #expect(issue.field == ["manifest", "hooks", "stop", "type"])
+      #expect(issue.field == ["manifest", "hooks", "stop", "0", "type"])
       #expect(issue.reason == .unsupported)
     }
     changed["hooks"] = ["hooks": ["stop": [["command": "fixture"]]]]
