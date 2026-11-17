@@ -82,12 +82,13 @@ public struct StateStore: Sendable {
   package func withLock<T>(
     createIfMissing: Bool = true, checkpoint: @escaping (String) throws -> Void = { _ in },
     outcome: TransactionOutcome? = nil, footprint: Set<NativeTargetRoute> = [],
+    installations: [SkillInstallationTarget] = [],
     existingRoot: ExistingProjectRoot? = nil,
     _ body: () throws -> T
   ) throws -> T {
     let root = try existingRoot?.open(for: self)
     return try withCoordination(
-      routes: footprint, writable: true, checkpoint: checkpoint,
+      routes: footprint, installations: installations, writable: true, checkpoint: checkpoint,
       existingRoot: existingRoot, projectRoot: root
     ) {
       try withScopeLock(

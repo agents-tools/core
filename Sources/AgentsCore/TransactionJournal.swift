@@ -44,6 +44,15 @@ struct TransactionJournal: Codable {
       guard entry.coordination.map({ footprint.indices.contains($0) }) ?? (route == nil) else {
         throw CoreError.invalidState("invalid entry coordination index")
       }
+      if let root = entry.coordinationRoot {
+        guard let registered = NativeTargetRoute.sharedRoute(root),
+          root.utf8.elementsEqual(registered.root.utf8),
+          let index = entry.coordination,
+          footprint[index].basename.utf8.elementsEqual(registered.basename.utf8)
+        else { throw CoreError.invalidState("invalid registered coordination root") }
+      } else if entry.coordination != nil, route == nil {
+        throw CoreError.invalidState("coordinated alias lacks its registered root")
+      }
       if let route {
         guard let index = entry.coordination,
           footprint[index].basename.utf8.elementsEqual(route.basename.utf8)
@@ -95,6 +104,7 @@ struct TransactionJournal: Codable {
     var conflict: Conflict?
     var security = TransactionSecurity()
     var coordination: Int?
+    var coordinationRoot: String?
     var name: String { String(path.split(separator: "/").last!) }
   }
 

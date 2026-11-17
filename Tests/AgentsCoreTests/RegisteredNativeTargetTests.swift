@@ -345,12 +345,17 @@ struct RegisteredNativeTargetTests {
       environment: RuntimeEnvironment(
         projectDirectory: fixture.root, homeDirectory: fixture.root.appendingPathComponent("home"),
         environment: ["CODEX_HOME": root.path]))
+    #expect(throws: CoreError.self) {
+      try store.withLock {
+        let transaction = FileTransaction(store: store)
+        try transaction.replace(root.appendingPathComponent("config.toml"), with: .data(Data()))
+      }
+    }
     try store.withLock(footprint: [.codexMCPProject]) {
       let target = try store.nativeTarget(for: .codexMCPProject)
       let transaction = FileTransaction(store: store)
-      #expect(throws: CoreError.self) {
-        try transaction.replace(target.url, with: .data(Data("owned region".utf8)))
-      }
+      try transaction.replace(target.url, with: .data(Data("owned region".utf8)))
+      try transaction.commit()
     }
     try store.withLock(footprint: [.codexMCPUser]) {
       let target = try store.nativeTarget(for: .codexMCPUser)
@@ -679,10 +684,16 @@ extension RegisteredNativeTargetTests {
     collidingEnvironment.environment["CLAUDE_CONFIG_DIR"] =
       fixture.root.appendingPathComponent(".claude").path
     let colliding = StateStore(scope: .project, environment: collidingEnvironment)
-    #expect(throws: CoreError.self) {
-      try colliding.nativeTarget(for: .named(.claudeAgent, scope: .project, name: "example"))
-    }
+    let collidingRoute = try NativeTargetRoute.named(.claudeAgent, scope: .project, name: "example")
+    let collidingTarget = try colliding.nativeTarget(for: collidingRoute)
+    #expect(collidingTarget.path == collidingRoute.root + "/" + collidingRoute.basename)
     #expect(try FileSnapshot.read(at: fixture.root) == beforeRefusal)
+    #expect(throws: CoreError.self) {
+      try colliding.withLock {
+        try FileTransaction(store: colliding).replace(collidingTarget.url, with: .data(Data()))
+      }
+    }
+    #expect(!FileManager.default.fileExists(atPath: collidingTarget.url.path))
     let linkParent = fixture.config.appendingPathComponent("commands")
     try FileManager.default.createSymbolicLink(at: linkParent, withDestinationURL: fixture.root)
     let user = StateStore(scope: .user, environment: fixture.store.environment)

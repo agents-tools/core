@@ -389,7 +389,7 @@ package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable 
     func matches(_ route: Self) throws -> Bool {
       guard route.basename.utf8.elementsEqual(target.lastPathComponent.utf8) else { return false }
       let authority = try route.rootAuthority(environment, validateExistingOverride: false)
-      let planned = authority.plannedPhysicalDirectory
+      let planned = try authority.plannedPhysicalDirectory
       let targetParent = target.deletingLastPathComponent()
       if planned.path.utf8.elementsEqual(targetParent.path.utf8) {
         _ = try authority.physicalDirectory()
@@ -417,7 +417,7 @@ package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable 
       let suffix = String(probe.basename.dropFirst("probe".count))
       guard target.lastPathComponent.hasSuffix(suffix) else { continue }
       let authority = try probe.rootAuthority(environment, validateExistingOverride: false)
-      let container = authority.plannedPhysicalDirectory
+      let container = try authority.plannedPhysicalDirectory
       var ancestor = target.deletingLastPathComponent()
       var relativeParts = [target.lastPathComponent]
       let containerIdentity = try? DirectoryHandle(at: container).objectIdentity
@@ -463,10 +463,14 @@ struct NativeRootAuthority {
   let descendants: [String]
   var logicalDirectory: URL { descendants.reduce(loader) { $0.appendingPathComponent($1) } }
   var plannedPhysicalDirectory: URL {
-    descendants.reduce(loader.resolvingSymlinksInPath()) { $0.appendingPathComponent($1) }
+    get throws {
+      try descendants.reduce(PathSafety.resolvedDirectoryBoundary(loader)) {
+        $0.appendingPathComponent($1)
+      }
+    }
   }
   func physicalDirectory() throws -> URL {
-    var result = loader.resolvingSymlinksInPath()
+    var result = try PathSafety.resolvedDirectoryBoundary(loader)
     let ancestry = try DirectoryAccessEvidence.capture(at: result)
     var opened =
       ancestry.directories.count == result.pathComponents.count
@@ -748,6 +752,7 @@ final class TransactionLockContext {
   let writable: Bool
   let requestedShared: Bool
   let absentRoots: [AbsentSharedRoot]
+  var installations: [SkillInstallationTarget] = []
   var existingProjectRoot: ExistingProjectRoot?
   var projectRootDirectory: DirectoryHandle?
   private var scopeDirectory: DirectoryHandle?
@@ -811,6 +816,7 @@ final class TransactionLockContext {
 
   func validateScope() throws {
     try existingProjectRoot?.validate()
+    for target in installations { try target.validateAuthority() }
     guard let directory = scopeDirectory else { return }
     var info = stat()
     guard let descriptor = scopeDescriptor, let identity = scopeLockIdentity,
@@ -887,7 +893,7 @@ extension StateStore {
     }
     if !route.shared, route.isNamed {
       let target = try route.physicalDirectory(environment).appendingPathComponent(route.basename)
-      try requireProjectNativeAuthority(at: target)
+      _ = try coordinationRoute(for: route)
       if route.isContainer {
         for shared in NativeTargetRoute.allCases where shared.shared {
           let parent = try shared.rootAuthority(environment, validateExistingOverride: false)
@@ -902,10 +908,12 @@ extension StateStore {
     }
     var canonical = route
     let parent: URL
-    if route.shared, let context = TransactionLockContext.current(self) {
-      parent = try context.targetDirectory(for: route)
-      if try context.absentRoot(for: route) == nil {
-        canonical = try context.resource(for: route).route
+    let coordinated = try coordinationRoute(for: route)
+    if let coordinated, let context = TransactionLockContext.current(self) {
+      let held = try context.targetDirectory(for: coordinated)
+      parent = route.shared ? held : try route.physicalDirectory(environment)
+      if route.shared, try context.absentRoot(for: coordinated) == nil {
+        canonical = try context.resource(for: coordinated).route
       }
     } else {
       parent = try route.physicalDirectory(environment)
@@ -929,7 +937,7 @@ extension StateStore {
 
   /// Acquire the union before the scope lock. Re-admission never replays a delivered callback.
   func withCoordination<T>(
-    routes: Set<NativeTargetRoute>, writable: Bool,
+    routes: Set<NativeTargetRoute>, installations: [SkillInstallationTarget] = [], writable: Bool,
     checkpoint: (String) throws -> Void = { _ in },
     existingRoot: ExistingProjectRoot? = nil, projectRoot: DirectoryHandle? = nil,
     _ body: () throws -> T
@@ -940,6 +948,17 @@ extension StateStore {
     }
     guard routes.allSatisfy({ $0.permits(scope) }) else {
       throw CoreError.unsafePath("registered native request belongs to another scope")
+    }
+    for target in installations {
+      try target.validateAuthority()
+      let current = try skillInstallationTarget(for: target.agent, named: target.name)
+      guard current.scope.path.utf8.elementsEqual(target.scope.path.utf8),
+        current.url.path.utf8.elementsEqual(target.url.path.utf8),
+        current.footprint == target.footprint
+      else { throw CoreError.invalidState("installation authority changed before admission") }
+    }
+    let installationRoutes = installations.reduce(into: Set<NativeTargetRoute>()) {
+      $0.formUnion($1.footprint)
     }
     for route in routes where !route.shared && route.isNamed { _ = try nativeTarget(for: route) }
     while true {
@@ -956,10 +975,14 @@ extension StateStore {
       let pending = before?.footprint ?? []
       var admissions: [SharedResource] = []
       let recoveryRoutes = Set(
-        (before?.roots.keys.map { $0 } ?? []).compactMap {
-          NativeTargetRoute.sharedRoute($0) ?? NativeTargetRoute.metadataRoute($0)
+        (before?.entries ?? []).compactMap { entry in
+          entry.coordinationRoot.flatMap { NativeTargetRoute.sharedRoute($0) }
+            ?? NativeTargetRoute.sharedRoute(entry.path)
+            ?? NativeTargetRoute.metadataRoute(entry.path)
         })
-      var requested = Set(routes.filter(\.shared).map { NativeTargetRoute.targetRoute($0.root)! })
+      var requested = Set(try routes.compactMap { try coordinationRoute(for: $0) })
+      requested.formUnion(installationRoutes)
+      let requestedShared = !requested.isEmpty
       requested.formUnion(recoveryRoutes)
       let ordered = requested.sorted { left, right in
         let leftPending = recoveryRoutes.contains(left)
@@ -1031,8 +1054,9 @@ extension StateStore {
       }
       let context = TransactionLockContext(
         store: self, resources: resources.sorted { $0.identity < $1.identity }, writable: writable,
-        requestedShared: routes.contains(where: \.shared), absentRoots: absentRoots,
+        requestedShared: requestedShared, absentRoots: absentRoots,
         admissions: admissions, requestedRoutes: routes)
+      context.installations = installations
       context.createdAncestry = createdAncestry
       context.existingProjectRoot = existingRoot
       context.projectRootDirectory = projectRoot
@@ -1113,6 +1137,12 @@ extension StateStore {
       guard let directory else { throw CoreError.invalidState("missing transaction scope") }
       try context.validate(journal, scope: directory)
     }
+    for target in context.installations {
+      let current = try skillInstallationTarget(for: target.agent, named: target.name)
+      guard current.url.path.utf8.elementsEqual(target.url.path.utf8),
+        current.footprint == target.footprint
+      else { throw CoreError.invalidState("installation authority changed during admission") }
+    }
     for admission in context.admissions { try admission.validate() }
     for resource in context.resources {
       if journal?.finalized != true && (context.writable || journal == nil) {
@@ -1164,5 +1194,35 @@ extension StateStore {
     return NativeTargetIdentity(
       device: identity.device, inode: identity.inode,
       kind: UInt32(identity.kind), basename: target.url.lastPathComponent)
+  }
+}
+
+extension StateStore {
+  func coordinationRoute(for route: NativeTargetRoute) throws -> NativeTargetRoute? {
+    if route.shared { return route }
+    let target = try route.physicalDirectory(environment).appendingPathComponent(route.basename)
+    guard let shared = try NativeTargetRoute.userRoute(at: target, environment: environment)
+    else { return nil }
+    guard route.knownReaders == shared.knownReaders, route.isContainer == shared.isContainer else {
+      throw CoreError.unsafePath("native alias has incompatible reader or object authority")
+    }
+    return shared
+  }
+
+  func materializationReceiptKey(for path: String) throws -> String {
+    if let route = try TransactionPaths(store: self).coordinationRoute(for: path) {
+      let resource = try TransactionLockContext.current(self).requiredResourceForRoute(route)
+      return resource.route.root + "/" + resource.identity.basename
+    }
+    return path
+  }
+}
+
+extension Optional where Wrapped == TransactionLockContext {
+  func requiredResourceForRoute(_ route: NativeTargetRoute) throws -> SharedResource {
+    guard let context = self else {
+      throw CoreError.invalidState("shared target requires its held footprint")
+    }
+    return try context.resource(for: route)
   }
 }
