@@ -25,11 +25,13 @@ struct ImplicitReadFootprintTests {
       ])
     let request = UpdateRequest(operation: .declaration(declaration))
     let report = try UpdateOperations.preview(request, scope: scope, environment: f.environment)
+    let discovery = try UpdateOperations.discover(
+      declaration, scope: scope, environment: f.environment)
     _ = try UpdateOperations.withPreparedUpdate(request, scope: scope, environment: f.environment) {
       try $0.apply(ifUnchangedFrom: report.displayedFingerprint)
     }
     let inspection = try UpdateOperations.inspect(scope: scope, environment: f.environment)
-    for locations in [report.readLocations, inspection.readLocations] {
+    for locations in [report.readLocations, discovery.readLocations, inspection.readLocations] {
       let paths = Set(locations.map(\.path))
       #expect(!paths.contains(root.path))
       #expect(

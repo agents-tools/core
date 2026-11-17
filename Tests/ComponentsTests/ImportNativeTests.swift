@@ -160,13 +160,13 @@ struct ImportNativeTests {
     let proposal = try SourceImport.preview(input)
     let metadata = try #require(proposal.packageMetadata)
     #expect(metadata.name.utf8.elementsEqual(name.utf8))
-    #expect(metadata.version.utf8.elementsEqual(version.utf8))
+    #expect((try #require(metadata.version)).utf8.elementsEqual(version.utf8))
     #expect(metadata.nameLocation.document == file)
     #expect(metadata.nameLocation.pointer == "/member[1]")
     #expect(metadata.nameLocation.span?.line == 3)
-    #expect(metadata.versionLocation.document == file)
-    #expect(metadata.versionLocation.pointer == "/member[2]")
-    #expect(metadata.versionLocation.span?.line == 2)
+    #expect(metadata.versionLocation?.document == file)
+    #expect(metadata.versionLocation?.pointer == "/member[2]")
+    #expect(metadata.versionLocation?.span?.line == 2)
     #expect(proposal.components.map(\.member?.selector) == [.command(name: "review")])
     #expect(proposal.diagnostics.contains { $0.code == .unconverted })
     #expect(try fixture.hash() == before)
@@ -191,6 +191,48 @@ struct ImportNativeTests {
     #expect(!sensitive.bindings.isEmpty)
     #expect(sensitive.components.count == 1)
     #expect(!String(reflecting: sensitive).contains("PRIVATE_VERSION_CANARY"))
+  }
+
+  @Test(arguments: [SourceImportProfile.claudePluginV1, .cursorPluginV1])
+  func nativePackageNameKeepsExactProducerCoordinatesWithoutVersion(
+    _ profile: SourceImportProfile
+  ) throws {
+    let fixture = try NativeImportFixture()
+    let suffix =
+      profile == .claudePluginV1 ? ".claude-plugin/plugin.json" : ".cursor-plugin/plugin.json"
+    let file = "different-folder/" + suffix
+    let name = profile == .claudePluginV1 ? "cafe\u{301}" : "exact.producer-name"
+    try fixture.write(file, "{\n  \"name\": \"\(name)\"\n}")
+    try fixture.write(
+      "different-folder/skills/helper/SKILL.md",
+      "---\nname: helper\ndescription: Helper\n---\nBody\n")
+    let before = try fixture.hash()
+    let proposal = try SourceImport.preview(fixture.input(profile, file))
+    let metadata = try #require(proposal.packageMetadata)
+    #expect(metadata.name.utf8.elementsEqual(name.utf8))
+    #expect(metadata.nameLocation.document == file)
+    #expect(metadata.nameLocation.pointer == "/member[0]")
+    #expect(metadata.nameLocation.span?.line == 2)
+    #expect(metadata.version == nil && metadata.versionLocation == nil)
+    #expect(proposal.components.count == 1 && proposal.diagnostics.isEmpty)
+    #expect(try fixture.hash() == before)
+    for invalidName in [#"7"#, #""""#, #""https://user:PRIVATE_NAME_CANARY@example.test""#] {
+      try fixture.write(file, "{\"name\":\(invalidName)}")
+      let invalid = try SourceImport.preview(fixture.input(profile, file))
+      #expect(invalid.packageMetadata == nil)
+      #expect(!invalid.diagnostics.isEmpty)
+      #expect(!String(reflecting: invalid).contains("PRIVATE_NAME_CANARY"))
+    }
+    if profile == .cursorPluginV1 {
+      try fixture.write(file, #"{"name":"Invalid_Producer"}"#)
+      let invalid = try SourceImport.preview(fixture.input(profile, file))
+      #expect(invalid.packageMetadata == nil)
+      #expect(
+        invalid.diagnostics.contains {
+          $0.code == .invalidInput && $0.location.document == file
+            && $0.location.pointer == "/member[0]"
+        })
+    }
   }
 
   @Test func codexRoleRelativeFileAndOpenCodeOrderedPolicyBecomeTypedIntent() throws {

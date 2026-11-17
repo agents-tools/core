@@ -190,9 +190,25 @@ package struct ImportResourceProposal: Equatable, Sendable {
 /// Producer package identity is provenance, not a component, source pin or deployment choice.
 package struct ImportPackageMetadata: Equatable, Sendable {
   package let name: String
-  package let version: String
+  package let version: String?
   package let nameLocation: ImportLocation
-  package let versionLocation: ImportLocation
+  package let versionLocation: ImportLocation?
+
+  package init(name: String, nameLocation: ImportLocation) {
+    self.name = name
+    self.nameLocation = nameLocation
+    version = nil
+    versionLocation = nil
+  }
+
+  package init(
+    name: String, version: String, nameLocation: ImportLocation, versionLocation: ImportLocation
+  ) {
+    self.name = name
+    self.version = version
+    self.nameLocation = nameLocation
+    self.versionLocation = versionLocation
+  }
 }
 
 /// Canonical intent and evidence only. Raw documents and literal credentials never escape parsing.

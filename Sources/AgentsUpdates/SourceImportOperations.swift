@@ -405,8 +405,19 @@ package struct ImportPreparation: Sendable {
   let input: SourceImportInput
   let proposal: SourceImportProposal
   let catalog: SourceImportProposal
-  let documentFingerprint: String
   let locations: [URL]
+  private let originalInputs: [TargetPrecondition]
+
+  init(
+    input: SourceImportInput, proposal: SourceImportProposal, catalog: SourceImportProposal,
+    locations: [URL]
+  ) throws {
+    self.input = input
+    self.proposal = proposal
+    self.catalog = catalog
+    self.locations = locations
+    originalInputs = try locations.map { try TargetPrecondition($0) }
+  }
 
   func validateConversion() throws {
     guard proposal.diagnostics.isEmpty, proposal.bindings.isEmpty else {
@@ -428,19 +439,16 @@ package struct ImportPreparation: Sendable {
   }
 
   func capture(admitConversion: Bool = true) throws -> [TargetPrecondition] {
-    let document = try PathSafety.resolvedChild(base: input.root, subpath: input.document)
-    let evidence = try TargetPrecondition(document)
-    let inputs = try locations.map { try TargetPrecondition($0) }
+    for original in originalInputs { try original.validate() }
     var enumeration = input
     enumeration.enumerateChoices = true
     enumeration.selection = nil
-    guard try evidence.displayEvidence(includeContent: true) == documentFingerprint,
-      try SourceImport.preview(input) == proposal, try SourceImport.preview(enumeration) == catalog
+    guard try SourceImport.preview(input) == proposal,
+      try SourceImport.preview(enumeration) == catalog
     else { throw CoreError.invalidState("import inputs changed; refresh the import inspection") }
     if admitConversion { try validateConversion() }
-    try evidence.validate()
-    for input in inputs { try input.validate() }
-    return inputs
+    for original in originalInputs { try original.validate() }
+    return originalInputs
   }
 }
 
@@ -469,8 +477,6 @@ public enum SourceImportOperations {
     let document = input.document
     let installedSkills = input.installedSkills
     let url = try PathSafety.resolvedChild(base: root, subpath: document)
-    let evidence = try TargetPrecondition(url)
-    let fingerprint = try evidence.displayEvidence(includeContent: true)
     let proposal = try SourceImport.preview(input)
     var enumeration = input
     enumeration.selection = nil
@@ -489,9 +495,8 @@ public enum SourceImportOperations {
         locations.append(URL(fileURLWithPath: String(identity.dropFirst(6))))
       }
     }
-    let preparation = ImportPreparation(
+    let preparation = try ImportPreparation(
       input: input, proposal: proposal, catalog: catalog,
-      documentFingerprint: fingerprint,
       locations: Array(Set(locations)).sorted { $0.path < $1.path })
     _ = try preparation.capture(admitConversion: false)
     return SourceImportInspection(proposal, preparation: preparation, catalog: catalog)

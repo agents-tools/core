@@ -46,7 +46,7 @@ struct ImportProfileTests {
     #expect(metadata.version == "1.0.0")
     #expect(metadata.nameLocation.document == "apm.yml")
     #expect(metadata.nameLocation.span?.line == 1)
-    #expect(metadata.versionLocation.span?.line == 2)
+    #expect(metadata.versionLocation?.span?.line == 2)
     #expect(proposal.profile.producerRevision == "787a97cc52fbbcc344374e1567b2a1e5b8adf441")
     #expect(try fixture.hash() == before)
 

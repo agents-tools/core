@@ -107,14 +107,11 @@ extension UpdateOperations {
           ledger, roots: store.ledgerRoots,
           generation: ResolvedLedgerCodec.digest(ledger))
         var revisions: [String: [String]] = [:]
-        var locations = try readLocations(
+        let locations = try readLocations(
           declarations: [previous, declaration], ledgers: [ledger], store: store)
         for id in ledger.sources.keys.sorted() {
           let identity = try ledger.sourceIdentity(id, roots: store.ledgerRoots)
           revisions[identity, default: []].append(ledger.sources[id]!.revision)
-          if let location = ledger.sources[id]!.location {
-            locations.append(try location.resolve(roots: store.ledgerRoots))
-          }
         }
         for key in revisions.keys { revisions[key] = Array(Set(revisions[key]!)).sorted() }
         try baseline.validate()
