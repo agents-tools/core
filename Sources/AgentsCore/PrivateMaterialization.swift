@@ -314,7 +314,8 @@ struct MaterializationReceipts: Codable {
         throw CoreError.invalidState("invalid materialization receipt target")
       }
       guard
-        [mode_t(S_IFREG), mode_t(S_IFDIR)].contains(record.access.identity.kind),
+        [mode_t(CPlatform.S_IFREG), mode_t(CPlatform.S_IFDIR)].contains(
+          record.access.identity.kind),
         record.access.identity.isDirectory == (record.treeAccess != nil),
         record.access.identity.isDirectory
           == (NativeTargetRoute.targetRoute(path)?.isContainer == true),
