@@ -31,8 +31,33 @@ package enum ResolvedLedgerCodec {
   ) throws -> Data? {
     try checkModel(ledger, limits: limits)
     try ledger.validate()
-    if let existing, try bytes(decode(existing, limits: limits)) == bytes(ledger) { return nil }
+    if let existing {
+      let original = try decode(existing, limits: limits)
+      try LedgerAdmission.check(bytes(ledger), limits: limits)
+      var comparison = ledger
+      for index in 0..<min(comparison.sourceUses.count, original.sourceUses.count) {
+        comparison.sourceUses[index].requirement = comparisonRequirement(
+          comparison.sourceUses[index].requirement, original: original.sourceUses[index].requirement
+        )
+      }
+      for index in 0..<min(comparison.groups.count, original.groups.count) {
+        comparison.groups[index].requirement = comparisonRequirement(
+          comparison.groups[index].requirement, original: original.groups[index].requirement)
+      }
+      if try bytes(original) == bytes(comparison) { return nil }
+    }
     return try encode(ledger, limits: limits)
+  }
+
+  /// Only typed version intent ignores spelling. Git ref names and every other wire value
+  /// retain byte identity; comparison never changes the ledger that will be published.
+  private static func comparisonRequirement(
+    _ requirement: SourceRequirement?, original: SourceRequirement?
+  ) -> SourceRequirement? {
+    guard let requirement, let original, requirement.isVersionRequirement,
+      requirement.declarationEquivalent(to: original)
+    else { return requirement }
+    return original
   }
 
   package static func checkModel(_ ledger: ResolvedLedger, limits: LedgerLimits) throws {

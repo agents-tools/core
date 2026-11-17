@@ -69,6 +69,22 @@ struct LedgerAuthorityTests {
     #expect(try ResolvedLedgerCodec.replacement(old, existing: nullable, limits: .standard) == nil)
   }
 
+  @Test func equivalentRequirementsDoNotMaskPrivateContinuityChanges() throws {
+    var ledger = fixture()
+    ledger.sourceUses = [
+      .init(source: "root", root: ".", requirement: .range(from: "v1.2.0", to: "2.0.0+meta"))
+    ]
+    ledger.nativeAuthorities![0].regions[0].path[1] = .position(
+      index: 1, evidence: .privateArray(token: UUID()))
+    let bytes = try encoded(ledger)
+    var next = ledger
+    next.sourceUses[0].requirement = .upToNextMajor(from: "1.2.0")
+    #expect(try ResolvedLedgerCodec.replacement(next, existing: bytes, limits: .standard) == nil)
+    next.nativeAuthorities![0].regions[0].path[1] = .position(
+      index: 1, evidence: .privateArray(token: UUID()))
+    #expect(try ResolvedLedgerCodec.replacement(next, existing: bytes, limits: .standard) != nil)
+  }
+
   @Test func strictTaggedWireRejectsUnknownAndWrongFields() throws {
     let bytes = try encoded(fixture())
     let root = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])

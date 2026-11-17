@@ -140,3 +140,120 @@ struct RequirementSemanticsTests {
       try String(contentsOf: after.appendingPathComponent("content"), encoding: .utf8) == "old")
   }
 }
+
+extension RequirementSemanticsTests {
+  @Test(arguments: [
+    (
+      SourceRequirement.range(from: "v1.2.0+lower", to: "2.0.0+upper"),
+      SourceRequirement.upToNextMajor(from: "1.2.0")
+    ),
+    (.range(from: "1.2.0-beta+lower", to: "1.3.0+upper"), .upToNextMinor(from: "v1.2.0-beta")),
+    (.exact(" V1.2.3+build "), .exact("1.2.3+build")),
+  ])
+  func sourceAndGroupRequirementsPreserveOriginalLayout(
+    _ original: SourceRequirement, _ equivalent: SourceRequirement
+  ) throws {
+    var ledger = ResolvedLedger()
+    ledger.sources["source"] = .init(
+      kind: .git, transport: "https://intranet/team.git",
+      revision: String(repeating: "a", count: 40))
+    ledger.sourceUses = [.init(source: "source", root: ".", requirement: original)]
+    ledger.groups = [
+      .init(
+        id: 0, source: "source", root: ".", name: "export", requirement: original,
+        manifestHash: "sha256:" + String(repeating: "a", count: 64), children: [])
+    ]
+    let encoded = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+    let originalBytes = try JSONSerialization.data(
+      withJSONObject: JSONSerialization.jsonObject(with: encoded),
+      options: [.prettyPrinted, .sortedKeys])
+    var next = ledger
+    next.sourceUses[0].requirement = equivalent
+    next.groups[0].requirement = equivalent
+    #expect(
+      try ResolvedLedgerCodec.replacement(next, existing: originalBytes, limits: .standard) == nil)
+    #expect(
+      try ResolvedLedgerCodec.decode(originalBytes, limits: .standard).groups[0].requirement
+        == original)
+    next.groups[0].requirement = .branch("different")
+    #expect(
+      try ResolvedLedgerCodec.replacement(next, existing: originalBytes, limits: .standard) != nil)
+  }
+
+  @Test func equivalentRequirementsDoNotMaskByteExactNativeOrRefChanges() throws {
+    var ledger = ResolvedLedger()
+    ledger.sources["source"] = .init(
+      kind: .git, transport: "https://intranet/team.git",
+      revision: String(repeating: "a", count: 40))
+    ledger.sourceUses = [
+      .init(source: "source", root: ".", requirement: .range(from: "v1.2.0", to: "2.0.0+meta"))
+    ]
+    ledger.lowerings = [
+      .init(
+        id: "native", format: "test/value@1", inputs: [], resources: [], deployments: [],
+        layout: .init("é"), platform: "macos", artifacts: [])
+    ]
+    let original = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+    var next = ledger
+    next.sourceUses[0].requirement = .upToNextMajor(from: "1.2.0")
+    next.lowerings[0].layout = .init("e\u{301}")
+    #expect(try ResolvedLedgerCodec.replacement(next, existing: original, limits: .standard) != nil)
+    for (before, after) in [
+      (LedgerValue("1.0", kind: .decimal), LedgerValue("1.00", kind: .decimal)),
+      (LedgerValue(), LedgerValue(object: [:])),
+      (
+        LedgerValue(object: [
+          "requirement": .init(object: ["from": .init("v1.2.0"), "to": .init("2.0.0+meta")])
+        ]),
+        LedgerValue(object: ["requirement": .init(object: ["from": .init("1.2.0")])])
+      ),
+    ] {
+      ledger.lowerings[0].layout = before
+      let valueBytes = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+      next = ledger
+      next.sourceUses[0].requirement = .upToNextMajor(from: "1.2.0")
+      next.lowerings[0].layout = after
+      #expect(
+        try ResolvedLedgerCodec.replacement(next, existing: valueBytes, limits: .standard) != nil)
+    }
+    ledger.sourceUses[0].requirement = .exact("1.2.3+one")
+    let exactBytes = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+    next = ledger
+    next.sourceUses[0].requirement = .exact("1.2.3+two")
+    #expect(
+      try ResolvedLedgerCodec.replacement(next, existing: exactBytes, limits: .standard) != nil)
+    for requirement in [SourceRequirement.branch("é"), .revision("é")] {
+      ledger.sourceUses[0].requirement = requirement
+      let refBytes = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+      next = ledger
+      if case .branch = requirement {
+        next.sourceUses[0].requirement = .branch("e\u{301}")
+      } else {
+        next.sourceUses[0].requirement = .revision("e\u{301}")
+      }
+      #expect(
+        try ResolvedLedgerCodec.replacement(next, existing: refBytes, limits: .standard) != nil)
+    }
+  }
+}
+
+extension RequirementSemanticsTests {
+  @Test func equivalentRequirementsStillRespectCandidateWireBudget() throws {
+    var ledger = ResolvedLedger()
+    ledger.sources["source"] = .init(
+      kind: .git, transport: "https://intranet/team.git",
+      revision: String(repeating: "a", count: 40))
+    ledger.sourceUses = [
+      .init(source: "source", root: ".", requirement: .upToNextMajor(from: "1.2.0"))
+    ]
+    let bytes = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+    var next = ledger
+    next.sourceUses[0].requirement = .range(
+      from: "1.2.0", to: "2.0.0+" + String(repeating: "metadata", count: 20))
+    var limits = LedgerLimits.standard
+    limits.encodedBytes = bytes.count
+    #expect(throws: (any Error).self) {
+      try ResolvedLedgerCodec.replacement(next, existing: bytes, limits: limits)
+    }
+  }
+}
