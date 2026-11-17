@@ -249,6 +249,82 @@ struct PluginLinkingTests {
     }
   }
 
+  @Test func emptyExpansionMustIdentifySelectedProducer() throws {
+    let fixture = try LinkFixture()
+    let declaring = fixture.root.appendingPathComponent("declaring")
+    let selected = fixture.root.appendingPathComponent("selected")
+    try container(fixture, "one", at: selected)
+    try fixture.manifest(
+      """
+      version: 1
+      sources: {b: {path: "\(selected.path)"}}
+      exports: [bundle]
+      groups: {bundle: {components: [{kind: plugin, name: empty, path: one, source: b, select: []}]}}
+      """, at: declaring)
+    let ledger = try freeze(
+      fixture,
+      """
+      version: 1
+      sources: {a: {path: "\(declaring.path)"}}
+      uses: [{source: a, group: bundle}]
+      """)
+    let parent = try #require(ledger.occurrences.firstIndex { $0.pluginExpansion != nil })
+    let occurrence = ledger.occurrences[parent]
+    let component = try #require(ledger.components[occurrence.component])
+    let expansion = try #require(occurrence.pluginExpansion)
+    #expect(expansion.children.isEmpty)
+    #expect(expansion.source == component.source)
+    #expect(component.declaringSource != component.source)
+    #expect(occurrence.dependencies.contains(component.declaringSource))
+    #expect(occurrence.dependencies.contains(component.source))
+    let bytes = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+    #expect(try ResolvedLedgerCodec.decode(bytes, limits: .standard) == ledger)
+    var wrongProducer = ledger
+    wrongProducer.occurrences[parent].pluginExpansion!.source = component.declaringSource
+    #expect(throws: (any Error).self) {
+      _ = try ResolvedLedgerCodec.decode(
+        ResolvedLedgerCodec.bytes(wrongProducer), limits: .standard)
+    }
+  }
+
+  @Test func everyContainerArrivalNeedsItsParentRelation() throws {
+    let fixture = try LinkFixture()
+    try container(fixture, "one", at: fixture.project)
+    let ledger = try freeze(
+      fixture,
+      """
+      version: 1
+      components:
+        - {kind: ignore, name: direct, patterns: [temp]}
+        - {kind: plugin, name: first, path: one, source: ".", select: [command]}
+        - {kind: plugin, name: repeated, path: one, source: ".", select: [command]}
+      """)
+    let members = ledger.occurrences.filter { $0.pluginMember != nil }
+    #expect(members.count == 2)
+    #expect(Set(members.map(\.component)).count == 1)
+    #expect(Set(members.map { $0.pluginMember!.parent }).count == 2)
+    #expect(
+      ledger.occurrences.contains {
+        $0.pluginMember == nil && ledger.components[$0.component]?.containerRoot == nil
+          && $0.consumerEditable
+      })
+    let bytes = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+    #expect(try ResolvedLedgerCodec.decode(bytes, limits: .standard) == ledger)
+    for editable in [false, true] {
+      var orphaned = ledger
+      var orphan = try #require(members.first)
+      orphan.id = (ledger.occurrences.map(\.id).max() ?? 0) + 1
+      orphan.reference = nil
+      orphan.pluginMember = nil
+      orphan.consumerEditable = editable
+      orphaned.occurrences.append(orphan)
+      #expect(throws: (any Error).self) {
+        _ = try ResolvedLedgerCodec.decode(
+          ResolvedLedgerCodec.bytes(orphaned), limits: .standard)
+      }
+    }
+  }
+
   @Test func strictClosureAndByteExactNoOp() throws {
     let fixture = try LinkFixture()
     try container(fixture, "one", at: fixture.project)
