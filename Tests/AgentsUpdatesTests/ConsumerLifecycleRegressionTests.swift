@@ -302,3 +302,260 @@ struct ConsumerLifecycleRegressionTests {
     #expect(try f.snapshot() == before)
   }
 }
+
+extension ConsumerLifecycleRegressionTests {
+  private func finiteRules(_ f: UpdateFixture) -> Declaration {
+    Declaration(
+      sources: ["fixture": SourceDeclaration(kind: .local, location: f.repo.path)],
+      components: [
+        .instructions(InstructionsDeclaration(agents: [.codex], sections: ["fixture:extra"]))
+      ])
+  }
+
+  private func writeFiniteRules(_ f: UpdateFixture) throws {
+    try f.write(
+      "---\ndescription: Extra.\n---\n# Extra\n\nSelected addition\n",
+      to: f.repo.appendingPathComponent("instructions/extra.md"))
+    try f.commit()
+  }
+
+  @Test func finiteAdditionPreservesPinsAndSharedInstructionSurvivors() throws {
+    let f = try UpdateFixture()
+    try f.install(agents: [.codex])
+    let previous = try f.store.loadLedger()
+    let original = try f.store.loadDeclaration()
+    try f.advance()
+    try writeFiniteRules(f)
+    let before = try FileHash.folderHash(f.root)
+    let scope = try UpdateOperations.inspect(environment: f.environment)
+    let discovery = try #require(try UpdateOperations.captureAddition(finiteRules(f), in: scope))
+    #expect(try FileHash.folderHash(f.root) == before)
+    var request = discovery.updateRequest()
+    request.replace = true
+    request.changingAccess = true
+    let preview = try UpdateOperations.preview(request, environment: f.environment)
+    let target = try #require(preview.instructions.targets.first { $0.url == f.instruction() })
+    let bytes = try #require(target.after)
+    #expect(String(decoding: bytes, as: UTF8.self).contains("Selected addition"))
+    #expect(String(decoding: bytes, as: UTF8.self).contains("old"))
+    #expect(!String(decoding: bytes, as: UTF8.self).contains("\nnew\n"))
+    _ = try UpdateOperations.withPreparedUpdate(request, environment: f.environment) {
+      try $0.apply(ifUnchangedFrom: preview.displayedFingerprint)
+    }
+    #expect(try f.bytes(f.instruction()) == bytes)
+    let next = try f.store.loadLedger()
+    for (id, component) in previous.components {
+      #expect(next.components[id] == component)
+      #expect(next.sources[component.source] == previous.sources[component.source])
+    }
+    let declaration = try f.store.loadDeclaration()
+    #expect(Array(declaration.components.prefix(original.components.count)) == original.components)
+    #expect(declaration.sources["fixture"] == original.sources["fixture"])
+  }
+
+  @Test func capturedAdditionRejectsForeignDestinationAndMutatedRequest() throws {
+    let f = try UpdateFixture()
+    let other = try UpdateFixture()
+    try writeFiniteRules(f)
+    for fixture in [f, other] {
+      try fixture.store.save(declaration: Declaration(agents: [.codex]), ledger: ResolvedLedger())
+    }
+    #expect(try f.bytes(f.store.declarationURL) == other.bytes(other.store.declarationURL))
+    var environment = f.environment
+    environment.environment["INSPECTION_SECRET"] = "CAPTURED_ENVIRONMENT_CANARY"
+    let inspection = try UpdateOperations.inspect(environment: environment)
+    #expect(!String(reflecting: inspection).contains("CAPTURED_ENVIRONMENT_CANARY"))
+    let discovery = try #require(
+      try UpdateOperations.captureAddition(finiteRules(f), in: inspection))
+    #expect(!String(reflecting: discovery).contains("CAPTURED_ENVIRONMENT_CANARY"))
+    let otherBefore = try FileHash.folderHash(other.root)
+    var called = false
+    #expect(throws: (any Error).self) {
+      try UpdateOperations.withPreparedUpdate(
+        discovery.updateRequest(), environment: other.environment
+      ) {
+        _ in called = true
+      }
+    }
+    #expect(!called)
+    #expect(try FileHash.folderHash(other.root) == otherBefore)
+    var modified = discovery.updateRequest()
+    modified.operation = .update
+    #expect(throws: (any Error).self) {
+      try UpdateOperations.preview(modified, environment: f.environment)
+    }
+    _ = try UpdateOperations.withPreparedUpdate(
+      discovery.updateRequest(), environment: f.environment
+    ) {
+      try $0.apply()
+    }
+    #expect(try f.store.loadDeclaration().sources["fixture"] != nil)
+  }
+
+  @Test(arguments: ["declaration", "ledger", "source"])
+  func capturedAdditionRejectsChangedEvidence(_ changed: String) throws {
+    let f = try UpdateFixture()
+    try f.install(agents: [.codex])
+    try writeFiniteRules(f)
+    let discovery = try #require(
+      try UpdateOperations.captureAddition(
+        finiteRules(f), in: UpdateOperations.inspect(environment: f.environment)))
+    if changed == "declaration" {
+      try f.write(
+        String(decoding: f.bytes(f.store.declarationURL), as: UTF8.self) + "\n# changed\n",
+        to: f.store.declarationURL)
+    } else if changed == "ledger" {
+      try f.write(
+        String(decoding: f.bytes(f.store.resolvedURL), as: UTF8.self) + "\n",
+        to: f.store.resolvedURL)
+    } else {
+      try f.write(
+        "---\ndescription: Extra.\n---\n# Extra\n\nChanged selected source\n",
+        to: f.repo.appendingPathComponent("instructions/extra.md"))
+      try f.commit()
+    }
+    var called = false
+    #expect(throws: (any Error).self) {
+      try UpdateOperations.withPreparedUpdate(discovery.updateRequest(), environment: f.environment)
+      {
+        _ in called = true
+      }
+    }
+    #expect(!called)
+  }
+
+  @Test func emptyAdditionDoesNotInitializeAndPendingAuthoredGraphIsProtected() throws {
+    let f = try UpdateFixture()
+    let scope = try UpdateOperations.inspect(environment: f.environment)
+    let before = try FileHash.folderHash(f.root)
+    #expect(
+      try UpdateOperations.captureAddition(
+        Declaration(sources: ["unused": .init(kind: .local, location: "/absent")]), in: scope)
+        == nil)
+    #expect(try FileHash.folderHash(f.root) == before)
+    try f.declare(agents: [.codex])
+    try writeFiniteRules(f)
+    #expect(throws: (any Error).self) {
+      try UpdateOperations.captureAddition(
+        finiteRules(f), in: UpdateOperations.inspect(environment: f.environment))
+    }
+  }
+}
+
+extension ConsumerLifecycleRegressionTests {
+  @Test(arguments: [false, true])
+  func finiteAdditionProtectsConditionalProducerUsesAndConflictingPins(_ sharedSource: Bool) throws
+  {
+    let f = try UpdateFixture()
+    let producerFixture = try sharedSource ? f : UpdateFixture()
+    try producerFixture.write(
+      """
+      version: 1
+      groups:
+        tools:
+          components: [{kind: mcpServer, name: protected-tool, transport: {kind: stdio, executable: never-run}, agents: [claude-code]}]
+      exports: [tools]
+      """, to: producerFixture.repo.appendingPathComponent(".agent/agents.yaml"))
+    try producerFixture.commit()
+    try f.declare(agents: [.codex])
+    var original = try f.store.loadDeclaration()
+    let alias = sharedSource ? "fixture" : "producer"
+    if !sharedSource {
+      original.sources[alias] = .init(kind: .local, location: producerFixture.repo.path)
+    }
+    original.uses = [.init(name: "tools", source: alias, condition: .init(scopes: [.project]))]
+    try f.store.save(declaration: original, ledger: ResolvedLedger())
+    _ = try f.apply()
+    let previous = try UpdateOperations.inspect(environment: f.environment)
+    let producer = try #require(previous.components.first { $0.name == "protected-tool" })
+    #expect(producer.occurrences.allSatisfy { !$0.consumerEditable })
+    try writeFiniteRules(f)
+    let scope = try UpdateOperations.inspect(environment: f.environment)
+    var conflicting = finiteRules(f)
+    conflicting.sources["fixture"]?.location = f.root.path
+    #expect(throws: (any Error).self) {
+      try UpdateOperations.captureAddition(conflicting, in: scope)
+    }
+    if sharedSource {
+      let before = try f.snapshot()
+      #expect(throws: (any Error).self) {
+        try UpdateOperations.captureAddition(finiteRules(f), in: scope)
+      }
+      #expect(try f.snapshot() == before)
+      return
+    }
+    let discovery = try #require(try UpdateOperations.captureAddition(finiteRules(f), in: scope))
+    let preview = try UpdateOperations.preview(
+      discovery.updateRequest(), environment: f.environment)
+    _ = try UpdateOperations.withPreparedUpdate(
+      discovery.updateRequest(), environment: f.environment
+    ) {
+      try $0.apply(ifUnchangedFrom: preview.displayedFingerprint)
+    }
+    let next = try UpdateOperations.inspect(environment: f.environment)
+    let retained = try #require(next.components.first { $0.name == "protected-tool" })
+    #expect(retained.revision == producer.revision)
+    #expect(retained.configuration == producer.configuration)
+    #expect(retained.conditions == producer.conditions)
+    #expect(retained.occurrences.allSatisfy { !$0.consumerEditable })
+    #expect(try f.store.loadDeclaration().uses == original.uses)
+    #expect(throws: (any Error).self) {
+      try UpdateOperations.preview(
+        .init(operation: .remove, selections: [retained.selection]),
+        environment: f.environment)
+    }
+  }
+
+}
+
+extension ConsumerLifecycleRegressionTests {
+  @Test func finiteAdditionRefusesNewForeignTargetBeforeCallback() throws {
+    let f = try UpdateFixture()
+    try writeFiniteRules(f)
+    let discovery = try #require(
+      try UpdateOperations.captureAddition(
+        finiteRules(f), in: UpdateOperations.inspect(environment: f.environment)))
+    _ = try UpdateOperations.preview(discovery.updateRequest(), environment: f.environment)
+    try f.write("Handwritten after preview\n", to: f.instruction())
+    var called = false
+    #expect(throws: (any Error).self) {
+      try UpdateOperations.withPreparedUpdate(discovery.updateRequest(), environment: f.environment)
+      {
+        _ in called = true
+      }
+    }
+    #expect(!called)
+    #expect(try f.bytes(f.instruction()) == Data("Handwritten after preview\n".utf8))
+    #expect(!FileManager.default.fileExists(atPath: f.store.declarationURL.path))
+    #expect(!FileManager.default.fileExists(atPath: f.store.resolvedURL.path))
+  }
+}
+
+extension ConsumerLifecycleRegressionTests {
+  @Test func finiteNamedCommandAdmitsItsNewClosedRoute() throws {
+    let f = try UpdateFixture()
+    let scope = try UpdateOperations.inspect(environment: f.environment)
+    let discovery = try #require(
+      try UpdateOperations.captureAddition(
+        Declaration(components: [
+          .command(
+            name: "review", description: "Review sources",
+            prompt: .literal("Review exact sources."), agents: [.claudeCode])
+        ]), in: scope))
+    let before = try FileHash.folderHash(f.root)
+    let preview = try UpdateOperations.preview(
+      discovery.updateRequest(), environment: f.environment)
+    #expect(try FileHash.folderHash(f.root) == before)
+    _ = try UpdateOperations.withPreparedUpdate(
+      discovery.updateRequest(), environment: f.environment
+    ) {
+      try $0.apply(ifUnchangedFrom: preview.displayedFingerprint)
+    }
+    let installed = try UpdateOperations.inspect(environment: f.environment)
+    let deployment = try #require(installed.deployments.first)
+    #expect(deployment.status == .current)
+    #expect(
+      try String(contentsOf: deployment.location, encoding: .utf8).contains("Review exact sources.")
+    )
+  }
+}
