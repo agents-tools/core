@@ -50,16 +50,20 @@ struct UpdateTransactionTests {
     #expect(try !fixture.preview().hasChanges)
   }
 
-  @Test(arguments: [false, true])
-  func outerTerminalReportsTheDurablePublication(_ committed: Bool) throws {
+  @Test(arguments: [
+    (TransactionCheckpoint.phase(.preparing).name, UpdateTerminalDisposition.unchanged),
+    (
+      TransactionCheckpoint.persisted(.applying, .entry(0, .publishing), .renamed).name, .rolledBack
+    ),
+    (TransactionCheckpoint.phase(.committed).name, .committed),
+  ])
+  func outerTerminalReportsTheDurablePublication(
+    point: String, expected: UpdateTerminalDisposition
+  ) throws {
     let fixture = try UpdateFixture()
     try fixture.install()
     let before = try fixture.snapshot()
     try fixture.advance()
-    let point =
-      committed
-      ? TransactionCheckpoint.phase(.committed).name
-      : TransactionCheckpoint.phase(.preparing).name
     var interrupted = false
     let result = UpdateOperations.perform(
       environment: fixture.environment,
@@ -70,10 +74,10 @@ struct UpdateTransactionTests {
         }
       }, { try $0.apply() })
     #expect(interrupted)
-    #expect(result.disposition == (committed ? .committed : .rolledBack))
+    #expect(result.disposition == expected)
     #expect(!result.recovery.pending)
     #expect(throws: UpdateApplyError.self) { try result.result.get() }
-    if !committed { #expect(try fixture.snapshot() == before) }
+    if expected != .committed { #expect(try fixture.snapshot() == before) }
   }
 
   @Test(arguments: [

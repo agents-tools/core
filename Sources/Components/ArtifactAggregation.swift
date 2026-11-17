@@ -32,6 +32,7 @@ package final class ArtifactAggregation: PreparedEvidence {
   private let selectedKinds: Set<DeclaredComponentKind>?
   private let selectedNames: Set<String>
   private let selectedIdentities: Set<String>?
+  private let retargetedInstructions: Set<String>
   private var unownedInstructions: [String] = []
   private var unownedSkills: [String] = []
   private var targets: [String: TargetPrecondition] = [:]
@@ -54,7 +55,7 @@ package final class ArtifactAggregation: PreparedEvidence {
     changingAccess: Bool,
     kinds: Set<DeclaredComponentKind>? = nil, names: Set<String> = [],
     selectedIdentities: Set<String>? = nil,
-    installations: [SkillInstallationTarget] = []
+    installations: [SkillInstallationTarget] = [], retargetedInstructions: Set<String> = []
   ) throws {
     self.ledger = ledger
     self.store = store
@@ -64,16 +65,12 @@ package final class ArtifactAggregation: PreparedEvidence {
     selectedKinds = kinds
     selectedNames = names
     self.selectedIdentities = selectedIdentities
+    self.retargetedInstructions = retargetedInstructions
     for (id, file) in resources where ledger.resources[id]?.kind != .liveEdit {
       resourceEvidence.append(try TargetPrecondition(file))
     }
-    func selected(_ deployment: LedgerDeployment, in ledger: ResolvedLedger) -> Bool {
-      kinds == nil
-        || deployment.owners.contains {
-          ledger.components[$0].flatMap { DeclaredComponentKind(rawValue: $0.kind) }.map {
-            kinds!.contains($0)
-          } ?? false
-        }
+    func selected(_ deployment: LedgerDeployment, in ledger: ResolvedLedger) throws -> Bool {
+      try deployment.owners.contains { try isSelected($0, in: ledger) }
     }
     for (id, source) in resources where ledger.resources[id]?.kind != .liveEdit {
       let resource = ledger.resources[id]!
@@ -111,11 +108,13 @@ package final class ArtifactAggregation: PreparedEvidence {
     let roots = store.ledgerRoots
     let artifacts = Dictionary(uniqueKeysWithValues: artifacts.map { ($0.name, $0) })
     let previousByPath = try Dictionary(
-      grouping: previous.deployments.filter { selected($0, in: previous) }
+      grouping: previous.deployments.filter { try selected($0, in: previous) }
     ) {
       try installationURL($0).path
     }
-    var byPath = try Dictionary(grouping: ledger.deployments.filter { selected($0, in: ledger) }) {
+    var byPath = try Dictionary(
+      grouping: ledger.deployments.filter { try selected($0, in: ledger) }
+    ) {
       try installationURL($0).path
     }
     var native: [String: [(LockedLowering, NativeMCPContribution, MaterializationTarget)]] = [:]
@@ -137,7 +136,11 @@ package final class ArtifactAggregation: PreparedEvidence {
       if native[path] == nil { native[path] = [] }
     }
     let currentComponents = try componentOutputs(ledger, artifacts: artifacts, routing: previous)
-    try LedgerReplay.withLockedResources(previous, store: store, roots: roots, limits: .standard) {
+    let oldNative = Set(
+      previous.lowerings.filter { $0.format.hasSuffix("-components@1") }.map(\.id))
+    try LedgerReplay.withLockedResources(
+      previous, store: store, roots: roots, limits: .standard, lowerings: oldNative
+    ) {
       oldArtifacts, _, _ in
       let oldComponents = try componentOutputs(
         previous,
@@ -314,6 +317,9 @@ package final class ArtifactAggregation: PreparedEvidence {
       } else {
         let before = try TargetPrecondition.readingFile(url).bytes
         var after = artifact.bytes
+        if deployment.route == "agents/instructions@1", let after {
+          try InstructionTargets(store: store).validateRenderedLinks(after, at: url)
+        }
         if deployment.ownership == .importBlock {
           guard let path = ClaudeInstructionPath(rawValue: deployment.target.path) else {
             throw CoreError.invalidState("invalid locked import location")
@@ -401,6 +407,11 @@ package final class ArtifactAggregation: PreparedEvidence {
 
   private func isSelected(_ id: String, in selected: ResolvedLedger) throws -> Bool {
     guard let c = selected.components[id] else { return false }
+    if try retargetedInstructions.contains(
+      LedgerImpact.identity(c, ledger: selected, roots: store.ledgerRoots))
+    {
+      return true
+    }
     if let selectedIdentities {
       return try selectedIdentities.contains(
         LedgerImpact.identity(c, ledger: selected, roots: store.ledgerRoots))
@@ -1185,6 +1196,14 @@ package final class ArtifactAggregation: PreparedEvidence {
   }
 
   package func validate(excludingTargets excluded: Set<String> = []) throws {
+    for change in changes
+    where change.deployment.route == "agents/instructions@1"
+      && ledger.deployments.contains(where: { $0.id == change.deployment.id })
+    {
+      if let bytes = change.after {
+        try InstructionTargets(store: store).validateRenderedLinks(bytes, at: change.url)
+      }
+    }
     let paths = targets.keys.sorted().map { URL(fileURLWithPath: $0) }
     for (index, path) in paths.enumerated() {
       if paths.prefix(index).contains(where: {

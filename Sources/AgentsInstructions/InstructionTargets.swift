@@ -199,6 +199,16 @@ package struct InstructionTargets {
     }
   }
 
+  /// Checks frozen rendered output against its receiving checkout, not mutable authoring input.
+  package func validateRenderedLinks(_ bytes: Data, at file: URL) throws {
+    guard let text = String(data: bytes, encoding: .utf8) else {
+      throw InstructionError.invalidLockedBlock
+    }
+    let problems = linkProblems(
+      in: text, file: file, key: InstructionLocations.key(for: file, store: store))
+    guard problems.isEmpty else { throw InstructionError.invalidLinks(problems) }
+  }
+
   /// Links in a rendered target that do not resolve, from the target file, to a regular file in
   /// the checkout being written. User targets belong to no checkout, so every local link fails.
   func linkProblems(in text: String, file: URL, key: String) -> [InstructionLinkProblem] {

@@ -1,6 +1,7 @@
 import AgentsCore
 import AgentsManifest
 import AgentsSkills
+import Components
 import Foundation
 
 extension SkillOperations {
@@ -124,19 +125,25 @@ extension SkillOperations {
     skillNames: [String] = [], apply: Bool = false,
     beforeApply: (([UpdateResult]) throws -> Void)? = nil
   ) throws -> [UpdateResult] {
-    let request = UpdateRequest(kinds: [.skills], names: skillNames)
-    if !apply {
-      return try UpdateOperations.preview(request, scope: scope, environment: environment).skills
-    }
-    return try UpdateOperations.withDomainUpdate(request, scope: scope, environment: environment) {
-      prepared in
-      try beforeApply?(prepared.report.skills)
-      let applied = try prepared.apply()
-      return applied.report.skills.map { item in
-        var item = item
-        item.installed = applied.installedSkills.filter { $0.skill == item.skill }
-        return item
+    do {
+      let request = UpdateRequest(kinds: [.skills], names: skillNames)
+      if !apply {
+        return try UpdateOperations.preview(request, scope: scope, environment: environment).skills
       }
+      return try UpdateOperations.withDomainUpdate(request, scope: scope, environment: environment)
+      {
+        prepared in
+        try beforeApply?(prepared.report.skills)
+        let applied = try prepared.apply()
+        return applied.report.skills.map { item in
+          var item = item
+          item.installed = applied.installedSkills.filter { $0.skill == item.skill }
+          return item
+        }
+      }
+    } catch let error as LinkError {
+      if case .missing = error { throw CoreError.notFound(error.description) }
+      throw error
     }
   }
 

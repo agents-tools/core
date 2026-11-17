@@ -9,7 +9,7 @@ enum UpdateReporting {
   static func skills(
     previous: ResolvedLedger, next: ResolvedLedger, resources: [String: URL],
     changes: [AggregatedChange], store: StateStore, lockMissing: Bool, included: Bool,
-    selectedIdentities: Set<String>? = nil
+    selectedIdentities: Set<String>? = nil, names: Set<String> = []
   ) throws -> [UpdateResult] {
     guard included else { return [] }
     struct Item {
@@ -25,6 +25,9 @@ enum UpdateReporting {
           !selectedIdentities.contains(
             try LedgerImpact.identity(component, ledger: ledger, roots: store.ledgerRoots))
         {
+          continue
+        }
+        guard names.isEmpty || names.contains(PathSafety.sanitizeName(component.name)) else {
           continue
         }
         guard let id = component.resources.first, let resource = ledger.resources[id] else {
@@ -158,7 +161,7 @@ enum UpdateReporting {
         after: try change.deployment.ownership == .importBlock
           ? InstructionTargets.ownedImportBytes(change.after) : change.after,
         beforeAgents: old?.agents,
-        afterAgents: change.after == nil ? [] : change.deployment.recipients,
+        afterAgents: after.targets[key]?.agents ?? [],
         drift: drift,
         foreign: change.deployment.ownership != .importBlock
           && change.before.map { $0 != change.after && !Instructions.isOwned($0) } ?? false)

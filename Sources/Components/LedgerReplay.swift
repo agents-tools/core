@@ -106,9 +106,13 @@ package enum LedgerReplay {
 
   package static func withLockedResources<T>(
     _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
+    lowerings selected: Set<String>? = nil,
     _ body: ([ReplayedArtifact], [String: URL], URL) throws -> T
   ) throws -> T {
-    try run(ledger, store: store, roots: roots, limits: limits, renderers: nil, recording: false) {
+    try run(
+      ledger, store: store, roots: roots, limits: limits, renderers: nil, recording: false,
+      selectedLowerings: selected
+    ) {
       artifacts, _, resources, workspace in try body(artifacts, resources, workspace)
     }
   }
@@ -132,18 +136,25 @@ package enum LedgerReplay {
   private static func run<T>(
     _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
     renderers: [String: LedgerRenderer]?, recording: Bool,
+    selectedLowerings: Set<String>? = nil,
     _ body: ([ReplayedArtifact], [LockedLowering], [String: URL], URL) throws -> T
   ) throws -> T {
     try ResolvedLedgerCodec.checkModel(ledger, limits: limits)
     try ledger.validate()
     try Task.checkCancellation()
+    let lowerings = ledger.lowerings.filter { selectedLowerings?.contains($0.id) ?? true }
+    guard selectedLowerings.map({ $0.isSubset(of: Set(ledger.lowerings.map(\.id))) }) ?? true else {
+      throw CoreError.invalidState("unknown selected locked lowering")
+    }
+    let resourceIDs =
+      selectedLowerings == nil ? Set(ledger.resources.keys) : Set(lowerings.flatMap(\.resources))
     let platform = ProcessInfo.processInfo.operatingSystemVersionString
     #if os(macOS)
       let current = "macos"
     #else
       let current = "linux"
     #endif
-    for lowering in ledger.lowerings {
+    for lowering in lowerings {
       guard (renderers ?? compatibilityRenderers)[lowering.format] != nil else {
         throw CoreError.invalidState("unknown renderer format")
       }
@@ -157,7 +168,7 @@ package enum LedgerReplay {
       (resource.entries + resource.support).reduce(0) { $0 + ($1.byteCount ?? 0) }
     }
     var remaining = limits.resourceBytes
-    for lowering in ledger.lowerings {
+    for lowering in lowerings {
       for id in lowering.resources {
         let size = sizes[id]!
         guard size <= remaining else { throw CoreError.invalidState("replay input byte budget") }
@@ -170,7 +181,8 @@ package enum LedgerReplay {
     defer { try? FileManager.default.removeItem(at: workspace) }
     return try SourceResolutionSession.withTemporaryRead(store: store) { session in
       var acquired: [String: URL] = [:]
-      for (id, resource) in ledger.resources.sorted(by: { $0.key < $1.key }) {
+      for (id, resource) in ledger.resources.sorted(by: { $0.key < $1.key })
+      where resourceIDs.contains(id) {
         try Task.checkCancellation()
         let file: URL
         if resource.kind == .liveEdit {
@@ -227,7 +239,7 @@ package enum LedgerReplay {
       var result: [ReplayedArtifact] = []
       var sealed: [LockedLowering] = []
       var names = Set<String>()
-      for lowering in ledger.lowerings {
+      for lowering in lowerings {
         try Task.checkCancellation()
         let table = renderers ?? compatibilityRenderers(outputBytes: remaining)
         let rendered = try table[lowering.format]!(lowering, ledger, acquired)

@@ -93,7 +93,8 @@ package struct LedgerImpact {
 
   package static func requireProtected(
     previous: ResolvedLedger, next: ResolvedLedger, kinds: Set<DeclaredComponentKind>,
-    names: Set<String> = [], roots: [String: URL], selectedIdentities: Set<String>? = nil
+    names: Set<String> = [], roots: [String: URL], selectedIdentities: Set<String>? = nil,
+    retargetedInstructions: Set<String> = []
   ) throws {
     struct Projection: Encodable {
       let component: LedgerComponent
@@ -104,6 +105,9 @@ package struct LedgerImpact {
       var result: [String: [String]] = [:]
       for occurrence in ledger.occurrences {
         guard var c = ledger.components[occurrence.component] else { continue }
+        let retargeted =
+          try c.kind == "instructions" && !c.chatGPT
+          && retargetedInstructions.contains(identity(c, ledger: ledger, roots: roots))
         let selected = try selectedIdentities.map {
           try $0.contains(identity(c, ledger: ledger, roots: roots))
         }
@@ -173,6 +177,8 @@ package struct LedgerImpact {
             if !result.contains(condition) { result.append(condition) }
           }
         }
+        let retargetIdentity = retargeted ? try identity(c, ledger: ledger, roots: roots) : nil
+        if retargeted { c.recipients = [] }
         if c.kind == "skills" { c.name = PathSafety.sanitizeName(c.name) }
         c.source = "input"
         c.declaringSource = "producer"
@@ -180,7 +186,9 @@ package struct LedgerImpact {
         let digest = try ResolvedLedgerCodec.digest(
           Projection(component: c, sources: sources, resources: resources))
         let destinations: [String]
-        if c.kind == DeclaredComponentKind.instructions.rawValue {
+        if retargeted {
+          destinations = ["retarget:" + retargetIdentity!]
+        } else if c.kind == DeclaredComponentKind.instructions.rawValue {
           destinations =
             c.recipients.map(\.rawValue)
             + (c.chatGPT ? ["prompt:" + (c.payload.object?["prompt"]?.text ?? "")] : [])

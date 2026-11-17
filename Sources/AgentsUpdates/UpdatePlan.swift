@@ -12,7 +12,7 @@ struct RequiredRoutes: Error {
 
 /// The composition plan borrows both source/replay resources and the admitted writer scope.
 final class UpdatePlan {
-  func requireSkillOwnership() throws { try aggregation.requireSkillOwnership() }
+  func requireOwnership() throws { try aggregation.requireOwnership() }
 
   let report: CombinedUpdateReport
   private let store: StateStore
@@ -80,6 +80,20 @@ final class UpdatePlan {
       candidate = try removing(request, from: declaration, ledger: previous, store: store)
       change = try store.planDeclaration(candidate, replacing: declaration, prepared: baseline)
     }
+    let retargetedInstructions: Set<String>
+    if case .remove = request.operation, request.agents != nil,
+      request.kinds?.contains(.instructions) ?? true
+    {
+      retargetedInstructions = try Set(
+        previous.occurrences.filter { $0.consumerEditable }.compactMap {
+          guard let component = previous.components[$0.component], component.kind == "instructions",
+            component.group == nil
+          else { return nil }
+          return try LedgerImpact.identity(component, ledger: previous, roots: store.ledgerRoots)
+        })
+    } else {
+      retargetedInstructions = []
+    }
     if restoring {
       let routes = try DeploymentConstruction.routes(previous)
       let required = try SkillLifecycle.installationTargets(previous, store: store)
@@ -94,7 +108,8 @@ final class UpdatePlan {
             watch: watch, change: nil, artifacts: artifacts, resources: resources,
             workspace: workspace,
             decisionInputs: [], originalInputs: [],
-            checkpoint: checkpoint, provider: provider, installations: Array(installations.values)))
+            checkpoint: checkpoint, provider: provider, installations: Array(installations.values),
+            retargetedInstructions: retargetedInstructions))
       }
     }
     var document: DeclarationDocument
@@ -200,7 +215,8 @@ final class UpdatePlan {
         let kinds = request.kinds ?? Set(DeclaredComponentKind.allCases)
         try LedgerImpact.requireProtected(
           previous: previous, next: native, kinds: kinds, names: Set(request.names),
-          roots: store.ledgerRoots, selectedIdentities: request.selectedIdentities)
+          roots: store.ledgerRoots, selectedIdentities: request.selectedIdentities,
+          retargetedInstructions: retargetedInstructions)
       }
       let complete = try DeploymentConstruction.complete(
         native, linked: linked, store: store, previous: previous, platform: platform)
@@ -226,7 +242,8 @@ final class UpdatePlan {
             watch: watch, change: change, artifacts: artifacts, resources: resources,
             workspace: workspace,
             decisionInputs: complete.inputs, originalInputs: originals + importInputs,
-            checkpoint: checkpoint, provider: provider, installations: Array(installations.values)))
+            checkpoint: checkpoint, provider: provider, installations: Array(installations.values),
+            retargetedInstructions: retargetedInstructions))
       }
     }
   }
@@ -238,7 +255,7 @@ final class UpdatePlan {
     workspace: URL,
     decisionInputs: [TargetPrecondition], originalInputs: [TargetPrecondition],
     checkpoint: @escaping (String) throws -> Void, provider: any RuntimeBindingProvider,
-    installations: [SkillInstallationTarget]
+    installations: [SkillInstallationTarget], retargetedInstructions: Set<String>
   ) throws {
     self.store = store
     self.baseline = baseline
@@ -253,7 +270,7 @@ final class UpdatePlan {
       resources: resources, workspace: workspace, store: store, replace: request.replace,
       changingAccess: request.changingAccess, kinds: request.kinds,
       names: Set(request.names), selectedIdentities: request.selectedIdentities,
-      installations: installations)
+      installations: installations, retargetedInstructions: retargetedInstructions)
     if let imported = request.importPreparation {
       for resource in imported.proposal.resources
       where resource.selected && resource.requiresStandaloneSource {
@@ -283,7 +300,7 @@ final class UpdatePlan {
       previous: previous, next: self.next, resources: resources,
       changes: aggregation.changes, store: store, lockMissing: lockMissing,
       included: request.kinds == nil || request.kinds!.contains(.skills),
-      selectedIdentities: request.selectedIdentities)
+      selectedIdentities: request.selectedIdentities, names: Set(request.names))
     let results =
       request.names.isEmpty ? allResults : allResults.filter { request.names.contains($0.skill) }
     receipts = results.flatMap(\.installed)
@@ -366,7 +383,9 @@ final class UpdatePlan {
       hasChanges: self.next != previous || change != nil
         || aggregation.changes.contains(where: \.changed),
       displayedFingerprint: fingerprint,
-      readLocations: Array(Set(readPaths)).sorted { $0.path < $1.path },
+      readLocations: Set(readPaths.map(\.path)).sorted().map {
+        URL(fileURLWithPath: $0, isDirectory: false)
+      },
       components: try aggregation.changes.filter { change in
         guard change.native else { return false }
         guard let identities = request.selectedIdentities else { return true }

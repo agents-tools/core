@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsInstructions
 import AgentsManifest
 import Foundation
 
@@ -87,7 +88,11 @@ public enum UpdateOperations {
             request: request, store: store, admitted: admitted, installations: installations,
             checkpoint: checkpoint, provider: provider
           ) { plan in
-            try plan.requireSkillOwnership()
+            do {
+              try plan.requireOwnership()
+            } catch let error as InstructionError {
+              throw UpdateApplyError(outcome: outcome, underlyingError: error)
+            }
             let update = PreparedUpdate(plan: plan, outcome: outcome)
             defer { update.invalidate() }
             delivered = true
