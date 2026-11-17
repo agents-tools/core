@@ -204,9 +204,11 @@ struct YAMLPatches {
       }
       return appendFlow(text, to: container)
     }
-    let indent =
-      pairs.first.map { indentation(at: $0.key.range.lowerBound) }
-      ?? indentation(at: container.range.lowerBound)
+    // The mapping starts after a compact sequence indicator, before any explicit key indicator.
+    let offset = container.range.lowerBound
+    let start = lineStart(offset)
+    let bom = start == 0 && bytes.starts(with: [0xEF, 0xBB, 0xBF]) ? 3 : 0
+    let indent = String(repeating: " ", count: offset - start - bom)
     let end =
       pairs.last.map { lineEnd($0.value.entryRange.upperBound) } ?? container.range.upperBound
     return [
