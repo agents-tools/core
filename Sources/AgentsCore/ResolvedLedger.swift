@@ -11,6 +11,8 @@ package struct ResolvedLedger: Codable, Equatable, Sendable {
   package var resources: [String: LedgerResource] = [:]
   package var deployments: [LedgerDeployment] = []
   package var lowerings: [LockedLowering] = []
+  /// Local regional evidence; nil grants no occurrence or container creation rights.
+  package var nativeAuthorities: [LedgerNativeAuthority]?
   /// Digest-keyed non-secret bytes. These are authoritative; materializations are disposable.
   package var contentObjects: [String: Data] = [:]
   package init() {}
