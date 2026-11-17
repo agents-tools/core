@@ -54,8 +54,8 @@ extension ResolvedLedger {
       }
       seen.insert(id)
     }
-    for deployment in deployments where deployment.ownership != .ownedValues {
-      guard deployment.route != "agents/skill@1" else { continue }
+    for deployment in deployments
+    where ["agents/instructions@1", "agents/claude-import@1"].contains(deployment.route) {
       let file = try deployment.target.resolve(roots: roots)
       let base = roots["project"]!
       let home = roots["home"]!
