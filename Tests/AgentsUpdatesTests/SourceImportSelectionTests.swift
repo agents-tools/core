@@ -28,6 +28,99 @@ struct SourceImportSelectionTests {
     #expect(throws: (any Error).self) { try report.resolving(choices: [shared.id]) }
   }
 
+  @Test func linkedSkillSupportingBytesInvalidateResolution() throws {
+    let f = try ImportSelectionFixture()
+    try f.write("bundle/.claude-plugin/plugin.json", #"{"name":"producer"}"#)
+    try f.write(
+      "bundle/skills/helper/SKILL.md", "---\nname: helper\ndescription: Helper\n---\nBody\n")
+    try f.write("bundle/shared/tool.txt", "Original support\n")
+    try FileManager.default.createSymbolicLink(
+      atPath: f.root.appendingPathComponent("bundle/skills/helper/reference.txt").path,
+      withDestinationPath: "../../shared/tool.txt")
+    let report = try SourceImportOperations.inspect(
+      format: "claudePluginV1", root: f.root, document: "bundle/.claude-plugin/plugin.json")
+    #expect(report.diagnostics.isEmpty)
+    let support = try #require(report.resources.first { $0.path == "shared/tool.txt" })
+    #expect(support.hash == nil && !support.requiresBindingRewrite)
+    try f.write("bundle/shared/tool.txt", "Modified support\n")
+    #expect(throws: (any Error).self) { try report.resolving() }
+    let refreshed = try SourceImportOperations.inspect(
+      format: "claudePluginV1", root: f.root, document: "bundle/.claude-plugin/plugin.json")
+    #expect(try refreshed.resolving().diagnostics.isEmpty)
+  }
+
+  @Test func supportingBytesInvalidateCapturedRequestPreparation() throws {
+    let f = try ImportSelectionFixture()
+    try f.write("bundle/.claude-plugin/plugin.json", #"{"name":"producer"}"#)
+    try f.write(
+      "bundle/commands/review.md",
+      "---\ndescription: Review\n---\nUse [support](../shared/tool.txt).\n")
+    try f.write("bundle/shared/tool.txt", "Original support\n")
+    let environment = RuntimeEnvironment(
+      projectDirectory: f.root, homeDirectory: f.root, environment: [:])
+    let scope = try UpdateOperations.inspect(environment: environment)
+    let report = try SourceImportOperations.inspect(
+      format: "claudePluginV1", root: f.root, document: "bundle/.claude-plugin/plugin.json")
+    #expect(report.diagnostics.isEmpty)
+    let request = try report.updateRequest(in: scope)
+    try f.write("bundle/shared/tool.txt", "Modified support\n")
+    #expect(throws: (any Error).self) { try report.resolving() }
+    #expect(throws: (any Error).self) {
+      try UpdateOperations.withPreparedUpdate(request, environment: environment) { _ in
+        Issue.record("Stale supporting content must not reach the prepared handle")
+      }
+    }
+    let refreshed = try SourceImportOperations.inspect(
+      format: "claudePluginV1", root: f.root, document: "bundle/.claude-plugin/plugin.json")
+    let freshRequest = try refreshed.updateRequest(in: scope)
+    _ = try UpdateOperations.preview(freshRequest, environment: environment)
+  }
+
+  @Test func literalSupportingBytesRemainPrivateAndFreshAfterSymbolicResolution() throws {
+    let f = try ImportSelectionFixture()
+    try f.write(
+      "bundle/.claude-plugin/plugin.json",
+      #"{"name":"producer","lspServers":"./shared/language.json"}"#)
+    try f.write(
+      "bundle/skills/helper/SKILL.md", "---\nname: helper\ndescription: Helper\n---\nBody\n")
+    let original =
+      #"{"review":{"command":"never-run","extensionToLanguage":{".txt":"text"},"env":{"TOKEN":"PRIVATE_SUPPORT_A"}}}"#
+    try f.write("bundle/shared/language.json", original)
+    try FileManager.default.createSymbolicLink(
+      atPath: f.root.appendingPathComponent("bundle/skills/helper/reference.txt").path,
+      withDestinationPath: "../../shared/language.json")
+    let report = try SourceImportOperations.inspect(
+      format: "claudePluginV1", root: f.root, document: "bundle/.claude-plugin/plugin.json")
+    let slot = try #require(report.requiredInputs.first { $0.kind == .bindingReference })
+    let resolved = try report.resolving(inputs: [
+      .init(id: slot.id, value: .binding(.environment("SUPPORT_TOKEN")))
+    ])
+    #expect(resolved.bindings.isEmpty)
+    let preserved = resolved.resources.filter {
+      $0.path == "skills/helper" || $0.path == "shared/language.json"
+    }
+    #expect(!preserved.isEmpty)
+    #expect(preserved.allSatisfy { $0.hash == nil && $0.requiresBindingRewrite })
+    #expect(!String(reflecting: resolved).contains("PRIVATE_SUPPORT_A"))
+    let environment = RuntimeEnvironment(
+      projectDirectory: f.root, homeDirectory: f.root, environment: [:])
+    let scope = try UpdateOperations.inspect(environment: environment)
+    #expect(throws: (any Error).self) { try resolved.updateRequest(in: scope) }
+    try f.write(
+      "bundle/shared/language.json",
+      original.replacingOccurrences(of: "PRIVATE_SUPPORT_A", with: "PRIVATE_SUPPORT_B"))
+    #expect(throws: (any Error).self) { try report.resolving() }
+    #expect(throws: (any Error).self) { try resolved.resolving() }
+    let refreshed = try SourceImportOperations.inspect(
+      format: "claudePluginV1", root: f.root, document: "bundle/.claude-plugin/plugin.json")
+    #expect(!refreshed.bindings.isEmpty)
+    #expect(!String(reflecting: refreshed).contains("PRIVATE_SUPPORT_B"))
+    #expect(
+      refreshed.resources.filter { $0.path == "skills/helper" }.allSatisfy {
+        $0.hash == nil && $0.requiresBindingRewrite
+      })
+  }
+
   @Test func resolvedCanonicalBindingCannotAdmitRawPreservedBytes() throws {
     let f = try ImportSelectionFixture()
     try f.write(
@@ -65,10 +158,9 @@ struct SourceImportSelectionTests {
     var enumeration = input
     enumeration.enumerateChoices = true
     let document = f.root.appendingPathComponent("settings.json")
-    let fingerprint = try TargetPrecondition(document).displayEvidence(includeContent: true)
-    let preparation = ImportPreparation(
+    let preparation = try ImportPreparation(
       input: input, proposal: proposal,
-      catalog: try SourceImport.preview(enumeration), documentFingerprint: fingerprint,
+      catalog: try SourceImport.preview(enumeration),
       locations: [document])
     #expect(throws: (any Error).self) { try preparation.capture() }
     #expect(try preparation.capture(admitConversion: false).count == 1)

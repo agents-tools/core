@@ -64,8 +64,9 @@ extension Expansion {
     }
     var effective = declaration
     if profile == .geminiExtensionV1, let metadata = proposal.packageMetadata {
-      guard proposal.profile == profile,
-        [metadata.nameLocation, metadata.versionLocation].allSatisfy({
+      guard let version = metadata.version, let versionLocation = metadata.versionLocation,
+        proposal.profile == profile,
+        [metadata.nameLocation, versionLocation].allSatisfy({
           $0.document.utf8.elementsEqual(document.utf8)
             && $0.span?.document.rawValue.utf8.elementsEqual(document.utf8) == true
         })
@@ -74,7 +75,7 @@ extension Expansion {
       }
       if authoredNative[AgentID.geminiCLI.rawValue]?["version"] == nil {
         var native = authoredNative
-        native[AgentID.geminiCLI.rawValue, default: [:]]["version"] = .string(metadata.version)
+        native[AgentID.geminiCLI.rawValue, default: [:]]["version"] = .string(version)
         effective = .plugin(
           name: name, path: path, source: alias, mode: mode, select: select, exclude: exclude,
           agents: agents, condition: authoredCondition, native: native)

@@ -68,6 +68,10 @@ enum NativeContainerImport {
           versionLocation: parsed.fieldLocation(["version"]))
       }
     }
+    if agent != .geminiCLI {
+      diagnostics.proposal.packageMetadata = .init(
+        name: name, nameLocation: parsed.fieldLocation(["name"]))
+    }
     // A container contributes typed children; .native selection/registration belongs to B/F.
     // Unknown/dependency fields are already diagnosed rather than becoming opaque payloads.
     for (field, kind) in [
@@ -235,6 +239,9 @@ enum NativeContainerImport {
           entries: try inventory(snapshot, root: root, limits: limits),
           documents: documents.mapValues { .object($0.fields) }, budget: parsed.admission.parser)
       } catch let issue as NativeComponentFieldIssue {
+        if issue.document == suffix, issue.field == ["name"] {
+          diagnostics.proposal.packageMetadata = nil
+        }
         let document: NativeImportDocument
         if issue.document == suffix {
           document = parsed
