@@ -212,6 +212,43 @@ final class MCPFacadeFixture {
     #expect(MCPConnectionOperations.describe(snapshot) == description)
   }
 
+  @Test func confirmationIdentifiesSelectedExecutableResourceInsteadOfDeclaration() throws {
+    let fixture = try MCPFacadeFixture()
+    let file = fixture.root.appendingPathComponent("selected-executable")
+    try Data("description-only resource".utf8).write(to: file)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+    let cwd = try MCPConnectionResource.live(fixture.root)
+    let declared = "/declared/different-executable"
+    let live = try MCPConnectionOperations.snapshot(
+      selectionID: "live-resource",
+      transport: .stdio(.init(executable: declared, arguments: ["fixed-argument"])),
+      workingDirectory: cwd, executable: .live(file))
+    let captured = try MCPConnectionOperations.snapshot(
+      selectionID: "captured-resource",
+      transport: .stdio(.init(executable: declared)), workingDirectory: cwd,
+      executable: .capture(
+        sourceRoot: fixture.root, path: "selected-executable",
+        expectedHash: "sha256:" + FileHash.sha256Hex(file: file),
+        expectedExecutableFiles: [".": true]))
+    let before = try FileHash.folderHash(fixture.root)
+    let liveDescription = MCPConnectionOperations.describe(live)
+    #expect(liveDescription.executable == file.path && !liveDescription.executableIsCaptured)
+    #expect(liveDescription.arguments == ["fixed-argument"])
+    #expect(liveDescription.readLocations.contains { $0.path == file.path })
+    let capturedDescription = MCPConnectionOperations.describe(captured)
+    #expect(capturedDescription.executable == "selected-executable")
+    #expect(capturedDescription.executableIsCaptured)
+    #expect(!capturedDescription.readLocations.contains { $0.path == file.path })
+    let path = try MCPConnectionOperations.snapshot(
+      selectionID: "path-command", transport: .stdio(.init(executable: "path-command")),
+      workingDirectory: cwd)
+    #expect(MCPConnectionOperations.describe(path).executable == "path-command")
+    #expect(try FileHash.folderHash(fixture.root) == before && fixture.text("pid") == nil)
+    try FileManager.default.removeItem(at: file)
+    #expect(MCPConnectionOperations.describe(live) == liveDescription)
+    #expect(MCPConnectionOperations.describe(captured) == capturedDescription)
+  }
+
   @Test func invalidOptionsAndUnavailableEnvironmentDoNotConsultProvider() async throws {
     let fixture = try MCPFacadeFixture()
     let spy = MCPBindingSpy()

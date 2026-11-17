@@ -120,7 +120,7 @@ private struct ManagedMCPFixture {
       selection: selected.occurrences[0].selection, scope: .project,
       environment: f.fixture.environment)
     let description = MCPConnectionOperations.describe(snapshot)
-    #expect(description.executable == "./tool" && description.executableIsCaptured)
+    #expect(description.executable == "tool" && description.executableIsCaptured)
     #expect(description.workingDirectory == "cwd" && description.workingDirectoryIsCaptured)
     #expect(snapshot.readLocations.contains(f.store.declarationURL))
     #expect(snapshot.readLocations.contains(f.store.resolvedURL))

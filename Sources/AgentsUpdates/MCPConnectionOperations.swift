@@ -207,7 +207,7 @@ public enum MCPConnectionOperations {
     var endpoint: String?
     switch snapshot.transport {
     case .stdio(let run):
-      executable = redaction.text(run.executable)
+      executable = redaction.text(snapshot.executable?.displayPath ?? run.executable)
       arguments = run.arguments.map(redaction.text)
       directory = snapshot.directory.map { redaction.text($0.displayPath) }
     case .streamableHTTP(let url, _), .sse(let url, _):
