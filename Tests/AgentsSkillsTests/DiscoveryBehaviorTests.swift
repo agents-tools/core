@@ -1,5 +1,7 @@
 import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -103,21 +105,16 @@ struct SkillDiscoveryTests {
 
     let locked = try temporaryDirectory()
     defer { removeTemporaryDirectory(locked) }
+    let upstream = try temporaryDirectory()
+    defer { removeTemporaryDirectory(upstream) }
     try writeDiscoverySkill(
-      locked.appendingPathComponent(".agents/skills/installed-skill"), name: "installed-skill")
+      upstream.appendingPathComponent("installed-skill"), name: "installed-skill")
     try writeDiscoverySkill(
       locked.appendingPathComponent("skills/source-skill"), name: "source-skill")
-    let store = StateStore(
-      scope: .project, environment: RuntimeEnvironment(projectDirectory: locked))
-    let id = "local:" + locked.path
-    try store.save(
-      declaration: Declaration(),
-      resolved: ResolvedState(
-        sources: [id: LockedSource(kind: .local)],
-        skills: [
-          "installed-skill": LockedSkill(
-            source: id, path: ".agents/skills/installed-skill", installs: ["codex": .edit])
-        ]))
+    _ = try SkillOperations.add(
+      AddOptions(
+        source: upstream.path,
+        agents: [.codex], mode: .edit, environment: RuntimeEnvironment(projectDirectory: locked)))
 
     #expect(try Discovery.discover(in: locked).map(\.name) == ["source-skill"])
   }

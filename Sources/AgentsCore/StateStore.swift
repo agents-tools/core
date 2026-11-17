@@ -51,9 +51,7 @@ public struct StateStore: Sendable {
   }
 
   package func readResolved(prepared: StatePrecondition? = nil) throws -> ResolvedState {
-    let lock: ResolvedState = try load(resolvedURL, prepared: prepared) ?? ResolvedState()
-    try lock.validate()
-    return lock
+    try readLedger(prepared: prepared).domainProjection(roots: ledgerRoots)
   }
 
   /// Reads watch state under a shared lock, without recovery or creating files.
@@ -84,9 +82,15 @@ public struct StateStore: Sendable {
   package func withLock<T>(
     createIfMissing: Bool = true, checkpoint: @escaping (String) throws -> Void = { _ in },
     outcome: TransactionOutcome? = nil, footprint: Set<NativeTargetRoute> = [],
+    installations: [SkillInstallationTarget] = [],
+    existingRoot: ExistingProjectRoot? = nil,
     _ body: () throws -> T
   ) throws -> T {
-    try withCoordination(routes: footprint, writable: true, checkpoint: checkpoint) {
+    let root = try existingRoot?.open(for: self)
+    return try withCoordination(
+      routes: footprint, installations: installations, writable: true, checkpoint: checkpoint,
+      existingRoot: existingRoot, projectRoot: root
+    ) {
       try withScopeLock(
         createIfMissing: createIfMissing, checkpoint: checkpoint, outcome: outcome, body)
     }
@@ -108,49 +112,69 @@ public struct StateStore: Sendable {
     if ![".agents.lock", TransactionJournal.fileName, "watch-refs.pending"].contains(where: {
       FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
     }) {
-      _ = try readResolved()
-      _ = try readWatch()
       _ = try declarationBytes()
+      _ = try readLedger()
+      _ = try readWatch()
     }
     let base = scope == .project ? environment.projectDirectory : environment.homeDirectory
     let physicalDirectory = base.resolvingSymlinksInPath().appendingPathComponent(
       directory.lastPathComponent)
-    return try FileLock.withDescriptor(
-      at: physicalDirectory.appendingPathComponent(".agents.lock"),
-      checkpoint: { try checkpoint("scope." + $0) },
-      { descriptor in
-        guard let context = TransactionLockContext.current(self),
-          let scopeDirectory = try openDirectoryIfPresent()
-        else {
-          throw CoreError.invalidState("missing scope lock admission")
-        }
-        try context.bindScope(scopeDirectory, descriptor: descriptor)
-        try verifyCoordinationAdmission()
-        let recovered = try FileTransaction.recover(
-          store: self, outcome: outcome, checkpoint: checkpoint)
-        _ = try readWatch()
-        let cache = SourceCache(store: self, checkpoint: checkpoint)
-        let referencesRecovered = try cache.recoverWatchReferences()
-        if recovered || referencesRecovered {
-          throw CoreError.transactionRecovered(directory.path)
-        }
-        let result: T
-        do {
-          result = try body()
-        } catch {
-          // A handled failure can finish rollback now. A killed process leaves the marker
-          // for the next access, which must recover the journal before releasing any ref.
-          do {
-            _ = try FileTransaction.recover(store: self, outcome: outcome)
-            _ = try SourceCache(store: self).recoverWatchReferences()
-          } catch {
-            outcome?.disposition = .recoveryRequired
+    func locked(_ body: (Int32) throws -> T) throws -> T {
+      if let context = TransactionLockContext.current(self),
+        let root = context.projectRootDirectory
+      {
+        try context.existingProjectRoot?.validate()
+        let name = directory.lastPathComponent
+        if try root.info(name) == nil {
+          try root.makeDirectory(name) {
+            try checkpoint("scope." + FileLock.ancestryCheckpoint(.created(depth: 0)))
           }
-          throw error
+          try checkpoint("scope." + FileLock.ancestryCheckpoint(.synced(depth: 0)))
         }
-        _ = try cache.recoverWatchReferences()
-        return result
-      })
+        let parent = try root.child(name)
+        try context.existingProjectRoot?.validate()
+        return try FileLock.withDescriptor(
+          in: parent, name: ".agents.lock", checkpoint: { try checkpoint("scope." + $0) }, body)
+      }
+      return try FileLock.withDescriptor(
+        at: physicalDirectory.appendingPathComponent(".agents.lock"),
+        checkpoint: { try checkpoint("scope." + $0) }, body)
+    }
+    return try locked { descriptor in
+      guard let context = TransactionLockContext.current(self),
+        let scopeDirectory = try openDirectoryIfPresent()
+      else {
+        throw CoreError.invalidState("missing scope lock admission")
+      }
+      try context.bindScope(scopeDirectory, descriptor: descriptor)
+      try verifyCoordinationAdmission()
+      let recovered = try FileTransaction.recover(
+        store: self, outcome: outcome, checkpoint: checkpoint)
+      _ = try readWatch()
+      let cache = SourceCache(store: self, checkpoint: checkpoint)
+      let referencesRecovered = try cache.recoverWatchReferences()
+      if recovered || referencesRecovered {
+        throw CoreError.transactionRecovered(directory.path)
+      }
+      let result: T
+      do {
+        result = try body()
+        try context.validateScope()
+      } catch {
+        // A handled failure can finish rollback now. A killed process leaves the marker
+        // for the next access, which must recover the journal before releasing any ref.
+        do {
+          _ = try FileTransaction.recover(store: self, outcome: outcome)
+          _ = try SourceCache(store: self).recoverWatchReferences()
+        } catch {
+          outcome?.requireRecovery()
+        }
+        throw error
+      }
+      _ = try cache.recoverWatchReferences()
+      try context.validateScope()
+      return result
+    }
   }
 
   /// Only the supplied scope root may resolve through links; state and cache ancestry may not.

@@ -5,11 +5,73 @@ import Foundation
 struct TransactionPaths {
   let store: StateStore
 
-  func path(for destination: URL) throws -> String {
+  func path(
+    for destination: URL, skillInitialization: SkillInitializationTarget? = nil,
+    installation: SkillInstallationTarget? = nil
+  ) throws
+    -> String
+  {
+    if let installation,
+      installation.scope.path.utf8.elementsEqual(store.directory.path.utf8),
+      installation.url.path.utf8.elementsEqual(destination.standardizedFileURL.path.utf8)
+    {
+      try installation.validateAuthority()
+      let canonical = installation.name.utf8.elementsEqual(
+        PathSafety.sanitizeName(installation.name).utf8)
+      let recorded =
+        canonical ? false : try persistedInstallation(installation.name, agent: installation.agent)
+      guard canonical || recorded
+      else { throw CoreError.unsafePath("installation recipient changed") }
+      if let route = try coordinationRoute(for: installation.path) {
+        _ = try TransactionLockContext.current(store).requiredResourceForRoute(route)
+      }
+      return installation.path
+    }
     let base =
       store.scope == .project ? store.environment.projectDirectory : store.environment.homeDirectory
     let physicalState = base.resolvingSymlinksInPath().appendingPathComponent(
       store.directory.lastPathComponent)
+    let admitted =
+      Array(TransactionLockContext.current(store)?.requestedRoutes ?? [])
+      + (TransactionLockContext.current(store)?.admissions.map(\.route) ?? [])
+    let requested = TransactionLockContext.current(store)?.requestedRoutes ?? []
+    let nativeRoutes = Array(Set(admitted + NativeTargetRoute.allCases)).sorted {
+      if requested.contains($0) != requested.contains($1) { return requested.contains($0) }
+      if $0.shared != $1.shared { return $0.shared }
+      if admitted.contains($0) != admitted.contains($1) { return admitted.contains($0) }
+      return $0.shared == $1.shared ? $0.rawValue < $1.rawValue : $0.shared
+    }
+    for route in nativeRoutes where route.shared || route.permits(store.scope) {
+      guard destination.lastPathComponent.utf8.elementsEqual(route.basename.utf8) else { continue }
+      let registered = try route.physicalDirectory(store.environment)
+        .appendingPathComponent(route.basename)
+      guard registered.path.utf8.elementsEqual(destination.standardizedFileURL.path.utf8) else {
+        continue
+      }
+      guard route.permits(store.scope) else {
+        throw CoreError.unsafePath("native target belongs to another scope")
+      }
+      let target = try store.nativeTarget(for: route)
+      if target.url.path.utf8.elementsEqual(destination.standardizedFileURL.path.utf8) {
+        if route.shared {
+          guard let context = TransactionLockContext.current(store) else {
+            throw CoreError.invalidState("shared target requires its held footprint")
+          }
+          _ = try context.targetDirectory(for: route)
+        }
+        if !route.shared { _ = try store.coordinationRoute(for: route) }
+        return target.path
+      }
+    }
+    try store.requireProjectNativeAuthority(at: destination)
+    if let initialization = skillInitialization,
+      initialization.scope.path.utf8.elementsEqual(store.directory.path.utf8),
+      initialization.file.path.utf8.elementsEqual(destination.standardizedFileURL.path.utf8)
+    {
+      let path = "skill-authoring/" + initialization.descendants.joined(separator: "/")
+      _ = try components(path)
+      return path
+    }
     if store.scope == .project {
       let relative = PathSafety.relativePath(
         destination.path, to: base.resolvingSymlinksInPath().path)
@@ -27,23 +89,6 @@ struct TransactionPaths {
         {
           return "instructions-" + agent.rawValue + "/" + file.lastPathComponent
         }
-      }
-    }
-    let nativeRoutes = NativeTargetRoute.allCases.sorted { $0.shared && !$1.shared }
-    for route in nativeRoutes where route.shared || store.scope == .project {
-      guard destination.lastPathComponent == route.basename else { continue }
-      let registered = try route.logicalDirectory(store.environment).resolvingSymlinksInPath()
-        .appendingPathComponent(route.basename)
-      guard registered == destination.standardizedFileURL else { continue }
-      let target = try store.nativeTarget(for: route)
-      if target.url == destination.standardizedFileURL {
-        if route.shared {
-          guard let context = TransactionLockContext.current(store) else {
-            throw CoreError.invalidState("shared target requires its held footprint")
-          }
-          _ = try context.targetDirectory(for: route)
-        }
-        return target.path
       }
     }
     var matchingInstallation = false
@@ -83,7 +128,15 @@ struct TransactionPaths {
     _ key: String, create: Bool = false,
     checkpoint: (DirectoryHandle.AncestryStep) throws -> Void = { _ in }
   ) throws -> DirectoryHandle {
-    try DirectoryHandle(at: rootURL(key), create: create, checkpoint: checkpoint)
+    let url = try rootURL(key)
+    if let context = TransactionLockContext.current(store), let root = context.projectRootDirectory,
+      let observation = context.existingProjectRoot,
+      let anchored = try observation.descendant(
+        at: url, from: root, create: create, checkpoint: checkpoint)
+    {
+      return anchored
+    }
+    return try DirectoryHandle(at: url, create: create, checkpoint: checkpoint)
   }
 
   func rootURL(_ key: String) throws -> URL {
@@ -94,7 +147,7 @@ struct TransactionPaths {
         ? store.environment.projectDirectory : store.environment.homeDirectory
       url = base.resolvingSymlinksInPath().appendingPathComponent(store.directory.lastPathComponent)
     } else if let route = NativeTargetRoute.targetRoute(key) {
-      guard route.shared || store.scope == .project else {
+      guard route.permits(store.scope) else {
         throw CoreError.unsafePath("project native targets require their project scope")
       }
       if route.shared {
@@ -103,7 +156,7 @@ struct TransactionPaths {
         }
         url = try context.targetDirectory(for: route)
       } else {
-        url = try route.logicalDirectory(store.environment).resolvingSymlinksInPath()
+        url = try route.physicalDirectory(store.environment)
       }
     } else if let route = NativeTargetRoute.metadataRoute(key) {
       guard let context = TransactionLockContext.current(store),
@@ -112,6 +165,8 @@ struct TransactionPaths {
         throw CoreError.invalidState("shared metadata directory is missing")
       }
       url = metadata.url
+    } else if key == "skill-authoring", store.scope == .project {
+      url = store.environment.projectDirectory.resolvingSymlinksInPath()
     } else if key == "instructions-project" || key == "instructions-authoring",
       store.scope == .project
     {
@@ -124,20 +179,25 @@ struct TransactionPaths {
     } else if let agent = AgentID(rawValue: key) {
       // Configured agent containers are trusted inputs. Resolve that boundary once;
       // journal descendants are opened without following links and roots are identity-bound.
-      url = AgentRegistry.installSkillsDirectory(
-        for: agent, scope: store.scope, environment: store.environment
-      ).resolvingSymlinksInPath()
+      url = try NativeRootAuthority(
+        loader: AgentRegistry.installSkillsDirectory(
+          for: agent, scope: store.scope, environment: store.environment), descendants: []
+      ).physicalDirectory()
     } else {
       throw CoreError.invalidState("unknown transaction root")
     }
     return url
   }
 
-  func nativeRootAuthorities(_ keys: Set<String>) throws -> [String: URL] {
-    var result: [String: URL] = [:]
+  func nativeRootAuthorities(_ keys: Set<String>) throws -> [String: NativeRootAuthority] {
+    var result: [String: NativeRootAuthority] = [:]
     for key in keys {
       if let route = NativeTargetRoute.targetRoute(key), !route.shared {
-        result[key] = try route.logicalDirectory(store.environment)
+        result[key] = try route.rootAuthority(store.environment)
+      } else if let agent = AgentID(rawValue: key) {
+        result[key] = NativeRootAuthority(
+          loader: AgentRegistry.installSkillsDirectory(
+            for: agent, scope: store.scope, environment: store.environment), descendants: [])
       }
     }
     return result
@@ -145,7 +205,7 @@ struct TransactionPaths {
 
   /// Only committed exact recipients authorize legacy spellings at the queue boundary.
   /// Recovery instead consumes the journal's already-admitted single-component path.
-  private func persistedInstallation(_ name: String, agent: AgentID) throws -> Bool {
+  fileprivate func persistedInstallation(_ name: String, agent: AgentID) throws -> Bool {
     guard !name.isEmpty, name != ".", name != "..", !name.contains("/"),
       !name.contains("\\"), !name.contains("\0"),
       let bytes = try store.existingData(store.resolvedURL)
@@ -190,13 +250,16 @@ struct TransactionPaths {
         throw CoreError.unsafePath("unmanaged state transaction path")
       }
     } else if let route = NativeTargetRoute.targetRoute(key) {
-      guard route.shared || store.scope == .project, descendants == [route.basename] else {
+      guard route.permits(store.scope), descendants == [route.basename] else {
         throw CoreError.unsafePath("unregistered native target")
       }
     } else if NativeTargetRoute.metadataRoute(key) != nil {
       guard descendants == ["receipt"] else {
         throw CoreError.unsafePath("unregistered shared transaction metadata")
       }
+    } else if key == "skill-authoring", store.scope == .project {
+      guard (1...3).contains(descendants.count), descendants.last == "SKILL.md"
+      else { throw CoreError.unsafePath("invalid local skill authoring path") }
     } else if key == "instructions-project", store.scope == .project {
       guard InstructionLocations.isProjectTarget(descendants.joined(separator: "/")) else {
         throw CoreError.unsafePath("unmanaged project instruction path")
@@ -243,5 +306,71 @@ struct TransactionPaths {
       directory = try directory.child(name)
     }
     return directory
+  }
+}
+
+/// Exact closed installation authority; coordination does not change its payload intention.
+package struct SkillInstallationTarget {
+  package let url: URL
+  package let footprint: Set<NativeTargetRoute>
+  let path: String
+  let scope: URL
+  let agent: AgentID
+  let name: String
+  let authority: NativeRootAuthority
+  let parentIdentity: FileObjectIdentity?
+
+  func validateAuthority() throws {
+    let parent = try authority.physicalDirectory()
+    guard parent.path.utf8.elementsEqual(url.deletingLastPathComponent().path.utf8),
+      try parentIdentity.map({ try DirectoryHandle(at: parent).objectIdentity == $0 }) ?? true
+    else { throw CoreError.invalidState("installation authority changed") }
+  }
+}
+
+extension StateStore {
+  package func skillInstallationTarget(for agent: AgentID, named name: String) throws
+    -> SkillInstallationTarget
+  {
+    let paths = TransactionPaths(store: self)
+    let canonical = name.utf8.elementsEqual(PathSafety.sanitizeName(name).utf8)
+    let recorded = canonical ? false : try paths.persistedInstallation(name, agent: agent)
+    guard !name.isEmpty, name != ".", name != "..", !name.contains("/"),
+      !name.contains("\\"), !name.contains("\0"),
+      canonical || recorded
+    else { throw CoreError.unsafePath("unrecorded installation target") }
+    let authority = NativeRootAuthority(
+      loader: AgentRegistry.installSkillsDirectory(
+        for: agent, scope: scope, environment: environment), descendants: [])
+    let parent = try authority.physicalDirectory()
+    let ancestry = try DirectoryAccessEvidence.capture(at: parent)
+    let identity =
+      ancestry.directories.count == parent.pathComponents.count
+      ? try DirectoryHandle(at: parent).objectIdentity : nil
+    let url = parent.appendingPathComponent(name)
+    let path = agent.rawValue + "/" + name
+    let route = try paths.coordinationRoute(for: path)
+    return SkillInstallationTarget(
+      url: url, footprint: Set(route.map { [$0] } ?? []), path: path, scope: directory,
+      agent: agent, name: name, authority: authority, parentIdentity: identity)
+  }
+}
+
+extension TransactionPaths {
+  func coordinationRoute(for path: String) throws -> NativeTargetRoute? {
+    if let metadata = NativeTargetRoute.metadataRoute(path) { return metadata }
+    if let route = NativeTargetRoute.targetRoute(path) {
+      return try store.coordinationRoute(for: route)
+    }
+    let parts = path.split(separator: "/").map(String.init)
+    guard parts.count == 2, let agent = AgentID(rawValue: parts[0]) else { return nil }
+    _ = try components(path)
+    let target = try rootURL(parts[0]).appendingPathComponent(parts[1])
+    guard let route = try NativeTargetRoute.userRoute(at: target, environment: store.environment)
+    else { return nil }
+    guard route.isContainer, route.knownReaders.contains(agent) else {
+      throw CoreError.unsafePath("installation aliases incompatible native readers")
+    }
+    return route
   }
 }

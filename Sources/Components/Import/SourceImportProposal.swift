@@ -1,19 +1,36 @@
 import AgentsCore
 import Foundation
 
-/// Each profile describes one producer format at an inspected release, not a format guess.
+/// Fixed input formats grounded in upstream source revisions or producer documentation.
 package enum SourceImportProfile: String, Sendable {
   case rulesyncSourcesV1, rulesyncNpmV1, vercelProjectV2, vercelUserV3
   case apmManifest, apmLock, rulesyncConfig, rulesyncGitHubV1, rulesyncAPMV1
+  case claudeSettingsV1, codexConfigV1, cursorMCPV1, geminiSettingsV1, openCodeConfigV2
+  case claudePluginV1, cursorPluginV1, geminiExtensionV1, claudeMarketplaceV1
+  case claudeCommandV1, claudeAgentV1, geminiCommandV1, geminiAgentV1
+  case openCodeCommandV2, openCodeAgentV2, cursorCommandV1, cursorAgentV1
+  case geminiIgnoreV1, cursorIgnoreV1
 
   package var specificationStatus: String {
     switch self {
     case .apmManifest, .apmLock: "APM working-draft profile; schema amendments are unratified"
-    default: "Pinned producer implementation format"
+    case .rulesyncSourcesV1, .rulesyncNpmV1, .rulesyncConfig, .rulesyncGitHubV1, .rulesyncAPMV1,
+      .vercelProjectV2, .vercelUserV3:
+      "Pinned producer implementation format"
+    case .codexConfigV1: "Pinned Codex source format"
+    case .geminiSettingsV1, .geminiExtensionV1, .geminiCommandV1, .geminiAgentV1, .geminiIgnoreV1:
+      "Pinned Gemini CLI source format"
+    case .openCodeConfigV2, .openCodeCommandV2, .openCodeAgentV2:
+      "Pinned OpenCode source format"
+    case .claudeSettingsV1, .claudePluginV1, .claudeMarketplaceV1, .claudeCommandV1, .claudeAgentV1:
+      "Documented Claude Code format (https://code.claude.com/docs); upstream source revision unavailable"
+    case .cursorMCPV1, .cursorPluginV1, .cursorCommandV1, .cursorAgentV1, .cursorIgnoreV1:
+      "Documented Cursor format (https://cursor.com/docs); upstream source revision unavailable"
     }
   }
 
-  package var producerRevision: String {
+  /// Exact upstream source revision when available. Documentation-only profiles have no commit.
+  package var producerRevision: String? {
     switch self {
     case .rulesyncSourcesV1, .rulesyncNpmV1, .rulesyncConfig, .rulesyncGitHubV1, .rulesyncAPMV1:
       "fbe4fe58334cab4e84b87f20d730d6450a35e0f7"
@@ -21,6 +38,15 @@ package enum SourceImportProfile: String, Sendable {
       "787a97cc52fbbcc344374e1567b2a1e5b8adf441"
     case .vercelProjectV2, .vercelUserV3:
       "e781cb4d07433dfe1d19e924ed45cc61738c55ec"
+    case .codexConfigV1:
+      "092d3acd6bec3e3a14bdc7e7a2810ab628ab759d"
+    case .geminiSettingsV1, .geminiExtensionV1, .geminiCommandV1, .geminiAgentV1, .geminiIgnoreV1:
+      "5a5c7180ff3f0a02511f54b54db7f228d4982a30"
+    case .openCodeConfigV2, .openCodeCommandV2, .openCodeAgentV2:
+      "fedc6f208aa2bd54c1019227214568083f6380ad"
+    case .claudeSettingsV1, .claudePluginV1, .claudeMarketplaceV1, .claudeCommandV1, .claudeAgentV1,
+      .cursorMCPV1, .cursorPluginV1, .cursorCommandV1, .cursorAgentV1, .cursorIgnoreV1:
+      nil
     }
   }
 }
@@ -52,6 +78,8 @@ package struct ImportBindingRequirement: Equatable, Sendable {
   package let reason: String
   /// Symbolic producer binding only; the process environment is never read.
   package var environmentVariable: String? = nil
+  /// Identifier used by RuntimeBinding.secret; the literal remains outside the proposal.
+  package var key: String? = nil
 }
 
 package struct ImportPin: Equatable, Sendable {
@@ -105,9 +133,39 @@ package struct ImportedSource: Equatable, Sendable {
   }
 }
 
+package struct ImportMemberCoordinate: Equatable, Sendable {
+  package let containerRoot: String
+  package let selector: ComponentReferenceDeclaration
+  package let profile: SourceImportProfile
+  package let formatVersion: Int
+
+  /// Producer identifiers are byte identities, including canonically equivalent Unicode names.
+  package static func == (lhs: Self, rhs: Self) -> Bool {
+    guard lhs.containerRoot.utf8.elementsEqual(rhs.containerRoot.utf8),
+      lhs.profile == rhs.profile, lhs.formatVersion == rhs.formatVersion
+    else { return false }
+    switch (lhs.selector, rhs.selector) {
+    case (.skill(let left), .skill(let right)),
+      (.instruction(let left), .instruction(let right)),
+      (.mcpServer(let left), .mcpServer(let right)),
+      (.hook(let left), .hook(let right)),
+      (.subagent(let left), .subagent(let right)),
+      (.command(let left), .command(let right)),
+      (.lspServer(let left), .lspServer(let right)),
+      (.permissions(let left), .permissions(let right)),
+      (.ignore(let left), .ignore(let right)),
+      (.plugin(let left), .plugin(let right)):
+      return left.utf8.elementsEqual(right.utf8)
+    default: return false
+    }
+  }
+}
+
 package struct ImportedComponent: Equatable, Sendable {
+  /// The original producer document, including inline declarations and referenced files.
   package let origin: ImportLocation
   package let declaration: ComponentDeclaration
+  package var member: ImportMemberCoordinate? = nil
 }
 
 /// This is a preservation intention, not a retained object or an adoption receipt. E must freeze
@@ -119,17 +177,28 @@ package struct ImportResourceProposal: Equatable, Sendable {
   /// Relative to the corresponding source root. Nil means exact producer coordinates are absent.
   package let path: String?
   package let producerIntegrity: ImportPin.Integrity?
-  package let observedHash: String?
+  package var observedHash: String?
   package let executableFlags: [String: Bool]
   package let requiresStandaloneSource: Bool
   package var kind: DeclaredComponentKind? = nil
   package var selected = true
+  /// E must reconstruct symbolic fields and keep the original freshness preimage private.
+  package var requiresBindingRewrite = false
+}
+
+/// Producer package identity is provenance, not a component, source pin or deployment choice.
+package struct ImportPackageMetadata: Equatable, Sendable {
+  package let name: String
+  package let version: String
+  package let nameLocation: ImportLocation
+  package let versionLocation: ImportLocation
 }
 
 /// Canonical intent and evidence only. Raw documents and literal credentials never escape parsing.
 /// Application, target ownership and adoption belong to the shared import lifecycle.
 package struct SourceImportProposal: Equatable, Sendable {
   package let profile: SourceImportProfile
+  package var packageMetadata: ImportPackageMetadata? = nil
   package var sources: [ImportedSource] = []
   package var components: [ImportedComponent] = []
   package var resources: [ImportResourceProposal] = []

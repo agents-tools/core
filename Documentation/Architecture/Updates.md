@@ -1,125 +1,117 @@
-# Combined Updates
+# Configuration Lifecycle
 
-`AgentsUpdates` composes the skill and instruction planners for one project or
-user scope. It updates all declared skills, instruction recipients and named
-ChatGPT prompts. Named skill selection and instruction recipient overrides
-belong to the standalone APIs. Consumers own rendering and completion output.
+`AgentsUpdates` owns configuration update, declaration edit, removal and locked
+restore for one project or user scope. It composes the complete YAML declaration,
+linked source graph, resolved ledger, domain rendering and native regional edits.
+Consumers own command parsing, presentation and completion output.
 
-## Reports and Preparation
+## Requests and Reports
 
-`UpdateOperations.preview(scope:environment:)` returns `CombinedUpdateReport`
-under one existing shared scope lock. It never returns an applicable handle,
-retains source trees, writes state or replays recovery. Mirror fetching and
-disposable snapshots are allowed. If a first writer appears during an
-unprotected inspection, the result or error is discarded and inspection
-retries under the shared lock.
+`UpdateRequest.operation` selects source update, locked restore, typed YAML edits,
+a complete declaration replacement, or removal. `kinds` restricts the component
+domains and `names` restricts members. A restricted operation protects the other
+recorded components' pins, payloads, resources and effective recipients. A change
+that requires a wider operation reports `requiresCombinedUpdate` before publishing.
+Producer-owned children cannot be edited as consumer declarations; their diagnostic
+identifies the producer and group reference. Root occurrence edits use
+`ManifestEdit` and digest-scoped document handles. Skill removal uses recorded
+membership while preserving authored all-member selections and their exclusions;
+new upstream members are admitted by update, not by removal.
 
-`UpdateOperations.withPreparedUpdate(scope:environment:_:)` acquires the
-writer lock, recovers pending work before reading the baseline, and prepares
-both kinds before calling the consumer. Shared pinned sources use one exact
-snapshot per normalized identity and effective declaration, so source movement
-between domain planners cannot produce different pins for the same source.
-Independent sources are not promised a simultaneous upstream snapshot.
+`UpdateOperations.preview(_:scope:environment:)` returns a serializable
+`CombinedUpdateReport`. It uses existing shared locks and never creates persistent
+scope, cache or native coordination locks, changes refs, retains content, recovers a
+journal, invokes a binding provider or runs source programs. Existing exact cached
+objects may be read under their existing locks. Missing objects, downloads,
+extraction and their locks remain temporary and are cleaned on success, failure
+and cancellation. A first writer invalidates an unlocked inspection attempt.
 
-The combined lock takes skills from the skill plan and instruction records
-from the instruction plan. It merges compatible source updates and retained
-baseline records, preserves declaration and watch data, and then validates the
-complete prospective state. Domain preparation defers whole-state validation
-until this merge so shared source changes are checked against both domains'
-prospective records. Standalone operations validate their complete resulting
-state before returning a preview or invoking a consumer callback. Applying
-preparation checks ownership and physical path collisions before the closure.
-Preview can report prospective membership that an applying preparation rejects
-as unmanaged.
+Reports include skill membership and typed file differences, instruction targets
+and prompts, selected native changes, missing-lock status, `hasChanges` and a
+`displayedFingerprint`. Native reports contain the owned symbolic values; complete
+shared documents, unrelated siblings, runtime secret values and private freshness
+evidence remain internal. Equal unmanaged values do not establish ownership.
+`hasChanges` includes declaration and ledger changes even when target bytes agree.
 
-The report contains `scope`, `skills`, `instructions`, `lockMissing` and
-`hasChanges`. The last includes normalized lock changes, physical differences
-and required missing-lock reconstruction. An empty unconfigured scope is
-unchanged. Section ordering and identical-content prompt repins can require
-application even without changed target bytes or changed prompt names.
+The versioned display fingerprint covers the operation and selection, complete
+candidate declaration and ledger, exact pins, resources, locked renderer/layout,
+ownership, actual destinations and stable access semantics. It excludes temporary
+paths and inodes, random IDs, timestamps, runtime secret values and complete native
+preimage digests. Repeated preparation of the same candidate and environment has
+the same fingerprint. This is a presentation comparison, not an authorization token.
 
-Skill results expose old/new versions from the resolved records, full revisions
-and hashes. Versions remain nil for absent sides, edit installations,
-well-known artifacts and Git resolutions without a selected version tag.
-`SkillFileEntry.file(Data, executable: Bool)` uses the same any-execute-bit rule
-as watch. Directories and links keep their own entry types; a symlink's mode is
-not its destination's mode. Persistent content hashes do not include mode.
+## Preparation and Application
 
-Each result's `membership` has one `SkillMembershipChange` per agent in the
-union of previous and prospective installations, sorted by agent raw value.
-`SkillMembership` is `.absent` or `.installed(mode:)`. These are managed
-membership states, independent of physical presence. Rows use physical paths
-with resolved parents and unfollowed final entries. Agents sharing a path
-retain separate rows while physical changes remain deduplicated. Unchanged
-results include membership too; `installed` retains its post-apply meaning.
+`withPreparedUpdate(_:scope:environment:_:)` acquires the request and pending-journal
+footprint before the scope writer lock. Source linking can discover a larger
+footprint; preparation releases the locks and readmits the union before delivering
+the consumer closure. This never repeats a delivered callback or binding provider.
+It captures declaration, ledger and watch together, links and freezes one paired
+source result, lowers it and aggregates contributions by physical destination.
+Shared native files receive one aggregated regional edit with all logical owners.
 
-A missing `agents.resolved` makes the before membership unrecorded and
-`lockMissing` true. A correct existing live link can therefore have added
-membership and no physical diff. It still fails applying preparation's
-unmanaged-content guard. A locked but missing target remains installed on the
-before side. If both record and selection are lost, no removal is invented.
-Loss of resolved state is distinct from replacing the never-removed writer
-lock file.
+The closure receives `PreparedUpdate.report` and `apply(ifUnchangedFrom:)`. Any
+apply attempt consumes the handle. It has no public initializer, serialization or
+`Sendable` conformance. It is valid only on its preparing thread inside the
+synchronous closure; exit invalidates retained handles and releases all borrowed
+source/replay resources. Do not re-enter scope operations, await, or dispatch the
+handle. Render the supplied report directly.
 
-## Handle Lifetime and Application
+A UI may preview without holding a writer lock, then prepare on a worker thread
+and pass the displayed fingerprint to `apply(ifUnchangedFrom:)`. A changed
+fingerprint requires a refreshed report. Matching fingerprints still execute all
+private freshness, ownership, permission, binding and publication checks.
 
-The closure receives a `PreparedUpdate` with a report and `apply()`. The handle
-has no public initializer, serialization or `Sendable` conformance. Its
-internal plan is separate from the report. Any apply attempt consumes it;
-inactive, repeated or wrong-thread use fails before I/O. Closure exit
-invalidates retained handles and releases their disposable planning resources.
+Application validates the captured state, targets, linked inputs and forwarding
+decisions. Live skill contents stay live while their source identity and valid
+metadata remain required. It retains the complete ledger/watch closure, stages
+resources, selected deployments, declaration, ledger, receipts and pruning, and
+commits through one `FileTransaction`. Required literal bindings are resolved only
+inside Core's private staged render. Ordinary application never starts an MCP
+server, hook, plugin or model call.
 
-The writer lock remains held through preparation, rendering and apply. The
-closure must stay synchronous on its preparing thread and must not re-enter
-scope operations, await work, or dispatch the handle. In particular, reading
-a separate output inventory can deadlock. Render the supplied report and
-apply or return. An interactive pause holds off other scope users; a UI that
-needs a long pause should preview first and prepare/display a fresh plan when
-ready to apply.
+Returning or throwing before apply cancels publication. A caller error after a
+successful apply does not undo the commit. A no-change apply returns receipts
+without rewriting state.
 
-Returning or throwing before apply cancels without publishing targets, state
-or retained content. A caller error after successful apply does not undo it.
-Applying revalidates declaration/resolved/watch bytes and presence, target
-entries, execute flags, links, path ancestry, instruction bytes and forwarding
-decision inputs. Live source identities and usable skill metadata are checked;
-their contents remain live. Pinned content is retained and verified, then
-preconditions are rechecked before one transaction stages both kinds, changed
-state and pruning. Copy staging and pinned-link destinations are verified
-against prepared bytes and execute flags before publication.
+## Exact Restore and Domain APIs
 
-`UpdateApplyResult` contains the rendered `report` and `installedSkills`
-receipts. A no-change apply returns receipts without rewriting state.
-Standalone skill and instruction updates use the same domain planners and
-staging functions, with their existing callback signatures and domain isolation.
+`UpdateOperations.restore(scope:environment:)` restores the complete locked
+deployment in one transaction. Restore acquires resources and runs the locked
+format/layout; it does not link mutable producer declarations, choose current
+refs or select a newer adapter. Missing resources, unknown renderers, output
+mismatches and incompatible platforms fail before publication. Embedded resources
+support cold reconstruction without the authoring tree. Live skills retain their
+explicit authoring location. Native restore preserves unmanaged regions.
+
+`SkillOperations` and `InstructionOperations` retain their type identities.
+Their add, update, remove and restore methods are public extensions in
+`AgentsUpdates`; consumers calling them must depend on and import `AgentsUpdates`
+as well as the domain product. Discovery, frontmatter and text rendering stay in
+the domain modules. Skill-only restore and update apply only the skill domain.
+`InstructionOperations.renderChatGPT` verifies locked sections and reads the current
+consumer-owned append file at export. Update and install do not require that file;
+producer-owned append resources remain frozen at their selected source.
+Watch remains a separate subscription API. Add inspection returns source-relative `Skill.path` and `Skill.skillFile` coordinates, never paths into a released snapshot.
 
 ## Failure and Recovery
 
-Handle misuse throws `CoreError.invalidState` before I/O. Failures during plan
-validation or application throw `UpdateApplyError`, preserving
-`underlyingError` and an `UpdateApplyDisposition`:
+Handle misuse fails before I/O. Apply failures are `UpdateApplyError` with the
+underlying error and a disposition:
 
 | Disposition | Established result |
 | --- | --- |
-| `unchanged` | No combined target/state publication, or validated rollback |
-| `committed` | The new combined generation is confirmed; a later failure still makes the operation fail |
-| `recoveryRequired` | Recovery could not establish a consistent completed generation |
+| `unchanged` | No publication, or validated rollback |
+| `committed` | The generation committed; a later failure still makes the operation fail |
+| `recoveryRequired` | Recovery could not establish a consistent generation |
 
-Errors before preparation finishes and caller errors retain their original
-types. A commit error does not itself imply rollback: publication of the
-committed marker can precede a cleanup error. Outcome tracking follows the
-owning journal through validated recovery, including enclosing scope cleanup,
-and does not infer disposition from journal-file presence. Cache-only
-publication journals cannot claim the combined update committed.
-
-The next applying operation recovers an abandoned transaction and raises
-`CoreError.transactionRecovered`. Consumers retry the entire preparation and
-render its fresh report. Read-only preview rejects pending recovery. The
-existing journal, descriptor-relative path checks, metadata preservation and
-fsync barriers supply the durability guarantees described in [State](State.md).
-The lock remains advisory: preconditions detect changes made while rendering
-but do not provide compare-and-swap against editors racing the final check.
-
-## Consumer Example
+Preparation errors retain their original type. Domain convenience APIs also unwrap unchanged apply failures; committed and recovery-required failures retain their disposition. Commit-marker publication can
+precede a cleanup error, so callers must inspect the disposition before retrying.
+The next writer recovers an abandoned journal and raises
+`CoreError.transactionRecovered`; retry the whole preparation. Read-only access
+reports pending recovery. Recovery uses sealed physical evidence and never invokes
+linkers, renderers or binding providers. See [State](State.md) for durability and
+concurrent-writer guarantees.
 
 ```swift
 import AgentsUpdates
@@ -131,7 +123,136 @@ let receipt = try UpdateOperations.withPreparedUpdate { update in
 renderCompletion(receipt)
 ```
 
-`render` and `renderCompletion` are consumer-owned functions. Consumers should
-render the combined report once before applying, use `hasChanges` for the
-no-change decision, and report completion only after the closure returns.
-Serialized reports are presentation values, not offline approval tokens.
+`render` and `renderCompletion` belong to the consumer. Completion is reported only
+after the closure returns.
+
+## Public Inspection and Interactive Consumers
+
+`UpdateOperations.inspect` captures the Manifest document (including typed values,
+source maps and NodeIDs), complete declaration, v2 source/component/occurrence/group
+and resource descriptions, deployments, watch state and recovery diagnostics under
+one admitted read footprint. Public record IDs join these immutable descriptions;
+logical selections remain independent of revisions and temporary directories.
+The report excludes retained content objects and complete native file bytes.
+Deployment drift compares owned content or validates the physical private receipt.
+An unverified observation is explicit. `readLocations` contains actual state,
+source, retained resource and deployment URLs, including missing leaves.
+
+A pending journal returns recovery diagnostics without reading inconsistent
+configuration. Inspection does not recover, resolve sources, call a provider or
+create persistent files. It is suitable for App refresh and filesystem invalidation.
+
+Pass a component's `selection` in `UpdateRequest.selections` to update or remove
+that logical component. An occurrence selects that contribution when it is the
+sole contribution; a coalesced component requires complete-component selection or
+a typed declaration-reference edit. The captured document/ledger generation is
+revalidated before linking. Bare names that match multiple logical components
+report ambiguity. Unselected components keep their recorded projection and pins.
+
+`UpdateOperations.discover` resolves an explicit complete declaration, including
+exported groups, in B's temporary source session without native lowering. It
+returns symbolic descriptions, all exact source revisions, stable identities and
+actual local read locations. `ComponentDiscovery.updateRequest()` carries the
+captured declaration identity and discovered graph fingerprint into preparation;
+a changed source fails before callback delivery. File enumeration and native input
+conversion remain with their domain/import owners.
+
+`SourceImportOperations.inspect` consumes an explicit existing importer profile,
+root, document, selection and supplied resource locations. Its immutable report
+preserves producer coordinates, pins/integrity, ordered sources, selections,
+bindings, unconverted diagnostics, resource preservation obligations and foreign
+deployment claims. `updateRequest(in:)` merges admitted canonical intent into the
+captured scope declaration. Preparation rereads the same inputs, compares the
+proposal, captures their private freshness evidence and validates it again around
+publication. Unresolved conversion/binding diagnostics stop submission; foreign
+claims do not establish ownership. Input content that would overwrite its own
+local authoring source requires independent preservation before submission.
+
+Pass D's `RuntimeBindingProvider` as `bindingProvider:` to public
+`withPreparedUpdate`, `perform` or full `restore`. Preparation and preview never
+call it. The provider resolves bounded data only during private staging. Native
+reports separate intended recipients from the verified physical object's reader
+union and retain sensitivity from an existing shared receipt, including when the
+selected change has no bindings.
+
+`UpdateOperations.perform` returns `UpdateCompletion` after the whole synchronous
+operation and outer cleanup have returned. It preserves the result/error and
+`unchanged`, `rolledBack`, `committed` or `recoveryRequired` disposition, reports
+recovery before callback delivery, and includes pending recovery/cleanup evidence.
+A durable commit remains committed when cleanup is pending. Render the disposition
+before deciding whether to retry. The terminal value is Sendable when its consumer
+result is Sendable; the prepared handle is always invalidated before it returns.
+
+```swift
+let displayed = try UpdateOperations.preview(request, environment: environment)
+let completion = UpdateOperations.perform(request, environment: environment,
+  bindingProvider: bindings
+) { prepared in
+  try prepared.apply(ifUnchangedFrom: displayed.displayedFingerprint)
+}
+```
+
+The closure runs on one thread and must not await. A UI may await the completed
+operation's result, refresh a changed candidate and reprepare for confirmation.
+Agents CLI restores the full scope once with `UpdateOperations.restore`; domain
+consumers continue using their restricted lifecycle methods.
+
+`CombinedUpdateReport.readLocations`, discovery and scope inspection expose durable
+state, source, own-instruction, resource and deployment inputs, including absent
+leaves introduced by an unsaved declaration. `inspectOwnInstructions` and
+`inspectChatGPTExport` pair their results with their owner-computed read locations.
+Export reads the consumer appendix at export time; an absent appendix is allowed
+while installing, but must exist when explicitly exported.
+
+Initialization uses a pure `describeInstructionsInitialization` or
+`describeProjectSkillInitialization` and then `UpdateOperations.initialize`.
+The immutable description contains the exact file/template and captured existing
+project identity. `describeSkillInitialization(directory:)` is explicit standalone
+authoring and can select a new direct child of an existing parent. Apply holds
+that observed root through the lower domain's sole transaction. Registered roots
+removed or replaced after description are never recreated. Existing URL-returning
+initializers use the same lower writer; consumers needing terminal evidence use
+the description/completion API. A committed operation with pending cleanup stays
+committed; durable rollback stays rolled back even with pending cleanup. Earlier
+recovery failure has unchanged current disposition and pending recovery evidence.
+No executing resource or borrowed descriptor outlives the synchronous return.
+
+`WatchOperations.previewAdd` and `previewRemove` produce immutable confirmation
+requests with a stable fingerprint, selected source/content and read locations.
+Add resolves Git in disposable storage or uses the existing verified index reader;
+preview never retains content, changes scope files or recovers. `apply(preview)`
+revalidates scope state and exact content in the existing subscription writer.
+`UpdateOperations.performWatch(preview)` returns that writer's outer
+`UpdateCompletion<WatchChange>` without nesting a transaction. Subscriptions do
+not deploy native targets or skills.
+
+Watch consumers can pass a displayed `WatchStatus` to `WatchOperations.seen`.
+The existing writer revalidates both normalized source identity and the exact Git
+commit or artifact digest map before retention and watch-state publication. A
+redirected alias or changed content requires refresh. Status and diff never deploy
+configuration.
+
+Concrete native contributions are decoded from their sealed F artifacts inside
+replay's resource lifetime. Composition resolves D's closed routes and descriptor
+physical identities before grouping logical owners. A shared document receives
+one regional preparation, including protected MCP and native component siblings.
+Reader and sensitivity evidence covers the physical object; selection controls
+which runtime bindings may be requested. Ordinary changes preserve an unselected
+private region using its verified receipt, without replaying its provider.
+
+Public prompt export renders locked sections in their recorded order and retains
+producer append resources. A recorded consumer `localAppend` is read from its
+current contained file only during export. Update, install and locked recovery do
+not read that mutable consumer file.
+
+`SourceImportInspection.producerRevision` is optional. Documentation-backed native
+profiles retain an unavailable upstream revision as `nil`; their
+`specificationStatus` remains available. Import requests rebase producer-local
+source coordinates into the captured declaration while retaining the proposal's
+input freshness evidence and conversion/binding diagnostics.
+
+A consumer presenting authored YAML occurrences can use the captured document's
+`node(at:)`, verify `editability(of:)`, and submit a typed `ManifestEdit` through
+`UpdateRequest.operation.edit`, with `expectedDeclarationDigest`. This addresses
+the selected authored node; it does not infer a producer child's ownership from a
+recorded occurrence index. The node and expected digest reject stale reuse.

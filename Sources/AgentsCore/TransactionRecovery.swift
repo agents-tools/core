@@ -14,6 +14,17 @@ extension FileTransaction {
     store: StateStore, outcome: TransactionOutcome? = nil,
     checkpoint: @escaping (String) throws -> Void = { _ in }
   ) throws -> Bool {
+    do {
+      return try recoverJournal(store: store, outcome: outcome, checkpoint: checkpoint)
+    } catch {
+      outcome?.requireRecovery()
+      throw error
+    }
+  }
+
+  private static func recoverJournal(
+    store: StateStore, outcome: TransactionOutcome?, checkpoint: @escaping (String) throws -> Void
+  ) throws -> Bool {
     guard let directory = try store.openDirectoryIfPresent() else { return false }
     let primary = TransactionJournal.fileName
     let incomplete = TransactionJournal.incompleteFileName
@@ -25,9 +36,14 @@ extension FileTransaction {
         if journal.finalized {
           try validateRecoveryCoordination(journal, store: store, directory: directory)
           try directory.syncFile(incomplete)
+          if outcome?.journalID == journal.id {
+            outcome?.recordTerminal(journal.phase)
+            outcome?.recoveryPending = true
+          }
           try cleanupFinalized(journal, store: store, directory: directory, checkpoint: checkpoint)
           if outcome?.journalID == journal.id {
-            outcome?.disposition = journal.phase == .committed ? .committed : .unchanged
+            outcome?.recordTerminal(journal.phase)
+            outcome?.recoveryPending = false
           }
           return true
         }
@@ -35,7 +51,10 @@ extension FileTransaction {
           try validateRecoveryCoordination(journal, store: store, directory: directory)
           try finalizeReservationConstruction(
             journal, store: store, directory: directory, checkpoint: checkpoint)
-          if outcome?.journalID == journal.id { outcome?.disposition = .unchanged }
+          if outcome?.journalID == journal.id {
+            outcome?.recordTerminal(.rolledBack)
+            outcome?.recoveryPending = false
+          }
           return true
         }
       }
@@ -44,51 +63,56 @@ extension FileTransaction {
       try directory.remove(incomplete)
       return true
     }
-    var recoveredID: UUID?
-    do {
-      let journal = try readJournal(directory.read(primary))
-      recoveredID = journal.id
-      try validateRecoveryCoordination(journal, store: store, directory: directory)
-      if journal.isReservationOnly {
-        try finalizeReservationConstruction(
-          journal, store: store, directory: directory, checkpoint: checkpoint)
-        if outcome?.journalID == journal.id { outcome?.disposition = .unchanged }
-        return true
-      }
-      if journal.finalized {
-        try directory.syncFile(primary)
-        try cleanupFinalized(journal, store: store, directory: directory, checkpoint: checkpoint)
-        if outcome?.journalID == journal.id {
-          outcome?.disposition = journal.phase == .committed ? .committed : .unchanged
-        }
-        return true
-      }
-      let session = try recoverySession(
+    let journal = try readJournal(directory.read(primary))
+    try validateRecoveryCoordination(journal, store: store, directory: directory)
+    if journal.isReservationOnly {
+      try finalizeReservationConstruction(
         journal, store: store, directory: directory, checkpoint: checkpoint)
-      // Validate the incomplete next generation before any recovery mutation.
-      if try directory.info(incomplete) != nil { _ = try directory.read(incomplete) }
-      // Any observed journal may have been renamed without its directory barrier. Persist it
-      // before granting permissions, renaming objects or deleting any resource, including on retry.
-      try directory.syncFile(primary)
-      try session.emit(.journalSynced)
-      if journal.phase == .applying { try session.rollback() }
-      if session.journal.phase == .applying || session.journal.phase == .preparing {
-        try session.sealDisposal()
-        try session.finish(.rolledBack)
-        try session.emit(.phase(.rolledBack))
-      }
-      try session.revalidateDisposal()
       if outcome?.journalID == journal.id {
-        outcome?.disposition = session.journal.phase == .committed ? .committed : .unchanged
+        outcome?.recordTerminal(.rolledBack)
+        outcome?.recoveryPending = false
       }
       return true
-    } catch {
-      // An unreadable journal cannot prove an unchanged or committed outcome.
-      if recoveredID == nil || outcome?.journalID == recoveredID {
-        outcome?.disposition = .recoveryRequired
-      }
-      throw error
     }
+    if journal.finalized {
+      try directory.syncFile(primary)
+      if outcome?.journalID == journal.id {
+        outcome?.recordTerminal(journal.phase)
+        outcome?.recoveryPending = true
+      }
+      try cleanupFinalized(journal, store: store, directory: directory, checkpoint: checkpoint)
+      if outcome?.journalID == journal.id {
+        outcome?.recordTerminal(journal.phase)
+        outcome?.recoveryPending = false
+      }
+      return true
+    }
+    if outcome?.journalID == journal.id {
+      // Stabilize the observed terminal before reconstructing data that disposal may reject.
+      try directory.syncFile(primary)
+      outcome?.recordTerminal(journal.phase)
+      if journal.phase == .applying { outcome?.publicationStarted = true }
+      outcome?.recoveryPending = true
+    }
+    let session = try recoverySession(
+      journal, store: store, directory: directory, checkpoint: checkpoint)
+    // Validate the incomplete next generation before any recovery mutation.
+    if try directory.info(incomplete) != nil { _ = try directory.read(incomplete) }
+    // Any observed journal may have been renamed without its directory barrier. Persist it
+    // before granting permissions, renaming objects or deleting any resource, including on retry.
+    if outcome?.journalID != journal.id { try directory.syncFile(primary) }
+    try session.emit(.journalSynced)
+    if journal.phase == .applying { try session.rollback() }
+    if session.journal.phase == .applying || session.journal.phase == .preparing {
+      try session.sealDisposal()
+      try session.finish(.rolledBack)
+      if outcome?.journalID == journal.id { outcome?.recordTerminal(.rolledBack) }
+      try session.emit(.phase(.rolledBack))
+    }
+    if outcome?.journalID == journal.id { outcome?.recordTerminal(session.journal.phase) }
+    try session.revalidateDisposal()
+    if outcome?.journalID == journal.id { outcome?.recoveryPending = false }
+    return true
   }
 
   package static func recoveryDiagnostic(store: StateStore) -> TransactionRecoveryDiagnostic {
@@ -164,6 +188,7 @@ extension FileTransaction {
   }
 
   static func readJournal(_ bytes: Data) throws -> TransactionJournal {
+    try LedgerAdmission.check(bytes, limits: .standard)
     try JSONKeys.validate(bytes)
     let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
     guard value?["version"] as? Int == TransactionJournal.currentVersion else {
@@ -326,7 +351,9 @@ extension TransactionSession {
     try requireParent(index)
     if let preimage = entry.preimage {
       let slot: TransactionSlot = entry.action == .install ? .exchanged : .deleted
-      try entry.security.validateObject(preimage, named: slot.name(index), in: container)
+      try entry.security.validateObject(
+        preimage, named: slot.name(index), in: container,
+        permittingDirectoryWrite: entry.progress.permitsDirectoryWrite)
     }
     if entry.preimage != nil {
       if entry.action == .install {

@@ -51,7 +51,7 @@ let package = Package(
       dependencies: [
         "AgentsCore", "TreeSitterYAML", "Yams",
         .product(name: "TreeSitter", package: "tree-sitter"),
-      ], resources: [.copy("Resources/agents.schema.json")]),
+      ], exclude: ["Resources/agents.schema.json"]),
     .target(
       name: "AgentsCore",
       dependencies: ["CPlatform", .product(name: "Crypto", package: "swift-crypto")]
@@ -67,6 +67,7 @@ let package = Package(
       name: "AgentsUpdates",
       dependencies: [
         "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions", "CPlatform",
+        "Components",
       ]),
     .target(
       name: "Components",
@@ -82,7 +83,9 @@ let package = Package(
       ], resources: [.copy("Fixtures")]),
     .executableTarget(
       name: "MCPTestProcess", dependencies: ["CPlatform"], path: "Tests/MCPTestProcess"),
-    .target(name: "StateTestSupport", path: "Tests/StateTestSupport"),
+    .target(
+      name: "StateTestSupport", dependencies: ["AgentsCore", "AgentsManifest"],
+      path: "Tests/StateTestSupport"),
     .executableTarget(
       name: "StateTestProcess",
       dependencies: [
@@ -96,7 +99,10 @@ let package = Package(
         "AgentsCore", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
       ]),
     .testTarget(
-      name: "AgentsInstructionsTests", dependencies: ["AgentsInstructions", "AgentsManifest"]),
+      name: "AgentsInstructionsTests",
+      dependencies: [
+        "AgentsInstructions", "AgentsSkills", "AgentsManifest", "AgentsUpdates", "StateTestSupport",
+      ]),
     .target(
       name: "ManifestTestSupport", dependencies: ["AgentsManifest"],
       path: "Tests/ManifestTestSupport"),
@@ -114,11 +120,13 @@ let package = Package(
       name: "AgentsUpdatesTests",
       dependencies: [
         "AgentsUpdates", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
+        "MCPTestProcess",
       ]),
     .testTarget(
       name: "AgentsSkillsTests",
       dependencies: [
-        "AgentsSkills", "AgentsCore", "AgentsManifest", "AgentsInstructions", "Yams",
+        "AgentsSkills", "AgentsCore", "AgentsManifest", "AgentsInstructions", "AgentsUpdates",
+        "Yams",
         "StateTestProcess", "StateTestSupport", "CPlatform",
       ]),
   ],

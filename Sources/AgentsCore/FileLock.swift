@@ -35,8 +35,17 @@ package enum FileLock {
     let parent = try DirectoryHandle(at: url.deletingLastPathComponent(), create: true) {
       try checkpoint(ancestryCheckpoint($0))
     }
+    return try withDescriptor(in: parent, name: url.lastPathComponent, checkpoint: checkpoint, body)
+  }
+
+  /// The caller pins and authorizes the existing parent; no absolute ancestry is created.
+  static func withDescriptor<T>(
+    in parent: DirectoryHandle, name: String, checkpoint: (String) throws -> Void = { _ in },
+    _ body: (Int32) throws -> T
+  ) throws -> T {
+    let url = parent.url.appendingPathComponent(name)
     let descriptor = openat(
-      parent.descriptor, url.lastPathComponent, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
+      parent.descriptor, name, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
       S_IRUSR | S_IWUSR)
     guard descriptor >= 0 else {
       throw FileSystem.posixError(

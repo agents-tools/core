@@ -1,5 +1,6 @@
 import AgentsManifest
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -15,7 +16,7 @@ struct WatchSourceTests {
       environment: SourceEnvironment(
         projectDirectory: fixture.environment.projectDirectory,
         homeDirectory: fixture.environment.homeDirectory))
-    try store.save(declaration: Declaration(sources: ["source": source]), resolved: ResolvedState())
+    try store.save(declaration: Declaration(sources: ["source": source]), ledger: ResolvedLedger())
     let lock = try FileSnapshot.read(at: store.resolvedURL)
 
     let added = try fixture.watch.add(
@@ -39,7 +40,7 @@ struct WatchSourceTests {
         projectDirectory: fixture.environment.projectDirectory,
         homeDirectory: fixture.environment.homeDirectory))
     try fixture.store.save(
-      declaration: Declaration(sources: ["source": source]), resolved: ResolvedState())
+      declaration: Declaration(sources: ["source": source]), ledger: ResolvedLedger())
     let topic = try fixture.head()
     try fixture.git(["branch", "topic"])
     try fixture.git(["commit", "--allow-empty", "-m", "advance default branch"])

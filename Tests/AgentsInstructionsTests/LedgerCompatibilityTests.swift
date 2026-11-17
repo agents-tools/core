@@ -13,7 +13,7 @@ struct LedgerCompatibilityTests {
       route: "agents/instructions@1", owners: ["section"], recipients: [.codex],
       ownership: .generated,
       expectedHash: digest, created: false)
-    // Use the production source renderer to obtain the v1 whole-file expected hash.
+    // Use the production source renderer to obtain the whole-file expected hash.
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "ledger-compatibility-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

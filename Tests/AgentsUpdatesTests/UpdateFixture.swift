@@ -4,6 +4,7 @@ import AgentsManifest
 import AgentsSkills
 import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 final class UpdateFixture {
@@ -77,7 +78,7 @@ final class UpdateFixture {
         instructions: InstructionsDeclaration(
           agents: agents, sections: ["fixture:rules"],
           chatgpt: ["weekly": PromptDeclaration(sections: ["fixture:rules"])])),
-      resolved: ResolvedState())
+      ledger: ResolvedLedger())
   }
 
   func install(mode: InstallMode = .copy, agents: [AgentID] = [.codex, .claudeCode]) throws {

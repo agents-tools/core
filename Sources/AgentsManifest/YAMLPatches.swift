@@ -34,7 +34,9 @@ struct YAMLPatches {
         let shifted = raw.components(separatedBy: newline).map { line in
           line.hasPrefix(oldIndent) ? newIndent + line.dropFirst(oldIndent.count) : line
         }.joined(separator: newline)
-        insertion = insertion.map { SourcePatch(range: $0.range, replacement: Array(shifted.utf8)) }
+        insertion = insertion.map {
+          SourcePatch(range: $0.range, replacement: movedEntry(shifted, at: $0.range.lowerBound))
+        }
       } else if !carried.isEmpty {
         let rendered = YAMLWriter.flow(value)
         let prefix = newline + carried.map { "  " + $0 + newline }.joined() + "  "
@@ -88,7 +90,8 @@ struct YAMLPatches {
       }
       return [
         SourcePatch(range: range, replacement: []),
-        SourcePatch(range: offset..<offset, replacement: Array(bytes[range])),
+        SourcePatch(
+          range: offset..<offset, replacement: movedEntry(source.spelling(range), at: offset)),
       ]
     }
   }
@@ -269,6 +272,12 @@ struct YAMLPatches {
       return node.pairs?.first(where: { $0.key.text == "file" })?.value
     }
     return node
+  }
+
+  private func movedEntry(_ text: String, at offset: Int) -> [UInt8] {
+    let prefix = offset > 0 && bytes[offset - 1] != 10 ? newline : ""
+    let suffix = offset < bytes.count && !text.hasSuffix(newline) ? newline : ""
+    return Array((prefix + text + suffix).utf8)
   }
 
   private func blockEntry(_ text: String, at offset: Int) -> [UInt8] {

@@ -9,7 +9,33 @@ import Foundation
 
 let arguments = CommandLine.arguments
 let scenario = arguments.count > 1 ? arguments[1] : "normal"
-let root = URL(fileURLWithPath: arguments.count > 2 ? arguments[2] : "/tmp")
+let observation = URL(fileURLWithPath: arguments.count > 2 ? arguments[2] : "/tmp")
+let root =
+  scenario == "managed" ? observation.appendingPathComponent(String(getpid())) : observation
+if scenario == "managed" {
+  try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+  try? Data().write(to: root.appendingPathComponent("ready"))
+  guard
+    (try? String(
+      contentsOfFile: FileManager.default.currentDirectoryPath + "/support", encoding: .utf8))
+      == "fixed support"
+  else { exit(4) }
+  let deadline = Date().addingTimeInterval(3)
+  var paired = false
+  while Date() < deadline {
+    let ready =
+      (try? FileManager.default.contentsOfDirectory(
+        at: observation, includingPropertiesForKeys: nil)) ?? []
+    if ready.filter({
+      FileManager.default.fileExists(atPath: $0.appendingPathComponent("ready").path)
+    }).count == 2 {
+      paired = true
+      break
+    }
+    usleep(1000)
+  }
+  guard paired else { exit(3) }
+}
 func record(_ value: [String: Any]) {
   guard let data = try? JSONSerialization.data(withJSONObject: value) else { return }
   let file = root.appendingPathComponent("wire.jsonl")
@@ -111,6 +137,10 @@ if scenario == "descendant" || scenario == "thread-descendant" {
 let fd = Int32(ProcessInfo.processInfo.environment["FD_CHECK"] ?? "-1") ?? -1
 record([
   "startup": true, "cwd": FileManager.default.currentDirectoryPath,
+  "liveMarker":
+    (try? String(
+      contentsOfFile: FileManager.default.currentDirectoryPath + "/live-marker", encoding: .utf8))
+    ?? "absent",
   "environment": ProcessInfo.processInfo.environment["FIXTURE_VALUE"] ?? "absent",
   "inheritedFD": fd >= 0 && fcntl(fd, F_GETFD) >= 0,
 ])
@@ -189,7 +219,14 @@ while true {
     let cursor = (message["params"] as? [String: Any])?["cursor"] as? String
     let tool: [String: Any] = [
       "name": cursor == nil ? "first" : "second",
-      "description": scenario == "long-text" ? String(repeating: "x", count: 17) : "fixture",
+      "description": scenario == "long-text"
+        ? String(repeating: "x", count: 17)
+        : scenario == "facade"
+          ? ["FACADE_SECRET", "FACADE_LITERAL", "FACADE_ENV", "FACADE_CONTROLLED"].map {
+            ProcessInfo.processInfo.environment[$0] ?? "absent"
+          }.map { value in
+            value + " " + value.replacingOccurrences(of: "-", with: "-\n")
+          }.joined(separator: " ") : "fixture",
       "inputSchema": ["type": "object"],
     ]
     var result: [String: Any] = ["tools": [tool]]

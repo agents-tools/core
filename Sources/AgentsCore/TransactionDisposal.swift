@@ -45,7 +45,7 @@ extension TransactionSession {
     for entryIndex in journal.entries.indices where journal.entries[entryIndex].container == index {
       for (slot, expected) in layouts[entryIndex].objects {
         let name = slot.name(entryIndex)
-        guard snapshot?.children?[name] == expected else {
+        guard snapshot?.child(named: name) == expected else {
           throw conflict(record.entry, "user object \(name) changed while sealing disposal")
         }
       }
@@ -144,12 +144,17 @@ extension TransactionSession {
           if let expected = [entry.preimage, entry.staged].compactMap({ $0 }).first(where: {
             $0.identity == FileObjectIdentity(info)
           }) {
-            try entry.security.validateObject(expected, named: name, in: handle)
+            try entry.security.validateObject(
+              expected, named: name, in: handle, remaining: journal.disposing)
           } else if entry.progress == .queued
             && entry.security.replacement == .privateMaterialization
             && slot == TransactionSlot.staging(for: entry)
           {
             _ = try handle.requirePrivateAccess(name)
+            if let snapshot = try FileSnapshot.read(name, from: handle) {
+              _ = try TreeMemberAccess.capture(
+                name, in: handle, snapshot: snapshot, requirePrivate: true)
+            }
           }
         }
       }

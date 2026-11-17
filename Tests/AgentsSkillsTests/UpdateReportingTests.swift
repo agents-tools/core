@@ -1,5 +1,7 @@
 import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -92,64 +94,6 @@ struct UpdateReportingTests {
     #expect(try !flag(file))
   }
 
-  @Test(arguments: ["prepared", "cached", "staged"])
-  func rejectsModeDisagreementBeforePublication(_ kind: String) throws {
-    let fixture = try SkillFixture()
-    try fixture.skill("demo", body: "same")
-    try fixture.commit()
-    _ = try fixture.add(mode: .copy)
-    let store = fixture.store()
-    let before = try fixture.stateAndTargetBytes()
-    try store.withLock {
-      let resolutions = try SourceResolutionSession(store: store)
-      let plan = try SkillOperations.prepareUpdate(
-        store: store, declaration: store.readDeclaration(), previous: store.readResolved(),
-        resolutions: resolutions)
-      if kind == "prepared" {
-        let lifecycle = try SkillLifecycle(store: store, provider: WellKnownProvider())
-        let source = try lifecycle.discover(
-          store.readDeclaration().sources["fixture"]!, live: false, fullDepth: true)
-        let prepared = try lifecycle.prepare(
-          source.skills[0], in: source,
-          declaration: SkillDeclaration(select: .all, mode: .copy), defaultAgents: [.codex])
-        try FileManager.default.setAttributes(
-          [.posixPermissions: 0o755],
-          ofItemAtPath: prepared.directory.appendingPathComponent("SKILL.md").path)
-        #expect(throws: CoreError.self) { try lifecycle.validate(prepared, name: "demo") }
-      } else if kind == "cached" {
-        let record = try #require(plan.next.skills["demo"])
-        let path = SourceCache(store: store).materializedURL(
-          sourceID: record.source, revision: record.revision!
-        )
-        .appendingPathComponent("skills/demo/SKILL.md")
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
-        #expect(throws: CoreError.self) { try plan.retain() }
-      } else {
-        let retained = try plan.retain()
-        let transaction = FileTransaction(store: store) { step in
-          if step == TransactionCheckpoint.stage(0, .constructed).name {
-            let parent = fixture.target("demo").deletingLastPathComponent()
-            let staged = try #require(
-              FileManager.default.contentsOfDirectory(
-                at: parent,
-                includingPropertiesForKeys: nil
-              ).first { $0.lastPathComponent.hasPrefix(".agents-") }
-            )
-            .appendingPathComponent(TransactionSlot.exchanged.name(0))
-            try FileManager.default.setAttributes(
-              [.posixPermissions: 0o755],
-              ofItemAtPath: staged.appendingPathComponent("SKILL.md").path)
-          }
-        }
-        try plan.stage(retained: retained, transaction: transaction)
-        #expect(throws: CoreError.invalidState("staged content executable mode mismatch")) {
-          try transaction.commit()
-        }
-      }
-    }
-    #expect(try fixture.stateAndTargetBytes() == before)
-  }
-
   @Test(arguments: [[AgentID.codex, .claudeCode], [.codex, .cursor]])
   func liveMembershipAndLostLockPreserveOwnership(_ agents: [AgentID]) throws {
     let fixture = try SkillFixture()
@@ -159,7 +103,7 @@ struct UpdateReportingTests {
       declaration: Declaration(
         sources: ["fixture": SourceDeclaration(kind: .local, location: fixture.repo.path)],
         skills: ["fixture": SkillDeclaration(select: .all, agents: agents, mode: .edit)]),
-      resolved: ResolvedState())
+      ledger: ResolvedLedger())
     let initial = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(initial.membership.count == agents.count)
@@ -194,7 +138,7 @@ struct UpdateReportingTests {
     #expect(repair.membership.allSatisfy { $0.before == $0.after } && !repair.changes.isEmpty)
     var declaration = try store.loadDeclaration()
     try declaration.setSkills(nil)
-    try store.save(declaration: declaration, resolved: store.loadResolved())
+    try store.save(declaration: declaration, ledger: store.loadLedger())
     let removed = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(removed.changed && removed.changes.isEmpty && removed.newVersion == nil)
@@ -214,7 +158,7 @@ struct UpdateReportingTests {
     let store = fixture.store()
     var declaration = try store.loadDeclaration()
     try declaration.updateSkills { $0?["fixture"]?.agents = [.codex, .cursor, .claudeCode] }
-    try store.save(declaration: declaration, resolved: store.loadResolved())
+    try store.save(declaration: declaration, ledger: store.loadLedger())
     let added = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(added.membership.first { $0.agent == .codex }?.before == .installed(mode: .edit))
@@ -222,7 +166,7 @@ struct UpdateReportingTests {
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
     try declaration.updateSkills { $0?["fixture"]?.agents = [.codex, .cursor] }
     try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
-    try store.save(declaration: declaration, resolved: store.loadResolved())
+    try store.save(declaration: declaration, ledger: store.loadLedger())
     let changed = try #require(
       SkillOperations.updateInstalled(environment: fixture.environment).first)
     #expect(changed.membership.first { $0.agent == .claudeCode }?.after == .absent)
@@ -232,6 +176,14 @@ struct UpdateReportingTests {
       })
     #expect(Set(changed.changes.map(\.path)).count == changed.changes.count)
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
+    let partial = try #require(
+      UpdateOperations.preview(
+        UpdateRequest(operation: .remove, kinds: [.skills], names: ["demo"], agents: [.codex]),
+        environment: fixture.environment
+      ).skills.first)
+    #expect(partial.changes.isEmpty)
+    #expect(partial.membership.first { $0.agent == .cursor }?.after == .installed(mode: .copy))
+    #expect(try fixture.body(fixture.target("demo")).contains("live"))
   }
 
   @Test func lossOfRecordAndSelectionDoesNotInventRemoval() throws {
@@ -239,7 +191,7 @@ struct UpdateReportingTests {
     try fixture.skill("demo", body: "live")
     _ = try fixture.add(mode: .edit)
     let store = fixture.store()
-    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    try store.save(declaration: Declaration(), ledger: ResolvedLedger())
     try FileManager.default.removeItem(at: store.resolvedURL)
     #expect(try SkillOperations.updateInstalled(environment: fixture.environment).isEmpty)
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)

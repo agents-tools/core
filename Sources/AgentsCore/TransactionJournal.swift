@@ -2,7 +2,7 @@ import Foundation
 
 /// The version is independent of declaration, resolved and watch formats.
 struct TransactionJournal: Codable {
-  static let currentVersion = 3
+  static let currentVersion = 4
   static let fileName = "transaction.json"
   /// The next journal generation before it replaces `fileName`.
   static let incompleteFileName = "transaction.new"
@@ -22,8 +22,7 @@ struct TransactionJournal: Codable {
   var finalized = false
 
   func validateCoordination() throws {
-    guard footprint.count <= NativeTargetRoute.sharedRoutes.count,
-      zip(footprint, footprint.dropFirst()).allSatisfy({ $0 < $1 })
+    guard zip(footprint, footprint.dropFirst()).allSatisfy({ $0 < $1 })
     else {
       throw CoreError.invalidState("unregistered shared transaction footprint")
     }
@@ -39,18 +38,29 @@ struct TransactionJournal: Codable {
         throw CoreError.invalidState("finalized transaction contradicts its terminal outcome")
       }
     }
-    if !finalized {
-      let sharedRoots = Set(
-        roots.keys.compactMap { key in
-          (NativeTargetRoute.sharedRoute(key) ?? NativeTargetRoute.metadataRoute(key))?.root
-        })
-      let footprintRoots = Set(
-        footprint.compactMap { identity in
-          NativeTargetRoute.sharedRoutes.first { $0.basename == identity.basename }?.root
-        })
-      guard sharedRoots == footprintRoots, footprintRoots.count == footprint.count else {
-        throw CoreError.invalidState("journal roots contradict shared footprint")
+    for entry in entries {
+      let route =
+        NativeTargetRoute.sharedRoute(entry.path) ?? NativeTargetRoute.metadataRoute(entry.path)
+      guard entry.coordination.map({ footprint.indices.contains($0) }) ?? (route == nil) else {
+        throw CoreError.invalidState("invalid entry coordination index")
       }
+      if let root = entry.coordinationRoot {
+        guard let registered = NativeTargetRoute.sharedRoute(root),
+          root.utf8.elementsEqual(registered.root.utf8),
+          let index = entry.coordination,
+          footprint[index].basename.utf8.elementsEqual(registered.basename.utf8)
+        else { throw CoreError.invalidState("invalid registered coordination root") }
+      } else if entry.coordination != nil, route == nil {
+        throw CoreError.invalidState("coordinated alias lacks its registered root")
+      }
+      if let route {
+        guard let index = entry.coordination,
+          footprint[index].basename.utf8.elementsEqual(route.basename.utf8)
+        else { throw CoreError.invalidState("journal route contradicts its coordination") }
+      }
+    }
+    guard Set(entries.compactMap(\.coordination)) == Set(footprint.indices) else {
+      throw CoreError.invalidState("unreferenced journal footprint")
     }
   }
 
@@ -93,6 +103,8 @@ struct TransactionJournal: Codable {
     var progress: Progress = .queued
     var conflict: Conflict?
     var security = TransactionSecurity()
+    var coordination: Int?
+    var coordinationRoot: String?
     var name: String { String(path.split(separator: "/").last!) }
   }
 

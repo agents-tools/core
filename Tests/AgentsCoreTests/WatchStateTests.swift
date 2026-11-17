@@ -30,7 +30,7 @@ struct WatchStateTests {
     var declaration = try store.loadDeclaration()
     #expect(declaration.watch == ["web", "git"])
     declaration.watch = ["git", "web"]
-    try store.save(declaration: declaration, resolved: ResolvedState())
+    try store.save(declaration: declaration, ledger: ResolvedLedger())
     #expect(try Data(contentsOf: store.declarationURL) == bytes)
     #expect(
       try FileManager.default.attributesOfItem(atPath: store.declarationURL.path)[.systemFileNumber]
@@ -56,7 +56,7 @@ struct WatchStateTests {
         "git": SourceDeclaration(kind: .local, location: "/source"),
         "web": SourceDeclaration(kind: .wellKnown, location: "https://example.test"),
       ], watch: ["web", "git"])
-    try store.save(declaration: declaration, resolved: ResolvedState(), watch: watch)
+    try store.save(declaration: declaration, ledger: ResolvedLedger(), watch: watch)
     let bytes = try Data(contentsOf: store.watchURL)
     #expect(try store.loadWatch() == watch)
     #expect(bytes.last == 10)
@@ -65,9 +65,9 @@ struct WatchStateTests {
       try #require(text.range(of: "alpha")).lowerBound
         < #require(text.range(of: "zebra")).lowerBound)
     #expect(!text.contains("timestamp"))
-    try store.save(declaration: declaration, resolved: ResolvedState())
+    try store.save(declaration: declaration, ledger: ResolvedLedger())
     #expect(try Data(contentsOf: store.watchURL) == bytes)
-    try store.save(declaration: declaration, resolved: ResolvedState(), watch: watch)
+    try store.save(declaration: declaration, ledger: ResolvedLedger(), watch: watch)
     #expect(try Data(contentsOf: store.watchURL) == bytes)
     #expect(try store.loadDeclaration().watch == ["git", "web"])
   }
@@ -80,7 +80,7 @@ struct WatchStateTests {
       environment: RuntimeEnvironment(
         projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:]
       ))
-    try store.save(declaration: Declaration(), resolved: ResolvedState(), watch: WatchState())
+    try store.save(declaration: Declaration(), ledger: ResolvedLedger(), watch: WatchState())
     let declaration = try Data(contentsOf: store.declarationURL)
     let resolved = try Data(contentsOf: store.resolvedURL)
     let valid = #"{"version":1,"sources":{}}"#
@@ -105,7 +105,7 @@ struct WatchStateTests {
       try data.write(to: store.watchURL)
       #expect(throws: (any Error).self) { try store.loadWatch() }
       #expect(throws: (any Error).self) {
-        try store.save(declaration: Declaration(), resolved: ResolvedState(), watch: WatchState())
+        try store.save(declaration: Declaration(), ledger: ResolvedLedger(), watch: WatchState())
       }
       #expect(try Data(contentsOf: store.watchURL) == data)
       #expect(try Data(contentsOf: store.declarationURL) == declaration)
@@ -125,7 +125,7 @@ struct WatchStateTests {
     try Data("invalid".utf8).write(to: store.watchURL)
     let before = try FileHash.folderHash(root)
     #expect(throws: (any Error).self) {
-      try store.save(declaration: Declaration(), resolved: ResolvedState())
+      try store.save(declaration: Declaration(), ledger: ResolvedLedger())
     }
     #expect(try FileHash.folderHash(root) == before)
   }
@@ -157,7 +157,7 @@ struct WatchStateTests {
     let declaration = Declaration(sources: [
       "source": SourceDeclaration(kind: .local, location: "/source")
     ])
-    try store.save(declaration: declaration, resolved: ResolvedState(), watch: WatchState())
+    try store.save(declaration: declaration, ledger: ResolvedLedger(), watch: WatchState())
     let lockBytes = try Data(contentsOf: store.resolvedURL)
     let child = try stateTestProcess(root: root, arguments: ["watch-crash", checkpoint])
     defer { terminateProcess(child) }

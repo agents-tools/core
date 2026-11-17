@@ -14,7 +14,7 @@ AgentsManifest → AgentsCore, TreeSitterYAML, TreeSitter, Yams
 AgentsSkills → AgentsCore, AgentsManifest, Yams
 AgentsInstructions → AgentsCore, AgentsManifest, Markdown
 Components → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, NativeDocuments, MCP
-AgentsUpdates → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions
+AgentsUpdates → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, Components
 NativeDocuments → AgentsCore, TOMLSemantics, TreeSitterTOML, TreeSitter
 TOMLSemantics → Foundation
 TreeSitterTOML → (vendored C grammar)
@@ -42,7 +42,7 @@ The frontend reads `.agent/agents.yaml` or the user scope’s `agents.yaml` and
 produces complete syntax-independent IR and typed declarations. Admission checks
 UTF-8 and unsupported raw line separators before parsing. Tree-sitter supplies
 concrete byte ranges under an enforced parser work policy; bounded CST admission
-precedes public Yams ordered-node composition. The bundled schema owns field
+precedes public Yams ordered-node composition. The source schema owns field
 shapes and generates finite runtime constraints and reference help. Core scalar
 resolution preserves string values, integer kind and exact decimal payloads.
 
@@ -88,9 +88,8 @@ and the existing state, linking, lifecycle and recovery guarantees.
   carry document coordinates and origins without syntax or source access.
 - `Declaration` holds complete typed symbolic manifest intent: ordered component
   and group occurrences, conditions, native values, symbolic group references and
-  source declaration directories. It has no serialized form. `ResolvedState`
-  defines version 1 skill/instruction state, including instruction sections,
-  prompts and physical targets.
+  source declaration directories. It has no serialized form. `ResolvedLedger` owns version 2 resolved state. `ResolvedState` is the derived
+  skill/instruction inventory view, including sections, prompts and physical targets.
 - `StateStore` owns scope paths, validation, deterministic lock and watch
   encoding and state persistence. It holds declaration bytes, their evidence,
   the absent-declaration rule and publication without knowing the declaration
@@ -125,7 +124,8 @@ and the existing state, linking, lifecycle and recovery guarantees.
 
 Core has no dependency on manifest syntax, skill discovery, frontmatter, Yams or
 Markdown.
-`AgentsInstructions` owns instruction text transformations and lifecycle.
+`AgentsInstructions` owns instruction text transformations, inventory and diagnostics.
+`AgentsUpdates` owns its deployment lifecycle.
 `InstructionLocations` supplies fixed target locations to lifecycle and journal
 validation.
 
@@ -202,7 +202,7 @@ means the before membership is unrecorded, not that files were absent.
 equal hashes do not suppress mode-only changes.
 
 The optional `beforeApply` callback runs before any replacement, and a thrown
-error cancels the operation. The extracted `SkillUpdatePlan` validates state
+error cancels the operation. The shared Updates plan validates state
 and target preconditions around content retention, including execute flags.
 Prepared, cached and staged skill content must agree in bytes and mode.
 A CLI auditing several projects calls `doctor` with an explicit environment
@@ -363,7 +363,7 @@ Versioned replay produces verified artifacts and owned-region intentions; its
 compatibility renderer table contains only existing formats. Test process formats
 are supplied explicitly and are absent from production registration. These
 package seams do not publish state.
-The existing public lifecycle operations still enforce their deployment subset.
+Updates consumes the full linked graph and paired ledger freeze for deployment.
 
 Root package resources use the project directory in project scope and the
 user-state directory in user scope. Explicit sources retain their declaring
@@ -415,12 +415,15 @@ lock through preparation and the synchronous consumer closure. Its
 retained or reused handles fail before I/O after closure exit. Reports cannot
 be reconstructed into applicable plans.
 
-Package-visible `SkillUpdatePlan` and `InstructionUpdatePlan` own discovery,
-reports, preconditions, retention and staging for their domains. Standalone
-updates use those same plans and preserve the other domain. Neither domain
-depends on the other or on `AgentsUpdates`. The composition target merges
-owned records and commits both kinds, changed state and cache pruning in one
-`FileTransaction`; the skill-only consumer need not link Markdown.
+`UpdatePlan` owns complete declaration linking, paired freeze, locked replay,
+artifact aggregation, the v2 ledger and the one publication transaction. Domain
+lifecycle methods are public extensions in Updates, so their consumers add an
+`AgentsUpdates` dependency and import. The domain modules keep discovery,
+frontmatter, rendering, inventory and diagnostic helpers. Restricted requests
+protect the recorded other-domain semantics and independent direct pins.
+Preview uses temporary acquisition; prepared callbacks remain inside both source
+and replay resource closures. Shared native files are aggregated once per physical
+destination, and reports expose selected owned changes only.
 
 See [combined updates](Updates.md) for callback restrictions, state-only
 changes, cancellation, failure dispositions and recovery.

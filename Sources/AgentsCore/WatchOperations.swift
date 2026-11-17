@@ -28,45 +28,35 @@ public struct WatchOperations: Sendable {
     path: String? = nil, scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> WatchChange {
+    try add(
+      source, alias: alias, requirement: requirement, path: path, scope: scope,
+      environment: environment, expected: nil, outcome: TransactionOutcome())
+  }
+
+  private func add(
+    _ source: String, alias: String?, requirement: SourceRequirement?, path: String?,
+    scope: InstallScope, environment: RuntimeEnvironment, expected: WatchMutationPreview?,
+    outcome: TransactionOutcome
+  ) throws -> WatchChange {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withLock(checkpoint: checkpoint) {
+    return try store.withLock(checkpoint: checkpoint, outcome: outcome) {
       let baseline = try StatePrecondition(store: store)
       let previous = try declarations.read(store, baseline)
-      var declaration = previous
-      let lock = try store.readResolved(prepared: baseline)
+      let lock = try store.readLedger(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
-      var argument = try SourceArgument(source)
-      guard argument.name == nil else {
-        throw CoreError.invalidSource("@skill: selects skills; watch subscribes to whole sources")
+      let planned = try planAdd(
+        source, alias: alias, requirement: requirement, path: path,
+        declaration: previous, store: store, baseline: baseline)
+      let (name, id, declared, change) = (planned.alias, planned.id, planned.source, planned.change)
+      if let expected {
+        try requireFingerprint(
+          expected, baseline: baseline, change: change, seen: expected.seen, store: store,
+          alias: name, sourceID: id, removing: false)
       }
-      if declaration.sources[argument.location] == nil,
-        let alias = try declaration.sources.keys.sorted().first(where: {
-          try declaration.sources[$0]?.identity(environment: environment) == argument.location
-        })
-      {
-        argument.location = alias
-      }
-      let selection = try argument.selection(
-        in: declaration, requirement: requirement, path: path, environment: environment)
-      let parsed = selection.source
-      let id = try parsed.identity(environment: environment)
-      let existing = try declaration.sources.keys.sorted().first {
-        try declaration.sources[$0]?.identity(environment: environment) == id
-      }
-      let name = alias ?? existing ?? declaration.derivedAlias(for: parsed.location)
-      if let current = declaration.sources[name],
-        try current.identity(environment: environment) != id
-      {
-        throw CoreError.invalidSource("source alias already refers to another source: \(name)")
-      }
-      let declared = selection.applied(to: existing.flatMap { declaration.sources[$0] } ?? parsed)
-      declaration.sources[name] = declared
-      declaration.watch = Array(Set((declaration.watch ?? []) + [name])).sorted()
-      try declaration.validate(environment: environment)
-      let change = try declarations.plan(store, previous, declaration, baseline)
-      let current = try acknowledge(declared, revision: nil, store: store)
+      let current = try acknowledge(declared, revision: nil, expected: expected?.seen, store: store)
       watch.sources[id] = WatchSourceState(seen: current)
-      try commit(change, watch: watch, lock: lock, store: store, baseline: baseline)
+      try commit(
+        change, watch: watch, lock: lock, store: store, baseline: baseline, outcome: outcome)
       return WatchChange(alias: name, sourceID: id, seen: current)
     }
   }
@@ -78,7 +68,7 @@ public struct WatchOperations: Sendable {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
       let declaration = try declarations.read(store, nil)
-      _ = try store.readResolved()
+      _ = try store.readLedger()
       let watch = try store.readWatch()
       return try (declaration.watch ?? []).sorted().map { alias in
         try inspect(alias: alias, declaration: declaration, watch: watch, store: store)
@@ -94,7 +84,7 @@ public struct WatchOperations: Sendable {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
       let declaration = try declarations.read(store, nil)
-      _ = try store.readResolved()
+      _ = try store.readLedger()
       let watch = try store.readWatch()
       let alias = try subscription(source, declaration: declaration, environment: environment)
       var result = try inspect(alias: alias, declaration: declaration, watch: watch, store: store)
@@ -107,23 +97,42 @@ public struct WatchOperations: Sendable {
 
   @discardableResult
   public func seen(
-    _ source: String, revision: String? = nil, scope: InstallScope = .project,
+    _ source: String, revision: String? = nil, ifCurrentIs expected: WatchSeen? = nil,
+    ifSourceIs expectedSource: String? = nil,
+    scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> WatchChange {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withLock(checkpoint: checkpoint) {
       let baseline = try StatePrecondition(store: store)
       let declaration = try declarations.read(store, baseline)
-      let lock = try store.readResolved(prepared: baseline)
+      let lock = try store.readLedger(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
       let declared = declaration.sources[alias]!
       let id = try declared.identity(environment: environment)
-      let current = try acknowledge(declared, revision: revision, store: store)
+      guard expectedSource == nil || expectedSource == id else {
+        throw CoreError.invalidState("watch source changed; refresh before acknowledging")
+      }
+      let current = try acknowledge(declared, revision: revision, expected: expected, store: store)
+      guard expected == nil || expected == current else {
+        throw CoreError.invalidState("watch content changed; refresh before acknowledging")
+      }
       watch.sources[id] = WatchSourceState(seen: current)
       try commit(nil, watch: watch, lock: lock, store: store, baseline: baseline)
       return WatchChange(alias: alias, sourceID: id, seen: current)
     }
+  }
+
+  /// Acknowledges exactly the displayed source/content pair, revalidated under the writer lock.
+  @discardableResult
+  public func seen(
+    _ status: WatchStatus, scope: InstallScope = .project,
+    environment: RuntimeEnvironment = RuntimeEnvironment()
+  ) throws -> WatchChange {
+    try seen(
+      status.alias, ifCurrentIs: status.current, ifSourceIs: status.sourceID,
+      scope: scope, environment: environment)
   }
 
   /// Removes only the subscription and baseline. Source declarations and installations remain.
@@ -132,21 +141,218 @@ public struct WatchOperations: Sendable {
     _ source: String, scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> WatchChange {
+    try remove(
+      source, scope: scope, environment: environment, expected: nil, outcome: TransactionOutcome())
+  }
+
+  private func remove(
+    _ source: String, scope: InstallScope, environment: RuntimeEnvironment,
+    expected: WatchMutationPreview?, outcome: TransactionOutcome
+  ) throws -> WatchChange {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withLock(checkpoint: checkpoint) {
+    return try store.withLock(checkpoint: checkpoint, outcome: outcome) {
       let baseline = try StatePrecondition(store: store)
       let previous = try declarations.read(store, baseline)
       var declaration = previous
-      let lock = try store.readResolved(prepared: baseline)
+      let lock = try store.readLedger(prepared: baseline)
       var watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
       let id = try declaration.sources[alias]!.identity(environment: environment)
       declaration.watch?.removeAll { $0 == alias }
       watch.sources.removeValue(forKey: id)
       let change = try declarations.plan(store, previous, declaration, baseline)
-      try commit(change, watch: watch, lock: lock, store: store, baseline: baseline)
+      if let expected {
+        try requireFingerprint(
+          expected, baseline: baseline, change: change, seen: nil, store: store, alias: alias,
+          sourceID: id, removing: true)
+      }
+      try commit(
+        change, watch: watch, lock: lock, store: store, baseline: baseline, outcome: outcome)
       return WatchChange(alias: alias, sourceID: id, seen: nil)
     }
+  }
+
+  /// Resolves acknowledgment in disposable storage without retaining refs or recovering the scope.
+  public func previewAdd(
+    _ source: String, alias: String? = nil, requirement: SourceRequirement? = nil,
+    path: String? = nil, scope: InstallScope = .project,
+    environment: RuntimeEnvironment = RuntimeEnvironment()
+  ) throws -> WatchMutationPreview {
+    let store = StateStore(scope: scope, environment: environment)
+    return try store.withReadLock {
+      let baseline = try StatePrecondition(store: store)
+      let previous = try declarations.read(store, baseline)
+      _ = try store.readLedger(prepared: baseline)
+      _ = try store.readWatch(prepared: baseline)
+      let planned = try planAdd(
+        source, alias: alias, requirement: requirement, path: path,
+        declaration: previous, store: store, baseline: baseline)
+      let seen = try observe(planned.source, store: store)
+      let fingerprint = try mutationFingerprint(
+        baseline: baseline, change: planned.change, seen: seen, store: store, alias: planned.alias,
+        sourceID: planned.id, removing: false)
+      try baseline.validate()
+      return WatchMutationPreview(
+        action: .add(source, alias, requirement, path), store: store,
+        alias: planned.alias, sourceID: planned.id, seen: seen, displayedFingerprint: fingerprint,
+        readLocations: mutationReadLocations(store, source: planned.source))
+    }
+  }
+
+  public func previewRemove(
+    _ source: String, scope: InstallScope = .project,
+    environment: RuntimeEnvironment = RuntimeEnvironment()
+  ) throws -> WatchMutationPreview {
+    let store = StateStore(scope: scope, environment: environment)
+    return try store.withReadLock {
+      let baseline = try StatePrecondition(store: store)
+      let previous = try declarations.read(store, baseline)
+      var declaration = previous
+      _ = try store.readLedger(prepared: baseline)
+      _ = try store.readWatch(prepared: baseline)
+      let alias = try subscription(source, declaration: declaration, environment: environment)
+      let selected = declaration.sources[alias]!
+      let id = try selected.identity(environment: environment)
+      declaration.watch?.removeAll { $0 == alias }
+      let change = try declarations.plan(store, previous, declaration, baseline)
+      let fingerprint = try mutationFingerprint(
+        baseline: baseline, change: change, seen: nil, store: store, alias: alias, sourceID: id,
+        removing: true)
+      try baseline.validate()
+      return WatchMutationPreview(
+        action: .remove(source), store: store,
+        alias: alias, sourceID: id, seen: nil, displayedFingerprint: fingerprint,
+        readLocations: mutationReadLocations(store, source: selected))
+    }
+  }
+
+  /// Revalidates exactly the displayed subscription mutation inside its sole scope writer.
+  @discardableResult
+  public func apply(_ preview: WatchMutationPreview) throws -> WatchChange {
+    try apply(preview, outcome: TransactionOutcome())
+  }
+
+  package func apply(_ preview: WatchMutationPreview, outcome: TransactionOutcome) throws
+    -> WatchChange
+  {
+    switch preview.action {
+    case .add(let source, let alias, let requirement, let path):
+      return try add(
+        source, alias: alias, requirement: requirement, path: path,
+        scope: preview.store.scope, environment: preview.store.environment, expected: preview,
+        outcome: outcome)
+    case .remove(let source):
+      return try remove(
+        source, scope: preview.store.scope, environment: preview.store.environment,
+        expected: preview, outcome: outcome)
+    }
+  }
+
+  private func mutationReadLocations(_ store: StateStore, source: SourceDeclaration) -> [URL] {
+    [store.declarationURL, store.resolvedURL, store.watchURL]
+      + (source.kind == .local ? [source.localURL(environment: store.environment)] : [])
+  }
+
+  private func mutationFingerprint(
+    baseline: StatePrecondition, change: DeclarationChange?,
+    seen: WatchSeen?, store: StateStore, alias: String, sourceID: String, removing: Bool
+  ) throws -> String {
+    struct Evidence: Encodable {
+      let scope: InstallScope
+      let alias: String
+      let sourceID: String
+      let removing: Bool
+      let state: [String?]
+      let declaration: String?
+      let seen: WatchSeen?
+    }
+    return try ResolvedLedgerCodec.digest(
+      Evidence(
+        scope: store.scope, alias: alias, sourceID: sourceID, removing: removing,
+        state: [store.declarationURL, store.resolvedURL, store.watchURL].map {
+          try baseline.bytes(for: $0).map { FileHash.sha256Hex(data: $0) }
+        }, declaration: change.map { FileHash.sha256Hex(data: $0.bytes) }, seen: seen))
+  }
+
+  private func requireFingerprint(
+    _ preview: WatchMutationPreview, baseline: StatePrecondition,
+    change: DeclarationChange?, seen: WatchSeen?, store: StateStore, alias: String,
+    sourceID: String, removing: Bool
+  ) throws {
+    guard
+      try mutationFingerprint(
+        baseline: baseline, change: change, seen: seen, store: store, alias: alias,
+        sourceID: sourceID, removing: removing) == preview.displayedFingerprint
+    else {
+      throw CoreError.invalidState("subscription changed; refresh before confirming")
+    }
+  }
+
+  private func observe(_ source: SourceDeclaration, store: StateStore) throws -> WatchSeen {
+    if source.kind == .wellKnown {
+      return .artifacts(
+        Dictionary(
+          uniqueKeysWithValues: try artifacts(source).map { ($0.name, $0.artifact.digest) }))
+    }
+    let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "agents-watch-preview-" + UUID().uuidString)
+    try FileSystem.createDirectory(at: temporary)
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    var source = source
+    if source.kind == .local {
+      source.location = source.localURL(environment: store.environment).path
+    }
+    let environment = RuntimeEnvironment(
+      projectDirectory: temporary, homeDirectory: temporary,
+      environment: store.environment.environment)
+    return .revision(
+      try SourceCache(store: StateStore(scope: .project, environment: environment)).watchRevision(
+        source))
+  }
+
+  private struct AddPlan {
+    let alias: String
+    let id: String
+    let source: SourceDeclaration
+    let change: DeclarationChange?
+  }
+
+  private func planAdd(
+    _ source: String, alias: String?, requirement: SourceRequirement?, path: String?,
+    declaration previous: Declaration, store: StateStore, baseline: StatePrecondition
+  ) throws -> AddPlan {
+    let environment = store.environment
+    var declaration = previous
+    var argument = try SourceArgument(source)
+    guard argument.name == nil else {
+      throw CoreError.invalidSource("@skill: selects skills; watch subscribes to whole sources")
+    }
+    if declaration.sources[argument.location] == nil,
+      let alias = try declaration.sources.keys.sorted().first(where: {
+        try declaration.sources[$0]?.identity(environment: environment) == argument.location
+      })
+    {
+      argument.location = alias
+    }
+    let selection = try argument.selection(
+      in: declaration, requirement: requirement, path: path, environment: environment)
+    let parsed = selection.source
+    let id = try parsed.identity(environment: environment)
+    let existing = try declaration.sources.keys.sorted().first {
+      try declaration.sources[$0]?.identity(environment: environment) == id
+    }
+    let name = alias ?? existing ?? declaration.derivedAlias(for: parsed.location)
+    if let current = declaration.sources[name],
+      try current.identity(environment: environment) != id
+    {
+      throw CoreError.invalidSource("source alias already refers to another source: \(name)")
+    }
+    let declared = selection.applied(to: existing.flatMap { declaration.sources[$0] } ?? parsed)
+    declaration.sources[name] = declared
+    declaration.watch = Array(Set((declaration.watch ?? []) + [name])).sorted()
+    try declaration.validate(environment: environment)
+    let change = try declarations.plan(store, previous, declaration, baseline)
+    return AddPlan(alias: name, id: id, source: declared, change: change)
   }
 
   private func sourceDeclaration(
@@ -181,27 +387,32 @@ public struct WatchOperations: Sendable {
   /// The prepared generation, captured before any network acknowledgment, is the journal's
   /// preimage evidence and also guards the lock that pruning follows.
   private func commit(
-    _ change: DeclarationChange?, watch: WatchState, lock: ResolvedState, store: StateStore,
-    baseline: StatePrecondition
+    _ change: DeclarationChange?, watch: WatchState, lock: ResolvedLedger, store: StateStore,
+    baseline: StatePrecondition, outcome: TransactionOutcome = TransactionOutcome()
   ) throws {
     try watch.validate()
-    let transaction = FileTransaction(store: store, checkpoint: checkpoint)
+    let transaction = FileTransaction(store: store, outcome: outcome, checkpoint: checkpoint)
     transaction.requireUnchanged(since: baseline)
     try store.stageDeclaration(change, in: transaction, prepared: baseline)
     try transaction.replace(
       store.watchURL, with: .data(StateStore.encode(watch)),
       expecting: baseline.evidence(for: store.watchURL))
-    try SourceCache(store: store).prune(referencedBy: lock, watch: watch, transaction: transaction)
+    var references = try RetentionReferences(ledger: lock, roots: store.ledgerRoots)
+    try references.include(watch: watch)
+    try SourceCache(store: store).prune(references: references, transaction: transaction)
     try transaction.commit()
   }
 
   private func acknowledge(
-    _ source: SourceDeclaration, revision: String?, store: StateStore
+    _ source: SourceDeclaration, revision: String?, expected: WatchSeen? = nil, store: StateStore
   ) throws -> WatchSeen {
     let cache = SourceCache(store: store, checkpoint: checkpoint)
     let id = try source.identity(environment: store.environment)
     if source.kind != .wellKnown {
       let head = try cache.watchRevision(source, revision: revision)
+      guard expected == nil || expected == .revision(head) else {
+        throw CoreError.invalidState("watch content changed; refresh before acknowledging")
+      }
       try checkpoint("watch.mirror.fetched")
       try cache.retainWatchRevision(sourceID: id, source: source.location, revision: head)
       return .revision(head)
@@ -210,6 +421,11 @@ public struct WatchOperations: Sendable {
       throw CoreError.invalidSource("well-known subscriptions do not accept Git revisions")
     }
     let artifacts = try artifacts(source)
+    let current = WatchSeen.artifacts(
+      Dictionary(uniqueKeysWithValues: artifacts.map { ($0.name, $0.artifact.digest) }))
+    guard expected == nil || expected == current else {
+      throw CoreError.invalidState("watch content changed; refresh before acknowledging")
+    }
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "agents-watch-" + UUID().uuidString)
     try FileSystem.createDirectory(at: root)
@@ -432,4 +648,19 @@ private struct WatchUnit: Equatable {
     default: throw CoreError.invalidSource("unsupported watch entry: \(name)")
     }
   }
+}
+
+/// Immutable subscription confirmation; no locks or borrowed resources escape preview.
+public struct WatchMutationPreview: Sendable {
+  fileprivate enum Action: Sendable {
+    case add(String, String?, SourceRequirement?, String?)
+    case remove(String)
+  }
+  fileprivate let action: Action
+  package let store: StateStore
+  public let alias: String
+  public let sourceID: String
+  public let seen: WatchSeen?
+  public let displayedFingerprint: String
+  public let readLocations: [URL]
 }

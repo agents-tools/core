@@ -60,39 +60,41 @@ extension InstructionOperations {
       return try store.withReadLock(
         onPendingRecovery: { empty(.pendingRecovery) },
         {
-          _ = try store.readDeploymentDeclaration()
+          _ = try store.readDeclaration()
           guard try store.existingData(store.resolvedURL) != nil else {
             return empty(.missingLock)
           }
-          let lock = try store.readResolved()
-          let sources = InstructionSources(store: store)
-          var directories: [String: String] = [:]
-          var unplaced: [LockedSection] = []
-          // User targets receive every section, so their placement needs no content.
-          for record in lock.instructions.sections {
-            if scope == .user {
-              directories[InstructionSources.identity(record)] = ""
-            } else if let unit = try? sources.restore(
-              [record], sources: lock.sources, cachedOnly: true
-            ).first {
-              directories[InstructionSources.identity(record)] = unit.section.directory
-            } else {
-              unplaced.append(record)
+          let ledger = try store.readLedger()
+          let lock = try ledger.domainProjection(roots: store.ledgerRoots)
+          let targets = try ledger.deployments.filter {
+            ["agents/instructions@1", "agents/claude-import@1"].contains($0.route)
+          }.map { deployment in
+            let file = try deployment.target.resolve(roots: store.ledgerRoots)
+            let key = InstructionLocations.key(for: file, store: store)
+            let sections = try deployment.owners.compactMap { ledger.components[$0] }.compactMap {
+              component throws -> LockedSection? in
+              guard deployment.ownership != .importBlock, let id = component.resources.first,
+                let resource = ledger.resources[id]
+              else { return nil }
+              return LockedSection(
+                name: component.name,
+                source: try lock.instructions.sections.first(where: {
+                  $0.name == component.name && $0.path == resource.path
+                    && $0.revision == component.revision
+                })?.source
+                  ?? (try ledger.sourceIdentity(component.source, roots: store.ledgerRoots)),
+                revision: component.revision, version: component.version,
+                artifact: resource.artifact,
+                path: resource.path,
+                hash: component.payload.object?["sourceHash"]?.text ?? resource.hash)
             }
-          }
-          let targets = lock.instructions.targets.sorted { $0.key < $1.key }.map { key, value in
-            let directory = scope == .project ? (key as NSString).deletingLastPathComponent : ""
             return InstructionMapping.Target(
-              target: key, agents: value.agents,
-              sections: value.import != nil
-                ? []
-                : lock.instructions.sections.filter {
-                  directories[InstructionSources.identity($0)] == directory
-                },
-              import: value.import)
-          }
+              target: key, agents: deployment.recipients, sections: sections,
+              import: deployment.importReference)
+          }.sorted { $0.target < $1.target }
+
           return InstructionMapping(
-            scope: scope, root: root, status: .locked, targets: targets, unplaced: unplaced,
+            scope: scope, root: root, status: .locked, targets: targets, unplaced: [],
             prompts: lock.instructions.chatgpt.mapValues(\.sections))
         })
     } catch {

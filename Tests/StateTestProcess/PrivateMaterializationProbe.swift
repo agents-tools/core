@@ -1,12 +1,55 @@
 import AgentsCore
 import AgentsInstructions
 import AgentsSkills
+import AgentsUpdates
+import CPlatform
 import Foundation
 
 func privateMaterializationProbe(
   _ command: String, store: StateStore, checkpoint: @escaping (String) throws -> Void
 ) throws {
   let root = store.environment.projectDirectory
+  if command.hasPrefix("private-legacy-") {
+    let target = try store.skillInstallationTarget(for: .claudeCode, named: "private-fixture")
+    try store.withLock(checkpoint: checkpoint, installations: [target]) {
+      try Data().write(to: root.appendingPathComponent("legacy-callback"))
+      let transaction = FileTransaction(store: store, checkpoint: checkpoint)
+      try transaction.replaceSkill(target, with: .copy(root.appendingPathComponent("new")))
+      try transaction.commit()
+    }
+    return
+  }
+  if command.hasPrefix("private-tree-") {
+    if command == "private-tree-recover" {
+      do { try store.withLock(checkpoint: checkpoint, {}) } catch CoreError.transactionRecovered {}
+      return
+    }
+    let route = try NativeTargetRoute.named(
+      .claudeSkillPlugin, scope: .user, name: "private-fixture")
+    try store.withLock(checkpoint: checkpoint, footprint: [route]) {
+      if command == "private-tree-lock" {
+        try checkpoint("tree.locked")
+        return
+      }
+      let target = try store.nativeTarget(for: route)
+      let prepared = try store.preparePrivateMaterialization(target, changingAccess: true)
+      let transaction = FileTransaction(store: store, checkpoint: checkpoint)
+      try transaction.replacePrivateTree(
+        prepared,
+        entries: [
+          .init("nested", content: .directory),
+          .init(
+            "nested/run",
+            content: .boundFile(bindings: ["value"], executable: true) {
+              try $0.value(for: "value")
+            }),
+          .init("config", content: .boundFile(bindings: ["value"]) { try $0.value(for: "value") }),
+          .init("alias", content: .symlink("nested/run")),
+        ], provider: TreeProbeBindings(root: root))
+      try transaction.commit()
+    }
+    return
+  }
   if command == "private-recover" {
     do { try store.withLock(checkpoint: checkpoint, {}) } catch CoreError.transactionRecovered {}
     return
@@ -114,9 +157,23 @@ func sharedMaterializationProbe(
         try transaction.replace(target.url, with: .data(Data("secret sibling; edited region".utf8)))
       }
     }
-    try transaction.replace(
-      store.environment.projectDirectory.appendingPathComponent("old-data/AGENTS.md"),
-      with: .data(Data("ordinary after".utf8)))
+    if store.scope == .project {
+      try transaction.replace(
+        store.environment.projectDirectory.appendingPathComponent("old-data/AGENTS.md"),
+        with: .data(Data("ordinary after".utf8)))
+    }
     try transaction.commit()
+  }
+}
+
+private struct TreeProbeBindings: RuntimeBindingProvider {
+  let root: URL
+  func value(for binding: String, environment: RuntimeEnvironment) throws -> Data {
+    let descriptor = open(
+      root.appendingPathComponent("tree-provider-resolved").path,
+      O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    guard descriptor >= 0 else { throw CoreError.invalidState("tree provider cannot replay") }
+    close(descriptor)
+    return Data("tree-private-after".utf8)
   }
 }

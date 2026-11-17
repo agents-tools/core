@@ -47,6 +47,12 @@ package enum SourceImport {
       case .rulesyncSourcesV1, .rulesyncNpmV1:
         try RulesyncSourceImport.read(
           ImportInput.document(input, limits: limits), input: input, into: &diagnostics)
+      case .claudeSettingsV1, .codexConfigV1, .cursorMCPV1, .geminiSettingsV1, .openCodeConfigV2,
+        .claudePluginV1, .cursorPluginV1, .geminiExtensionV1, .claudeMarketplaceV1,
+        .claudeCommandV1, .claudeAgentV1, .geminiCommandV1, .geminiAgentV1,
+        .openCodeCommandV2, .openCodeAgentV2, .cursorCommandV1, .cursorAgentV1, .geminiIgnoreV1,
+        .cursorIgnoreV1:
+        try NativeSourceImport.read(input, limits: limits, into: &diagnostics)
       case .vercelProjectV2, .vercelUserV3:
         try VercelSourceImport.read(
           ImportInput.document(input, limits: limits), input: input, limits: limits,

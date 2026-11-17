@@ -50,6 +50,32 @@ struct UpdateTransactionTests {
     #expect(try !fixture.preview().hasChanges)
   }
 
+  @Test(arguments: [false, true])
+  func outerTerminalReportsTheDurablePublication(_ committed: Bool) throws {
+    let fixture = try UpdateFixture()
+    try fixture.install()
+    let before = try fixture.snapshot()
+    try fixture.advance()
+    let point =
+      committed
+      ? TransactionCheckpoint.phase(.committed).name
+      : TransactionCheckpoint.phase(.preparing).name
+    var interrupted = false
+    let result = UpdateOperations.perform(
+      environment: fixture.environment,
+      checkpoint: { step in
+        if step == point {
+          interrupted = true
+          throw CoreError.invalidState("terminal fixture failure")
+        }
+      }, { try $0.apply() })
+    #expect(interrupted)
+    #expect(result.disposition == (committed ? .committed : .rolledBack))
+    #expect(!result.recovery.pending)
+    #expect(throws: UpdateApplyError.self) { try result.result.get() }
+    if !committed { #expect(try fixture.snapshot() == before) }
+  }
+
   @Test(arguments: [
     "between-kinds", TransactionCheckpoint.phase(.preparing).name,
     TransactionCheckpoint.persisted(.applying, .entry(0, .publishing), .renamed).name,
@@ -120,8 +146,21 @@ struct UpdateTransactionTests {
     #expect(throws: CoreError.recoveryPending(TransactionRecoveryDiagnostic.pendingMessage)) {
       try fixture.preview()
     }
+    let inspection = try UpdateOperations.inspect(environment: fixture.environment)
+    #expect(inspection.recovery.pending)
+    #expect(inspection.components.isEmpty)
+    var delivered = false
+    let recovered: UpdateCompletion<Void> = UpdateOperations.perform(
+      environment: fixture.environment
+    ) { _ in
+      delivered = true
+    }
+    #expect(!delivered)
+    #expect(recovered.recoveredBeforePreparation)
+    #expect(recovered.disposition == .unchanged)
+    #expect(!recovered.recovery.pending)
     #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      try fixture.apply()
+      try recovered.result.get()
     }
     let committed = committedPoints.contains(checkpoint)
     if !committed { #expect(try fixture.snapshot() == before) }
@@ -219,6 +258,11 @@ private func launch(_ fixture: UpdateFixture, command: String, argument: String)
   process.arguments = [
     fixture.root.path, command, argument, "--scope", fixture.store.scope.rawValue,
   ]
+  let scratch = fixture.root.appendingPathComponent("process-temporary")
+  try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+  var environment = ProcessInfo.processInfo.environment
+  environment["TMPDIR"] = scratch.path + "/"
+  process.environment = environment
   try process.run()
   return process
 }
@@ -231,4 +275,43 @@ private func waitFor(_ name: String, fixture: UpdateFixture, child: Process) thr
 /// A child that survives the termination deadline fails the test instead of blocking the run.
 private func terminate(_ process: Process) {
   do { try ProcessWait.terminate(process) } catch { Issue.record(error) }
+}
+
+extension UpdateTransactionTests {
+  @Test func combinedNativeFileAndSharedDocumentFaultRollBackTogether() throws {
+    let fixture = try UpdateFixture()
+    let config = fixture.root.appendingPathComponent(".codex/config.toml")
+    let role = fixture.root.appendingPathComponent(".codex/agents/researcher.toml")
+    try fixture.write("# User setting\ntheme = 'fixture'\n", to: config)
+    let initial = Declaration(components: [
+      .subagent(
+        name: "researcher", description: "Research sources", prompt: .literal("Before."),
+        agents: [.codex]),
+      .mcpServer(name: "db", transport: .stdio(.init(executable: "before")), agents: [.codex]),
+    ])
+    try fixture.store.save(declaration: initial, ledger: ResolvedLedger())
+    _ = try fixture.apply()
+    let files = [fixture.store.declarationURL, fixture.store.resolvedURL, config, role]
+    let before = try files.map { try Data(contentsOf: $0) }
+    let next = Declaration(components: [
+      .subagent(
+        name: "researcher", description: "Research sources", prompt: .literal("After."),
+        agents: [.codex]),
+      .mcpServer(name: "db", transport: .stdio(.init(executable: "after")), agents: [.codex]),
+    ])
+    var reached = false
+    let completion = UpdateOperations.perform(
+      .init(operation: .declaration(next)), environment: fixture.environment,
+      checkpoint: { step in
+        if step == TransactionCheckpoint.progress(0, .applied).name {
+          reached = true
+          throw CoreError.invalidState("combined native fault fixture")
+        }
+      }, { try $0.apply() })
+    #expect(reached)
+    #expect(completion.disposition == .rolledBack)
+    #expect(!completion.recovery.pending)
+    #expect(throws: UpdateApplyError.self) { try completion.result.get() }
+    #expect(try files.map { try Data(contentsOf: $0) } == before)
+  }
 }

@@ -1,5 +1,6 @@
 import AgentsManifest
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -38,15 +39,12 @@ struct SourceCacheTests {
     #expect(
       !FileManager.default.fileExists(
         atPath: cache.materializedURL(sourceID: id, revision: second.revision).path))
-    let section = LockedSection(
-      name: "rules", source: id, revision: first.revision, path: "content",
-      hash: "sha256:" + String(repeating: "a", count: 64))
-    try cache.prune(
-      referencedBy: ResolvedState(
-        sources: [id: locked],
-        instructions: LockedInstructions(chatgpt: ["prompt": LockedPrompt(sections: [section])])))
+    var references = RetentionReferences()
+    references.git.insert(.init(source: id, revision: first.revision))
+    references.sourceLocations[id] = repo.path
+    try prune(cache, references: references)
     #expect(FileManager.default.fileExists(atPath: tree.path))
-    try cache.prune(referencedBy: ResolvedState())
+    try prune(cache, references: RetentionReferences())
     #expect(!FileManager.default.fileExists(atPath: tree.path))
   }
 
@@ -170,14 +168,10 @@ extension SourceCacheTests {
     try FileManager.default.createDirectory(
       at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
     try FileManager.default.createSymbolicLink(at: link, withDestinationURL: external)
-    let state = ResolvedState(
-      sources: [id: LockedSource(kind: .local)],
-      skills: [
-        "demo": LockedSkill(
-          source: id, revision: revision, path: ".",
-          hash: "sha256:" + String(repeating: "b", count: 64), installs: ["codex": .link])
-      ])
-    #expect(throws: CoreError.self) { try cache.prune(referencedBy: state) }
+    var references = RetentionReferences()
+    references.git.insert(.init(source: id, revision: revision))
+    references.sourceLocations[id] = String(id.dropFirst(6))
+    #expect(throws: CoreError.self) { try prune(cache, references: references) }
     #expect(
       try String(contentsOf: external.appendingPathComponent("unrelated"), encoding: .utf8)
         == "keep")
@@ -194,13 +188,17 @@ extension SourceCacheTests {
     try FileManager.default.createDirectory(
       at: content.appendingPathComponent("nested"), withIntermediateDirectories: true)
     try Data("live".utf8).write(to: content.appendingPathComponent("nested/SKILL.md"))
-    let id = "local:" + content.path
-    let state = ResolvedState(
-      sources: [id: LockedSource(kind: .local)],
-      skills: ["live": LockedSkill(source: id, path: "nested", installs: ["codex": .edit])])
-    try SourceCache(store: store).prune(referencedBy: state)
+    var references = RetentionReferences()
+    references.live = [content.appendingPathComponent("nested")]
+    try prune(SourceCache(store: store), references: references)
     #expect(
       FileManager.default.fileExists(atPath: content.appendingPathComponent("nested/SKILL.md").path)
     )
   }
+  private func prune(_ cache: SourceCache, references: RetentionReferences) throws {
+    let transaction = FileTransaction(store: cache.store)
+    try cache.prune(references: references, transaction: transaction)
+    try transaction.commit()
+  }
+
 }

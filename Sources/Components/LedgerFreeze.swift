@@ -97,7 +97,7 @@ package enum LedgerFreeze {
             url, embed: kind != .git, limits: limits,
             sourceRoot: try session.resource(snapshot: resource.snapshot, path: "."))
           let flags =
-            captured.entries.count == 1 && captured.entries[0].kind == .file
+            captured.entries.count == 1 && captured.entries[0].kind != .directory
             ? [resource.path: captured.flags["."] ?? false] : captured.flags
           guard captured.hash == resource.hash,
             resource.executableFlags.isEmpty || flags == resource.executableFlags
@@ -139,7 +139,8 @@ package enum LedgerFreeze {
       let record = LedgerComponent(
         declaringSource: try sourceID(component.declaringSnapshot),
         source: try sourceID(component.snapshot), root: component.key.root,
-        group: component.key.group, kind: component.key.kind.rawValue, name: component.key.name,
+        group: component.key.group, containerRoot: component.key.containerRoot,
+        kind: component.key.kind.rawValue, name: component.key.name,
         revision: component.pin?.revision, version: component.pin?.version,
         payload: payload, conditions: component.conditions.map(LedgerCondition.init),
         recipients: component.recipients.sorted { $0.rawValue < $1.rawValue },
@@ -154,7 +155,24 @@ package enum LedgerFreeze {
             reference: origin.reference, dependencies: try origin.dependencies.map(sourceID),
             condition: LedgerCondition(origin.condition),
             recipients: origin.recipients.sorted { $0.rawValue < $1.rawValue },
-            consumerEditable: origin.consumerEditable))
+            consumerEditable: origin.consumerEditable,
+            pluginMember: origin.pluginMember.map {
+              let selector = LedgerPayload.reference($0.selector).object!
+              return LedgerPluginMember(
+                parent: $0.parentOccurrence,
+                kind: selector["kind"]!.text!, name: selector["name"]!.text!)
+            },
+            input: origin.provenance.format == "yaml"
+              ? nil
+              : LedgerInputProvenance(
+                format: origin.provenance.format, adapterVersion: origin.provenance.adapterVersion,
+                pointer: origin.provenance.pointer),
+            pluginExpansion: try origin.pluginExpansion.map {
+              LedgerPluginExpansion(
+                source: try sourceID($0.snapshot), root: $0.root,
+                containerRoot: $0.containerRoot, document: $0.document, input: $0.input,
+                children: $0.children)
+            }))
       }
     }
     ledger.occurrences.sort { $0.id < $1.id }
@@ -175,6 +193,7 @@ package enum LedgerFreeze {
         manifestHash: reference.manifestHash,
         children: (children[reference.occurrence] ?? []).sorted())
     }
+    try ResolvedLedgerCodec.checkModel(ledger, limits: limits)
     try ledger.validate()
     return Result(ledger: ledger, sources: sources)
   }

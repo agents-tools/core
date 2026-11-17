@@ -9,9 +9,10 @@ extension StateStore {
   package func withReadLock<T>(
     onPendingRecovery: (() throws -> T)? = nil,
     footprint: Set<NativeTargetRoute> = [],
+    installations: [SkillInstallationTarget] = [],
     _ body: () throws -> T
   ) throws -> T {
-    try withCoordination(routes: footprint, writable: false) {
+    try withCoordination(routes: footprint, installations: installations, writable: false) {
       try withScopeReadLock(onPendingRecovery: onPendingRecovery, body)
     }
   }
