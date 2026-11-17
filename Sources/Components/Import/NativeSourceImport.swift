@@ -104,8 +104,8 @@ enum NativeSourceImport {
       }
       NativeImportInput.unknown(
         parsed.fields, allowed: converted, at: parsed.location(), into: &diagnostics)
-      let privateInput = diagnostics.proposal.bindings.contains {
-        $0.location.document == input.document
+      let privateInput = diagnostics.proposal.preservationBindings.contains {
+        $0.document == input.document
       }
       try NativeImportInput.resource(
         input.document, root: root, input: input, origin: parsed.location(),
@@ -140,13 +140,20 @@ enum NativeSourceImport {
     let agent = NativeImportInput.agent(parsed.input.profile)
     for name in servers.keys.sorted() {
       try Task.checkCancellation()
-      if ![SourceImportProfile.claudePluginV1, .cursorPluginV1, .geminiExtensionV1].contains(
-        parsed.input.profile),
+      let selectable = ![SourceImportProfile.claudePluginV1, .cursorPluginV1, .geminiExtensionV1]
+        .contains(parsed.input.profile)
+      let choice =
+        selectable && NativeImportInput.name(name)
+        ? diagnostics.beginChoice(name, at: try parsed.memberLocation(keys, name: name)) : nil
+      defer { if let choice { diagnostics.endChoice(choice) } }
+      if selectable, !parsed.input.enumerateChoices,
         !(parsed.input.selection?.contains(name) ?? true)
       {
         continue
       }
       let location = try parsed.memberLocation(keys, name: name)
+      let canonicalAttempt = diagnostics.beginCanonicalAttempt()
+      defer { diagnostics.endCanonicalAttempt(canonicalAttempt) }
       guard NativeImportInput.name(name), case .object(let fields) = servers[name] else {
         NativeImportInput.unconverted(servers[name]!, at: location, into: &diagnostics)
         continue
@@ -360,7 +367,8 @@ enum NativeSourceImport {
           profile: parsed.input.profile, resources: resourceCoordinates)
         if let bearer = extra["bearer_token_env_var"]?.importString {
           _ = NativeImportInput.binding(
-            location.appending("bearer_token_env_var"), environment: bearer, into: &diagnostics)
+            location.appending("bearer_token_env_var"), environment: bearer, canonical: false,
+            into: &diagnostics)
         }
         NativeImportInput.emit(
           .mcpServer(name: name, transport: transport, agents: [agent], native: native),
@@ -396,8 +404,12 @@ enum NativeSourceImport {
     guard case .object(let entries) = value else { throw ImportReadFailure.invalid }
     try classifyMembers(value, parsed: parsed, keys: [key], into: &diagnostics)
     for (index, name) in entries.keys.sorted().enumerated() {
-      guard parsed.input.selection?.contains(name) ?? true else { continue }
       let origin = parsed.location([key, name], display: "/\(key)/member[\(index)]")
+      let choice = NativeImportInput.name(name) ? diagnostics.beginChoice(name, at: origin) : nil
+      defer { if let choice { diagnostics.endChoice(choice) } }
+      guard parsed.input.enumerateChoices || (parsed.input.selection?.contains(name) ?? true) else {
+        continue
+      }
       guard NativeImportInput.name(name), let fields = entries[name]?.importObject else {
         NativeImportInput.unconverted(entries[name]!, at: origin, into: &diagnostics)
         continue
@@ -471,8 +483,12 @@ enum NativeSourceImport {
     guard case .object(let agents) = value else { throw ImportReadFailure.invalid }
     try classifyMembers(value, parsed: parsed, keys: ["agents"], into: &diagnostics)
     for (index, name) in agents.keys.sorted().enumerated() {
-      guard parsed.input.selection?.contains(name) ?? true else { continue }
       let origin = parsed.location(["agents", name], display: "/agents/member[\(index)]")
+      let choice = NativeImportInput.name(name) ? diagnostics.beginChoice(name, at: origin) : nil
+      defer { if let choice { diagnostics.endChoice(choice) } }
+      guard parsed.input.enumerateChoices || (parsed.input.selection?.contains(name) ?? true) else {
+        continue
+      }
       guard NativeImportInput.name(name), let fields = agents[name]?.importObject,
         Set(fields.keys).isSubset(of: ["description", "config_file"]),
         let description = fields["description"]?.importString,

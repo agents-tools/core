@@ -162,7 +162,7 @@ enum NativeImportInput {
   }
 
   static func binding(
-    _ location: ImportLocation, environment: String? = nil,
+    _ location: ImportLocation, environment: String? = nil, canonical: Bool = true,
     into diagnostics: inout ImportDiagnostics
   ) -> RuntimeBinding {
     let key =
@@ -170,6 +170,15 @@ enum NativeImportInput {
     diagnostics.binding(location, environmentVariable: environment)
     if let index = diagnostics.proposal.bindings.firstIndex(where: { $0.location == location }) {
       diagnostics.proposal.bindings[index].key = key
+      if canonical { diagnostics.proposal.bindings[index].canonicalSlot = true }
+    }
+    if canonical, let reference = diagnostics.bindingReferences[key] {
+      switch reference {
+      case .environment, .secret:
+        diagnostics.resolvedBindings.insert(location)
+        return reference
+      case .literal: break
+      }
     }
     return environment.map(RuntimeBinding.environment) ?? .secret(key)
   }
@@ -213,7 +222,7 @@ enum NativeImportInput {
             "Native interpolation is not a single admitted symbolic environment reference.")
           throw ImportReadFailure.invalid
         } else {
-          result[key] = binding(item, into: &diagnostics)
+          result[key] = binding(item, canonical: !literalsOnly, into: &diagnostics)
         }
       }
     }
@@ -308,9 +317,9 @@ enum NativeImportInput {
         })?.producerPath
       else { continue }
       let relative = root == "." ? path : root + (path == "." ? "" : "/" + path)
-      if diagnostics.proposal.bindings.contains(where: {
-        relative == "." || $0.location.document == relative
-          || $0.location.document.hasPrefix(relative + "/")
+      if diagnostics.proposal.preservationBindings.contains(where: {
+        relative == "." || $0.document == relative
+          || $0.document.hasPrefix(relative + "/")
       }) {
         diagnostics.proposal.resources[index].requiresBindingRewrite = true
         diagnostics.proposal.resources[index].observedHash = nil
@@ -331,8 +340,8 @@ enum NativeImportInput {
     try admission?.resource(url, snapshot: snapshot)
     let needsRewrite =
       rewrite
-      || diagnostics.proposal.bindings.contains {
-        $0.location.document == relative || $0.location.document.hasPrefix(relative + "/")
+      || diagnostics.proposal.preservationBindings.contains {
+        $0.document == relative || $0.document.hasPrefix(relative + "/")
           || relative == "."
       }
     let frozen = try LedgerResources.capture(

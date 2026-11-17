@@ -51,7 +51,7 @@ package enum SourceImportProfile: String, Sendable {
   }
 }
 
-package struct ImportLocation: Equatable, Sendable {
+package struct ImportLocation: Hashable, Sendable {
   package let document: String
   /// Object-map entries use sorted member ordinals, so credential-bearing keys are never echoed.
   package let pointer: String
@@ -80,6 +80,7 @@ package struct ImportBindingRequirement: Equatable, Sendable {
   package var environmentVariable: String? = nil
   /// Identifier used by RuntimeBinding.secret; the literal remains outside the proposal.
   package var key: String? = nil
+  package var canonicalSlot = false
 }
 
 package struct ImportPin: Equatable, Sendable {
@@ -207,6 +208,9 @@ package struct SourceImportProposal: Equatable, Sendable {
   package var selections: [ImportProducerSelection] = []
   package var deployments: [ImportDeploymentEvidence] = []
   package var orderedSources: [ImportOrderedSource] = []
+  package var choices: [ImportChoiceMetadata] = []
+  package var requiredInputs: [ImportInputMetadata] = []
+  package var preservationBindings: [ImportLocation] = []
 }
 
 package struct SourceImportInput: Sendable {
@@ -217,6 +221,8 @@ package struct SourceImportInput: Sendable {
   /// Nil selects every entry; empty selects none. JSON maps use producer keys, YAML lists use
   /// decimal ordinals, and rulesync config sources use their explicit source selector.
   package var selection: Set<String>? = nil
+  package var enumerateChoices = false
+  package var bindingReferences: [String: RuntimeBinding] = [:]
   /// Source lock keys do not reliably identify a transport/provider. These are explicit input,
   /// normally supplied by the config adapter, and never inferred from a normalized lock key.
   package var sourceDeclarations: [String: SourceDeclaration] = [:]
@@ -278,4 +284,20 @@ package struct ImportOrderedSource: Equatable, Sendable {
   package let rulesPath: String
   package let skills: [String]?
   package let rules: [String]?
+}
+
+package struct ImportChoiceMetadata: Equatable, Sendable {
+  package let key: String
+  package var locations: [ImportLocation]
+  package var components: [Int] = []
+  package var sources: [Int] = []
+  package var resources: [Int] = []
+  package var diagnostics: [Int] = []
+}
+
+package struct ImportInputMetadata: Equatable, Sendable {
+  package enum Kind: String, Sendable { case gitSource, installedContent }
+  package let kind: Kind
+  package let key: String
+  package let location: ImportLocation
 }
