@@ -309,18 +309,28 @@ enum NativeImportInput {
   /// Reconcile every source-relative overlap before the operation publishes its proposal,
   /// including partial proposals returned after a parsing failure.
   static func reconcilePreservation(into diagnostics: inout ImportDiagnostics) {
-    for index in diagnostics.proposal.resources.indices {
-      let resource = diagnostics.proposal.resources[index]
+    var blockedCaptures: [String: Set<ImportLocation>] = [:]
+    for resource in diagnostics.proposal.resources {
       guard let path = resource.path,
         let root = diagnostics.proposal.sources.first(where: {
           $0.alias == resource.sourceAlias
         })?.producerPath
       else { continue }
       let relative = root == "." ? path : root + (path == "." ? "" : "/" + path)
-      if diagnostics.proposal.preservationBindings.contains(where: {
-        relative == "." || $0.document == relative
-          || $0.document.hasPrefix(relative + "/")
-      }) {
+      if resource.requiresBindingRewrite
+        || diagnostics.proposal.preservationBindings.contains(where: {
+          relative == "." || $0.document == relative
+            || $0.document.hasPrefix(relative + "/")
+        })
+      {
+        blockedCaptures[resource.sourceAlias, default: []].insert(resource.origin)
+      }
+    }
+    // A capture and its supporting resources share an origin and source coordinate. Literal
+    // classification in any part of that closure blocks preservation of the complete capture.
+    for index in diagnostics.proposal.resources.indices {
+      let resource = diagnostics.proposal.resources[index]
+      if blockedCaptures[resource.sourceAlias]?.contains(resource.origin) == true {
         diagnostics.proposal.resources[index].requiresBindingRewrite = true
         diagnostics.proposal.resources[index].observedHash = nil
       }
