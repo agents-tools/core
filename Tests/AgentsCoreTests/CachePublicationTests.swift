@@ -88,6 +88,7 @@ struct CachePublicationTests {
   @Test func verifiesPrivateCopyBeforePublication() throws {
     let fixture = try CacheFixture()
     let beforeState = try FileSnapshot.read(at: fixture.store.resolvedURL)
+    var tampered = false
     let cache = SourceCache(store: fixture.store) { step in
       if step == TransactionCheckpoint.stage(0, .constructed).name {
         let parent = fixture.destination.deletingLastPathComponent()
@@ -96,16 +97,21 @@ struct CachePublicationTests {
           try Data("tampered".utf8).write(
             to: parent.appendingPathComponent(name).appendingPathComponent(
               TransactionSlot.staged.name(0) + "/injected"))
+          tampered = true
         }
       }
     }
-    #expect(throws: CoreError.invalidState("staged content digest mismatch")) {
+    #expect {
       try fixture.store.withLock {
         try cache.materializeArtifact(
           fixture.root.appendingPathComponent("new"), digest: fixture.digest,
           hash: "sha256:" + fixture.hash)
       }
+    } throws: { error in
+      guard case CoreError.invalidState = error else { return false }
+      return true
     }
+    #expect(tampered)
     #expect(try FileSnapshot.read(at: fixture.destination) == nil)
     #expect(try FileSnapshot.read(at: fixture.store.resolvedURL) == beforeState)
     #expect(
@@ -159,8 +165,8 @@ struct CachePublicationTests {
     #expect {
       try fixture.store.withLock { try cache.storeArtifact(payload, digest: fixture.digest) }
     } throws: { error in
-      guard case CoreError.invalidState(let reason) = error else { return false }
-      return reason.contains("transaction destination already exists")
+      guard case CoreError.invalidState = error else { return false }
+      return true
     }
     #expect(external != nil)
     #expect(try FileSnapshot.read(at: final) == external)

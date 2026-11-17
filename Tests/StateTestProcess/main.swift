@@ -253,8 +253,14 @@ if arguments[2].hasPrefix("ledger-") {
   try Data((String(describing: outcome.disposition) + "\n" + failure).utf8).write(
     to: root.appendingPathComponent("publication-result"))
 } else if arguments[2] == "recover" {
-  try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
-    _ = try FileTransaction.recover(store: store) { try stop($0, marker: "recovery-ready") }
+  if scope == .user {
+    do {
+      try store.withLock(checkpoint: { try stop($0, marker: "recovery-ready") }, {})
+    } catch CoreError.transactionRecovered {}
+  } else {
+    try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
+      _ = try FileTransaction.recover(store: store) { try stop($0, marker: "recovery-ready") }
+    }
   }
 } else if arguments[2] == "read" {
   try Data().write(to: root.appendingPathComponent("reader-started"))
@@ -312,7 +318,12 @@ if arguments[2].hasPrefix("ledger-") {
       try Data().write(to: root.appendingPathComponent("lock-acquired"))
     })
 } else {
-  try store.withLock {
+  let createdSkill =
+    arguments[2] == "crash" && scope == .user
+    ? try store.skillInstallationTarget(for: .claudeCode, named: "created") : nil
+  try store.withLock(
+    footprint: createdSkill?.footprint ?? [], installations: createdSkill.map { [$0] } ?? []
+  ) {
     if arguments[2] == "cache-content" || arguments[2] == "cache-git"
       || arguments[2] == "cache-bytes"
     {
@@ -397,10 +408,14 @@ if arguments[2].hasPrefix("ledger-") {
       ledger.sources["local:/new"] = LedgerSource(kind: .local, revision: "live")
       try transaction.replace(store.resolvedURL, with: .data(StateStore.encode(ledger)))
       try transaction.delete(store.cacheDirectory.appendingPathComponent("artifact-content/pruned"))
-      try transaction.replace(
-        AgentRegistry.installSkillsDirectory(
-          for: .claudeCode, scope: scope, environment: store.environment
-        ).appendingPathComponent("created"), with: .link(root.appendingPathComponent("new")))
+      if let createdSkill {
+        try transaction.replaceSkill(createdSkill, with: .link(root.appendingPathComponent("new")))
+      } else {
+        try transaction.replace(
+          AgentRegistry.installSkillsDirectory(
+            for: .claudeCode, scope: scope, environment: store.environment
+          ).appendingPathComponent("created"), with: .link(root.appendingPathComponent("new")))
+      }
       try transaction.replace(
         InstructionLocations.file(for: .codex, scope: scope, environment: store.environment)!,
         with: .data(Data("new instructions".utf8)))
