@@ -19,6 +19,8 @@ package struct AggregatedChange {
   package var memberAccessChanges: [PrivateTreeAccessChange] = []
   package var symbolicBefore: LedgerValue? = nil
   package var symbolicAfter: LedgerValue? = nil
+  package var configurationBefore: String? = nil
+  package var configurationAfter: String? = nil
 }
 
 /// One prepared physical replacement owns all logical contributions at that destination.
@@ -112,16 +114,19 @@ package final class ArtifactAggregation: PreparedEvidence {
     }
     let roots = store.ledgerRoots
     let artifacts = Dictionary(uniqueKeysWithValues: artifacts.map { ($0.name, $0) })
+    let affectedPaths = try Set(
+      previous.deployments.filter { try selected($0, in: previous) }.map {
+        try installationURL($0).path
+      }
+        + ledger.deployments.filter { try selected($0, in: ledger) }.map {
+          try installationURL($0).path
+        })
     let previousByPath = try Dictionary(
-      grouping: previous.deployments.filter { try selected($0, in: previous) }
-    ) {
-      try installationURL($0).path
-    }
+      grouping: previous.deployments.filter { try affectedPaths.contains(installationURL($0).path) }
+    ) { try installationURL($0).path }
     var byPath = try Dictionary(
-      grouping: ledger.deployments.filter { try selected($0, in: ledger) }
-    ) {
-      try installationURL($0).path
-    }
+      grouping: ledger.deployments.filter { try affectedPaths.contains(installationURL($0).path) }
+    ) { try installationURL($0).path }
     var native: [String: [(LockedLowering, NativeMCPContribution, MaterializationTarget)]] = [:]
     for lowering in ledger.lowerings
     where lowering.format.hasSuffix("-mcp@1") {
@@ -1469,6 +1474,9 @@ package final class ArtifactAggregation: PreparedEvidence {
       }
       return names
     }
+    func bindingPlaceholder(_ name: String) -> String {
+      "agents-symbolic-binding-" + FileHash.sha256Hex(data: Data(name.utf8))
+    }
     let selectedEnvironment = store.environment
     let generatedBudget = nativeBudget()
     func bundle(
@@ -1478,12 +1486,74 @@ package final class ArtifactAggregation: PreparedEvidence {
       var environment = selectedEnvironment
       if symbolic {
         for name in bindings(contribution) {
-          environment.environment[name] = "agents-symbolic-binding"
+          environment.environment[name] = bindingPlaceholder(name)
         }
       }
       return try Self.generatedPluginFiles(
         contribution, target: target, values: values, environment: environment,
         budget: generatedBudget)
+    }
+    func symbolicFiles(
+      _ contribution: NativeGeneratedPluginContribution, target: MaterializationTarget
+    ) throws -> [String: Data] {
+      let values = RuntimeBindingValues(
+        Dictionary(
+          uniqueKeysWithValues: bindings(contribution).map {
+            ($0, Data(bindingPlaceholder($0).utf8))
+          }))
+      return try bundle(contribution, target: target, values: values, symbolic: true)
+    }
+    func preview(
+      _ contribution: NativeGeneratedPluginContribution, target: MaterializationTarget,
+      selected: ResolvedLedger, files: [String: Data]
+    ) throws -> String {
+      var sections = ["Target: " + target.url.path]
+      for path in files.keys.sorted() {
+        guard let text = String(data: files[path]!, encoding: .utf8) else {
+          throw CoreError.invalidState("generated native preview is not UTF-8")
+        }
+        var displayed = text
+        for name in bindings(contribution).sorted() {
+          // Native conversion sees inert literals; display labels use the native JSON escaper.
+          let label = try Self.configurationPreview(.string("«binding:" + name + "»"))
+          displayed = displayed.replacingOccurrences(
+            of: bindingPlaceholder(name), with: String(label.dropFirst().dropLast()))
+        }
+        sections.append(path + "\n" + displayed)
+      }
+      let skillResources = Set(
+        contribution.members.compactMap { member -> String? in
+          if case .skill(_, let resource) = member.content { return resource }
+          return nil
+        })
+      for placement in contribution.resourcePlacements {
+        let resource = contribution.resources[placement.resource]!
+        sections.append("Resource: " + placement.path)
+        for entry in resource.entries where entry.kind != .directory {
+          let suffix = entry.path == "." ? "" : "/" + entry.path
+          let detail =
+            entry.kind == .symlink
+            ? " -> " + (entry.link ?? "") : entry.executable ? " (executable)" : ""
+          sections.append(placement.path + suffix + detail)
+          if skillResources.contains(placement.resource), entry.path == "SKILL.md" {
+            let bytes: Data?
+            if let object = entry.object, let captured = selected.contentObjects[object] {
+              bytes = captured
+            } else if let source = resources[placement.resource] {
+              bytes = try Data(
+                contentsOf: PathSafety.resolvedChild(base: source, subpath: entry.path))
+            } else {
+              bytes = nil
+            }
+            if let bytes, let text = String(data: bytes, encoding: .utf8) {
+              sections.append(text)
+            } else {
+              sections.append("Recorded skill content is unavailable in this preview.")
+            }
+          }
+        }
+      }
+      return sections.joined(separator: "\n\n")
     }
     for path in Set(next.keys).union(old.keys).sorted() {
       let entry = next[path] ?? old[path]!
@@ -1502,6 +1572,10 @@ package final class ArtifactAggregation: PreparedEvidence {
           target, changingAccess: changingAccess,
           requiringReceiptForExistingTarget: !priorNames.isEmpty) : nil
       let exists = FileManager.default.fileExists(atPath: path)
+      let priorFiles = try old[path].map { try symbolicFiles($0.1, target: target) }
+      let configurationBefore = try old[path].map {
+        try preview($0.1, target: target, selected: previous, files: priorFiles!)
+      }
       if exists && selected {
         guard let prior = old[path],
           previous.deployments.contains(where: { $0.id == prior.0.id && $0.ownership == .generated }
@@ -1510,7 +1584,7 @@ package final class ArtifactAggregation: PreparedEvidence {
           throw CoreError.invalidState("generated native container contains unmanaged content")
         }
         if receipt == nil {
-          let expected = try bundle(prior.1, target: target, values: .init([:]))
+          let expected = priorFiles!
           guard try Self.generatedTreeMatches(prior.1, target: target, files: expected) else {
             throw CoreError.invalidState("owned generated native container drifted")
           }
@@ -1527,12 +1601,8 @@ package final class ArtifactAggregation: PreparedEvidence {
         if let index = ledger.lowerings.firstIndex(where: { $0.id == current.0.id }) {
           ledger.lowerings[index].deployments = [deployment.id]
         }
+        let symbolic = try symbolicFiles(current.1, target: target)
         if selected {
-          let symbolicValues = RuntimeBindingValues(
-            Dictionary(
-              uniqueKeysWithValues: names.map { ($0, Data("agents-symbolic-binding".utf8)) }))
-          let symbolic = try bundle(
-            current.1, target: target, values: symbolicValues, symbolic: true)
           let tree = workspace.appendingPathComponent(
             "generated-" + FileHash.sha256Hex(data: Data(path.utf8)))
           try FileSystem.createDirectory(at: tree)
@@ -1610,8 +1680,9 @@ package final class ArtifactAggregation: PreparedEvidence {
             changed: selected && (writes[path] != nil || privatePlan != nil), native: true,
             accessChange: privatePlan?.accessChange, effectiveReaders: current.1.knownReaders,
             privateMaterialization: sensitive, requiredBindings: names.sorted(),
-            symbolicBefore: old[path].flatMap { previous.components[$0.1.component]?.payload },
-            symbolicAfter: ledger.components[current.1.component]?.payload))
+            configurationBefore: configurationBefore,
+            configurationAfter: try preview(
+              current.1, target: target, selected: ledger, files: symbolic)))
       } else if selected,
         let deployment = previous.deployments.first(where: { $0.id == entry.0.id })
       {
@@ -1621,7 +1692,7 @@ package final class ArtifactAggregation: PreparedEvidence {
             deployment: deployment, url: target.url, before: nil, after: nil, changed: exists,
             native: true,
             privateMaterialization: sensitive,
-            symbolicBefore: previous.components[entry.1.component]?.payload))
+            configurationBefore: configurationBefore))
       }
     }
     return Set(next.keys).union(old.keys)

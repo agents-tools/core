@@ -321,6 +321,11 @@ struct NativeAuthorityIntegrationTests {
     let before = try FileHash.folderHash(f.root)
     let preview = try f.preview()
     #expect(try FileHash.folderHash(f.root) == before)
+    let text = try #require(preview.components.first { $0.kind == "plugin" }?.symbolicAfter)
+    #expect(text.contains("mcpServers"))
+    #expect(text.contains("«binding:"))
+    #expect(!text.contains("source-private-canary"))
+    #expect(!text.contains("actual-generated-private-canary"))
     _ = try UpdateOperations.withPreparedUpdate(
       environment: f.environment,
       bindingProvider: Bindings(value: "actual-generated-private-canary")
@@ -351,6 +356,35 @@ struct NativeAuthorityIntegrationTests {
     ) { try $0.apply() }
     #expect(
       try String(contentsOf: manifest, encoding: .utf8).contains("cold-generated-private-canary"))
+  }
+
+  @Test func generatedGeminiAuthoredVersionOverridesProducerAndSurvivesColdRestore() throws {
+    let f = try UpdateFixture(scope: .user)
+    let source = f.store.directory.appendingPathComponent("bundle")
+    try f.write(
+      #"{"name":"upstream","version":"1.2.3"}"#,
+      to: source.appendingPathComponent("gemini-extension.json"))
+    try f.store.save(
+      declaration: Declaration(components: [
+        .plugin(
+          name: "selected", path: "bundle", source: ".", mode: .components,
+          agents: [.geminiCLI], native: ["gemini-cli": ["version": .string("9.8.7")]])
+      ]), ledger: ResolvedLedger())
+    let preview = try f.preview()
+    #expect(preview.components.first?.symbolicAfter?.contains("9.8.7") == true)
+    _ = try UpdateOperations.withPreparedUpdate(scope: .user, environment: f.environment) {
+      try $0.apply(ifUnchangedFrom: preview.displayedFingerprint)
+    }
+    let installed = try UpdateOperations.inspect(scope: .user, environment: f.environment)
+    let tree = try #require(installed.deployments.first?.location)
+    try FileManager.default.removeItem(at: source)
+    try FileManager.default.removeItem(at: tree)
+    _ = try UpdateOperations.restore(scope: .user, environment: f.environment)
+    let manifest = try #require(
+      JSONSerialization.jsonObject(
+        with: Data(contentsOf: tree.appendingPathComponent("gemini-extension.json")))
+        as? [String: Any])
+    #expect(manifest["version"] as? String == "9.8.7")
   }
 
   @Test(arguments: [AgentID.claudeCode, .cursor, .geminiCLI], [false, true])
@@ -399,7 +433,6 @@ struct NativeAuthorityIntegrationTests {
           source: "."
           path: bundle
           agents: ["\(agent.rawValue)"]
-          native: {gemini-cli: {version: "1.2.3"}}
         - kind: mcpServer
           name: independent
           transport: {kind: stdio, executable: fixture-command}
@@ -409,6 +442,14 @@ struct NativeAuthorityIntegrationTests {
     _ = try UpdateOperations.withPreparedUpdate(scope: .user, environment: f.environment) {
       try $0.apply(ifUnchangedFrom: preview.displayedFingerprint)
     }
+    let memberPreview = try #require(
+      preview.components.first { $0.kind == "plugin" }?.symbolicAfter)
+    #expect(memberPreview.contains("Target: "))
+    #expect(memberPreview.contains(command))
+    #expect(memberPreview.contains("Frozen member"))
+    #expect(memberPreview.contains("skills/helper/SKILL.md"))
+    #expect(memberPreview.contains("Frozen skill"))
+    #expect(!memberPreview.contains("\"kind\":\"object\""))
     let ledger = try f.store.readLedger()
     #expect(ledger.lowerings.filter { $0.format.hasSuffix("-generated-plugin@1") }.count == 1)
     #expect(ledger.deployments.filter { $0.route == "agents/skill@1" }.isEmpty)
@@ -446,6 +487,12 @@ struct NativeAuthorityIntegrationTests {
         "Frozen member"))
     let restored = try UpdateOperations.inspect(scope: .user, environment: f.environment)
     #expect(restored.deployments.allSatisfy { $0.status == .current })
+    if agent == .geminiCLI {
+      let native = try #require(
+        JSONSerialization.jsonObject(with: Data(contentsOf: tree.appendingPathComponent(manifest)))
+          as? [String: Any])
+      #expect(native["version"] as? String == "1.2.3")
+    }
     if supportingLink {
       #expect(
         try String(

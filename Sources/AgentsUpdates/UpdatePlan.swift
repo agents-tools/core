@@ -427,12 +427,14 @@ final class UpdatePlan {
                   beforeMode: UInt32($0.before.mode), afterOwner: $0.owner, afterMode: $0.mode)
               })
           },
-          symbolicBefore: try change.symbolicBefore.map {
-            try UpdateOperations.symbolicConfigurationText($0)
-          },
-          symbolicAfter: try change.symbolicAfter.map {
-            try UpdateOperations.symbolicConfigurationText($0)
-          },
+          symbolicBefore: try change.configurationBefore
+            ?? change.symbolicBefore.map {
+              try UpdateOperations.symbolicConfigurationText($0)
+            },
+          symbolicAfter: try change.configurationAfter
+            ?? change.symbolicAfter.map {
+              try UpdateOperations.symbolicConfigurationText($0)
+            },
           kind: component.kind, name: component.name, path: change.url.path,
           agents: change.deployment.recipients, changed: change.changed)
       })
