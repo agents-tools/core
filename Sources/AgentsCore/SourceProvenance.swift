@@ -30,11 +30,12 @@ public struct SourceProvenance: Sendable, Equatable {
   public let adapterVersion: String
   public let group: String?
   public let referenceChain: [SourceSpan]
+  public let pointer: String?
 
   public init(
     sourceIdentity: String, revision: String? = nil, artifactDigest: String? = nil,
     relativePath: String, format: String, adapterVersion: String, group: String? = nil,
-    referenceChain: [SourceSpan] = []
+    referenceChain: [SourceSpan] = [], pointer: String? = nil
   ) {
     self.sourceIdentity = sourceIdentity
     self.revision = revision
@@ -44,6 +45,7 @@ public struct SourceProvenance: Sendable, Equatable {
     self.adapterVersion = adapterVersion
     self.group = group
     self.referenceChain = referenceChain
+    self.pointer = pointer
   }
 }
 

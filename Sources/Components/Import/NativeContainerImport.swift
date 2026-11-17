@@ -29,6 +29,24 @@ enum NativeContainerImport {
     let agent = NativeImportInput.agent(input.profile)
     let alias = NativeImportInput.source(
       input, root: root, origin: parsed.location(), into: &diagnostics)
+    let surface = NativeImportSemantics.surface(input.profile)
+    let defaults: [String: String]
+    do {
+      defaults =
+        agent == .geminiCLI
+        ? [
+          "commands": "commands", "agents": "agents", "skills": "skills",
+          "hooks": "hooks/hooks.json",
+        ]
+        : try NativeComponentFieldsV1.pluginDefaults(
+          surface: surface, document: suffix, fieldPrefix: [],
+          explicitFields: Set(parsed.fields.keys))
+    } catch let issue as NativeComponentFieldIssue {
+      guard issue.document == suffix else { throw ImportReadFailure.invalid }
+      NativeImportSemantics.report(issue, at: parsed.fieldLocation(issue.field), into: &diagnostics)
+      return
+    }
+    var documents: [String: NativeImportDocument] = [:]
     let metadata: Set<String> = ["name", "version"]
     let members: Set<String> =
       agent == .geminiCLI
@@ -43,9 +61,9 @@ enum NativeContainerImport {
     }
     // A container contributes typed children; .native selection/registration belongs to B/F.
     // Unknown/dependency fields are already diagnosed rather than becoming opaque payloads.
-    for (field, kind, folder) in [
-      ("commands", DeclaredComponentKind.command, "commands"),
-      ("agents", .subagent, "agents"), ("skills", .skills, "skills"),
+    for (field, kind) in [
+      ("commands", DeclaredComponentKind.command),
+      ("agents", .subagent), ("skills", .skills),
     ] {
       let supplied = parsed.fields[field]
       if agent == .geminiCLI, supplied != nil {
@@ -54,8 +72,7 @@ enum NativeContainerImport {
       }
       var paths: [String] = []
       var explicitPaths: Set<String> = []
-      // Cursor explicit paths replace default discovery. Claude paths add to defaults.
-      if agent != .cursor || supplied == nil { paths.append(folder) }
+      if let path = defaults[field] { paths.append(path) }
       if let supplied {
         if let path = supplied.importString {
           let relative = try componentPath(path, agent: agent)
@@ -78,11 +95,11 @@ enum NativeContainerImport {
       }
     }
     var mcpSources: [(NativeValue, NativeImportDocument, [String])] = []
-    let mcpDefault = agent == .cursor ? "mcp.json" : ".mcp.json"
-    if agent != .geminiCLI, agent != .cursor || parsed.fields["mcpServers"] == nil,
+    if let mcpDefault = defaults["mcpServers"],
       let document = try optionalDocument(
         mcpDefault, root: root, input: input, limits: limits, admission: parsed.admission)
     {
+      documents[mcpDefault] = document
       NativeImportInput.unknown(
         document.fields, allowed: ["mcpServers"], at: document.location(), into: &diagnostics)
       if let map = document.fields["mcpServers"] {
@@ -95,7 +112,7 @@ enum NativeContainerImport {
     if let declared = parsed.fields["mcpServers"] {
       try configurations(
         declared, field: "mcpServers", parsed: parsed, root: root, limits: limits,
-        into: &mcpSources, diagnostics: &diagnostics)
+        into: &mcpSources, documents: &documents, diagnostics: &diagnostics)
     }
     // The producer loads defaults then declarations; later duplicate names replace earlier ones.
     var winners: [String: (NativeValue, NativeImportDocument, [String])] = [:]
@@ -134,16 +151,17 @@ enum NativeContainerImport {
         rewrite: rewrite, into: &diagnostics, admission: parsed.admission)
     }
     var lspSources: [(NativeValue, NativeImportDocument, [String])] = []
-    if agent == .claudeCode,
+    if let lspDefault = defaults["lspServers"],
       let document = try optionalDocument(
-        ".lsp.json", root: root, input: input, limits: limits, admission: parsed.admission)
+        lspDefault, root: root, input: input, limits: limits, admission: parsed.admission)
     {
+      documents[lspDefault] = document
       lspSources.append((.object(document.fields), document, []))
     }
     if let value = parsed.fields["lspServers"] {
       try configurations(
         value, field: "lspServers", parsed: parsed, root: root, limits: limits, into: &lspSources,
-        diagnostics: &diagnostics)
+        documents: &documents, diagnostics: &diagnostics)
     }
     var lspWinners: [String: (NativeValue, NativeImportDocument, [String])] = [:]
     for (value, document, keys) in lspSources {
@@ -158,19 +176,19 @@ enum NativeContainerImport {
         into: &diagnostics)
     }
     var hookSources: [(NativeValue, NativeImportDocument, [String])] = []
-    if agent != .cursor || parsed.fields["hooks"] == nil,
+    if let hookDefault = defaults["hooks"],
       let document = try optionalDocument(
-        "hooks/hooks.json", root: root, input: input, limits: limits, admission: parsed.admission),
-      let value = document.fields["hooks"]
+        hookDefault, root: root, input: input, limits: limits, admission: parsed.admission)
     {
+      documents[hookDefault] = document
       NativeImportInput.unknown(
         document.fields, allowed: ["hooks"], at: document.location(), into: &diagnostics)
-      hookSources.append((value, document, ["hooks"]))
+      if let value = document.fields["hooks"] { hookSources.append((value, document, ["hooks"])) }
     }
     if let value = parsed.fields["hooks"] {
       try configurations(
         value, field: "hooks", parsed: parsed, root: root, limits: limits, into: &hookSources,
-        diagnostics: &diagnostics)
+        documents: &documents, diagnostics: &diagnostics)
     }
     for (value, document, keys) in hookSources {
       try NativeSourceImport.hooks(
@@ -194,6 +212,44 @@ enum NativeContainerImport {
       NativeImportInput.unconverted(
         parsed.fields[field]!, at: parsed.location([field]), into: &diagnostics)
     }
+    if agent != .geminiCLI {
+      for (_, document, _) in mcpSources + lspSources + hookSources {
+        guard document.input.document != input.document else { continue }
+        let path =
+          root == "."
+          ? document.input.document : String(document.input.document.dropFirst(root.count + 1))
+        documents[path] = document
+      }
+      do {
+        _ = try NativeComponentFieldsV1.plugin(
+          surface: surface, document: suffix, fieldPrefix: [], fields: parsed.fields,
+          entries: try inventory(snapshot, root: root, limits: limits),
+          documents: documents.mapValues { .object($0.fields) }, budget: parsed.admission.parser)
+      } catch let issue as NativeComponentFieldIssue {
+        let document: NativeImportDocument
+        if issue.document == suffix {
+          document = parsed
+        } else {
+          guard let captured = documents[issue.document] else { throw ImportReadFailure.invalid }
+          document = captured
+        }
+        NativeImportSemantics.report(
+          issue, at: document.fieldLocation(issue.field), into: &diagnostics)
+      }
+    }
+    for field in metadata {
+      if let value = parsed.fields[field] {
+        _ = NativeImportInput.sensitive(value, at: parsed.location([field]), into: &diagnostics)
+      }
+    }
+    if let options = parsed.fields["userConfig"]?.importObject {
+      for (name, value) in options {
+        guard let option = value.importObject, option["sensitive"] == .boolean(true),
+          let literal = option["default"], literal != .string("")
+        else { continue }
+        diagnostics.binding(parsed.fieldLocation(["userConfig", name, "default"]))
+      }
+    }
     // Record the actual manifest, not a raw original bundle containing credential literals.
     let rewrite = diagnostics.proposal.bindings.contains { $0.location.document == input.document }
     try NativeImportInput.resource(
@@ -208,6 +264,45 @@ enum NativeContainerImport {
     _ = alias
   }
 
+  private static func inventory(
+    _ snapshot: SourceSnapshot, root: String, limits: SourceImportLimits
+  ) throws -> [LedgerEntry] {
+    let url = try snapshot.resource(root)
+    var entries: [LedgerEntry] = []
+    func append(_ file: URL) throws {
+      guard entries.count < limits.resourceEntries else { throw ImportReadFailure.invalid }
+      let path = try snapshot.relativePath(file)
+      let relative =
+        path == root ? "." : root == "." ? path : String(path.dropFirst(root.count + 1))
+      let info = try FileManager.default.attributesOfItem(atPath: file.path)
+      let kind: LedgerEntry.Kind
+      switch info[.type] as? FileAttributeType {
+      case .typeRegular: kind = .file
+      case .typeDirectory: kind = .directory
+      case .typeSymbolicLink: kind = .symlink
+      default: throw ImportReadFailure.invalid
+      }
+      entries.append(
+        .init(
+          path: relative, kind: kind,
+          link: kind == .symlink
+            ? try FileManager.default.destinationOfSymbolicLink(atPath: file.path) : nil,
+          executable: kind == .file
+            && ((info[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o111 != 0,
+          byteCount: kind == .file ? (info[.size] as? NSNumber)?.intValue : nil))
+    }
+    try append(url)
+    guard let walk = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) else {
+      throw ImportReadFailure.invalid
+    }
+    for case let file as URL in walk {
+      try Task.checkCancellation()
+      try append(file)
+      if entries.last?.kind == .symlink { walk.skipDescendants() }
+    }
+    return entries
+  }
+
   private static func componentPath(_ path: String, agent: AgentID) throws -> String {
     if agent == .claudeCode, !path.hasPrefix("./"), path != "." {
       throw CoreError.unsafePath("native component path")
@@ -219,6 +314,7 @@ enum NativeContainerImport {
     _ value: NativeValue, field: String, parsed: NativeImportDocument,
     root: String, limits: SourceImportLimits,
     into sources: inout [(NativeValue, NativeImportDocument, [String])],
+    documents: inout [String: NativeImportDocument],
     diagnostics: inout ImportDiagnostics
   ) throws {
     if let path = value.importString {
@@ -231,6 +327,7 @@ enum NativeContainerImport {
           .missingResource, parsed.location([field]), "Explicit native component file is absent.")
         return
       }
+      documents[relative] = document
       guard
         let fields = field == "lspServers"
           ? NativeValue.object(document.fields) : document.fields[field]
@@ -249,7 +346,7 @@ enum NativeContainerImport {
       for entry in entries {
         try configurations(
           entry, field: field, parsed: parsed, root: root, limits: limits, into: &sources,
-          diagnostics: &diagnostics)
+          documents: &documents, diagnostics: &diagnostics)
       }
     } else if value.importObject != nil, NativeImportInput.agent(parsed.input.profile) != .cursor {
       sources.append((value, parsed, [field]))
@@ -352,7 +449,7 @@ enum NativeContainerImport {
         try NativeMemberImport.read(
           .init(profile: input.profile, root: input.root, document: file), container: root,
           kind: kind, limits: limits, into: &diagnostics, admission: admission,
-          discoveryRoot: relative)
+          discoveryRoot: relative, inPlugin: true)
       }
     }
   }

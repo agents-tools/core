@@ -11,6 +11,8 @@ public struct ResolvedLedger: Codable, Equatable, Sendable {
   public var resources: [String: LedgerResource] = [:]
   public var deployments: [LedgerDeployment] = []
   public var lowerings: [LockedLowering] = []
+  /// Local regional evidence; nil grants no occurrence or container creation rights.
+  package var nativeAuthorities: [LedgerNativeAuthority]?
   /// Digest-keyed non-secret bytes. These are authoritative; materializations are disposable.
   public var contentObjects: [String: Data] = [:]
   public init() {}
@@ -204,6 +206,7 @@ public struct LedgerComponent: Codable, Equatable, Sendable {
   public var source: String
   public var root: String
   public var group: String?
+  public var containerRoot: String?
   public var kind: String
   public var name: String
   public var revision: String?
@@ -215,7 +218,8 @@ public struct LedgerComponent: Codable, Equatable, Sendable {
   public var resources: [String]
 
   public init(
-    declaringSource: String, source: String, root: String, group: String? = nil, kind: String,
+    declaringSource: String, source: String, root: String, group: String? = nil,
+    containerRoot: String? = nil, kind: String,
     name: String, revision: String? = nil, version: String? = nil, payload: LedgerValue,
     conditions: [LedgerCondition], recipients: [AgentID], chatGPT: Bool, resources: [String]
   ) {
@@ -223,6 +227,7 @@ public struct LedgerComponent: Codable, Equatable, Sendable {
     self.root = root
     self.declaringSource = declaringSource
     self.group = group
+    self.containerRoot = containerRoot
     self.kind = kind
     self.name = name
     self.revision = revision
@@ -245,11 +250,27 @@ public struct LedgerOccurrence: Codable, Equatable, Sendable {
   public var condition: LedgerCondition
   public var recipients: [AgentID]
   public var consumerEditable: Bool
+  package var pluginMember: LedgerPluginMember?
+  package var input: LedgerInputProvenance?
+  package var pluginExpansion: LedgerPluginExpansion?
 
   public init(
     declaringSource: String, manifestPath: String, id: Int, component: String,
     reference: Int? = nil, dependencies: [String], condition: LedgerCondition,
     recipients: [AgentID], consumerEditable: Bool
+  ) {
+    self.init(
+      declaringSource: declaringSource, manifestPath: manifestPath, id: id, component: component,
+      reference: reference, dependencies: dependencies, condition: condition,
+      recipients: recipients, consumerEditable: consumerEditable, pluginMember: nil,
+      input: nil, pluginExpansion: nil)
+  }
+
+  package init(
+    declaringSource: String, manifestPath: String, id: Int, component: String,
+    reference: Int? = nil, dependencies: [String], condition: LedgerCondition,
+    recipients: [AgentID], consumerEditable: Bool, pluginMember: LedgerPluginMember?,
+    input: LedgerInputProvenance?, pluginExpansion: LedgerPluginExpansion?
   ) {
     self.id = id
     self.declaringSource = declaringSource
@@ -260,6 +281,65 @@ public struct LedgerOccurrence: Codable, Equatable, Sendable {
     self.condition = condition
     self.recipients = recipients
     self.consumerEditable = consumerEditable
+    self.pluginMember = pluginMember
+    self.input = input
+    self.pluginExpansion = pluginExpansion
+  }
+}
+
+/// Native conversion provenance; diagnostic pointers never participate in logical identity.
+package struct LedgerInputProvenance: Codable, Equatable, Sendable {
+  package var format: String
+  package var adapterVersion: String
+  package var pointer: String?
+  package init(format: String, adapterVersion: String, pointer: String? = nil) {
+    self.format = format
+    self.adapterVersion = adapterVersion
+    self.pointer = pointer
+  }
+}
+
+package struct LedgerPluginMember: Codable, Equatable, Sendable {
+  package var parent: Int
+  package var kind: String
+  package var name: String
+  package init(parent: Int, kind: String, name: String) {
+    self.parent = parent
+    self.kind = kind
+    self.name = name
+  }
+
+  package static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.parent == rhs.parent && lhs.kind.utf8.elementsEqual(rhs.kind.utf8)
+      && lhs.name.utf8.elementsEqual(rhs.name.utf8)
+  }
+}
+
+/// Complete ordered direct-member closure, including a successfully expanded empty selection.
+package struct LedgerPluginExpansion: Codable, Equatable, Sendable {
+  package var source: String
+  package var root: String
+  package var containerRoot: String
+  package var document: String
+  package var input: LedgerInputProvenance
+  package var children: [Int]
+  package init(
+    source: String, root: String, containerRoot: String, document: String,
+    input: LedgerInputProvenance, children: [Int]
+  ) {
+    self.source = source
+    self.root = root
+    self.containerRoot = containerRoot
+    self.document = document
+    self.input = input
+    self.children = children
+  }
+
+  package static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.source.utf8.elementsEqual(rhs.source.utf8) && lhs.root.utf8.elementsEqual(rhs.root.utf8)
+      && lhs.containerRoot.utf8.elementsEqual(rhs.containerRoot.utf8)
+      && lhs.document.utf8.elementsEqual(rhs.document.utf8)
+      && lhs.input == rhs.input && lhs.children == rhs.children
   }
 }
 

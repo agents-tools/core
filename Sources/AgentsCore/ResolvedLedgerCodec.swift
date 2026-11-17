@@ -31,7 +31,7 @@ package enum ResolvedLedgerCodec {
   ) throws -> Data? {
     try checkModel(ledger, limits: limits)
     try ledger.validate()
-    if let existing, try decode(existing, limits: limits) == ledger { return nil }
+    if let existing, try bytes(decode(existing, limits: limits)) == bytes(ledger) { return nil }
     return try encode(ledger, limits: limits)
   }
 
@@ -61,7 +61,42 @@ package enum ResolvedLedgerCodec {
     var pending =
       ledger.components.values.map { ($0.payload, 0) }
       + ledger.lowerings.map { ($0.layout, 0) }
-    var nodes = 0
+    var nodes = ledger.occurrences.count + ledger.groups.count
+    let ordered = ledger.occurrences.sorted { $0.id < $1.id }
+    var pluginDepth: [Int: Int] = [:]
+    for occurrence in ordered {
+      if let member = occurrence.pluginMember {
+        let depth = (pluginDepth[member.parent] ?? 0) + 1
+        guard depth < limits.depth else {
+          throw CoreError.invalidState("ledger plugin depth budget")
+        }
+        pluginDepth[occurrence.id] = depth
+      }
+      nodes += occurrence.pluginExpansion?.children.count ?? 0
+      guard nodes <= limits.nodes else { throw CoreError.invalidState("ledger relation budget") }
+    }
+    for authority in ledger.nativeAuthorities ?? [] {
+      func charge(_ count: Int) throws {
+        guard count <= limits.nodes - nodes else {
+          throw CoreError.invalidState("ledger authority budget")
+        }
+        nodes += count
+      }
+      try charge(1)
+      for (deployments, path) in authority.regions.map({ ($0.deployments, $0.path) })
+        + authority.createdContainers.map({ ($0.deployments, $0.path) })
+      {
+        guard path.count < limits.depth else {
+          throw CoreError.invalidState("ledger native path depth budget")
+        }
+        try charge(1)
+        try charge(deployments.count)
+        try charge(path.count)
+        for step in path {
+          if case .position = step { try charge(1) }
+        }
+      }
+    }
     while let (value, depth) = pending.popLast() {
       nodes += 1
       guard depth < limits.depth / 2, nodes <= limits.nodes else {
@@ -88,18 +123,22 @@ package enum ResolvedLedgerCodec {
   private indirect enum WireShape {
     case ledger, source, location, sourceUse, component, condition, occurrence, group
     case resource, entry, deployment, lowering, value, artifact, requirement, scalar
+    case pluginMember, input, pluginExpansion
+    case nativeAuthority, nativeRegion, nativeContainer, nativeStep, nativeEvidence
     case map(WireShape)
     case list(WireShape)
 
     var nullable: Set<String> {
       switch self {
+      case .ledger: ["nativeAuthorities"]
       case .source: ["transport", "location", "version", "container", "namespace"]
       case .location: ["root"]
       case .sourceUse: ["requirement"]
       case .requirement: ["to"]
-      case .component: ["group", "revision", "version"]
+      case .component: ["group", "revision", "version", "containerRoot"]
       case .condition: ["agents", "scopes", "platforms"]
-      case .occurrence: ["reference"]
+      case .occurrence: ["reference", "pluginMember", "input", "pluginExpansion"]
+      case .input: ["pointer"]
       case .group: ["parent", "requirement"]
       case .resource: ["artifact", "location"]
       case .entry: ["object", "link", "byteCount"]
@@ -112,6 +151,12 @@ package enum ResolvedLedgerCodec {
 
     func member(_ key: String) -> Self {
       switch (self, key) {
+      case (.ledger, "nativeAuthorities"): .list(.nativeAuthority)
+      case (.nativeAuthority, "target"): .location
+      case (.nativeAuthority, "regions"): .list(.nativeRegion)
+      case (.nativeAuthority, "createdContainers"): .list(.nativeContainer)
+      case (.nativeRegion, "path"), (.nativeContainer, "path"): .list(.nativeStep)
+      case (.nativeStep, "evidence"): .nativeEvidence
       case (.ledger, "sources"): .map(.source)
       case (.ledger, "sourceUses"): .list(.sourceUse)
       case (.ledger, "components"): .map(.component)
@@ -125,6 +170,9 @@ package enum ResolvedLedgerCodec {
       case (.component, "payload"), (.lowering, "layout"): .value
       case (.component, "conditions"): .list(.condition)
       case (.occurrence, "condition"): .condition
+      case (.occurrence, "pluginMember"): .pluginMember
+      case (.occurrence, "input"), (.pluginExpansion, "input"): .input
+      case (.occurrence, "pluginExpansion"): .pluginExpansion
       case (.resource, "entries"), (.resource, "support"): .list(.entry)
       case (.resource, "artifact"): .artifact
       case (.value, "array"): .list(.value)

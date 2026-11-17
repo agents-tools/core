@@ -1,7 +1,25 @@
 import AgentsCore
+import NativeDocuments
 
 /// Reuses F's finite conversion/validation rather than maintaining another native field table.
 enum NativeImportSemantics {
+  static func surface(_ profile: SourceImportProfile) -> NativeClientSurface {
+    switch NativeImportInput.agent(profile) {
+    case .claudeCode: return .claudeCode
+    case .codex: return .codexCLI
+    case .geminiCLI: return .geminiCLI
+    case .cursor: return .cursorEditor
+    case .opencode: return .openCodeCLI
+    }
+  }
+
+  static func report(
+    _ issue: NativeComponentFieldIssue, at location: ImportLocation,
+    into diagnostics: inout ImportDiagnostics
+  ) {
+    diagnostics.add(issue.reason == .invalid ? .invalidInput : .unconverted, location, issue.detail)
+  }
+
   static func mcp(
     name: String, transport: MCPTransportDeclaration,
     native: [String: NativeValue], profile: SourceImportProfile, resources: [String]

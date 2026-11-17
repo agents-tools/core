@@ -14,6 +14,18 @@ final class Expansion {
   var active: [GroupIdentity] = []
   var nextOccurrence = 0
   var referenceParent: Int?
+  struct PluginFrame {
+    let parent: Int
+    let selector: ComponentReferenceDeclaration
+    let root: String
+    let containerRoot: String
+    let origin: ImportLocation
+    let input: LedgerInputProvenance
+    let recipients: Set<AgentID>
+  }
+  var pluginFrame: PluginFrame?
+  var pluginDepth = 0
+  var pluginChildren: [Int: [Int]] = [:]
   private struct IndexRequest: Hashable {
     let source: String
     let names: [String]?
@@ -189,63 +201,77 @@ final class Expansion {
       }
       guard emit else { continue }
       let effective = condition.intersecting(component.condition ?? DeclarationCondition())
-      do {
-        switch component {
-        case .skills(let alias, let selection):
-          try skills(
-            selection, alias: alias, context: context, group: group,
-            condition: effective, chain: chain, position: position, dependencies: dependencies)
-        case .instructions(let selection):
-          for (index, section) in selection.sectionReferences.enumerated() {
-            try instruction(
-              section, prompt: nil, selection: selection, context: context, group: group,
-              condition: effective, chain: chain,
-              position: linking.position(at: pointer + "/sections/\(index)", in: context)
-                ?? position,
-              dependencies: dependencies)
-          }
-          for prompt in selection.prompts {
-            let promptCondition = effective.intersecting(
-              prompt.prompt.condition ?? DeclarationCondition())
-            for section in prompt.prompt.sectionReferences {
-              try instruction(
-                section, prompt: prompt.name, selection: selection, context: context,
-                group: group, condition: promptCondition, chain: chain, position: position,
-                dependencies: dependencies, append: prompt.prompt.append)
-            }
-          }
-        default:
-          let resources = try component.resources.map {
-            try resource($0, context: context, chain: chain)
-          }
-          try append(
-            key: key(component.name!, kind: component.kind, context: context, group: group),
-            snapshot: context.view.snapshot, pin: context.view.pin,
-            payload: .declaration(component),
-            context: context,
-            group: group, condition: effective,
-            recipients: effective.recipients(
-              requested: component.agents ?? context.declaration.defaultAgents,
-              scope: linking.store.scope, platform: linking.platform), chatGPT: false,
-            resources: resources, chain: chain, position: position,
-            dependencies: dependencies + resources.map(\.snapshot))
-        }
-      } catch let error as LinkError { throw error } catch {
-        throw LinkError.invalid(
-          String(describing: error), chain + (position.map { [$0.span] + $0.origins } ?? []))
-      }
+      try emitComponent(
+        component, in: context, group: group, condition: effective,
+        chain: chain, position: position, dependencies: dependencies, pointer: pointer)
     }
   }
 
-  private func key(
+  func emitComponent(
+    _ component: ComponentDeclaration, in context: LinkingDocument,
+    group: String?, condition effective: DeclarationCondition, chain: [SourceSpan],
+    position: SourceMapEntry?, dependencies: [SourceSnapshotID], pointer: String = ""
+  ) throws {
+    do {
+      switch component {
+      case .skills(let alias, let selection):
+        try skills(
+          selection, alias: alias, context: context, group: group,
+          condition: effective, chain: chain, position: position, dependencies: dependencies)
+      case .instructions(let selection):
+        for (index, section) in selection.sectionReferences.enumerated() {
+          try instruction(
+            section, prompt: nil, selection: selection, context: context, group: group,
+            condition: effective, chain: chain,
+            position: linking.position(at: pointer + "/sections/\(index)", in: context)
+              ?? position,
+            dependencies: dependencies)
+        }
+        for prompt in selection.prompts {
+          let promptCondition = effective.intersecting(
+            prompt.prompt.condition ?? DeclarationCondition())
+          for section in prompt.prompt.sectionReferences {
+            try instruction(
+              section, prompt: prompt.name, selection: selection, context: context,
+              group: group, condition: promptCondition, chain: chain, position: position,
+              dependencies: dependencies, append: prompt.prompt.append)
+          }
+        }
+      case .plugin:
+        try plugin(
+          component, context: context, group: group, condition: effective,
+          chain: chain, position: position, dependencies: dependencies)
+      default:
+        let resources = try component.resources.map {
+          try resource($0, context: context, chain: chain)
+        }
+        try append(
+          key: key(component.name!, kind: component.kind, context: context, group: group),
+          snapshot: context.view.snapshot, pin: context.view.pin,
+          payload: .declaration(try resolvedNativeResources(component, context: context)),
+          context: context,
+          group: group, condition: effective,
+          recipients: effective.recipients(
+            requested: component.agents ?? context.declaration.defaultAgents,
+            scope: linking.store.scope, platform: linking.platform), chatGPT: false,
+          resources: resources, chain: chain, position: position,
+          dependencies: dependencies + resources.map(\.snapshot))
+      }
+    } catch let error as LinkError { throw error } catch {
+      throw LinkError.invalid(
+        String(describing: error), chain + (position.map { [$0.span] + $0.origins } ?? []))
+    }
+  }
+
+  func key(
     _ name: String, kind: DeclaredComponentKind, context: LinkingDocument, group: String?
   ) -> ComponentKey {
     ComponentKey(
-      source: context.view.snapshot.source, root: context.view.discoveryPath,
-      group: group, kind: kind, name: name)
+      source: context.view.snapshot.source, root: pluginFrame?.root ?? context.view.discoveryPath,
+      group: group, kind: kind, name: name, containerRoot: pluginFrame?.containerRoot)
   }
 
-  private func selectedView(_ address: SourceAddress, key: ComponentKey?, live: Bool = false) throws
+  func selectedView(_ address: SourceAddress, key: ComponentKey?, live: Bool = false) throws
     -> SourceSnapshot
   {
     if let contained = address.contained {
@@ -287,6 +313,10 @@ final class Expansion {
     return try linking.view(address, pin: pin)!
   }
 
+  private func canonicalSkillName(_ value: String) -> String {
+    pluginFrame == nil ? PathSafety.sanitizeName(value) : value
+  }
+
   private func skills(
     _ selection: SkillDeclaration, alias: String,
     context: LinkingDocument, group: String?, condition: DeclarationCondition,
@@ -309,12 +339,12 @@ final class Expansion {
     let requestedNames: [String]?
     switch selection.select {
     case .all: requestedNames = nil
-    case .names(let names): requestedNames = names.map(PathSafety.sanitizeName)
+    case .names(let names): requestedNames = names.map(canonicalSkillName)
     }
-    let excluded = Set((selection.exclude ?? []).map(PathSafety.sanitizeName))
+    let excluded = Set((selection.exclude ?? []).map(canonicalSkillName))
     var overrides: [String: SkillOverride] = [:]
     for (name, override) in selection.overrides ?? [:] {
-      let canonical = PathSafety.sanitizeName(name)
+      let canonical = canonicalSkillName(name)
       guard overrides[canonical] == nil else {
         throw LinkError.invalid("duplicate canonical skill override: \(canonical)", location)
       }
@@ -338,14 +368,14 @@ final class Expansion {
     } else {
       let live = selection.mode == .edit
       let primary = try selectedView(address, key: nil, live: live)
-      var selected = try members(primary, live: live).map { PathSafety.sanitizeName($0.name) }
+      var selected = try members(primary, live: live).map { canonicalSkillName($0.name) }
       for name in overrides.keys.sorted()
       where !excluded.contains(name) && (selectedMode(name) == .edit) != live {
         let view = try selectedView(
           address, key: key(name, kind: .skills, context: context, group: group),
           live: selectedMode(name) == .edit)
         if try members(view, live: selectedMode(name) == .edit).contains(where: {
-          PathSafety.sanitizeName($0.name) == name
+          canonicalSkillName($0.name) == name
         }) {
           selected.append(name)
         }
@@ -361,7 +391,8 @@ final class Expansion {
         throw LinkError.invalid("edit requires an actual local skill with no requirement", location)
       }
       let matches = try members(view, live: mode == .edit).filter {
-        PathSafety.sanitizeName($0.name) == name
+        if pluginFrame != nil { return $0.name.utf8.elementsEqual(name.utf8) }
+        return canonicalSkillName($0.name) == name
           || PathSafety.sanitizeName(URL(fileURLWithPath: $0.path).lastPathComponent) == name
       }
       if matches.isEmpty, requestedNames == nil { continue }
@@ -369,7 +400,7 @@ final class Expansion {
         throw LinkError.missing("skill '\(name)'", location)
       }
       let componentKey = key(
-        PathSafety.sanitizeName(skill.name), kind: .skills, context: context, group: group)
+        canonicalSkillName(skill.name), kind: .skills, context: context, group: group)
       let effective = condition.intersecting(skill.condition)
       let resource = LinkedResource(
         snapshot: view.snapshot, path: skill.path,
@@ -395,12 +426,12 @@ final class Expansion {
     let requested: [String]?
     switch selection.select {
     case .all: requested = nil
-    case .names(let names): requested = names.map(PathSafety.sanitizeName)
+    case .names(let names): requested = names.map(canonicalSkillName)
     }
-    let excluded = Set((selection.exclude ?? []).map(PathSafety.sanitizeName))
+    let excluded = Set((selection.exclude ?? []).map(canonicalSkillName))
     var overrides: [String: SkillOverride] = [:]
     for (name, override) in selection.overrides ?? [:] {
-      let canonical = PathSafety.sanitizeName(name)
+      let canonical = canonicalSkillName(name)
       guard overrides[canonical] == nil else {
         throw LinkError.invalid("duplicate canonical skill override: \(canonical)", chain)
       }
@@ -456,7 +487,7 @@ final class Expansion {
       }
       try linking.budget.snapshot(view.snapshot)
       guard let skill = try SkillSnapshotReader.read(view).first,
-        PathSafety.sanitizeName(skill.name) == name
+        canonicalSkillName(skill.name) == name
       else {
         throw LinkError.missing("skill '\(name)'", location)
       }
@@ -552,7 +583,7 @@ final class Expansion {
     }
   }
 
-  private func resource(
+  func resource(
     _ resource: ResourceDeclaration, context: LinkingDocument, chain: [SourceSpan]
   ) throws -> LinkedResource {
     let address = try linking.address(resource.source, in: context, chain: chain)
@@ -562,7 +593,7 @@ final class Expansion {
     return try self.resource(resource.path, in: view, chain: chain)
   }
 
-  private func resource(_ resourcePath: String, in view: SourceSnapshot, chain: [SourceSpan]) throws
+  func resource(_ resourcePath: String, in view: SourceSnapshot, chain: [SourceSpan]) throws
     -> LinkedResource
   {
     let root = try view.directory()
@@ -587,7 +618,7 @@ final class Expansion {
       executableFlags: [path: ((info[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o111 != 0])
   }
 
-  private func append(
+  func append(
     key: ComponentKey, snapshot: SourceSnapshotID, pin: SourceRevision? = nil,
     payload: LinkedPayload, context: LinkingDocument,
     group: String?, condition: DeclarationCondition, recipients: Set<AgentID>, chatGPT: Bool,
@@ -602,13 +633,20 @@ final class Expansion {
       revision: context.view.pin?.revision,
       artifactDigest: context.view.snapshot.revision.hasPrefix("sha256:")
         ? context.view.snapshot.revision : nil,
-      relativePath: context.manifestPath, format: "yaml", adapterVersion: "1",
-      group: group, referenceChain: chain)
+      relativePath: pluginFrame?.origin.document ?? context.manifestPath,
+      format: pluginFrame?.input.format ?? "yaml",
+      adapterVersion: pluginFrame?.input.adapterVersion ?? "1",
+      group: group, referenceChain: chain, pointer: pluginFrame?.origin.pointer)
+    let recipients = pluginFrame.map { recipients.intersection($0.recipients) } ?? recipients
     let origin = ContributionOrigin(
       occurrence: occurrence, provenance: provenance,
       declaration: position?.span, sourceOrigins: position?.origins ?? [],
       reference: referenceParent, condition: condition,
-      recipients: recipients, dependencies: dependencies, consumerEditable: !context.producer)
+      recipients: recipients, dependencies: dependencies, consumerEditable: !context.producer,
+      pluginMember: pluginFrame.map {
+        LinkedPluginMember(parentOccurrence: $0.parent, selector: $0.selector)
+      })
+    if let frame = pluginFrame { pluginChildren[frame.parent, default: []].append(occurrence) }
     components.append(
       LinkedComponent(
         key: key, declaringSnapshot: context.view.snapshot, snapshot: snapshot, pin: pin,
@@ -658,6 +696,7 @@ final class Expansion {
       result.flatMap { component in
         [component.snapshot] + component.resources.map(\.snapshot)
           + component.origins.flatMap(\.dependencies)
+          + component.origins.compactMap { $0.pluginExpansion?.snapshot }
       } + references.map(\.snapshot))
     return LinkedComponents(
       components: result, references: references,

@@ -10,6 +10,32 @@ package struct ComponentKey: Hashable, Sendable {
   package let group: String?
   package let kind: DeclaredComponentKind
   package let name: String
+  package let containerRoot: String?
+
+  package init(
+    source: String, root: String, group: String?, kind: DeclaredComponentKind,
+    name: String, containerRoot: String? = nil
+  ) {
+    self.source = source
+    self.root = root
+    self.group = group
+    self.kind = kind
+    self.name = name
+    self.containerRoot = containerRoot
+  }
+
+  package static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.kind == rhs.kind && lhs.source.utf8.elementsEqual(rhs.source.utf8)
+      && lhs.root.utf8.elementsEqual(rhs.root.utf8) && lhs.name.utf8.elementsEqual(rhs.name.utf8)
+      && lhs.group.map { Data($0.utf8) } == rhs.group.map { Data($0.utf8) }
+      && lhs.containerRoot.map { Data($0.utf8) } == rhs.containerRoot.map { Data($0.utf8) }
+  }
+  package func hash(into hasher: inout Hasher) {
+    hasher.combine(kind.rawValue)
+    for value in [Optional(source), root, group, name, containerRoot] {
+      hasher.combine(value.map { Data($0.utf8) })
+    }
+  }
 }
 
 /// Exact, relative resource evidence. URLs used while reading never enter this value.
@@ -39,9 +65,43 @@ package enum LinkedPayload: Equatable, Sendable {
 
   func sameContent(as other: Self) -> Bool {
     if case .declaration(let lhs) = self, case .declaration(let rhs) = other {
-      return lhs.comparisonPayload == rhs.comparisonPayload
+      guard let a = try? ResolvedLedgerCodec.bytes(LedgerPayload.component(lhs.comparisonPayload)),
+        let b = try? ResolvedLedgerCodec.bytes(LedgerPayload.component(rhs.comparisonPayload))
+      else { return false }
+      return a == b
     }
     return self == other
+  }
+}
+
+package struct LinkedPluginMember: Equatable, Sendable {
+  package let parentOccurrence: Int
+  package let selector: ComponentReferenceDeclaration
+
+  package static func == (lhs: Self, rhs: Self) -> Bool {
+    guard lhs.parentOccurrence == rhs.parentOccurrence,
+      let a = try? ResolvedLedgerCodec.bytes(LedgerPayload.reference(lhs.selector)),
+      let b = try? ResolvedLedgerCodec.bytes(LedgerPayload.reference(rhs.selector))
+    else { return false }
+    return a == b
+  }
+}
+
+package struct LinkedPluginExpansion: Equatable, Sendable {
+  package let snapshot: SourceSnapshotID
+  package let root: String
+  package let containerRoot: String
+  package let document: String
+  package let input: LedgerInputProvenance
+  package var children: [Int]
+
+  package static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.snapshot.source.utf8.elementsEqual(rhs.snapshot.source.utf8)
+      && lhs.snapshot.revision.utf8.elementsEqual(rhs.snapshot.revision.utf8)
+      && lhs.root.utf8.elementsEqual(rhs.root.utf8)
+      && lhs.containerRoot.utf8.elementsEqual(rhs.containerRoot.utf8)
+      && lhs.document.utf8.elementsEqual(rhs.document.utf8)
+      && lhs.input == rhs.input && lhs.children == rhs.children
   }
 }
 
@@ -56,6 +116,8 @@ package struct ContributionOrigin: Equatable, Sendable {
   /// Source variables traversed to reach this contribution, including resource dependencies.
   package let dependencies: [SourceSnapshotID]
   package let consumerEditable: Bool
+  package var pluginMember: LinkedPluginMember? = nil
+  package var pluginExpansion: LinkedPluginExpansion? = nil
 }
 
 package struct LinkedComponent: Equatable, Sendable {
@@ -68,7 +130,7 @@ package struct LinkedComponent: Equatable, Sendable {
   package var recipients: Set<AgentID>
   /// ChatGPT is a projection, not an AgentID. Scope/platform constraints still apply.
   package let chatGPT: Bool
-  package let resources: [LinkedResource]
+  package var resources: [LinkedResource]
   package var origins: [ContributionOrigin]
   /// Consumer-owned export input. It is not read or retained for installation replay.
   package var localAppend: LedgerLocation? = nil
@@ -120,6 +182,50 @@ package struct LinkedComponents: Equatable, Sendable {
         }, by: \.key)
     }
     var changes = Set<ComponentKey>()
+    func relations(_ graph: Self) -> [Int: Data] {
+      guard
+        graph.components.contains(where: {
+          $0.origins.contains { $0.pluginMember != nil || $0.pluginExpansion != nil }
+        })
+      else { return [:] }
+      let occurrences = Dictionary(
+        uniqueKeysWithValues: graph.components.flatMap { component in
+          component.origins.map { ($0.occurrence, component) }
+        })
+      func identity(_ key: ComponentKey) -> LedgerValue {
+        var fields: [String: LedgerValue] = [
+          "source": .init(key.source), "root": .init(key.root),
+          "kind": .init(key.kind.rawValue), "name": .init(key.name),
+        ]
+        fields["group"] = key.group.map { .init($0) }
+        fields["containerRoot"] = key.containerRoot.map { .init($0) }
+        return .init(object: fields)
+      }
+      var result: [Int: Data] = [:]
+      for component in graph.components {
+        for origin in component.origins {
+          var fields: [String: LedgerValue] = [:]
+          if let member = origin.pluginMember, let parent = occurrences[member.parentOccurrence] {
+            fields["parent"] = identity(parent.key)
+            fields["selector"] = LedgerPayload.reference(member.selector)
+          }
+          if let expansion = origin.pluginExpansion {
+            fields["source"] = .init(expansion.snapshot.source)
+            fields["revision"] = .init(expansion.snapshot.revision)
+            fields["root"] = .init(expansion.root)
+            fields["containerRoot"] = .init(expansion.containerRoot)
+            fields["children"] = .init(
+              array: expansion.children.compactMap { occurrences[$0] }.map { identity($0.key) })
+          }
+          if !fields.isEmpty {
+            result[origin.occurrence] = try? ResolvedLedgerCodec.bytes(LedgerValue(object: fields))
+          }
+        }
+      }
+      return result
+    }
+    let beforeRelations = relations(previous)
+    let afterRelations = relations(self)
     func compare(_ lhs: [LinkedComponent], _ rhs: [LinkedComponent]) {
       for (a, b) in zip(lhs, rhs) {
         // Coalescing retains distinct complete clauses; collection order carries no restriction.
@@ -128,12 +234,19 @@ package struct LinkedComponents: Equatable, Sendable {
           ? a.conditions.count == b.conditions.count
             && a.conditions.allSatisfy { b.conditions.contains($0) }
           : a.conditions == b.conditions
+        let aRelations = a.origins.compactMap { beforeRelations[$0.occurrence] }.sorted {
+          $0.lexicographicallyPrecedes($1)
+        }
+        let bRelations = b.origins.compactMap { afterRelations[$0.occurrence] }.sorted {
+          $0.lexicographicallyPrecedes($1)
+        }
         if a.key != b.key || a.snapshot != b.snapshot || a.pin != b.pin
           || !a.payload.sameContent(as: b.payload)
           || !sameConditions
           || a.localAppend != b.localAppend
           || a.recipients != b.recipients || a.chatGPT != b.chatGPT || a.resources != b.resources
           || Set(a.origins.flatMap(\.dependencies)) != Set(b.origins.flatMap(\.dependencies))
+          || aRelations != bRelations
         {
           changes.insert(a.key)
           changes.insert(b.key)
@@ -177,9 +290,12 @@ package struct LinkedComponents: Equatable, Sendable {
       }
     }
     return changes.sorted { lhs, rhs in
-      [lhs.source, lhs.root, lhs.group ?? "", lhs.kind.rawValue, lhs.name]
+      [lhs.source, lhs.root, lhs.containerRoot ?? "", lhs.group ?? "", lhs.kind.rawValue, lhs.name]
         .lexicographicallyPrecedes(
-          [rhs.source, rhs.root, rhs.group ?? "", rhs.kind.rawValue, rhs.name])
+          [
+            rhs.source, rhs.root, rhs.containerRoot ?? "", rhs.group ?? "", rhs.kind.rawValue,
+            rhs.name,
+          ])
     }
   }
 

@@ -47,6 +47,24 @@ struct NativeImportDocument {
       keys + [name], display: keys.map { "/" + $0 }.joined() + "/member[\(index)]")
   }
 
+  /// Structural helper paths are resolved against original syntax, with value-free ordinals.
+  func fieldLocation(_ keys: [String]) -> ImportLocation {
+    var prefix: [String] = []
+    var display = ""
+    for key in keys {
+      let value = try? document.read(.init(keys: prefix))?.value
+      if let map = value?.importObject, let index = map.keys.sorted().firstIndex(of: key) {
+        display += "/member[\(index)]"
+      } else if case .array = value, Int(key) != nil {
+        display += "/" + key
+      } else {
+        return location(prefix, display: display)
+      }
+      prefix.append(key)
+    }
+    return location(keys, display: display)
+  }
+
   func location(_ keys: [String] = [], display: String? = nil) -> ImportLocation {
     let observation = try? document.read(.init(keys: keys))
     var range = observation?.valueRange ?? observation?.entryRanges.first
@@ -276,6 +294,28 @@ enum NativeImportInput {
     }
     diagnostics.proposal.components.append(
       .init(origin: origin, declaration: declaration, member: member))
+  }
+
+  /// A directory may be captured before a later native document reveals a literal binding.
+  /// Reconcile every source-relative overlap before the operation publishes its proposal,
+  /// including partial proposals returned after a parsing failure.
+  static func reconcilePreservation(into diagnostics: inout ImportDiagnostics) {
+    for index in diagnostics.proposal.resources.indices {
+      let resource = diagnostics.proposal.resources[index]
+      guard let path = resource.path,
+        let root = diagnostics.proposal.sources.first(where: {
+          $0.alias == resource.sourceAlias
+        })?.producerPath
+      else { continue }
+      let relative = root == "." ? path : root + (path == "." ? "" : "/" + path)
+      if diagnostics.proposal.bindings.contains(where: {
+        relative == "." || $0.location.document == relative
+          || $0.location.document.hasPrefix(relative + "/")
+      }) {
+        diagnostics.proposal.resources[index].requiresBindingRewrite = true
+        diagnostics.proposal.resources[index].observedHash = nil
+      }
+    }
   }
 
   static func resource(
