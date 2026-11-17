@@ -82,3 +82,20 @@ package enum InstructionLocations {
     return file.standardizedFileURL
   }
 }
+
+extension InstructionLocations {
+  package static func clientFiles(
+    for agent: AgentID, scope: InstallScope, environment: RuntimeEnvironment
+  ) -> [(String, URL)] {
+    var result =
+      file(for: agent, scope: scope, environment: environment).map {
+        [("instructions.fixed", $0)]
+      } ?? []
+    if agent == .claudeCode && scope == .project {
+      result += projectPaths.filter { $0.contains("CLAUDE") }.map {
+        ("instructions." + $0, environment.projectDirectory.appendingPathComponent($0))
+      }
+    }
+    return result
+  }
+}

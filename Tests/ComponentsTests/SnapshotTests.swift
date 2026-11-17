@@ -7,6 +7,43 @@ import Testing
 
 @Suite("Exact component snapshots", .serialized)
 struct SnapshotTests {
+  @Test func failedGitComponentKeepsTypedFailureAndDeclarationLocation() throws {
+    let fixture = try LinkFixture()
+    let missing = fixture.root.appendingPathComponent("missing.git")
+    let source = "file://localhost" + missing.path
+    let expression = """
+      version: 1
+      sources: {producer: {url: "\(source)"}}
+      groups:
+        selected:
+          components:
+            - {kind: skills, source: producer, select: all}
+      uses: [{group: selected}]
+      """
+    let before = try FileHash.folderHash(fixture.root)
+    do {
+      _ = try fixture.link(expression)
+      Issue.record("Missing Git source was admitted")
+    } catch let error as GitError {
+      #expect(error.operation == .clone)
+      #expect(error.source == source)
+      #expect(error.command.contains("clone"))
+      #expect(error.exitCode != 0)
+      #expect(error.stderr.contains("fatal:"))
+      #expect(
+        error.context.map(\.document.rawValue) == ["consumer/agents.yaml", "consumer/agents.yaml"])
+      #expect(error.context.map(\.line) == [7, 6])
+      #expect(error.context.allSatisfy { $0.start < $0.end && $0.column > 0 })
+      #expect(!error.description.contains(fixture.store.cacheDirectory.path))
+      #expect(!error.description.contains(".staging-"))
+      #expect(!error.description.contains("agents-linking-"))
+      #expect(error.description.contains("consumer/agents.yaml:6:"))
+    } catch {
+      Issue.record("Git failure lost its type: \(type(of: error))")
+    }
+    #expect(try FileHash.folderHash(fixture.root) == before)
+  }
+
   @Test func localDirectoryBeneathRepositoryKeepsItsOwnContent() throws {
     let fixture = try LinkFixture()
     try fixture.initialize(fixture.project)

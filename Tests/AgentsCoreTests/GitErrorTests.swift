@@ -36,6 +36,30 @@ struct GitErrorTests {
     }
   }
 
+  @Test func locationContextPreservesSanitizedGitFailure() {
+    let source = "file://localhost/producer"
+    let mirror = URL(fileURLWithPath: "/temporary/cache/source.git")
+    let command = ["git", "-C", mirror.path, "fetch"]
+    var error = GitError(
+      operation: .fetch, source: source,
+      stderr: "Receiving objects: 100% (1/1), done.\nfatal: cannot read '\(mirror.path)'\n",
+      command: command, exitCode: 128, replacingPaths: [mirror])
+    #expect(error.context.isEmpty)
+    let original = error
+    let span = SourceSpan(
+      document: DocumentIdentity("consumer/agents.yaml"), start: 10, end: 40, line: 3, column: 5)
+    error.context.append(span)
+    #expect(error.operation == original.operation)
+    #expect(error.source == original.source)
+    #expect(error.stderr == original.stderr)
+    #expect(error.command == original.command)
+    #expect(error.exitCode == original.exitCode)
+    #expect(error.context == [span])
+    #expect(error.description == original.description + " at consumer/agents.yaml:3:5")
+    #expect(!error.description.contains(mirror.path))
+    #expect(error.stderr == "fatal: cannot read '\(source)'")
+  }
+
   @Test func missingFileRepositoryIdentifiesCloneAndSource() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
