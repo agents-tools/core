@@ -25,6 +25,8 @@ public enum Editability: Sendable, Equatable {
 public enum ManifestEdit: Sendable {
   case setDefaultAgents([AgentID]?)
   case upsertSource(NamedSourceDeclaration)
+  /// Replaces one source in place and retargets its typed alias references.
+  case replaceSource(NodeID, with: NamedSourceDeclaration)
   case removeSource(alias: String)
   case insertComponent(ComponentDeclaration, into: ContainerID, at: InsertionPosition)
   case replaceComponent(NodeID, with: ComponentDeclaration)

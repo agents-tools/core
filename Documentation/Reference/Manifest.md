@@ -72,6 +72,16 @@ group components to `/groups/0/components/...`. Handles belong to one digest.
 Agents App uses these document and edit APIs for configuration editing. Save
 operations preserve YAML text and scalar identity through the prepared edits.
 
+Editing a named source uses `replaceSource(sourceNode, with: replacement)`, where
+`sourceNode` is captured from `/sources/<index>` in the current document snapshot.
+The replacement retains collection position and rewrites typed references to the
+old alias, including declaration `watch`, root and unused-group references,
+executable sources and independent working-directory sources. Native data and
+other strings remain unchanged. Same-alias replacement updates the definition;
+new sources use `upsertSource`. Handles and the expected document digest must come
+from the same snapshot. Invalid final source kinds, modes or aliases are rejected;
+persisted Watch source-identity keys are outside document editing.
+
 No-op changes return exact bytes. Changed fields and collection entries preserve
 unrelated bytes. Adjacent leading comments and same-line trailing comments belong
 to their item; moves carry them. Deletion retains comments unless explicitly
