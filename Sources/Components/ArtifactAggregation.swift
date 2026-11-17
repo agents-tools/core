@@ -15,6 +15,7 @@ package struct AggregatedChange {
   package var effectiveReaders: [AgentID] = []
   package var privateMaterialization = false
   package var requiredBindings: [String] = []
+  package var memberAccessChanges: [PrivateTreeAccessChange] = []
   package var symbolicBefore: LedgerValue? = nil
   package var symbolicAfter: LedgerValue? = nil
 }
@@ -39,6 +40,7 @@ package final class ArtifactAggregation: PreparedEvidence {
   private var skillContent: [String: (String, [String: Bool])] = [:]
   private var privateWrites:
     [(PreparedPrivateMaterialization, Set<String>, (RuntimeBindingValues) throws -> Data)] = []
+  private var privateTrees: [(PreparedPrivateMaterialization, [PrivateTreeEntry])] = []
   private var resourceEvidence: [TargetPrecondition] = []
   private var physicalPaths: [NativeTargetIdentity: String] = [:]
 
@@ -153,12 +155,23 @@ package final class ArtifactAggregation: PreparedEvidence {
             }) {
               try prepareWholeNative(
                 path: path, next: next, old: old, previous: previous,
-                artifacts: artifacts, workspace: workspace)
+                artifacts: artifacts, workspace: workspace, changingAccess: changingAccess)
             } else {
               for entry in next {
+                let privatePlan =
+                  try store.materializationReceipt(for: entry.target) == nil
+                  ? nil : store.preparePrivateMaterialization(entry.target)
                 try record(
                   entry, previous: previous, changed: false,
-                  readers: entry.contribution.knownReaders, ownership: .generated)
+                  readers: Array(
+                    Set(
+                      entry.contribution.knownReaders
+                        + DeploymentConstruction.route(
+                          entry.output, request: entry.contribution.request
+                        )
+                        .knownReaders)
+                  ).sorted { $0.rawValue < $1.rawValue },
+                  privatePlan: privatePlan, ownership: .generated)
               }
             }
           case .ignore:
@@ -411,17 +424,8 @@ package final class ArtifactAggregation: PreparedEvidence {
   }
 
   private func location(_ target: MaterializationTarget) -> LedgerLocation {
-    for (key, root) in [
-      ("project", store.environment.projectDirectory), ("home", store.environment.homeDirectory),
-    ] {
-      let root = root.resolvingSymlinksInPath().standardizedFileURL
-      if PathSafety.isContained(target.url, in: root) {
-        return .init(
-          kind: .registered, root: key,
-          path: String(target.url.path.dropFirst(root.path.count + 1)))
-      }
-    }
-    return .init(kind: .absolute, path: target.url.path)
+    let parts = target.path.split(separator: "/", maxSplits: 1)
+    return .init(kind: .registered, root: String(parts[0]), path: String(parts[1]))
   }
 
   private func record(
@@ -455,6 +459,7 @@ package final class ArtifactAggregation: PreparedEvidence {
         changed: changed, native: true, accessChange: privatePlan?.accessChange,
         effectiveReaders: readers,
         privateMaterialization: privatePlan != nil, requiredBindings: bindings,
+        memberAccessChanges: privatePlan?.memberAccessChanges ?? [],
         symbolicBefore: oldComponent?.payload,
         symbolicAfter: ledger.components[entry.contribution.component]?.payload))
   }
@@ -463,12 +468,36 @@ package final class ArtifactAggregation: PreparedEvidence {
     _ value: NativeComponentValue, values: RuntimeBindingValues?,
     selected: ResolvedLedger
   ) throws -> NativeValue {
-    guard let values else { return try value.referenceValue(budget: nativeBudget()) }
+    try Self.componentValue(value, values: values, selected: selected, store: store)
+  }
+
+  private static func componentValue(
+    _ value: NativeComponentValue, values: RuntimeBindingValues?,
+    selected: ResolvedLedger, store: StateStore, symbolicVariant: Int = 0
+  ) throws -> NativeValue {
+    var environment = store.environment
+    var symbolic: [String: Data] = [:]
+    if values == nil {
+      // Preview converts the typed program without reading runtime values.
+      for placement in value.bindings {
+        switch placement.binding {
+        case .secret(let name):
+          symbolic[name] = Data(
+            ("agents-symbolic-secret-" + String(symbolicVariant) + "-"
+              + FileHash.sha256Hex(data: Data(name.utf8))).utf8)
+        case .environment(let name):
+          environment.environment[name] =
+            "agents-symbolic-environment-" + String(symbolicVariant) + "-"
+            + FileHash.sha256Hex(data: Data(name.utf8))
+        case .literal: break
+        }
+      }
+    }
     let paths = try selected.resources.keys.reduce(into: [String: String]()) {
       $0[$1] = try Self.resourceDestination($1, ledger: selected, store: store).path
     }
     return try value.stagedValue(
-      bindings: values, environment: store.environment,
+      bindings: values ?? RuntimeBindingValues(symbolic), environment: environment,
       resourcePaths: paths,
       budget: NativeDocumentBudget(
         limits: .init(
@@ -478,9 +507,64 @@ package final class ArtifactAggregation: PreparedEvidence {
       codexCommandShell: .posix, cursorCommandShell: .posix)
   }
 
+  private static func generatedManifestMatches(
+    _ manifest: NativeComponentValue, observed: NativeValue?, selected: ResolvedLedger,
+    privateGeneration: Bool, store: StateStore
+  ) throws -> Bool {
+    guard let observed else { return false }
+    let first = try Self.componentValue(manifest, values: nil, selected: selected, store: store)
+    guard privateGeneration, !manifest.bindings.isEmpty else { return observed == first }
+    let second = try Self.componentValue(
+      manifest, values: nil, selected: selected, store: store, symbolicVariant: 1)
+    // F determines the native positions. Only leaves changed by its binding conversion vary.
+    func matches(_ actual: NativeValue, _ a: NativeValue, _ b: NativeValue) -> Bool {
+      if a == b { return actual == a }
+      switch (actual, a, b) {
+      case (.string, .string, .string): return true
+      case (.object(let actual), .object(let a), .object(let b)):
+        guard Set(actual.keys) == Set(a.keys), Set(a.keys) == Set(b.keys) else { return false }
+        return a.allSatisfy { matches(actual[$0.key]!, $0.value, b[$0.key]!) }
+      case (.array(let actual), .array(let a), .array(let b)):
+        guard actual.count == a.count, a.count == b.count else { return false }
+        return a.indices.allSatisfy { matches(actual[$0], a[$0], b[$0]) }
+      default: return false
+      }
+    }
+    return matches(observed, first, second)
+  }
+
+  private func generatedManifestBytes(
+    _ manifest: NativeComponentValue, values: RuntimeBindingValues?
+  ) throws -> Data {
+    try Self.generatedManifestBytes(manifest, values: values, selected: ledger, store: store)
+  }
+
+  private static func generatedManifestBytes(
+    _ manifest: NativeComponentValue, values: RuntimeBindingValues?,
+    selected: ResolvedLedger, store: StateStore
+  ) throws -> Data {
+    guard
+      case .object(let fields) = try componentValue(
+        manifest, values: values, selected: selected, store: store)
+    else { throw CoreError.invalidState("generated native manifest must be an object") }
+    let document = try NativeDocument(
+      bytes: Data("{}".utf8), format: .json,
+      budget: NativeDocumentBudget(
+        limits: .init(
+          storage: LedgerLimits.standard.resourceBytes, work: LedgerLimits.standard.encodedBytes,
+          nodes: LedgerLimits.standard.nodes, depth: LedgerLimits.standard.depth,
+          uninterruptedBytes: LedgerLimits.standard.keyBytes)))
+    return try document.prepare(
+      fields.keys.sorted().map {
+        .put(region: .init(keys: [$0]), expected: .absent, value: fields[$0]!)
+      }
+    ).bytes
+  }
+
   private func prepareWholeNative(
     path: String, next: [ComponentOutputEntry], old: [ComponentOutputEntry],
-    previous: ResolvedLedger, artifacts: [String: ReplayedArtifact], workspace: URL
+    previous: ResolvedLedger, artifacts: [String: ReplayedArtifact], workspace: URL,
+    changingAccess: Bool
   ) throws {
     guard let target = (next.first ?? old.first)?.target else { return }
     let capture = try TargetPrecondition(target.url).capturingPublicationAccess()
@@ -496,6 +580,49 @@ package final class ArtifactAggregation: PreparedEvidence {
     guard next.count <= 1, old.count <= 1 else {
       throw CoreError.invalidState("conflicting native whole-object owners")
     }
+    let hasBindings: Bool = next.contains {
+      if case .generatedLSPPlugin(_, _, let manifest) = $0.output.content {
+        return !manifest.bindings.isEmpty
+      }
+      return false
+    }
+    let hadBindings: Bool = old.contains {
+      if case .generatedLSPPlugin(_, _, let manifest) = $0.output.content {
+        return !manifest.bindings.isEmpty
+      }
+      return false
+    }
+    let receipt = try store.materializationReceipt(for: target)
+    let privatePlan =
+      try hasBindings || hadBindings || receipt != nil
+      ? store.preparePrivateMaterialization(
+        target, changingAccess: changingAccess,
+        requiringReceiptForExistingTarget: hadBindings) : nil
+    if let privatePlan {
+      struct MemberAccess: Encodable {
+        let path: String
+        let before: String
+        let afterOwner: UInt32
+        let afterMode: UInt32
+      }
+      fingerprints.append(
+        try ResolvedLedgerCodec.digest(
+          privatePlan.memberAccessChanges.map {
+            let file = try PathSafety.resolvedChild(base: target.url, subpath: $0.path)
+            return MemberAccess(
+              path: $0.path,
+              before: try TargetPrecondition(file).displayEvidence(includeContent: false),
+              afterOwner: $0.owner, afterMode: $0.mode)
+          }))
+    }
+    func bindingNames(_ entry: ComponentOutputEntry) -> Set<String> {
+      guard case .generatedLSPPlugin(_, _, let manifest) = entry.output.content else { return [] }
+      return Set(
+        manifest.bindings.compactMap {
+          if case .secret(let name) = $0.binding { return name }
+          return nil
+        })
+    }
     func source(_ entry: ComponentOutputEntry) throws -> FileTransaction.Source {
       switch entry.output.content {
       case .file(_, let bytes): return .data(bytes)
@@ -505,23 +632,11 @@ package final class ArtifactAggregation: PreparedEvidence {
         else { throw CoreError.invalidState("missing frozen native container") }
         return .copy(tree)
       case .generatedLSPPlugin(_, let manifestPath, let manifest):
-        guard manifest.bindings.isEmpty else {
-          throw CoreError.invalidState(
-            "native private container materialization requires the Core tree construction interface"
-          )
-        }
         let tree = workspace.appendingPathComponent(
           "native-tree-" + FileHash.sha256Hex(data: Data(entry.id.utf8)))
         let file = try PathSafety.resolvedChild(base: tree, subpath: manifestPath)
         try FileSystem.createDirectory(at: file.deletingLastPathComponent())
-        let document = try NativeDocument(
-          bytes: Data("{}".utf8), format: .json, budget: nativeBudget())
-        let observation = try document.read(.init(keys: []))!
-        let bytes = try document.prepare([
-          .put(
-            region: .init(keys: []), expected: .owned(observation),
-            value: componentValue(manifest, values: nil, selected: ledger))
-        ]).bytes
+        let bytes = try generatedManifestBytes(manifest, values: nil)
         try bytes.write(to: file)
         return .copy(tree)
       default: throw CoreError.invalidState("native whole-object content has a regional shape")
@@ -530,7 +645,8 @@ package final class ArtifactAggregation: PreparedEvidence {
     let exists = FileManager.default.fileExists(atPath: path)
     if exists {
       guard let old = old.first,
-        let deployment = previous.deployments.first(where: { $0.id == old.id })
+        let deployment = previous.deployments.first(where: { $0.id == old.id }),
+        deployment.ownership == .generated
       else {
         throw CoreError.invalidState("native target contains unmanaged content")
       }
@@ -548,7 +664,7 @@ package final class ArtifactAggregation: PreparedEvidence {
       case .generatedLSPPlugin(_, let manifestPath, let manifest):
         let captured = try LedgerResources.capture(target.url, embed: false, limits: .standard)
         let expectedPaths = Set([
-          manifestPath, (manifestPath as NSString).deletingLastPathComponent,
+          ".", manifestPath, (manifestPath as NSString).deletingLastPathComponent,
         ])
         guard captured.entries.allSatisfy({ expectedPaths.contains($0.path) && !$0.executable })
         else {
@@ -558,9 +674,9 @@ package final class ArtifactAggregation: PreparedEvidence {
           bytes: Data(contentsOf: target.url.appendingPathComponent(manifestPath)), format: .json,
           budget: nativeBudget())
         guard
-          try current.read(.init(keys: []))?.value
-            == componentValue(manifest, values: nil, selected: previous),
-          deployment.ownership == .generated
+          try Self.generatedManifestMatches(
+            manifest, observed: current.read(.init(keys: []))?.value, selected: previous,
+            privateGeneration: receipt != nil, store: store)
         else { throw CoreError.invalidState("owned generated native tree drifted") }
       default: throw CoreError.invalidState("invalid whole-object ownership")
       }
@@ -574,9 +690,54 @@ package final class ArtifactAggregation: PreparedEvidence {
         changed = try !exists || FileHash.folderHash(target.url) != FileHash.folderHash(tree)
       default: throw CoreError.invalidState("invalid native whole-object source")
       }
-      if changed { writes[path] = desired }
+      if let privatePlan {
+        switch entry.output.content {
+        case .generatedLSPPlugin(_, let manifestPath, let manifest):
+          let parts = manifestPath.split(separator: "/")
+          var members: [PrivateTreeEntry] = []
+          for count in 1..<parts.count {
+            members.append(.init(parts.prefix(count).joined(separator: "/"), content: .directory))
+          }
+          let selected = ledger
+          let selectedStore = store
+          members.append(
+            .init(
+              manifestPath,
+              content: .boundFile(bindings: bindingNames(entry)) {
+                values in
+                try Self.generatedManifestBytes(
+                  manifest, values: values, selected: selected, store: selectedStore)
+              }))
+          privateTrees.append((privatePlan, members))
+        case .nativePlugin:
+          guard case .copy(let tree) = desired else {
+            throw CoreError.invalidState("native container has no frozen tree")
+          }
+          let captured = try LedgerResources.capture(tree, embed: false, limits: .standard)
+          let members = try captured.entries.filter { $0.path != "." }.map { item in
+            let content: PrivateTreeEntry.Content
+            switch item.kind {
+            case .directory: content = .directory
+            case .file:
+              content = .file(
+                try Data(contentsOf: PathSafety.resolvedChild(base: tree, subpath: item.path)),
+                executable: item.executable)
+            case .symlink: content = .symlink(item.link!)
+            }
+            return PrivateTreeEntry(item.path, content: content)
+          }
+          privateTrees.append((privatePlan, members))
+        case .file(_, let bytes):
+          privateWrites.append((privatePlan, [], { _ in bytes }))
+        default: throw CoreError.invalidState("invalid private whole-object output")
+        }
+      } else if changed {
+        writes[path] = desired
+      }
       try record(
-        entry, previous: previous, changed: changed, readers: readers, ownership: .generated)
+        entry, previous: previous, changed: changed || privatePlan != nil,
+        readers: readers, privatePlan: privatePlan, bindings: bindingNames(entry).sorted(),
+        ownership: .generated)
     } else if let entry = old.first,
       let deployment = previous.deployments.first(where: { $0.id == entry.id })
     {
@@ -584,7 +745,8 @@ package final class ArtifactAggregation: PreparedEvidence {
       changes.append(
         .init(
           deployment: deployment, url: target.url, before: nil, after: nil,
-          changed: exists, native: true, effectiveReaders: readers,
+          changed: exists, native: true, accessChange: privatePlan?.accessChange,
+          effectiveReaders: readers, privateMaterialization: privatePlan != nil,
           symbolicBefore: previous.components[entry.contribution.component]?.payload))
     }
   }
@@ -699,6 +861,7 @@ package final class ArtifactAggregation: PreparedEvidence {
     let document = try NativeDocument(
       bytes: capture.bytes ?? Data((format == .toml ? "" : "{}\n").utf8),
       format: format, budget: nativeBudget())
+    let selectedStore = store
     func names(_ bindings: [NativeComponentBindingPlacement]) -> Set<String> {
       Set(
         bindings.compactMap {
@@ -729,7 +892,7 @@ package final class ArtifactAggregation: PreparedEvidence {
         })
       return .init(
         key: key, region: region, bindings: bindings, symbolic: c.value,
-        render: { try self.nativeValue(c, values: $0, ledger: selected) })
+        render: { try Self.nativeValue(c, values: $0, ledger: selected, store: selectedStore) })
     }
     func regional(_ entry: ComponentOutputEntry, selected: ResolvedLedger) throws
       -> [NativeRegionOwner]
@@ -756,7 +919,9 @@ package final class ArtifactAggregation: PreparedEvidence {
           try region(
             member.keys, symbolic: selected.components[entry.contribution.component]!.payload,
             bindings: names(value.bindings),
-            render: { try self.componentValue(value, values: $0, selected: selected) })
+            render: {
+              try Self.componentValue(value, values: $0, selected: selected, store: selectedStore)
+            })
         ]
       case .claudePermissions(let policy):
         var values: [(String, NativeValue)] = []
@@ -788,8 +953,12 @@ package final class ArtifactAggregation: PreparedEvidence {
     func keyed(_ items: [NativeRegionOwner]) throws -> [String: NativeRegionOwner] {
       var result: [String: NativeRegionOwner] = [:]
       for item in items {
-        if let existing = result[item.key], try existing.render(nil) != item.render(nil) {
-          throw CoreError.invalidState("conflicting native physical region owners")
+        if let existing = result[item.key] {
+          guard
+            (existing.bindings.isEmpty && item.bindings.isEmpty)
+              || existing.symbolic == item.symbolic,
+            try existing.render(nil) == item.render(nil)
+          else { throw CoreError.invalidState("conflicting native physical region owners") }
         }
         result[item.key] = item
       }
@@ -931,12 +1100,6 @@ package final class ArtifactAggregation: PreparedEvidence {
         depth: LedgerLimits.standard.depth, uninterruptedBytes: LedgerLimits.standard.keyBytes))
   }
 
-  private func nativeValue(
-    _ contribution: NativeMCPContribution, values: RuntimeBindingValues?, ledger: ResolvedLedger
-  ) throws -> NativeValue {
-    try Self.nativeValue(contribution, values: values, ledger: ledger, store: store)
-  }
-
   private static func nativeValue(
     _ contribution: NativeMCPContribution, values: RuntimeBindingValues?, ledger: ResolvedLedger,
     store: StateStore
@@ -1040,6 +1203,9 @@ package final class ArtifactAggregation: PreparedEvidence {
     }
     for path in deletes.sorted() {
       try transaction.delete(URL(fileURLWithPath: path), expecting: targets[path])
+    }
+    for (prepared, entries) in privateTrees {
+      try transaction.replacePrivateTree(prepared, entries: entries, provider: provider)
     }
     for (prepared, bindings, render) in privateWrites {
       try transaction.replacePrivate(
@@ -1196,7 +1362,13 @@ extension ArtifactAggregation {
             for: DeploymentConstruction.physicalRoute(
               DeploymentConstruction.route(output, request: contribution.request), ledger: ledger,
               store: store))
-          if try store.materializationReceipt(for: target) != nil { return ("current", nil) }
+          let privateGeneration = try store.materializationReceipt(for: target) != nil
+          if privateGeneration {
+            switch output.content {
+            case .file, .nativePlugin, .generatedLSPPlugin: break
+            default: return ("current", nil)
+            }
+          }
           let budget = NativeDocumentBudget(
             limits: .init(
               storage: LedgerLimits.standard.resourceBytes,
@@ -1211,7 +1383,7 @@ extension ArtifactAggregation {
               bytes: Data(contentsOf: url), format: output.route.documentFormat!, budget: budget)
             matches =
               try document.read(.init(keys: member.keys))?.value
-              == value.referenceValue(budget: budget)
+              == componentValue(value, values: nil, selected: ledger, store: store)
           case .claudePermissions(let policy):
             let document = try NativeDocument(
               bytes: Data(contentsOf: url), format: .json, budget: budget)
@@ -1259,7 +1431,22 @@ extension ArtifactAggregation {
               text.components(separatedBy: opening).count == 2
               && text.components(separatedBy: closing).count == 2
               && text.contains(opening + patterns.joined(separator: "\n") + "\n" + closing)
-          case .generatedLSPPlugin, .hook, .orderedPermissions:
+          case .generatedLSPPlugin(_, let manifestPath, let manifest):
+            let captured = try LedgerResources.capture(url, embed: false, limits: .standard)
+            let paths = Set([
+              ".", manifestPath, (manifestPath as NSString).deletingLastPathComponent,
+            ])
+            let document = try NativeDocument(
+              bytes: Data(contentsOf: url.appendingPathComponent(manifestPath)), format: .json,
+              budget: budget)
+            matches =
+              try captured.entries.allSatisfy {
+                paths.contains($0.path) && !$0.executable
+              }
+              && generatedManifestMatches(
+                manifest, observed: document.read(.init(keys: []))?.value, selected: ledger,
+                privateGeneration: privateGeneration, store: store)
+          case .hook, .orderedPermissions:
             return (
               "unverified", "native ownership observation requires the integrated regional evidence"
             )

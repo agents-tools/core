@@ -383,7 +383,12 @@ final class UpdatePlan {
             ComponentPermissionChange(
               beforeOwner: access.before.owner, beforeGroup: access.before.group,
               beforeMode: UInt32(access.before.mode), afterOwner: access.owner,
-              afterMode: access.mode, ownerOnly: true)
+              afterMode: access.mode, ownerOnly: true,
+              members: change.memberAccessChanges.map {
+                ComponentMemberPermissionChange(
+                  path: $0.path, beforeOwner: $0.before.owner, beforeGroup: $0.before.group,
+                  beforeMode: UInt32($0.before.mode), afterOwner: $0.owner, afterMode: $0.mode)
+              })
           },
           symbolicBefore: try change.symbolicBefore.map {
             String(decoding: try ResolvedLedgerCodec.bytes($0), as: UTF8.self)

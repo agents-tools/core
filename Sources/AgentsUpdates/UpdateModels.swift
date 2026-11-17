@@ -76,4 +76,14 @@ public struct ComponentPermissionChange: Codable, Sendable, Equatable {
   public let afterOwner: UInt32
   public let afterMode: UInt32
   public let ownerOnly: Bool
+  public let members: [ComponentMemberPermissionChange]
+}
+
+public struct ComponentMemberPermissionChange: Codable, Sendable, Equatable {
+  public let path: String
+  public let beforeOwner: UInt32
+  public let beforeGroup: UInt32
+  public let beforeMode: UInt32
+  public let afterOwner: UInt32
+  public let afterMode: UInt32
 }
