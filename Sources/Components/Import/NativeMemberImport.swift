@@ -75,20 +75,24 @@ enum NativeMemberImport {
         do {
           fields = try NativeComponentFieldsV1.markdown(
             surface: NativeImportSemantics.surface(input.profile),
-            kind: isAgent ? .subagent : .command, name: fallback, fields: fields,
+            document: input.document, fieldPrefix: [], kind: isAgent ? .subagent : .command,
+            name: fallback, fields: fields,
             inPlugin: inPlugin, budget: admission.parser)
         } catch let issue as NativeComponentFieldIssue {
-          let location =
-            parsed.header.flatMap { header in
-              issue.field.first.flatMap { field in
-                Int(field).flatMap {
-                  header.pairs?.indices.contains($0) == true
-                    ? header.pairs?.sorted { $0.0 < $1.0 }[$0].1 : nil
-                }
-                  ?? header[field]
-              }
-            }?.location ?? origin
-          NativeImportSemantics.report(issue, at: location, into: &diagnostics)
+          guard issue.document == input.document else { throw ImportReadFailure.invalid }
+          var value = parsed.header
+          for field in issue.field {
+            guard let node = value else { break }
+            if let child = node[field] {
+              value = child
+            } else if let index = Int(field), let items = node.items, items.indices.contains(index)
+            {
+              value = items[index]
+            } else {
+              break
+            }
+          }
+          NativeImportSemantics.report(issue, at: value?.location ?? origin, into: &diagnostics)
           return
         }
       } else {

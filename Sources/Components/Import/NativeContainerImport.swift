@@ -30,13 +30,22 @@ enum NativeContainerImport {
     let alias = NativeImportInput.source(
       input, root: root, origin: parsed.location(), into: &diagnostics)
     let surface = NativeImportSemantics.surface(input.profile)
-    let defaults =
-      agent == .geminiCLI
-      ? [
-        "commands": "commands", "agents": "agents", "skills": "skills", "hooks": "hooks/hooks.json",
-      ]
-      : try NativeComponentFieldsV1.pluginDefaults(
-        surface: surface, explicitFields: Set(parsed.fields.keys))
+    let defaults: [String: String]
+    do {
+      defaults =
+        agent == .geminiCLI
+        ? [
+          "commands": "commands", "agents": "agents", "skills": "skills",
+          "hooks": "hooks/hooks.json",
+        ]
+        : try NativeComponentFieldsV1.pluginDefaults(
+          surface: surface, document: suffix, fieldPrefix: [],
+          explicitFields: Set(parsed.fields.keys))
+    } catch let issue as NativeComponentFieldIssue {
+      guard issue.document == suffix else { throw ImportReadFailure.invalid }
+      NativeImportSemantics.report(issue, at: parsed.fieldLocation(issue.field), into: &diagnostics)
+      return
+    }
     var documents: [String: NativeImportDocument] = [:]
     let metadata: Set<String> = ["name", "version"]
     let members: Set<String> =
@@ -213,33 +222,19 @@ enum NativeContainerImport {
       }
       do {
         _ = try NativeComponentFieldsV1.plugin(
-          surface: surface, fields: parsed.fields,
+          surface: surface, document: suffix, fieldPrefix: [], fields: parsed.fields,
           entries: try inventory(snapshot, root: root, limits: limits),
           documents: documents.mapValues { .object($0.fields) }, budget: parsed.admission.parser)
       } catch let issue as NativeComponentFieldIssue {
-        var document = parsed
-        var keys = issue.field
-        if let field = issue.field.first {
-          let sources =
-            field == "mcpServers"
-            ? mcpSources : field == "lspServers" ? lspSources : field == "hooks" ? hookSources : []
-          let external = sources.filter { $0.1.input.document != input.document }
-          // The helper does not return a document coordinate. Only a single original
-          // source can be located uniquely; multiple inputs retain their manifest location.
-          let declaredPaths =
-            parsed.fields[field]?.importStrings
-            ?? parsed.fields[field]?.importString.map { [$0] }
-          if Set(external.map { $0.1.input.document }).count == 1, let source = external.first,
-            parsed.fields[field] == nil
-              || (declaredPaths?.count == 1
-                && documents[(try? ImportInput.path(declaredPaths![0])) ?? ""]?.input.document
-                  == source.1.input.document)
-          {
-            document = source.1
-            keys = source.2 + Array(issue.field.dropFirst().filter { $0 != "default" })
-          }
+        let document: NativeImportDocument
+        if issue.document == suffix {
+          document = parsed
+        } else {
+          guard let captured = documents[issue.document] else { throw ImportReadFailure.invalid }
+          document = captured
         }
-        NativeImportSemantics.report(issue, at: document.fieldLocation(keys), into: &diagnostics)
+        NativeImportSemantics.report(
+          issue, at: document.fieldLocation(issue.field), into: &diagnostics)
       }
     }
     for field in metadata {

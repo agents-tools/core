@@ -590,7 +590,15 @@ struct ImportNativeTests {
     #expect(
       invalid.diagnostics.contains {
         $0.code == .invalidInput && $0.location.document == "bundle/.lsp.json"
-          && $0.location.span != nil
+          && $0.location.pointer == "/member[0]/member[2]" && $0.location.span != nil
+      })
+    try fixture.write("opencode.json", #"{"lsp":{"source":{"command":17}}}"#)
+    let wrapped = try SourceImport.preview(fixture.input(.openCodeConfigV2, "opencode.json"))
+    #expect(wrapped.components.isEmpty)
+    #expect(
+      wrapped.diagnostics.contains {
+        $0.code == .invalidInput && $0.location.document == "opencode.json"
+          && $0.location.pointer == "/member[0]/member[0]/member[0]"
       })
   }
 
@@ -646,28 +654,32 @@ struct ImportNativeTests {
       })
   }
 
-  @Test func multiplePluginConfigurationInputsDoNotInventAnErrorDocument() throws {
+  @Test(arguments: [false, true])
+  func multiplePluginConfigurationInputsKeepExactFailureDocument(_ firstInvalid: Bool) throws {
     let fixture = try NativeImportFixture()
     try fixture.write(
       "bundle/.claude-plugin/plugin.json",
       #"{"name":"bundle","mcpServers":["./first.json","./second.json"]}"#)
-    try fixture.write("bundle/first.json", #"{"mcpServers":{"same":{"command":"tool"}}}"#)
-    try fixture.write("bundle/second.json", #"{"mcpServers":{"same":{"command":17}}}"#)
+    let invalid = "{\n  \"mcpServers\": {\n    \"same\": {\n      \"command\": 17\n    }\n  }\n}"
+    let valid = #"{"mcpServers":{"same":{"command":"tool"}}}"#
+    try fixture.write("bundle/first.json", firstInvalid ? invalid : valid)
+    try fixture.write("bundle/second.json", firstInvalid ? valid : invalid)
+    let before = try fixture.hash()
     let result = try SourceImport.preview(
       fixture.input(.claudePluginV1, "bundle/.claude-plugin/plugin.json"))
-    #expect(result.components.isEmpty)
+    #expect(result.components.count == (firstInvalid ? 1 : 0))
+    let invalidDocument = firstInvalid ? "bundle/first.json" : "bundle/second.json"
     #expect(
       result.diagnostics.contains {
-        $0.code == .invalidInput && $0.location.document == "bundle/second.json"
+        $0.code == .invalidInput && $0.location.document == invalidDocument
+          && $0.location.pointer == "/member[0]/member[0]/member[0]"
+          && $0.location.span?.line == 4
       })
     #expect(
       !result.diagnostics.contains {
-        $0.code == .invalidInput && $0.location.document == "bundle/first.json"
+        $0.code == .invalidInput && $0.location.document != invalidDocument
       })
-    #expect(
-      result.diagnostics.contains {
-        $0.code == .invalidInput && $0.location.document == "bundle/.claude-plugin/plugin.json"
-      })
+    #expect(try fixture.hash() == before)
   }
 
   @Test func overlappingPreservationResourcesUseCompleteBindingClassification() throws {

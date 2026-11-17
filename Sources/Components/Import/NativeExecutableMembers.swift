@@ -136,14 +136,13 @@ extension NativeSourceImport {
       }
       do {
         _ = try NativeComponentFieldsV1.lsp(
-          surface: NativeImportSemantics.surface(parsed.input.profile), fields: fields,
+          surface: NativeImportSemantics.surface(parsed.input.profile),
+          document: parsed.input.document, fieldPrefix: keys + [name], fields: fields,
           budget: parsed.admission.parser)
       } catch let issue as NativeComponentFieldIssue {
-        let path = issue.field.enumerated().map { index, key in
-          index == 0 && Int(key) != nil ? fields.keys.sorted()[Int(key)!] : key
-        }
+        guard issue.document == parsed.input.document else { throw ImportReadFailure.invalid }
         NativeImportSemantics.report(
-          issue, at: parsed.fieldLocation(keys + [name] + path), into: &diagnostics)
+          issue, at: parsed.fieldLocation(issue.field), into: &diagnostics)
         continue
       }
       var executable: String
