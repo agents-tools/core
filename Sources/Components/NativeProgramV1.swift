@@ -12,7 +12,7 @@ package enum NativeProgramV1 {
   /// Frozen program shape is still the typed declaration's run, not native settings data.
   static func validateFrozenRun(_ input: ComponentRenderInput) throws {
     guard let run = input.fields["run"]?.object,
-      Set(run.keys).subtracting(["workingDirectory"]) == [
+      Set(run.keys).subtracting(["workingDirectory", "executableSource"]) == [
         "executable", "arguments", "environment",
       ],
       run["executable"]?.kind == .string, run["executable"]?.text?.isEmpty == false,
@@ -24,6 +24,14 @@ package enum NativeProgramV1 {
           && ($0.value.kind == .literal || $0.value.text?.isEmpty == false)
       })
     else { throw input.issue(["run"], .invalid, "invalid frozen typed native program") }
+    if let source = run["executableSource"] {
+      guard source.kind == .string, source.text?.isEmpty == false,
+        run["executable"]!.text!.contains("/")
+      else {
+        throw input.issue(
+          ["run", "executableSource"], .invalid, "invalid executable source coordinate")
+      }
+    }
     if let cwd = run["workingDirectory"] {
       guard let fields = cwd.object, Set(fields.keys).isSubset(of: ["path", "source"]),
         fields["path"]?.kind == .string, fields["path"]?.text?.isEmpty == false,

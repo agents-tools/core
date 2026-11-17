@@ -108,6 +108,8 @@ public struct SkillOverride: Equatable, Sendable {
 
 public struct SkillDeclaration: Equatable, Sendable {
   public var select: SkillSelection
+  /// Narrows filesystem discovery relative to the source view while retaining its containment.
+  public var path: String?
   public var exclude: [String]?
   public var agents: [AgentID]?
   public var mode: InstallMode?
@@ -137,11 +139,12 @@ public struct SkillDeclaration: Equatable, Sendable {
   public var native: NativeConfiguration
 
   public init(
-    select: SkillSelection, exclude: [String]? = nil, agents: [AgentID]? = nil,
+    select: SkillSelection, path: String? = nil, exclude: [String]? = nil, agents: [AgentID]? = nil,
     mode: InstallMode? = nil, overrides: [String: SkillOverride]? = nil,
     condition: DeclarationCondition? = nil, native: NativeConfiguration = [:]
   ) {
     self.select = select
+    self.path = path
     self.exclude = exclude
     self.agents = agents
     self.mode = mode
@@ -378,6 +381,12 @@ public struct Declaration: Equatable, Sendable {
           throw CoreError.invalidState("unknown source alias: \(alias)")
         }
         let source = sources[alias]
+        if let path = selection.path {
+          _ = try PathSafety.sanitizeSubpath(path)
+          guard source?.kind != .wellKnown else {
+            throw CoreError.invalidState("skill paths require a filesystem source")
+          }
+        }
         let modes =
           [selection.mode ?? .link] + selection.overrideDeclarations.compactMap { $0.override.mode }
         if modes.contains(.edit), alias != ".", source?.kind != .local || source?.requirement != nil
@@ -401,6 +410,20 @@ public struct Declaration: Equatable, Sendable {
           if let append = entry.prompt.append { _ = try PathSafety.sanitizeSubpath(append) }
         }
       default: break
+      }
+      let program: ExecutableDeclaration?
+      switch component {
+      case .mcpServer(_, .stdio(let value), _, _, _): program = value
+      case .hook(_, _, let value, _, _, _, _, _), .lspServer(_, let value, _, _, _, _, _):
+        program = value
+      default: program = nil
+      }
+      if let program, let alias = program.executableSource {
+        guard alias == "." || sources[alias] != nil, program.executable.contains("/") else {
+          throw CoreError.invalidState(
+            "executable source requires an existing alias and resource path")
+        }
+        _ = try PathSafety.sanitizeSubpath(program.executable)
       }
     }
     guard Set(watch ?? []).count == (watch ?? []).count else {

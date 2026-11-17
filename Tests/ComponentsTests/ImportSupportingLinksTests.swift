@@ -31,6 +31,16 @@ struct ImportSupportingLinksTests {
     #expect(member.member?.selector == .skill(name: "helper"))
     #expect(member.member?.containerRoot == "bundle")
     #expect(member.origin.document == "bundle/skills/helper/SKILL.md")
+    guard case .skills(let alias, let selection) = member.declaration else {
+      Issue.record("Expected selected skill declaration")
+      return
+    }
+    let source = try #require(proposal.sources.first { $0.alias == alias })
+    #expect(source.declaration?.location == "bundle")
+    #expect(source.declaration?.path == nil)
+    #expect(selection.path == "skills/helper")
+    #expect(source.producerPath == "bundle")
+    #expect(selection.select == .names(["helper"]))
     let preservation = try #require(proposal.resources.first { $0.kind == .skills })
     #expect(preservation.path == "skills/helper")
     #expect(preservation.requiresStandaloneSource && !preservation.requiresBindingRewrite)

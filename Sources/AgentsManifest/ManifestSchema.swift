@@ -33,7 +33,7 @@ enum ManifestSchema {
       [
         "executable": .string, "arguments": .array(.string, maximum: 10000),
         "environment": .dictionary(.named("binding"), maximum: 10000),
-        "workingDirectory": .named("resource"),
+        "workingDirectory": .named("resource"), "executableSource": .string,
       ], required: ["executable"], maximum: nil),
     "transport": .oneOf([
       .object(
@@ -41,7 +41,7 @@ enum ManifestSchema {
           "kind": .constant("stdio"), "executable": .string,
           "arguments": .array(.string, maximum: 10000),
           "environment": .dictionary(.named("binding"), maximum: 10000),
-          "workingDirectory": .named("resource"),
+          "workingDirectory": .named("resource"), "executableSource": .string,
         ], required: ["kind", "executable"], maximum: nil),
       .object(
         [
@@ -106,7 +106,7 @@ enum ManifestSchema {
         "native": .dictionary(.dictionary(.native, maximum: 10000), maximum: 10000),
         "source": .string, "select": .oneOf([.constant("all"), .array(.string, maximum: 10000)]),
         "exclude": .array(.string, maximum: 10000), "mode": .enumeration(["link", "copy", "edit"]),
-        "overrides": .dictionary(.named("override"), maximum: 10000),
+        "overrides": .dictionary(.named("override"), maximum: 10000), "path": .string,
       ], required: ["kind", "source"], maximum: nil),
     "component_instructions": .object(
       [

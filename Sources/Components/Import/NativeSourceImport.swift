@@ -354,7 +354,9 @@ enum NativeSourceImport {
           }
           transport = .stdio(
             .init(
-              executable: executable, arguments: arguments, environment: environment,
+              executable: executable,
+              executableSource: executable.contains("/") ? "native-input" : nil,
+              arguments: arguments, environment: environment,
               workingDirectory: cwd))
         }
         var resourceCoordinates: [String] = []
@@ -377,7 +379,7 @@ enum NativeSourceImport {
       } catch let issue as NativeAdapterIssue {
         diagnostics.add(
           issue.reason == .invalid ? .invalidInput : .unconverted, location,
-          "F's fixed native field profile cannot admit this member; its field/default semantics are not converted."
+          "The native field profile cannot preserve this member's field or default semantics."
         )
       } catch is CancellationError { throw CancellationError() } catch CoreError.unsafePath {
         diagnostics.add(.unsafePath, location, "Native resource escapes its format-owned root.")

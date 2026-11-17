@@ -337,10 +337,26 @@ final class Expansion {
         root: context.view.discoveryPath)
     }
     if let source = address.source, source.kind == .wellKnown {
+      guard selection.path == nil else {
+        throw LinkError.invalid("skill paths require a filesystem source", location)
+      }
       try indexSkills(
         selection, address: address, source: source, context: context, group: group,
         condition: condition, chain: chain, position: position, dependencies: dependencies)
       return
+    }
+    if let path = selection.path {
+      let path = try PathSafety.sanitizeSubpath(path)
+      let root = try PathSafety.sanitizeSubpath(address.root + "/" + path)
+      let contained = try address.contained.map {
+        try SourceSnapshot(
+          snapshot: $0.snapshot, pin: $0.pin, root: $0.root, discoveryPath: root,
+          localEnvironment: $0.localEnvironment, liveRoot: $0.liveRoot,
+          packageIdentity: $0.packageIdentity)
+      }
+      var source = address.source
+      source?.path = root
+      address = SourceAddress(id: address.id, source: source, contained: contained, root: root)
     }
     let requestedNames: [String]?
     switch selection.select {
