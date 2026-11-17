@@ -374,15 +374,25 @@ struct YAMLPatches {
     let range = owned(node, container: container)
     let comments = retainComments ? document.comments.filter { range.contains($0.lowerBound) } : []
     let kept = comments.map {
-      indentation(at: node.entryRange.lowerBound) + source.spelling($0) + newline
+      let prefix = source.spelling(lineStart($0.lowerBound)..<$0.lowerBound)
+      let indent =
+        prefix.allSatisfy { $0 == " " } ? prefix : indentation(at: node.entryRange.lowerBound)
+      return indent + source.spelling($0) + newline
     }.joined()
     // An emptied block collection must remain an explicit empty collection, preserving its field.
     let count = container.items?.count ?? container.pairs?.count ?? 0
     if count == 1 {
       let replacement = container.pairs == nil ? "[]" : "{}"
-      let indent = indentation(at: node.entryRange.lowerBound)
+      var indent = indentation(at: node.entryRange.lowerBound)
+      // An indentationless sequence aligns with its key, but a flow value must be nested.
+      if container.entryRange.lowerBound < container.range.lowerBound {
+        let column = container.entryRange.lowerBound - lineStart(container.entryRange.lowerBound)
+        if indent.utf8.count <= column { indent = String(repeating: " ", count: column + 2) }
+      }
+      var text = indent + replacement + newline + kept
+      if range.upperBound == bytes.count, bytes.last != 10 { text.removeLast(newline.count) }
       return [
-        SourcePatch(range: range, replacement: Array((indent + replacement + newline + kept).utf8))
+        SourcePatch(range: range, replacement: Array(text.utf8))
       ]
     }
     return [SourcePatch(range: range, replacement: Array(kept.utf8))]
