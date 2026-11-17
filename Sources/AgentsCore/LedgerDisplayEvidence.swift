@@ -32,10 +32,10 @@ extension TargetPrecondition {
     for (root, before) in TransactionLockContext.currentForDisplay?.createdAncestry ?? [] {
       let parent = physicalURL.deletingLastPathComponent().path
       if parent.utf8.elementsEqual(root.path.utf8) || parent.hasPrefix(root.path + "/") {
-        guard ancestry.starts(with: before.directories) else {
+        guard access.ancestry.directories.starts(with: before.directories) else {
           throw CoreError.invalidState("existing publication ancestry access changed")
         }
-        ancestry = before.directories
+        if before.directories.count < ancestry.count { ancestry = before.directories }
       }
     }
     return try ResolvedLedgerCodec.digest(
