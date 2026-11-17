@@ -2,7 +2,7 @@ import Foundation
 
 /// The version is independent of declaration, resolved and watch formats.
 struct TransactionJournal: Codable {
-  static let currentVersion = 3
+  static let currentVersion = 4
   static let fileName = "transaction.json"
   /// The next journal generation before it replaces `fileName`.
   static let incompleteFileName = "transaction.new"
@@ -38,20 +38,20 @@ struct TransactionJournal: Codable {
         throw CoreError.invalidState("finalized transaction contradicts its terminal outcome")
       }
     }
-    if !finalized {
-      let sharedRoots = Set(
-        roots.keys.compactMap { key in
-          (NativeTargetRoute.sharedRoute(key) ?? NativeTargetRoute.metadataRoute(key))?.root
-        })
-      let routes = sharedRoots.compactMap(NativeTargetRoute.sharedRoute)
-      guard sharedRoots.count == routes.count, sharedRoots.count == footprint.count,
-        routes.allSatisfy({ route in
-          footprint.contains { $0.basename.utf8.elementsEqual(route.basename.utf8) }
-        }),
-        footprint.allSatisfy({ identity in
-          routes.contains { $0.basename.utf8.elementsEqual(identity.basename.utf8) }
-        })
-      else { throw CoreError.invalidState("journal roots contradict shared footprint") }
+    for entry in entries {
+      let route =
+        NativeTargetRoute.sharedRoute(entry.path) ?? NativeTargetRoute.metadataRoute(entry.path)
+      guard entry.coordination.map({ footprint.indices.contains($0) }) ?? (route == nil) else {
+        throw CoreError.invalidState("invalid entry coordination index")
+      }
+      if let route {
+        guard let index = entry.coordination,
+          footprint[index].basename.utf8.elementsEqual(route.basename.utf8)
+        else { throw CoreError.invalidState("journal route contradicts its coordination") }
+      }
+    }
+    guard Set(entries.compactMap(\.coordination)) == Set(footprint.indices) else {
+      throw CoreError.invalidState("unreferenced journal footprint")
     }
   }
 
@@ -94,6 +94,7 @@ struct TransactionJournal: Codable {
     var progress: Progress = .queued
     var conflict: Conflict?
     var security = TransactionSecurity()
+    var coordination: Int?
     var name: String { String(path.split(separator: "/").last!) }
   }
 

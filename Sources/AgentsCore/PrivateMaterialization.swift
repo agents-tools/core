@@ -17,7 +17,7 @@ package struct RuntimeBindingValues: CustomStringConvertible, CustomDebugStringC
   package var customMirror: Mirror { Mirror(self, children: [Mirror.Child]()) }
   private let values: [String: Data]
 
-  init(_ values: [String: Data]) { self.values = values }
+  package init(_ values: [String: Data]) { self.values = values }
 
   package func value(for binding: String) throws -> Data {
     guard let value = values[binding] else {
@@ -27,7 +27,7 @@ package struct RuntimeBindingValues: CustomStringConvertible, CustomDebugStringC
   }
 }
 
-/// A physical file admitted by Core's existing, scope-owned path registrations.
+/// A file or complete named container admitted by Core's scope-owned path registrations.
 package struct MaterializationTarget {
   package let url: URL
   package let path: String
@@ -41,10 +41,18 @@ package struct PrivateAccessChange {
   package let mode: UInt32
 }
 
+package struct PrivateTreeAccessChange {
+  package let path: String
+  package let before: FileAccessEvidence
+  package let owner: UInt32
+  package let mode: UInt32
+}
+
 /// A local receipt view has no payload digest or serializable binding data.
 package struct MaterializationReceipt {
   package let generation: UUID
   package let access: FileAccessEvidence
+  package let treeAccess: [TreeMemberAccess]?
 }
 
 package struct PreparedPrivateMaterialization {
@@ -54,14 +62,18 @@ package struct PreparedPrivateMaterialization {
   package let target: MaterializationTarget
   let evidence: TargetPrecondition
   let receiptEvidence: TargetPrecondition?
+  package let memberAccessChanges: [PrivateTreeAccessChange]
+  let preimageTreeAccess: [TreeMemberAccess]?
   var ancestry: DirectoryAccessEvidence { evidence.access!.ancestry }
   var beforeAccess: FileAccessEvidence? { evidence.access?.target }
 
   /// A non-secret access segment for the enclosing candidate's displayed fingerprint.
   package func accessFingerprint() throws -> String {
     let input = PrivateAccessFingerprint(
-      target: target.path, owner: owner, before: beforeAccess, ancestry: ancestry,
-      permissionChange: accessChange != nil, receiptGeneration: receiptGeneration)
+      target: target.path, owner: owner,
+      publicationAccess: try evidence.displayEvidence(includeContent: false),
+      permissionChange: accessChange != nil, receiptGeneration: receiptGeneration,
+      members: preimageTreeAccess)
     return "sha256:" + FileHash.sha256Hex(data: try StateStore.encode(input))
   }
 }
@@ -70,10 +82,10 @@ private struct PrivateAccessFingerprint: Encodable {
   let version = 1
   let target: String
   let owner: UInt32
-  let before: FileAccessEvidence?
-  let ancestry: DirectoryAccessEvidence
+  let publicationAccess: String
   let permissionChange: Bool
   let receiptGeneration: UUID?
+  let members: [TreeMemberAccess]?
 }
 
 extension StateStore {
@@ -106,7 +118,8 @@ extension StateStore {
       return nil
     }
     _ = try preparePrivateMaterialization(target, expecting: record.generation)
-    return MaterializationReceipt(generation: record.generation, access: record.access)
+    return MaterializationReceipt(
+      generation: record.generation, access: record.access, treeAccess: record.treeAccess)
   }
 
   /// Under the caller's scope lock, preparation never calls a provider or renderer.
@@ -114,9 +127,6 @@ extension StateStore {
     _ target: MaterializationTarget, changingAccess: Bool = false,
     requiringReceiptForExistingTarget: Bool = false, expecting generation: UUID? = nil
   ) throws -> PreparedPrivateMaterialization {
-    if NativeTargetRoute.targetRoute(target.path)?.isContainer == true {
-      throw CoreError.invalidState("private materialization requires a registered regular file")
-    }
     guard target.scope.path == directory.path,
       try TransactionPaths(store: self).path(for: target.url) == target.path
     else { throw CoreError.invalidState("materialization target belongs to another scope") }
@@ -129,7 +139,7 @@ extension StateStore {
       let evidence = try TargetPrecondition(target.url).capturingAccess()
       return PreparedPrivateMaterialization(
         owner: UInt32(geteuid()), receiptGeneration: nil, accessChange: nil, target: target,
-        evidence: evidence, receiptEvidence: nil)
+        evidence: evidence, receiptEvidence: nil, memberAccessChanges: [], preimageTreeAccess: nil)
     }
     let receipt = try materializationReceipts(for: target.path)
     let record = receipt.records.targets[target.path]
@@ -140,17 +150,50 @@ extension StateStore {
     guard !requiringReceiptForExistingTarget || evidence.snapshot == nil || record != nil else {
       throw CoreError.invalidState("known materialized target is missing its private receipt")
     }
-    guard evidence.snapshot == nil || evidence.snapshot?.isRegular == true else {
-      throw CoreError.unsafePath("private materialization requires a regular file")
+    guard
+      evidence.snapshot == nil || evidence.snapshot?.isRegular == true
+        || evidence.snapshot?.identity.isDirectory == true
+    else {
+      throw CoreError.unsafePath(
+        "private materialization requires a regular file or registered container")
     }
     let parentURL = evidence.physicalURL.deletingLastPathComponent()
     let ancestry = try DirectoryAccessEvidence.capture(at: parentURL)
     var beforeAccess: FileAccessEvidence?
     var change: PrivateAccessChange?
+    var tree: [TreeMemberAccess]?
+    var memberChanges: [PrivateTreeAccessChange] = []
+    let privateMode: mode_t = evidence.snapshot?.identity.isDirectory == true ? 0o700 : 0o600
     if evidence.snapshot != nil {
       let parent = try DirectoryHandle(at: parentURL)
       beforeAccess = try parent.accessEvidence(target.url.lastPathComponent)
-      var changesAccess = beforeAccess?.mode != 0o600
+      if let snapshot = evidence.snapshot {
+        tree = try TreeMemberAccess.capture(
+          target.url.lastPathComponent, in: parent, snapshot: snapshot)
+      }
+      for member in tree ?? [] {
+        let parts = member.path.split(separator: "/").map(String.init)
+        var directory = try parent.child(target.url.lastPathComponent)
+        for name in parts.dropLast() { directory = try directory.child(name) }
+        let mode: UInt32 =
+          member.access.identity.isDirectory || member.access.mode & 0o100 != 0 ? 0o700 : 0o600
+        var changes = UInt32(member.access.mode) != mode
+        do { _ = try directory.requirePrivateAccess(parts.last!, matching: member.access) } catch {
+          changes = true
+        }
+        if changes {
+          memberChanges.append(
+            .init(path: member.path, before: member.access, owner: UInt32(geteuid()), mode: mode))
+        }
+      }
+      var changesAccess = beforeAccess?.mode != privateMode || !memberChanges.isEmpty
+      if let snapshot = evidence.snapshot {
+        do {
+          try TreeMemberAccess.verify(
+            tree, snapshot: snapshot, named: target.url.lastPathComponent,
+            in: parent, requirePrivate: true)
+        } catch { changesAccess = true }
+      }
       do { _ = try parent.requirePrivateAccess(target.url.lastPathComponent) } catch {
         changesAccess = true
       }
@@ -158,7 +201,8 @@ extension StateStore {
         guard changingAccess, let beforeAccess else {
           throw CoreError.invalidState("private materialization requires an explicit access change")
         }
-        change = PrivateAccessChange(before: beforeAccess, owner: UInt32(geteuid()), mode: 0o600)
+        change = PrivateAccessChange(
+          before: beforeAccess, owner: UInt32(geteuid()), mode: UInt32(privateMode))
       }
     }
     if let record = receipt.records.targets[target.path] {
@@ -168,11 +212,16 @@ extension StateStore {
         throw CoreError.invalidState("materialization receipt root changed")
       }
       if evidence.snapshot != nil {
-        guard evidence.snapshot?.digest == record.digest, beforeAccess == record.access else {
+        guard evidence.snapshot?.digest == record.digest, beforeAccess == record.access,
+          tree == record.treeAccess
+        else {
           throw CoreError.invalidState("materialized preimage differs from its receipt")
         }
         _ = try DirectoryHandle(at: parentURL).requirePrivateAccess(
           target.url.lastPathComponent, matching: record.access)
+        try TreeMemberAccess.verify(
+          record.treeAccess, snapshot: evidence.snapshot!, named: target.url.lastPathComponent,
+          in: DirectoryHandle(at: parentURL), requirePrivate: true)
       }
     }
     try evidence.validate()
@@ -180,7 +229,8 @@ extension StateStore {
     return PreparedPrivateMaterialization(
       owner: UInt32(geteuid()), receiptGeneration: record?.generation, accessChange: change,
       target: target,
-      evidence: evidence, receiptEvidence: receipt.evidence)
+      evidence: evidence, receiptEvidence: receipt.evidence, memberAccessChanges: memberChanges,
+      preimageTreeAccess: tree)
   }
 }
 
@@ -195,6 +245,7 @@ struct MaterializationReceipts: Codable {
     let rootIdentity: String
     let digest: String
     let access: FileAccessEvidence
+    var treeAccess: [TreeMemberAccess]? = nil
   }
 
   func validate(store: StateStore) throws {
@@ -217,9 +268,13 @@ struct MaterializationReceipts: Codable {
         throw CoreError.invalidState("invalid materialization receipt target")
       }
       guard
-        record.access.identity.kind == S_IFREG,
+        [mode_t(S_IFREG), mode_t(S_IFDIR)].contains(record.access.identity.kind),
+        record.access.identity.isDirectory == (record.treeAccess != nil),
+        record.access.identity.isDirectory
+          == (NativeTargetRoute.targetRoute(path)?.isContainer == true),
         !record.rootIdentity.isEmpty
       else { throw CoreError.invalidState("invalid materialization receipt target") }
+      if let members = record.treeAccess { try TreeMemberAccess.validateStructure(members) }
       try StateValidation.digest("sha256:" + record.digest)
     }
   }
@@ -271,8 +326,10 @@ extension StateStore {
     let evidenceWithAccess = try evidence.capturingAccess()
     let access = try directory.requirePrivateAccess(url.lastPathComponent)
     do {
-      var records = try Self.decode(
-        directory.read(url.lastPathComponent), as: MaterializationReceipts.self)
+      let bytes = try directory.read(
+        url.lastPathComponent, maximumBytes: LedgerLimits.standard.encodedBytes)
+      try LedgerAdmission.check(bytes, limits: .standard)
+      var records = try Self.decode(bytes, as: MaterializationReceipts.self)
       try records.validate(store: self)
       if let resource {
         guard records.targets.count == 1, let (key, record) = records.targets.first,
