@@ -3,10 +3,91 @@ import AgentsInstructions
 import AgentsManifest
 import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Instruction mapping read locations")
 struct MappingReadLocationsTests {
+  @Test(arguments: [
+    "base-absent", "metadata-absent", "lock-absent", "base-access", "metadata-access",
+    "lock-access",
+  ])
+  func sharedRecoveryAdmissionRepairChangesStatusWithoutChangingScope(_ damage: String) throws {
+    let f = try InstructionFixture()
+    let config = f.root.appendingPathComponent("shared-config")
+    let home = f.project.appendingPathComponent("home")
+    for directory in [config, home] {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+    let environment = RuntimeEnvironment(
+      projectDirectory: f.project, homeDirectory: home,
+      environment: ["CLAUDE_CONFIG_DIR": config.path])
+    let store = StateStore(scope: .project, environment: environment)
+    try store.save(declaration: Declaration(), ledger: ResolvedLedger())
+    try f.write("Before", to: f.project.appendingPathComponent("old-data/AGENTS.md"))
+    var binaryDirectory = Bundle(for: MappingTestBundle.self).bundleURL
+    while !FileManager.default.isExecutableFile(
+      atPath: binaryDirectory.appendingPathComponent("StateTestProcess").path),
+      binaryDirectory.path != "/"
+    {
+      binaryDirectory.deleteLastPathComponent()
+    }
+    let child = Process()
+    child.executableURL = binaryDirectory.appendingPathComponent("StateTestProcess")
+    child.arguments = [
+      f.project.path, "shared-install", "shared.ready", "--shared-config", config.path,
+    ]
+    child.environment = ProcessInfo.processInfo.environment
+    try child.run()
+    defer { do { try ProcessWait.terminate(child) } catch { Issue.record(error) } }
+    try ProcessWait.marker(f.project.appendingPathComponent("ready"), child: child, root: f.project)
+    try ProcessWait.terminate(child)
+    func mapping() throws -> InstructionMapping {
+      try #require(
+        InstructionOperations.export(projectRoots: [f.project], environment: environment).last)
+    }
+    #expect(try mapping().status == .pendingRecovery)
+    let base = config.resolvingSymlinksInPath().appendingPathComponent(".agents-native")
+    let metadata = try #require(
+      FileManager.default.contentsOfDirectory(
+        at: base, includingPropertiesForKeys: nil
+      ).first)
+    let lock = metadata.appendingPathComponent("lock")
+    let externalPaths = Set([config, base, metadata, lock].map { $0.standardizedFileURL.path })
+    let damaged = damage.hasPrefix("base") ? base : damage.hasPrefix("metadata") ? metadata : lock
+    let backup = f.root.appendingPathComponent("metadata-backup")
+    let scopeBefore = try f.snapshot(store.directory)
+    if damage.hasSuffix("absent") {
+      try FileManager.default.moveItem(at: damaged, to: backup)
+    } else {
+      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: damaged.path)
+    }
+    let beforeInspection = try f.snapshot()
+    let unavailable = try mapping()
+    guard case .unavailable = unavailable.status else {
+      Issue.record("Expected failed shared admission, got \(unavailable.status)")
+      return
+    }
+    #expect(
+      Set(unavailable.readLocations.map(\.path)).isSuperset(of: externalPaths))
+    #expect(try f.snapshot() == beforeInspection)
+    #expect(try f.snapshot(store.directory) == scopeBefore)
+    if damage.hasSuffix("absent") {
+      try FileManager.default.moveItem(at: backup, to: damaged)
+    } else {
+      try FileManager.default.setAttributes(
+        [.posixPermissions: damage == "lock-access" ? 0o600 : 0o700],
+        ofItemAtPath: damaged.path)
+    }
+    let repairedBeforeInspection = try f.snapshot()
+    let repaired = try mapping()
+    #expect(repaired.status == .pendingRecovery)
+    #expect(
+      Set(repaired.readLocations.map(\.path)).isSuperset(of: externalPaths))
+    #expect(try f.snapshot(store.directory) == scopeBefore)
+    #expect(try f.snapshot() == repairedBeforeInspection)
+  }
+
   @Test func lockedMappingReadsMetadataWithoutContentDependencies() throws {
     let f = try InstructionFixture()
     try f.section("shared")
@@ -111,3 +192,5 @@ struct MappingReadLocationsTests {
     #expect(mapping.readLocations.map(\.path) == expected)
   }
 }
+
+private final class MappingTestBundle: NSObject {}

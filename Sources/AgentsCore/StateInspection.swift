@@ -16,13 +16,19 @@ extension StateStore {
   /// Pending recovery runs the diagnostic callback instead of inspecting inconsistent state;
   /// by default it throws `CoreError.recoveryPending`.
   /// The body may be retried when a first writer creates the scope lock.
+  /// The location callback reports external shared admission dependencies before opening them,
+  /// including failed attempts, and may report a location more than once during re-admission.
   package func withReadLock<T>(
     onPendingRecovery: (() throws -> T)? = nil,
     footprint: Set<NativeTargetRoute> = [],
     installations: [SkillInstallationTarget] = [],
+    onReadLocation: ((URL) -> Void)? = nil,
     _ body: () throws -> T
   ) throws -> T {
-    try withCoordination(routes: footprint, installations: installations, writable: false) {
+    try withCoordination(
+      routes: footprint, installations: installations, writable: false,
+      onReadLocation: onReadLocation
+    ) {
       try withScopeReadLock(onPendingRecovery: onPendingRecovery, body)
     }
   }

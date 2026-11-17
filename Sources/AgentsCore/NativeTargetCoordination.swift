@@ -537,7 +537,8 @@ final class SharedResource {
 
   init(
     store: StateStore, route: NativeTargetRoute = .claudeMCPLocal, create: Bool,
-    existingRoot: ExistingProjectRoot? = nil, projectRoot: DirectoryHandle? = nil
+    existingRoot: ExistingProjectRoot? = nil, projectRoot: DirectoryHandle? = nil,
+    onReadLocation: ((URL) -> Void)? = nil
   ) throws {
     guard route.shared else { throw CoreError.invalidState("project route has no shared resource") }
     self.route = NativeTargetRoute.targetRoute(route.root)!
@@ -552,6 +553,13 @@ final class SharedResource {
     }
     ancestry = try DirectoryAccessEvidence.capture(at: url)
     identity = SharedResourceIdentity(parent: try parent.objectIdentity, basename: route.basename)
+    // Record the intended private domain before opening it: missing entries or invalid access
+    // can stop admission before a SharedResource exists.
+    let baseURL = parent.url.appendingPathComponent(Self.metadataName)
+    let metadataURL = baseURL.appendingPathComponent(identity.directoryName)
+    onReadLocation?(baseURL)
+    onReadLocation?(metadataURL)
+    onReadLocation?(metadataURL.appendingPathComponent("lock"))
     func child(_ parent: DirectoryHandle, _ name: String) throws -> DirectoryHandle? {
       if try parent.info(name) == nil {
         guard create else { return nil }
@@ -940,8 +948,18 @@ extension StateStore {
     routes: Set<NativeTargetRoute>, installations: [SkillInstallationTarget] = [], writable: Bool,
     checkpoint: (String) throws -> Void = { _ in },
     existingRoot: ExistingProjectRoot? = nil, projectRoot: DirectoryHandle? = nil,
+    onReadLocation: ((URL) -> Void)? = nil,
     _ body: () throws -> T
   ) throws -> T {
+    func recordAncestry(_ url: URL) {
+      guard let onReadLocation else { return }
+      var ancestor = url.standardizedFileURL
+      while true {
+        onReadLocation(ancestor)
+        guard ancestor.path != "/" else { return }
+        ancestor.deleteLastPathComponent()
+      }
+    }
     try existingRoot?.validate()
     if TransactionLockContext.isHeld {
       throw CoreError.invalidState("nested scope lock acquisition")
@@ -990,7 +1008,13 @@ extension StateStore {
         return leftPending == rightPending ? left.rawValue < right.rawValue : leftPending
       }
       let physicalTargets = try ordered.map { route in
-        try route.physicalDirectory(environment).appendingPathComponent(route.basename)
+        if onReadLocation != nil {
+          let authority = try route.rootAuthority(environment, validateExistingOverride: false)
+          recordAncestry(authority.loader)
+          recordAncestry(authority.logicalDirectory)
+          recordAncestry(try authority.plannedPhysicalDirectory)
+        }
+        return try route.physicalDirectory(environment).appendingPathComponent(route.basename)
       }
       for parent in physicalTargets.map({ $0.deletingLastPathComponent() }) {
         var ancestor = parent
@@ -1026,7 +1050,8 @@ extension StateStore {
         do {
           resource = try SharedResource(
             store: self, route: route, create: writable && !recovering,
-            existingRoot: existingRoot, projectRoot: projectRoot)
+            existingRoot: existingRoot, projectRoot: projectRoot,
+            onReadLocation: onReadLocation)
         } catch {
           if recovering {
             throw CoreError.invalidState(
@@ -1066,7 +1091,8 @@ extension StateStore {
           guard let metadata = resource.metadata else {
             // No metadata means no prior registered writer. Recheck after the unlocked read.
             let result = Result { try locked(index + 1) }
-            let after = try SharedResource(store: self, route: resource.route, create: false)
+            let after = try SharedResource(
+              store: self, route: resource.route, create: false, onReadLocation: onReadLocation)
             guard after.metadata == nil else { return nil }
             return try result.get()
           }
