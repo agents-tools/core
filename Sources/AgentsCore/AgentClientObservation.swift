@@ -65,8 +65,8 @@ package enum AgentClientObservation {
     guard url.isFileURL, !url.path.contains("\0") else { return .invalid }
     var info = stat()
     guard stat(url.path, &info) == 0 else { return failureState(errno) }
-    let kind = info.st_mode & mode_t(S_IFMT)
-    return kind == mode_t(directory ? S_IFDIR : S_IFREG) ? .present : .invalid
+    let kind = info.st_mode & mode_t(CPlatform.S_IFMT)
+    return kind == mode_t(directory ? CPlatform.S_IFDIR : CPlatform.S_IFREG) ? .present : .invalid
   }
 
   package static func command(
@@ -84,7 +84,7 @@ package enum AgentClientObservation {
         }
         continue
       }
-      guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else { continue }
+      guard info.st_mode & mode_t(CPlatform.S_IFMT) == mode_t(CPlatform.S_IFREG) else { continue }
       guard access(url.path, X_OK) == 0 else {
         issues.append(
           .init(path: url.path, state: failureState(errno), reason: "executable access denied"))
@@ -125,7 +125,7 @@ package enum AgentClientObservation {
     defer { close(fd) }
     var info = stat()
     guard fstat(fd, &info) == 0 else { throw ClientVersionUnknownError(.unreadableMetadata) }
-    guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
+    guard info.st_mode & mode_t(CPlatform.S_IFMT) == mode_t(CPlatform.S_IFREG) else {
       throw ClientVersionUnknownError(.nonRegularMetadata)
     }
     let limit = 1_048_576
