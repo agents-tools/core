@@ -348,13 +348,17 @@ final class UpdatePlan {
       let declaration: String?
       let targets: [String]
     }
+    var semanticCandidate = self.next
+    semanticCandidate.nativeAuthorities = nil
+    var semanticBaseline = previous
+    semanticBaseline.nativeAuthorities = nil
     let fingerprint = try ResolvedLedgerCodec.digest(
       Fingerprint(
         operation: operation, scope: store.scope, kinds: request.kinds?.map(\.rawValue).sorted(),
         names: request.names.sorted(), selectedIdentities: request.selectedIdentities?.sorted(),
         replace: request.replace,
         changingAccess: request.changingAccess,
-        candidate: self.next, baseline: previous,
+        candidate: semanticCandidate, baseline: semanticBaseline,
         declaration: try (change?.bytes ?? baseline.bytes(for: store.declarationURL)).map {
           "sha256:" + FileHash.sha256Hex(data: $0)
         },
@@ -455,7 +459,9 @@ final class UpdatePlan {
       try store.stageDeclaration(declarationChange, in: transaction, prepared: baseline)
       // Empty scopes need no lock file; a declaration edit always accompanies first deployment.
       if try store.declarationBytes(prepared: baseline) != nil || declarationChange != nil {
-        try store.stageLedger(next, limits: .standard, transaction: transaction, prepared: baseline)
+        try store.stageLedger(
+          producing: { self.aggregation.ledger }, limits: .standard, transaction: transaction,
+          prepared: baseline)
       }
       try cache.prune(references: references, transaction: transaction)
       try transaction.commit()

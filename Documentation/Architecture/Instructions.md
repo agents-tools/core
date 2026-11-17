@@ -43,10 +43,10 @@ A project's own files live in `.agent/instructions/` and are referenced by bare
 name; `.section(name:source:)` in `agents.yaml`, or `alias:name` in operation
 arguments, references a declared source. Own files are read from the
 working tree as it is. Their lock records have source `.`, the project-relative
-path and the hash, and no revision. Resolution and restore read only the named
-file, `.agent/instructions/<name>.md`, and so does adding named files, so other
-files in the container affect only listing. Restoring a lock fails with `InstructionError.ownChanged` when an
-own file's hash changed; update reads the current file.
+path and the hash, and no revision. Resolution reads only the named file, `.agent/instructions/<name>.md`, and so does
+adding named files, so other files in the container affect only listing. Locked
+restore publishes the frozen output and preserves the current own source file.
+Update reads the current file; doctor reports changes since the recorded hash.
 
 `add(InstructionAddOptions, beforeApply:)` accepts a source alias or string,
 or `.` for own files, plus an optional alias, requirement, search path, ordered

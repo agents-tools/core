@@ -77,6 +77,24 @@ extension StateStore {
     }
   }
 
+  package func stageLedger(
+    producing ledger: @escaping () throws -> ResolvedLedger, limits: LedgerLimits,
+    transaction: FileTransaction, prepared: StatePrecondition
+  ) throws {
+    let original = try prepared.bytes(for: resolvedURL)
+    try transaction.replace(
+      resolvedURL,
+      with: .prepared { directory in
+        let bytes =
+          try ResolvedLedgerCodec.replacement(ledger(), existing: original, limits: limits)
+          ?? original
+        guard let bytes else { throw CoreError.invalidState("missing deferred ledger") }
+        let file = directory.appendingPathComponent("ledger")
+        try bytes.write(to: file)
+        return file
+      }, expecting: prepared.evidence(for: resolvedURL))
+  }
+
   private func ledgerBytes(limits: LedgerLimits) throws -> Data? {
     guard let directory = try openDirectoryIfPresent(),
       try directory.info(Self.resolvedFileName) != nil

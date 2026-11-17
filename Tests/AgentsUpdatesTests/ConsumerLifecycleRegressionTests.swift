@@ -177,10 +177,6 @@ struct ConsumerLifecycleRegressionTests {
     let f = try UpdateFixture()
     try f.declare(mode: .edit, agents: [.codex])
     var declaration = try f.store.loadDeclaration()
-    declaration.components.removeAll {
-      if case .instructions = $0 { return true }
-      return false
-    }
     declaration.components.append(
       .command(
         name: "review", description: "Review", prompt: .literal("Frozen review"),
