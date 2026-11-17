@@ -60,7 +60,7 @@ final class Linking {
   let session: SourceResolutionSession
   let directPins: [ComponentKey: SourceRevision]
   let retainedLedger: ResolvedLedger?
-  let budget = LinkBudget()
+  let budget: LinkBudget
   var documents: [GroupIdentity: LinkingDocument] = [:]
   var nonGit = Set<String>()
   var git = Set<String>()
@@ -72,7 +72,7 @@ final class Linking {
   init(
     document: DeclarationDocument, store: StateStore, platform: DeclarationPlatform,
     session: SourceResolutionSession, directPins: [ComponentKey: SourceRevision],
-    retainedLedger: ResolvedLedger?
+    retainedLedger: ResolvedLedger?, budget: LinkBudget = LinkBudget()
   ) {
     self.document = document
     self.store = store
@@ -80,6 +80,7 @@ final class Linking {
     self.session = session
     self.directPins = directPins
     self.retainedLedger = retainedLedger
+    self.budget = budget
   }
 
   /// An implicit selection admits only members owned by its recorded index. The component key

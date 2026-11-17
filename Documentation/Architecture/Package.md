@@ -406,6 +406,20 @@ caller to redact; they have no automatic serialized representation.
 origin, deadline and resource-cleanup behavior in ComponentsTests. They do not
 use external services or execute configured third-party clients.
 
+Components' package-only `SourceCatalog` enumerates one explicit source and discovery
+root using temporary snapshot acquisition, existing skill/instruction readers,
+producer export linking and native import adapters. Inspection-bound IDs identify
+representable units; exported groups keep symbolic uses and complete producer-owned
+closures. Native registration and component expansion are explicit choices, including
+empty containers. Opaque registration requires the exact container name from adapter
+metadata; unresolved requirements remain visible and cannot be selected. Member
+units carry typed kind selections and byte-exact sibling exclusions. Importer
+keys retain the adapter's complete family effects, fixed contributions, requirements
+and separate producer selection claims. Captured content and paths remain source-
+relative; borrowed extraction URLs never escape. Empty selection yields no addition.
+Destination-bound composition, pin protection and publication remain in AgentsUpdates;
+the package catalog does not create update requests.
+
 ## AgentsUpdates
 
 `UpdateOperations.preview` plans all declared skills, instruction targets and
