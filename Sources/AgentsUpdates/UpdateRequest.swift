@@ -11,6 +11,7 @@ public enum UpdateOperation: Sendable {
 
 /// Selection constrains application and protects the recorded semantics of every other domain.
 public struct UpdateRequest: Sendable {
+  package var catalogPreparation: CatalogPreparation?
   package var capturedAddition: CapturedAddition?
   package var importPreparation: ImportPreparation?
   package var expectedDiscoveryFingerprint: String?

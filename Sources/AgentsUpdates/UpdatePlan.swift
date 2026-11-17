@@ -34,7 +34,8 @@ final class UpdatePlan {
   ) throws -> T {
     var request = request
     try request.capturedAddition?.validate(request, in: store)
-    let importInputs = try request.importPreparation?.capture() ?? []
+    let catalogInputs = try request.catalogPreparation?.validate() ?? []
+    let importInputs = try (request.importPreparation?.capture() ?? []) + catalogInputs
     let baseline = try StatePrecondition(store: store)
     let previous = try store.readLedger(prepared: baseline)
     try resolveSelection(&request, ledger: previous, store: store, baseline: baseline)
@@ -272,6 +273,7 @@ final class UpdatePlan {
       changingAccess: request.changingAccess, kinds: request.kinds,
       names: Set(request.names), selectedIdentities: request.selectedIdentities,
       installations: installations, retargetedInstructions: retargetedInstructions)
+    try request.catalogPreparation?.validateStandalone(replacing: aggregation.changes.map(\.url))
     if let imported = request.importPreparation {
       for resource in imported.proposal.resources
       where resource.selected && resource.requiresStandaloneSource {

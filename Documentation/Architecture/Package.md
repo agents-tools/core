@@ -406,7 +406,34 @@ caller to redact; they have no automatic serialized representation.
 origin, deadline and resource-cleanup behavior in ComponentsTests. They do not
 use external services or execute configured third-party clients.
 
+Components' package-only `SourceCatalog` enumerates one explicit source and discovery
+root using temporary snapshot acquisition, existing skill/instruction readers,
+producer export linking and native import adapters. Inspection-bound IDs identify
+representable units; exported groups keep symbolic uses and complete producer-owned
+closures. Native registration and component expansion are explicit choices, including
+empty containers. Opaque registration requires the exact container name from adapter
+metadata; unresolved requirements remain visible and cannot be selected. Member
+units carry typed kind selections and byte-exact sibling exclusions. Importer
+keys retain the adapter's complete family effects, fixed contributions, requirements
+and separate producer selection claims. Captured content and paths remain source-
+relative; borrowed extraction URLs never escape. Empty selection yields no addition.
+Destination-bound composition, pin protection and publication remain in AgentsUpdates;
+the package catalog does not create update requests.
+
 ## AgentsUpdates
+
+`UpdateOperations.inspectSource` exposes inspection-bound source choices, linked
+closures, adapter key effects, fixed contributions and typed missing inputs.
+`SourceCatalogInspection.select` composes a finite addition through the captured
+scope destination. Empty selection returns nil without acquiring a source or
+creating a request. Exported groups remain symbolic; plugin member selections
+compose into one components declaration per container, and native registration
+remains indivisible. Adapter selections rerun the owning converter with its real
+keys and retain independent raw-resource admission. Source evidence is revalidated
+at selection and preparation, including original documents behind inline imported
+intent. Public inspection values contain no borrowed extraction URLs or runtime
+environment/private freshness observations. The ordinary request retains exact
+protected pins and destination identity through preview, reprepare and apply.
 
 `UpdateOperations.preview` plans all declared skills, instruction targets and
 prompts under one shared scope lock. `withPreparedUpdate` holds one writer
