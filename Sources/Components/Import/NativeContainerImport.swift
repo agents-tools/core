@@ -54,10 +54,19 @@ enum NativeContainerImport {
       : ["commands", "agents", "skills", "hooks", "mcpServers", "lspServers", "rules"]
     NativeImportInput.unknown(
       parsed.fields, allowed: metadata.union(members), at: parsed.location(), into: &diagnostics)
-    if agent == .geminiCLI, parsed.fields["version"]?.importString?.isEmpty != false {
-      diagnostics.add(
-        .invalidInput, parsed.location(["version"]), "Native extension requires a version string.")
-      return
+    if agent == .geminiCLI {
+      guard let version = parsed.fields["version"]?.importString, !version.isEmpty else {
+        diagnostics.add(
+          .invalidInput, parsed.location(["version"]), "Native extension requires a version string."
+        )
+        return
+      }
+      if !version.contains("://") || ImportInput.safeLocator(version) {
+        diagnostics.proposal.packageMetadata = .init(
+          name: name, version: version,
+          nameLocation: parsed.fieldLocation(["name"]),
+          versionLocation: parsed.fieldLocation(["version"]))
+      }
     }
     // A container contributes typed children; .native selection/registration belongs to B/F.
     // Unknown/dependency fields are already diagnosed rather than becoming opaque payloads.
