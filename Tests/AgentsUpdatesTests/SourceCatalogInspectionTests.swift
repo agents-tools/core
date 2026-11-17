@@ -227,3 +227,111 @@ extension SourceCatalogInspectionTests {
     #expect(!FileManager.default.fileExists(atPath: f.store.declarationURL.path))
   }
 }
+
+extension SourceCatalogInspectionTests {
+  @Test(arguments: [AgentID.claudeCode, .cursor], [PluginModeDeclaration.native, .components])
+  func nativeCatalogSelectionPublishesExactRegistrationAndSelectedGeneratedMembers(
+    _ agent: AgentID, _ strategy: PluginModeDeclaration
+  ) throws {
+    let f = try UpdateFixture(scope: .user)
+    let producer = f.root.appendingPathComponent("catalog-package")
+    let container = producer.appendingPathComponent("bundle")
+    let manifest =
+      agent == .claudeCode ? ".claude-plugin/plugin.json" : ".cursor-plugin/plugin.json"
+    let profile: SourceImportProfile = agent == .claudeCode ? .claudePluginV1 : .cursorPluginV1
+    try f.write(#"{"name":"producer-package"}"#, to: container.appendingPathComponent(manifest))
+    for (name, body) in [("review", "Selected captured command"), ("other", "Unselected command")] {
+      try f.write(
+        agent == .claudeCode ? "---\ndescription: Review\n---\n\(body)\n" : body + "\n",
+        to: container.appendingPathComponent("commands/\(name).md"))
+    }
+    try f.write(
+      "---\nname: helper\ndescription: Helper\n---\nSelected captured skill\n",
+      to: container.appendingPathComponent("skills/helper/SKILL.md"))
+    let script = container.appendingPathComponent("scripts/never-run")
+    try f.write("#!/bin/sh\n# Never executed.\n", to: script)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    let before = try FileHash.folderHash(f.root)
+    let catalog = try UpdateOperations.inspectSource(
+      alias: "consumer-alias",
+      source: .init(kind: .local, location: producer.path, path: "bundle"), scope: .user,
+      environment: f.environment)
+    let native = try #require(
+      catalog.availableChoices.first {
+        if case .nativePlugin = $0.unit { return true }
+        return false
+      })
+    let metadata = try #require(
+      try SourceImport.preview(
+        .init(
+          profile: profile, root: producer,
+          document: "bundle/" + manifest)
+      ).packageMetadata)
+    #expect(native.unavailableReason == nil)
+    #expect(native.origin.document == metadata.nameLocation.document)
+    #expect(native.origin.pointer == metadata.nameLocation.pointer)
+    #expect(native.origin.span == metadata.nameLocation.span)
+    #expect(native.effects.first?.name.utf8.elementsEqual(metadata.name.utf8) == true)
+    #expect(native.effects.first?.recipients == [agent])
+    let choices: [SourceCatalogChoiceID]
+    if strategy == .native {
+      choices = [native.id]
+    } else {
+      choices = catalog.availableChoices.compactMap {
+        guard case .pluginMember(let selector) = $0.unit else { return nil }
+        switch selector {
+        case .command(name: "review"), .skill(name: "helper"): return $0.id
+        default: return nil
+        }
+      }
+      #expect(choices.count == 2)
+    }
+    let discovery = try #require(try catalog.select(choices, options: .init(agents: [agent])))
+    let request = discovery.updateRequest()
+    guard case .declaration(let declaration) = request.operation else {
+      Issue.record("missing captured declaration")
+      return
+    }
+    #expect(declaration.components.count == 1)
+    guard
+      case .plugin(_, _, _, let mode, let select, let exclude, let recipients, _, _) =
+        declaration.components[0]
+    else {
+      Issue.record("missing plugin declaration")
+      return
+    }
+    #expect(mode == strategy && recipients == [agent])
+    if strategy == .native { #expect(select == nil && exclude.isEmpty) }
+    #expect(try FileHash.folderHash(f.root) == before)
+    let preview = try UpdateOperations.preview(request, scope: .user, environment: f.environment)
+    _ = try UpdateOperations.withPreparedUpdate(request, scope: .user, environment: f.environment) {
+      try $0.apply(ifUnchangedFrom: preview.displayedFingerprint)
+    }
+    let installed = try UpdateOperations.inspect(scope: .user, environment: f.environment)
+    #expect(installed.deployments.allSatisfy { $0.status == .current })
+    let tree = try #require(
+      installed.deployments.first {
+        FileManager.default.fileExists(atPath: $0.location.appendingPathComponent(manifest).path)
+      }?.location)
+    #expect(
+      try String(contentsOf: tree.appendingPathComponent("commands/review.md"), encoding: .utf8)
+        .contains("Selected captured command"))
+    #expect(
+      try String(contentsOf: tree.appendingPathComponent("skills/helper/SKILL.md"), encoding: .utf8)
+        .contains("Selected captured skill"))
+    #expect(
+      FileManager.default.fileExists(atPath: tree.appendingPathComponent("commands/other.md").path)
+        == (strategy == .native))
+    let frozen = try FileHash.folderHash(tree)
+    let flags = try FileHash.executableFlags(tree)
+    if strategy == .native { #expect(flags["scripts/never-run"] == true) }
+    try FileManager.default.removeItem(at: producer)
+    if FileManager.default.fileExists(atPath: f.store.cacheDirectory.path) {
+      try FileManager.default.removeItem(at: f.store.cacheDirectory)
+    }
+    try FileManager.default.removeItem(at: tree)
+    _ = try UpdateOperations.restore(scope: .user, environment: f.environment)
+    #expect(try FileHash.folderHash(tree) == frozen)
+    #expect(try FileHash.executableFlags(tree) == flags)
+  }
+}
