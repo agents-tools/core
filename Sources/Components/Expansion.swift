@@ -257,7 +257,13 @@ final class Expansion {
           resources: resources, chain: chain, position: position,
           dependencies: dependencies + resources.map(\.snapshot))
       }
-    } catch let error as LinkError { throw error } catch {
+    } catch let error as LinkError { throw error } catch var error as GitError {
+      for span in chain + (position.map { [$0.span] + $0.origins } ?? [])
+      where !error.context.contains(span) {
+        error.context.append(span)
+      }
+      throw error
+    } catch {
       throw LinkError.invalid(
         String(describing: error), chain + (position.map { [$0.span] + $0.origins } ?? []))
     }
