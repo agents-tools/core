@@ -130,6 +130,8 @@ extension NativeSourceImport {
     try classifyMembers(value, parsed: parsed, keys: keys, into: &diagnostics)
     for name in servers.keys.sorted() {
       let origin = try parsed.memberLocation(keys, name: name)
+      let canonicalAttempt = diagnostics.beginCanonicalAttempt()
+      defer { diagnostics.endCanonicalAttempt(canonicalAttempt) }
       guard NativeImportInput.name(name), let fields = servers[name]?.importObject else {
         NativeImportInput.unconverted(servers[name]!, at: origin, into: &diagnostics)
         continue

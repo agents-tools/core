@@ -23,8 +23,19 @@ enum RulesyncSourceImport {
     }
     for (index, key) in sources.keys.sorted().enumerated() {
       try Task.checkCancellation()
-      guard input.selection?.contains(key) ?? true else { continue }
       let location = origin.appending("sources/member[\(index)]")
+      let repositoryKey = key.components(separatedBy: "#")[0]
+      let admissibleKey =
+        npm
+        ? RulesyncConfigImport.npmSelector(key)
+        : (ImportInput.safeLocator(repositoryKey)
+          || RulesyncConfigImport.githubLocator(repositoryKey) != nil)
+      let choice = admissibleKey ? diagnostics.beginChoice(key, at: location) : nil
+      defer { if let choice { diagnostics.endChoice(choice) } }
+      guard input.enumerateChoices || (input.selection?.contains(key) ?? true) else { continue }
+      if admissibleKey, !npm, input.sourceDeclarations[key] == nil {
+        diagnostics.requireInput(.gitSource, key: key, at: location)
+      }
       guard let entry = sources[key] as? [String: Any] else {
         diagnostics.add(.invalidInput, location, "Expected a locked source object.")
         continue

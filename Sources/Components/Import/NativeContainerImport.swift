@@ -152,8 +152,8 @@ enum NativeContainerImport {
       let relative =
         root == "."
         ? document.input.document : String(document.input.document.dropFirst(root.count + 1))
-      let rewrite = diagnostics.proposal.bindings.contains {
-        $0.location.document == document.input.document
+      let rewrite = diagnostics.proposal.preservationBindings.contains {
+        $0.document == document.input.document
       }
       try NativeImportInput.resource(
         relative, root: root, input: input, origin: document.location(), limits: limits,
@@ -210,8 +210,8 @@ enum NativeContainerImport {
       let path =
         root == "."
         ? document.input.document : String(document.input.document.dropFirst(root.count + 1))
-      let rewrite = diagnostics.proposal.bindings.contains {
-        $0.location.document == document.input.document
+      let rewrite = diagnostics.proposal.preservationBindings.contains {
+        $0.document == document.input.document
       }
       try NativeImportInput.resource(
         path, root: root, input: input, origin: document.location(), limits: limits,
@@ -260,7 +260,9 @@ enum NativeContainerImport {
       }
     }
     // Record the actual manifest, not a raw original bundle containing credential literals.
-    let rewrite = diagnostics.proposal.bindings.contains { $0.location.document == input.document }
+    let rewrite = diagnostics.proposal.preservationBindings.contains {
+      $0.document == input.document
+    }
     try NativeImportInput.resource(
       suffix, root: root, input: input, origin: parsed.location(), limits: limits, rewrite: rewrite,
       into: &diagnostics, admission: parsed.admission)
@@ -420,6 +422,9 @@ enum NativeContainerImport {
         let content = try ImportSkillContent.read(skillPath, input: input, limits: limits)
         diagnostics.proposal.diagnostics += content.diagnostics
         diagnostics.proposal.bindings += content.bindings
+        diagnostics.proposal.preservationBindings += content.bindings.filter {
+          $0.environmentVariable == nil
+        }.map(\.location)
         if !content.bindings.isEmpty { continue }
         let alias = "native-skill-" + String(diagnostics.proposal.sources.count)
         diagnostics.proposal.sources.append(

@@ -30,8 +30,16 @@ enum VercelSourceImport {
     }
     for (index, name) in skills.keys.sorted().enumerated() {
       try Task.checkCancellation()
-      guard input.selection?.contains(name) ?? true else { continue }
       let location = origin.appending("skills/member[\(index)]")
+      let choice = ImportInput.name(name) ? diagnostics.beginChoice(name, at: location) : nil
+      defer { if let choice { diagnostics.endChoice(choice) } }
+      guard input.enumerateChoices || (input.selection?.contains(name) ?? true) else { continue }
+      var contentAdmitted = false
+      defer {
+        if ImportInput.name(name), !contentAdmitted {
+          diagnostics.requireInput(.installedContent, key: name, at: location)
+        }
+      }
       guard ImportInput.name(name), let entry = skills[name] as? [String: Any],
         let source = ImportInput.string(entry["source"]),
         let sourceType = ImportInput.string(entry["sourceType"])
@@ -159,6 +167,7 @@ enum VercelSourceImport {
               "Captured actual local content has a SHA-256 pin; the recorded GitHub tree hash is not verified."
             )
           }
+          contentAdmitted = true
           let contentAlias = alias + "-content"
           diagnostics.proposal.sources.append(
             .init(

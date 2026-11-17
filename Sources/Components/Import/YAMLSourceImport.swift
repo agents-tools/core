@@ -266,7 +266,11 @@ enum YAMLSourceImport {
       for (index, item) in items.enumerated() {
         try Task.checkCancellation()
         let alias = "apm-\(group)-\(index)"
-        guard input.selection?.contains(String(index)) ?? true else { continue }
+        let choice = diagnostics.beginChoice(String(index), at: item.location)
+        defer { diagnostics.endChoice(choice) }
+        guard input.enumerateChoices || (input.selection?.contains(String(index)) ?? true) else {
+          continue
+        }
         let development = group == "devDependencies"
         let raw: String
         var requested: String?
@@ -484,7 +488,11 @@ enum YAMLSourceImport {
     }
     for (index, item) in items.enumerated() {
       try Task.checkCancellation()
-      guard input.selection?.contains(String(index)) ?? true else { continue }
+      let choice = diagnostics.beginChoice(String(index), at: item.location)
+      defer { diagnostics.endChoice(choice) }
+      guard input.enumerateChoices || (input.selection?.contains(String(index)) ?? true) else {
+        continue
+      }
       guard item.pairs != nil, let repo = item["repo_url"]?.string else {
         diagnostics.add(.invalidInput, item.location, "Expected a locked repository entry.")
         continue
@@ -626,7 +634,11 @@ enum YAMLSourceImport {
     }
     for (index, item) in items.enumerated() {
       try Task.checkCancellation()
-      guard input.selection?.contains(String(index)) ?? true else { continue }
+      let choice = diagnostics.beginChoice(String(index), at: item.location)
+      defer { diagnostics.endChoice(choice) }
+      guard input.enumerateChoices || (input.selection?.contains(String(index)) ?? true) else {
+        continue
+      }
       item.unknown(
         [
           "source", "owner", "repo", "agent", "scope", "skill", "requested_ref", "resolved_ref",
