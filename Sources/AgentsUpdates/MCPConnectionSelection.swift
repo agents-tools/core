@@ -85,9 +85,16 @@ extension MCPConnectionOperations {
             try run.workingDirectory == nil ? .live(environment.projectDirectory) : capture()
         }
         guard resources.next() == nil else { throw MCPConnectionPreparationError.invalidResource }
-        let result = try snapshot(
+        var result = try snapshot(
           selectionID: selection.identity, transport: transport,
           workingDirectory: directory, executable: executable)
+        result.durableReadLocations = Array(
+          Set(
+            result.readLocations
+              + (try UpdateOperations.readLocations(
+                declarations: [], ledgers: [ledger], store: store))
+          )
+        ).sorted { $0.path < $1.path }
         try baseline.validate()
         return result
       }

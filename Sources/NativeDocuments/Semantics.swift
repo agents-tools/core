@@ -25,7 +25,7 @@ extension Node {
     return try budget.equal(text, other.text)
   }
 
-  func fingerprint(_ budget: NativeDocumentBudget) throws -> Data {
+  func fingerprint(_ budget: NativeDocumentBudget, exactScalars: Bool = false) throws -> Data {
     var data = Data()
     func append(_ text: String) throws {
       try budget.allocate(text.utf8.count + 24, stage: "observation")
@@ -49,21 +49,40 @@ extension Node {
       }
       for m in sorted {
         try append(m.key)
-        let child = try m.node.fingerprint(budget)
+        let child = try m.node.fingerprint(budget, exactScalars: exactScalars)
         try budget.allocate(child.count, stage: "observation subtree")
         data.append(child)
       }
     } else if kind == .array {
       try append(String(elements.count))
       for e in elements {
-        let child = try e.fingerprint(budget)
+        let child = try e.fingerprint(budget, exactScalars: exactScalars)
         try budget.allocate(child.count, stage: "observation subtree")
         data.append(child)
       }
     } else {
       try append(text)
+      if exactScalars {
+        if kind == .integer || kind == .decimal { try append(raw) }
+        if kind == .atom { try append(atomType ?? "nativeAtom") }
+      }
     }
     return data
+  }
+
+  func arrayDigest(_ budget: NativeDocumentBudget) throws -> NativeArrayDigest {
+    try budget.check()
+    if let cachedArrayDigest { return cachedArrayDigest }
+    let semantic = try fingerprint(budget, exactScalars: true)
+    let domain = NativeArrayDigest.currentFormat + "\0"
+    try budget.allocate(domain.utf8.count + semantic.count + 192, stage: "native array digest")
+    try budget.step(domain.utf8.count + semantic.count)
+    var bytes = Data(domain.utf8)
+    bytes.append(semantic)
+    let result = NativeArrayDigest(
+      format: NativeArrayDigest.currentFormat, digest: FileHash.sha256Hex(data: bytes))
+    cachedArrayDigest = result
+    return result
   }
 
   func projectionFailure(_ budget: NativeDocumentBudget) throws -> NativeProjectionFailure? {

@@ -54,10 +54,9 @@ package enum NativePathStep: Equatable {
 package struct NativeOccurrenceEvidence: Equatable {
   package let idKey: String?
   package let id: String?
-  /// Versioned format owners may retain these semantic fingerprints and neighbor evidence.
-  /// They contain no byte offsets and do not authorize adoption of an observed occurrence.
-  /// Fingerprints contain value bytes: secret-bearing matches stay in E/D's private plan,
-  /// while only non-secret semantic evidence may enter a versioned locked layout.
+  /// Ephemeral semantic fingerprints contain value bytes and never grant adoption.
+  /// Keep the complete occurrence evidence in the current private operation; persisted
+  /// positions use versioned array digests or D-validated opaque private array tokens.
   package let snapshot: Data?
   /// Insertion ownership pins the complete semantic array and its position. Changed arrays
   /// require fresh evidence from an authorized same-snapshot prepare, never duplicate reselection.
@@ -154,6 +153,37 @@ package enum NativeRegionEdit {
   }
 }
 
+/// Versioned native semantics, not a NativeValue projection. The caller decides whether
+/// this digest is public-safe; private-array digests belong only in D's private receipt.
+package struct NativeArrayDigest: Equatable, CustomStringConvertible, CustomDebugStringConvertible {
+  package static let currentFormat = "native-array@1"
+  package let format: String
+  package let digest: String
+  package init(format: String, digest: String) {
+    self.format = format
+    self.digest = digest
+  }
+  package var description: String { "Native array semantic evidence." }
+  package var debugDescription: String { description }
+}
+
+/// Index refers to the caller's retaining observations. Nil means that the admitted edit
+/// removed the region or replaced its ancestry, so its old authority cannot be rematched.
+package struct NativeRegionRemap {
+  package let index: Int
+  package let observation: NativeObservation?
+}
+
+/// Index refers to trackingArrays. A present final region/digest does not confer ownership.
+/// Only canRetainToken proves unchanged structure, durable address and exact semantics.
+/// All fields remain private-operation evidence until E/D classify and encode them.
+package struct NativeArrayTransition {
+  package let index: Int
+  package let region: NativeRegion?
+  package let digest: NativeArrayDigest?
+  package let canRetainToken: Bool
+}
+
 package struct PreparedNativeChange {
   package let bytes: Data
   package let changedRegions: [NativeRegion]
@@ -161,6 +191,8 @@ package struct PreparedNativeChange {
   package let createdContainers: [NativeRegion]
   /// Input edit index associates each inserted owner with its final, rematchable observation.
   package let appendedOccurrences: [NativeAppendedOccurrence]
+  package let survivingRegions: [NativeRegionRemap]
+  package let arrayTransitions: [NativeArrayTransition]
 }
 
 package struct NativeAppendedOccurrence {
@@ -178,6 +210,8 @@ struct Member {
 
 final class Node {
   enum Kind: String { case object, array, string, integer, decimal, boolean, null, atom }
+  // Parsed document nodes are immutable; expected edit copies never inherit this cache.
+  var cachedArrayDigest: NativeArrayDigest?
   var kind: Kind
   var text: String
   var raw: String

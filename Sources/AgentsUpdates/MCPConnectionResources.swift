@@ -18,11 +18,19 @@ public struct MCPConnectionResource: Sendable, CustomStringConvertible,
     let realPath: String
   }
   private let storage: Storage
+  private let sourcePath: String
   let directory: Bool
   let byteCount: Int
   var sensitivePaths: [String] {
     if case .live(let url, let identity) = storage { return [url.path, identity.realPath] }
     return []
+  }
+  var isCaptured: Bool {
+    if case .captured = storage { true } else { false }
+  }
+  var displayPath: String { sourcePath }
+  var readLocations: [URL] {
+    sensitivePaths.map { URL(fileURLWithPath: $0).standardizedFileURL }
   }
   public var description: String { "<MCP connection resource>" }
   public var debugDescription: String { description }
@@ -40,7 +48,8 @@ public struct MCPConnectionResource: Sendable, CustomStringConvertible,
       guard directory || attributes[.type] as? FileAttributeType == .typeRegular else {
         throw MCPConnectionPreparationError.invalidResource
       }
-      return Self(storage: .live(url, identity), directory: directory, byteCount: 0)
+      return Self(
+        storage: .live(url, identity), sourcePath: url.path, directory: directory, byteCount: 0)
     } catch { throw MCPConnectionPreparationError.invalidResource }
   }
 
@@ -73,7 +82,7 @@ public struct MCPConnectionResource: Sendable, CustomStringConvertible,
       let count = (captured.entries + captured.support).reduce(0) { $0 + ($1.byteCount ?? 0) }
       return Self(
         storage: .captured(resource, captured.objects, expectedExecutableFiles),
-        directory: directory, byteCount: count)
+        sourcePath: resource.path, directory: directory, byteCount: count)
     } catch is CancellationError {
       throw CancellationError()
     } catch let error as MCPConnectionPreparationError {
@@ -136,7 +145,7 @@ public struct MCPConnectionResource: Sendable, CustomStringConvertible,
       let count = (captured.entries + captured.support).reduce(0) { $0 + ($1.byteCount ?? 0) }
       return Self(
         storage: .captured(retained, captured.objects, captured.flags),
-        directory: type == .typeDirectory, byteCount: count)
+        sourcePath: resource.path, directory: type == .typeDirectory, byteCount: count)
     }
     try FileManager.default.removeItem(at: workspace)
     return try result.get()

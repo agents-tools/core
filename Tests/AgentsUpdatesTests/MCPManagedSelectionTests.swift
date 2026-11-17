@@ -119,6 +119,14 @@ private struct ManagedMCPFixture {
     let snapshot = try MCPConnectionOperations.snapshot(
       selection: selected.occurrences[0].selection, scope: .project,
       environment: f.fixture.environment)
+    let description = MCPConnectionOperations.describe(snapshot)
+    #expect(description.executable == "./tool" && description.executableIsCaptured)
+    #expect(description.workingDirectory == "cwd" && description.workingDirectoryIsCaptured)
+    #expect(snapshot.readLocations.contains(f.store.declarationURL))
+    #expect(snapshot.readLocations.contains(f.store.resolvedURL))
+    #expect(snapshot.readLocations.contains(f.store.watchURL))
+    #expect(description.readLocations == snapshot.readLocations)
+    #expect(!snapshot.readLocations.contains { $0.path.contains("agents-mcp-capture-") })
     let spy = MCPBindingSpy(["wanted": Data("provider-canary".utf8)])
     #expect(MCPConnectionOperations.describe(snapshot).requiredBindings == ["wanted"])
     #expect(spy.calls.isEmpty)

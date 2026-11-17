@@ -148,6 +148,70 @@ final class MCPFacadeFixture {
     try fixture.unchanged()
   }
 
+  @Test func confirmationShowsFixedCommandAndSafeEndpointWithoutEffects() throws {
+    let fixture = try MCPFacadeFixture()
+    let live = try MCPConnectionResource.live(fixture.root)
+    let snapshot = try MCPConnectionOperations.snapshot(
+      selectionID: "description-only",
+      transport: .stdio(
+        .init(
+          executable: "safe-command", arguments: ["--mode", "read-only", "literal-\ncanary", "é"],
+          environment: ["TOKEN": .literal("literal-canary"), "SECRET": .secret("named-secret")])),
+      workingDirectory: live)
+    let before = try FileHash.folderHash(fixture.root)
+    let description = MCPConnectionOperations.describe(snapshot)
+    #expect(description.executable == "safe-command")
+    #expect(description.arguments == ["--mode", "read-only", "[redacted]", "é"])
+    #expect(description.workingDirectory == fixture.root.path)
+    #expect(!description.workingDirectoryIsCaptured && !description.executableIsCaptured)
+    #expect(description.endpoint == nil && description.startsOwnedProcess)
+    #expect(description.requiredBindings == ["named-secret"])
+    #expect(description.readLocations == snapshot.readLocations)
+    #expect(snapshot.readLocations.contains { $0.path == fixture.root.path })
+    #expect(try FileHash.folderHash(fixture.root) == before && fixture.text("pid") == nil)
+    for transport: MCPTransportDeclaration in [
+      .sse(
+        url: "http://127.0.0.1:1/private-path?token=query-canary",
+        headers: [
+          "Authorization": .literal("header-canary"), "X-Secret": .secret("remote-secret"),
+        ]),
+      .streamableHTTP(url: "http://127.0.0.1:1/private-path?token=query-canary", headers: [:]),
+    ] {
+      // Projection only. No test() call is admitted for these endpoint values.
+      let remote = try MCPConnectionOperations.snapshot(selectionID: "remote", transport: transport)
+      let info = MCPConnectionOperations.describe(remote)
+      #expect(info.endpoint == "http://127.0.0.1:1/[redacted]")
+      #expect(!info.startsOwnedProcess && info.executable == nil && info.arguments == nil)
+      #expect(info.workingDirectory == nil && info.readLocations.isEmpty)
+      let text = String(decoding: try JSONEncoder().encode(info), as: UTF8.self)
+      for hidden in ["private-path", "query-canary", "header-canary"] {
+        #expect(!text.contains(hidden))
+      }
+    }
+    let credentialInOrigin = try MCPConnectionOperations.snapshot(
+      selectionID: "header-redaction-only",
+      transport: .sse(
+        url: "http://127.0.0.1:1/mcp",
+        headers: [
+          "Authorization": .literal("Bearer 127.0.0.1")
+        ]))
+    #expect(
+      MCPConnectionOperations.describe(credentialInOrigin).endpoint
+        == "http://[redacted]:1/[redacted]")
+    let long = try MCPConnectionOperations.snapshot(
+      selectionID: "bounded",
+      transport: .stdio(
+        .init(
+          executable: "safe-command", arguments: ["a" + String(repeating: "é", count: 20_000)])),
+      workingDirectory: live)
+    let projected = try #require(MCPConnectionOperations.describe(long).arguments?.first)
+    #expect(projected.utf8.count == 4095 && projected.hasPrefix("a"))
+    #expect(String(data: Data(projected.utf8), encoding: .utf8) != nil)
+    #expect(fixture.text("pid") == nil)
+    try FileManager.default.removeItem(at: fixture.root)
+    #expect(MCPConnectionOperations.describe(snapshot) == description)
+  }
+
   @Test func invalidOptionsAndUnavailableEnvironmentDoNotConsultProvider() async throws {
     let fixture = try MCPFacadeFixture()
     let spy = MCPBindingSpy()
