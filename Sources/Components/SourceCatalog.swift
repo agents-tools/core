@@ -99,13 +99,16 @@ package struct SourceCatalog: Sendable {
       let snapshot = try SourceSnapshotID(
         source: source.identity(environment: store.environment), revision: "sha256:" + hash)
       try budget.snapshot(snapshot)
-      let choices = try skills.enumerated().map { index, skill in
-        try budget.contribution(chain: 0)
-        try budget.snapshot(.init(source: snapshot.source, revision: skill.artifact.digest))
-        return Choice(
-          id: .init(owner: owner, index: index), label: label("Skill", skill.name),
-          origin: .init(document: skill.name, pointer: ""), unit: .skill(skill.name),
-          graph: nil, imported: nil, artifact: skill.artifact, unavailableReason: nil)
+      let choices = try SourceResolutionSession.withTemporaryRead(store: store) { session in
+        try skills.enumerated().map { index, skill in
+          let graph = try capturedIndexSkill(
+            skill, alias: alias, source: source, store: store, platform: platform,
+            session: session, budget: budget)
+          return Choice(
+            id: .init(owner: owner, index: index), label: label("Skill", skill.name),
+            origin: .init(document: skill.name, pointer: ""), unit: .skill(skill.name),
+            graph: graph, imported: nil, artifact: skill.artifact, unavailableReason: nil)
+        }
       }
       return .init(
         alias: alias, source: source, snapshot: snapshot, root: source.path ?? ".",
@@ -349,5 +352,63 @@ package struct SourceCatalog: Sendable {
       producerIdentity: value.producerIdentity, registry: value.registry,
       resolvedRef: value.resolvedRef,
       resolvedURL: value.resolvedURL, developmentOnly: value.developmentOnly)
+  }
+}
+
+extension SourceCatalog {
+  /// Interprets the already verified artifact through ordinary skill expansion, without fetching
+  /// again or promoting the borrowed extraction to a source identity.
+  private static func capturedIndexSkill(
+    _ skill: SnapshotIndexSkill, alias: String, source: SourceDeclaration, store: StateStore,
+    platform: DeclarationPlatform, session: SourceResolutionSession, budget: LinkBudget
+  ) throws -> LinkedComponents {
+    let id = try source.identity(environment: store.environment)
+    let view = try session.fileSnapshot(
+      source: id, revision: skill.artifact.digest,
+      files: skill.files, executableFlags: skill.executableFlags)
+    try budget.snapshot(view.snapshot)
+    let declaration = Declaration(
+      sources: [alias: source],
+      components: [
+        .skills(source: alias, .init(select: .names([skill.name])))
+      ])
+    let identity = DocumentIdentity("catalog/agents.yaml")
+    let bytes =
+      try DeclarationEditPlan.bytes(
+        replacing: Declaration(), with: declaration,
+        in: nil, identity: identity, environment: store.environment) ?? Array("version: 1\n".utf8)
+    let document = try DeclarationDocument(bytes: bytes, identity: identity)
+    let root = store.scope == .user ? store.directory : store.environment.projectDirectory
+    let consumer = try SourceSnapshot(
+      snapshot: .init(source: "local:" + root.path, revision: "live"),
+      pin: nil, root: root,
+      localEnvironment: .init(
+        projectDirectory: root,
+        homeDirectory: store.environment.homeDirectory), liveRoot: root)
+    session.register(consumer)
+    let context = LinkingDocument(
+      declaration: declaration, document: document, view: consumer,
+      manifestPath: store.scope == .user ? "agents.yaml" : ".agent/agents.yaml", producer: false,
+      importedSources: [alias: view])
+    try budget.manifest(consumer.snapshot, path: context.manifestPath, bytes: bytes.count)
+    let linking = Linking(
+      document: document, store: store, platform: platform, session: session,
+      directPins: [:], retainedLedger: nil, budget: budget)
+    linking.sourceUses = [.init(source: id, root: ".", requirement: source.requirement)]
+    let expansion = Expansion(linking: linking, choices: [:], emit: true)
+    try expansion.expandRoot(context)
+    let graph = try expansion.result()
+    return LinkedComponents(
+      components: graph.components.map { component in
+        var component = component
+        component.resources = component.resources.map { resource in
+          LinkedResource(
+            snapshot: resource.snapshot, path: resource.path, hash: resource.hash,
+            executableFlags: resource.executableFlags, artifact: skill.artifact)
+        }
+        return component
+      }, references: graph.references, constraints: graph.constraints, selections: graph.selections,
+      sourceSnapshots: graph.sourceSnapshots, sourceUses: graph.sourceUses,
+      declaringSnapshots: graph.declaringSnapshots)
   }
 }
