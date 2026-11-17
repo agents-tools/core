@@ -48,6 +48,20 @@ extension StateStore {
     for route in NativeTargetRoute.allCases {
       roots[route.root] = try? route.logicalDirectory(environment).resolvingSymlinksInPath()
     }
+    for route in TransactionLockContext.current(self)?.requestedRoutes ?? []
+    where route.isNamed && route.permits(scope) {
+      roots[route.root] = try? route.physicalDirectory(environment)
+    }
+    if let ledger = try? readLedger() {
+      for deployment in ledger.deployments {
+        guard deployment.target.kind == .registered, let key = deployment.target.root,
+          let route = NativeTargetRoute.targetRoute(key), route.isNamed,
+          route.permits(scope), deployment.target.path.utf8.elementsEqual(route.basename.utf8),
+          Set(deployment.recipients).isSubset(of: route.knownReaders)
+        else { continue }
+        roots[key] = try? route.physicalDirectory(environment)
+      }
+    }
     return roots
   }
 

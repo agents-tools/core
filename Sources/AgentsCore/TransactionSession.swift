@@ -28,13 +28,17 @@ final class TransactionSession {
     self.outcome = outcome
   }
 
+  var privateTreeBytes = 0
+
   func emit(_ point: TransactionCheckpoint) throws { try checkpoint(point.name) }
 
   func persist(_ change: TransactionCheckpoint.Change) throws {
     try requireScope()
+    let bytes = try StateStore.encode(journal)
+    try LedgerAdmission.check(bytes, limits: .standard)
     try directory.replaceFile(
       TransactionJournal.fileName, through: TransactionJournal.incompleteFileName,
-      with: StateStore.encode(journal),
+      with: bytes,
       afterWrite: {
         try emit(.persisted(journal.phase, change, .written))
       },
@@ -167,6 +171,20 @@ final class TransactionSession {
       try requireParent(index)
       try entry.security.validate(entry: entry)
       let target = parents[index].url.appendingPathComponent(entry.name)
+      if let coordination = entry.coordination {
+        let identity = journal.footprint[coordination]
+        if let route = NativeTargetRoute.metadataRoute(entry.path) {
+          guard let resource = resources.first(where: { $0.identity == identity }),
+            resource.route.basename.utf8.elementsEqual(route.basename.utf8),
+            try resource.metadata?.objectIdentity == parents[index].objectIdentity,
+            entry.name == "receipt"
+          else { throw CoreError.invalidState("invalid coordinated receipt entry") }
+        } else {
+          guard try parents[index].objectIdentity == identity.parent,
+            entry.name.utf8.elementsEqual(identity.basename.utf8)
+          else { throw CoreError.invalidState("entry contradicts physical coordination") }
+        }
+      }
       guard
         !targets.contains(where: {
           PathSafety.isContained(target, in: $0) || PathSafety.isContained($0, in: target)
@@ -262,14 +280,15 @@ final class TransactionSession {
       return layouts[0]
     }
     let container = try self.container(entry.container)
+    let permitsWrite = permittingDirectoryWrite && entry.progress.permitsDirectoryWrite
     var objects: [TransactionSlot: FileSnapshot] = [:]
     for slot in TransactionSlot.objectSlots {
       if let value = try FileSnapshot.read(slot.name(index), from: container) {
-        try entry.security.validateObject(value, named: slot.name(index), in: container)
+        try entry.security.validateObject(
+          value, named: slot.name(index), in: container, permittingDirectoryWrite: permitsWrite)
         objects[slot] = value
       }
     }
-    let permitsWrite = permittingDirectoryWrite && entry.progress.permitsDirectoryWrite
     for layout in layouts where Set(layout.objects.keys) == Set(objects.keys) {
       guard
         layout.objects.allSatisfy({ slot, expected in
@@ -278,12 +297,14 @@ final class TransactionSession {
         })
       else { continue }
       if layout.kind == .prepared, let original = entry.preimage {
-        try entry.security.validateObject(original, named: entry.name, in: parents[index])
+        try entry.security.validateObject(
+          original, named: entry.name, in: parents[index], permittingDirectoryWrite: permitsWrite)
       }
       if case .object(let expected) = layout.target,
         try parents[index].info(entry.name).map(FileObjectIdentity.init) == expected.identity
       {
-        try entry.security.validateObject(expected, named: entry.name, in: parents[index])
+        try entry.security.validateObject(
+          expected, named: entry.name, in: parents[index], permittingDirectoryWrite: permitsWrite)
       }
       if try layout.target.matches(
         entry.name, from: parents[index], permittingDirectoryWrite: permitsWrite)

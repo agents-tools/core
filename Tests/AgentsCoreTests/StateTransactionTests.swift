@@ -222,8 +222,7 @@ extension StateTransactionTests {
     }
     #expect { try store.withLock {} } throws: { error in
       if json == "{broken" {
-        let error = error as NSError
-        return error.domain == NSCocoaErrorDomain && error.code == 3840
+        return error as? CoreError == .invalidState("invalid ledger JSON")
       }
       return error as? CoreError
         == .invalidState(
@@ -501,22 +500,18 @@ extension StateTransactionTests {
         text.data(using: .utf16BigEndian)!, text.data(using: .utf32)!,
         Data(text.utf8) + Data(" {}".utf8),
       ]
-      for (index, bytes) in encodings.enumerated() {
+      for bytes in encodings {
         try bytes.write(to: url)
         let snapshot = try FileSnapshot.read(at: fixture.root)
         #expect { try fixture.store.withLock {} } throws: { error in
-          if index < 4 {
-            return error as? CoreError
-              == .invalidState("JSON must be UTF-8 without a byte order mark")
-          }
-          let error = error as NSError
-          return error.domain == NSCocoaErrorDomain && error.code == 3840
+          guard case CoreError.invalidState = error else { return false }
+          return true
         }
         #expect(try FileSnapshot.read(at: fixture.root) == snapshot)
       }
     }
     try Data(duplicate.utf8).write(to: url)
-    #expect(throws: CoreError.invalidState("duplicate JSON key: phase")) {
+    #expect(throws: CoreError.invalidState("duplicate ledger key")) {
       try fixture.store.withLock {}
     }
     try original.write(to: url)

@@ -28,12 +28,22 @@ extension TargetPrecondition {
       let linkGroup: UInt32?
     }
     let access = try TargetAccessPrecondition.capture(at: physicalURL)
+    var ancestry = access.ancestry.directories
+    for (root, before) in TransactionLockContext.currentForDisplay?.createdAncestry ?? [] {
+      let parent = physicalURL.deletingLastPathComponent().path
+      if parent.utf8.elementsEqual(root.path.utf8) || parent.hasPrefix(root.path + "/") {
+        guard ancestry.starts(with: before.directories) else {
+          throw CoreError.invalidState("existing publication ancestry access changed")
+        }
+        ancestry = before.directories
+      }
+    }
     return try ResolvedLedgerCodec.digest(
       Display(
         path: physicalURL.path, exists: snapshot != nil,
         content: includeContent ? snapshot?.digest : nil,
         target: access.target.map(Access.init),
-        ancestry: access.ancestry.directories.map(Access.init), linkOwner: access.linkOwner,
+        ancestry: ancestry.map(Access.init), linkOwner: access.linkOwner,
         linkGroup: access.linkGroup))
   }
 }

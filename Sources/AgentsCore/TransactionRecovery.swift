@@ -188,6 +188,7 @@ extension FileTransaction {
   }
 
   static func readJournal(_ bytes: Data) throws -> TransactionJournal {
+    try LedgerAdmission.check(bytes, limits: .standard)
     try JSONKeys.validate(bytes)
     let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
     guard value?["version"] as? Int == TransactionJournal.currentVersion else {
@@ -350,7 +351,9 @@ extension TransactionSession {
     try requireParent(index)
     if let preimage = entry.preimage {
       let slot: TransactionSlot = entry.action == .install ? .exchanged : .deleted
-      try entry.security.validateObject(preimage, named: slot.name(index), in: container)
+      try entry.security.validateObject(
+        preimage, named: slot.name(index), in: container,
+        permittingDirectoryWrite: entry.progress.permitsDirectoryWrite)
     }
     if entry.preimage != nil {
       if entry.action == .install {

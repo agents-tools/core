@@ -742,6 +742,7 @@ final class TransactionLockContext {
   private static let threadKey = "agents.core.transaction-lock-context"
   let scopeURL: URL
   let resources: [SharedResource]
+  var createdAncestry: [(URL, DirectoryAccessEvidence)] = []
   let admissions: [SharedResource]
   let requestedRoutes: Set<NativeTargetRoute>
   let writable: Bool
@@ -765,6 +766,10 @@ final class TransactionLockContext {
     self.writable = writable
     self.requestedShared = requestedShared
     self.absentRoots = absentRoots
+  }
+
+  static var currentForDisplay: TransactionLockContext? {
+    Thread.current.threadDictionary[threadKey] as? TransactionLockContext
   }
 
   static var isHeld: Bool { Thread.current.threadDictionary[threadKey] != nil }
@@ -883,6 +888,17 @@ extension StateStore {
     if !route.shared, route.isNamed {
       let target = try route.physicalDirectory(environment).appendingPathComponent(route.basename)
       try requireProjectNativeAuthority(at: target)
+      if route.isContainer {
+        for shared in NativeTargetRoute.allCases where shared.shared {
+          let parent = try shared.rootAuthority(environment, validateExistingOverride: false)
+            .plannedPhysicalDirectory
+          if parent.path.utf8.elementsEqual(target.path.utf8)
+            || parent.path.utf8.starts(with: (target.path + "/").utf8)
+          {
+            throw CoreError.unsafePath("registered container encloses a shared native loader")
+          }
+        }
+      }
     }
     var canonical = route
     let parent: URL
@@ -929,6 +945,13 @@ extension StateStore {
     while true {
       let before = try pendingCoordinationJournal(diagnosing: !writable)
       var resources: [SharedResource] = []
+      var createdAncestry: [(URL, DirectoryAccessEvidence)] = []
+      if writable {
+        let evidence = try DirectoryAccessEvidence.capture(at: directory)
+        if evidence.directories.count < directory.pathComponents.count {
+          createdAncestry.append((directory, evidence))
+        }
+      }
       var absentRoots: [AbsentSharedRoot] = []
       let pending = before?.footprint ?? []
       var admissions: [SharedResource] = []
@@ -943,8 +966,35 @@ extension StateStore {
         let rightPending = recoveryRoutes.contains(right)
         return leftPending == rightPending ? left.rawValue < right.rawValue : leftPending
       }
+      let physicalTargets = try ordered.map { route in
+        try route.physicalDirectory(environment).appendingPathComponent(route.basename)
+      }
+      for parent in physicalTargets.map({ $0.deletingLastPathComponent() }) {
+        var ancestor = parent
+        while ancestor.path != "/" {
+          if let enclosing = try NativeTargetRoute.userRoute(
+            at: ancestor, environment: environment), enclosing.isContainer
+          {
+            throw CoreError.unsafePath("native coordination would be inside a registered container")
+          }
+          ancestor.deleteLastPathComponent()
+        }
+      }
+      for (index, target) in physicalTargets.enumerated() {
+        for (other, nested) in physicalTargets.enumerated() where index != other {
+          let parent = nested.deletingLastPathComponent()
+          if parent.path.utf8.elementsEqual(target.path.utf8)
+            || parent.path.hasPrefix(target.path + "/")
+          {
+            throw CoreError.unsafePath("nested native coordination domains conflict")
+          }
+        }
+      }
       for route in ordered {
         let recovering = recoveryRoutes.contains(route)
+        if writable, !recovering, let absent = try AbsentSharedRoot(store: self, route: route) {
+          createdAncestry.append((absent.physical, absent.ancestry))
+        }
         if !writable, !recovering, let absent = try AbsentSharedRoot(store: self, route: route) {
           absentRoots.append(absent)
           continue
@@ -983,6 +1033,7 @@ extension StateStore {
         store: self, resources: resources.sorted { $0.identity < $1.identity }, writable: writable,
         requestedShared: routes.contains(where: \.shared), absentRoots: absentRoots,
         admissions: admissions, requestedRoutes: routes)
+      context.createdAncestry = createdAncestry
       context.existingProjectRoot = existingRoot
       context.projectRootDirectory = projectRoot
       func locked(_ index: Int) throws -> T? {

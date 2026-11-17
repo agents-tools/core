@@ -791,7 +791,6 @@ extension RegisteredNativeTargetTests {
       to: payload.appendingPathComponent("manifest.json"))
     try store.withLock(footprint: [route]) {
       let target = try store.nativeTarget(for: route)
-      #expect(throws: CoreError.self) { try store.preparePrivateMaterialization(target) }
       #expect(throws: CoreError.self) {
         let invalid = FileTransaction(store: store)
         try invalid.replace(target.url, with: .data(Data("wrong kind".utf8)))

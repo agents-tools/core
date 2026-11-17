@@ -41,7 +41,7 @@ extension TransactionSession {
 
   func stage(
     _ index: Int, source: FileTransaction.Source?, expectation: FileTransaction.Expectation,
-    privateData: (() throws -> Data)? = nil
+    privateData: (() throws -> Data)? = nil, privateTree: PrivateTree? = nil
   ) throws {
     let entry = journal.entries[index]
     let parent = parents[index]
@@ -53,7 +53,7 @@ extension TransactionSession {
     if source != nil || entry.security.replacement == .privateMaterialization {
       let sealed = try construct(
         source, expectation: expectation, named: staging.name(index), index: index,
-        container: container, parent: parent, privateData: privateData)
+        container: container, parent: parent, privateData: privateData, privateTree: privateTree)
       try emit(.stage(index, .constructed))
       let capture = try FileSnapshot.capture(staging.name(index), from: container)
       try verify(source, sealed, capture: capture)
@@ -64,6 +64,8 @@ extension TransactionSession {
       if entry.security.replacement == .privateMaterialization {
         journal.entries[index].security.stagedAccess = try container.requirePrivateAccess(
           staging.name(index))
+        journal.entries[index].security.stagedTreeAccess = try TreeMemberAccess.capture(
+          staging.name(index), in: container, snapshot: snapshot, requirePrivate: true)
       }
     } else {
       try emit(.stage(index, .constructed))
@@ -82,11 +84,30 @@ extension TransactionSession {
   private func construct(
     _ source: FileTransaction.Source?, expectation: FileTransaction.Expectation,
     named name: String, index: Int, container: DirectoryHandle, parent: DirectoryHandle,
-    privateData: (() throws -> Data)?
+    privateData: (() throws -> Data)?, privateTree: PrivateTree?
   ) throws -> FileTransaction.Expectation {
     let entry = journal.entries[index]
     var expectation = expectation
     if entry.security.replacement == .privateMaterialization {
+      if let privateTree {
+        var bytes = privateTreeBytes
+        defer { privateTreeBytes = bytes }
+        try privateTree.construct(
+          named: name, in: container, bytes: &bytes,
+          admit: { snapshot, access, members in
+            // Payload writes change fixed-width digests, not the sealed evidence's shape.
+            var candidate = self.journal
+            candidate.entries[index].staged = snapshot
+            candidate.entries[index].security.stagedAccess = access
+            candidate.entries[index].security.stagedTreeAccess = members
+            candidate.entries[index].progress = .ready
+            try LedgerAdmission.check(StateStore.encode(candidate), limits: .standard)
+          },
+          validate: { try self.requirePreimage(index) })
+        expectation.kind = S_IFDIR
+        expectation.mode = 0o700
+        return expectation
+      }
       guard let privateData else {
         throw conflict(index, "missing private materialization producer")
       }
@@ -159,6 +180,9 @@ extension TransactionSession {
     capture: FileSnapshot.Capture
   ) throws {
     let snapshot = capture.snapshot
+    if let digest = expectation.objectDigest, snapshot?.digest != digest {
+      throw CoreError.invalidState("staged subtree content or executable intent mismatch")
+    }
     if let kind = expectation.kind, snapshot?.identity.kind != kind {
       throw CoreError.invalidState("staged content type mismatch")
     }
@@ -276,7 +300,7 @@ extension TransactionSession {
         records.targets[entry.path] = .init(
           generation: journal.id,
           rootIdentity: resource?.identity.orderingKey ?? identity,
-          digest: snapshot.digest, access: access)
+          digest: snapshot.digest, access: access, treeAccess: entry.security.stagedTreeAccess)
       } else {
         records.targets.removeValue(forKey: entry.path)
       }

@@ -122,11 +122,13 @@ final class DirectoryHandle {
     var names: [String] = []
     errno = 0
     while let entry = readdir(stream) {
-      let name = String(cString: platform_entry_name(entry))
+      guard let name = String(validatingCString: platform_entry_name(entry)) else {
+        throw CoreError.unsafePath("filesystem entry is not valid UTF-8")
+      }
       if name != "." && name != ".." { names.append(name) }
     }
     guard errno == 0 else { throw CoreError.unsafePath("cannot enumerate \(url.path)") }
-    return names.sorted()
+    return names.sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
   }
 
   enum RemovalStep: String { case unlinked, synced }
@@ -170,12 +172,15 @@ final class DirectoryHandle {
           throw CoreError.unsafePath("cannot make removed directory writable: \(name)")
         }
       }
+      let recorded = expected?.children.map {
+        Dictionary(uniqueKeysWithValues: $0.map { (Data($0.name.utf8), $0.snapshot) })
+      }
       for child in try directory.names() {
-        if let expected, expected.children?[child] == nil {
+        if expected != nil, recorded?[Data(child.utf8)] == nil {
           throw CoreError.invalidState("unexpected descendant during removal: \(child)")
         }
         try directory.removeContents(
-          child, expected: expected?.children?[child], identity: nil,
+          child, expected: recorded?[Data(child.utf8)], identity: nil,
           prefix: prefix.isEmpty ? child : prefix + "/" + child, checkpoint: checkpoint)
       }
       try directory.sync()
@@ -564,8 +569,8 @@ final class DirectoryHandle {
   private func synchronizeContents(_ name: String, as snapshot: FileSnapshot) throws {
     if let children = snapshot.children {
       let directory = try child(name)
-      for (child, value) in children.sorted(by: { $0.key < $1.key }) {
-        try directory.synchronizeContents(child, as: value)
+      for member in children {
+        try directory.synchronizeContents(member.name, as: member.snapshot)
       }
       try directory.sync()
     } else if snapshot.isRegular {

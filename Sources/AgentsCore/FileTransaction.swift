@@ -16,6 +16,8 @@ package final class FileTransaction {
   /// Checks for the sealed staging; nil fields are not compared.
   struct Expectation {
     var hash: String?
+    /// Complete byte-identified subtree content and execute intent, independent of inode copies.
+    var objectDigest: String?
     var executableFlags: [String: Bool]?
     var kind: mode_t?
     var mode: mode_t?
@@ -30,6 +32,7 @@ package final class FileTransaction {
     let expectation: Expectation
     let security: TransactionSecurity
     let privateData: (() throws -> Data)?
+    var privateTree: PrivateTree? = nil
     var installs: Bool { source != nil || security.replacement == .privateMaterialization }
   }
   private let store: StateStore
@@ -126,7 +129,8 @@ package final class FileTransaction {
     provider: any RuntimeBindingProvider,
     render: @escaping (RuntimeBindingValues) throws -> Data
   ) throws {
-    guard prepared.target.scope.path == store.directory.path, prepared.owner == geteuid(),
+    guard NativeTargetRoute.targetRoute(prepared.target.path)?.isContainer != true,
+      prepared.target.scope.path == store.directory.path, prepared.owner == geteuid(),
       bindings.allSatisfy({ !$0.isEmpty && !$0.contains("\0") })
     else { throw CoreError.invalidState("invalid private materialization inputs") }
     guard let receiptEvidence = prepared.receiptEvidence else {
@@ -161,6 +165,33 @@ package final class FileTransaction {
               "private materialization could not resolve or render its bindings")
           }
         }))
+  }
+
+  /// Replaces one registered named container atomically. Inputs own their bytes.
+  package func replacePrivateTree(
+    _ prepared: PreparedPrivateMaterialization, entries: [PrivateTreeEntry],
+    provider: any RuntimeBindingProvider
+  ) throws {
+    guard NativeTargetRoute.targetRoute(prepared.target.path)?.isContainer == true,
+      prepared.target.scope.path.utf8.elementsEqual(store.directory.path.utf8),
+      prepared.owner == geteuid(), let receipt = prepared.receiptEvidence
+    else { throw CoreError.invalidState("private tree requires its prepared registered container") }
+    let tree = try PrivateTree(entries: entries, provider: provider, environment: store.environment)
+    try receipt.validate()
+    let (path, evidence, previous) = try request(prepared.target.url, expecting: prepared.evidence)
+    guard path.utf8.elementsEqual(prepared.target.path.utf8) else {
+      throw CoreError.invalidState("materialization registration changed")
+    }
+    var security = previous
+    security.replacement = .privateMaterialization
+    security.permissionChange = prepared.accessChange != nil
+    security.preimageAccess = prepared.beforeAccess
+    security.preimageTreeAccess = prepared.preimageTreeAccess
+    security.ancestry = prepared.ancestry
+    requests.append(
+      Request(
+        path: path, evidence: evidence, source: nil,
+        expectation: .init(kind: S_IFDIR), security: security, privateData: nil, privateTree: tree))
   }
 
   private func queueReceipt() throws {
@@ -235,6 +266,25 @@ package final class FileTransaction {
     guard evidence.url.path == destination.standardizedFileURL.path else {
       throw CoreError.invalidState("precondition belongs to another target")
     }
+    if let snapshot = evidence.snapshot, snapshot.identity.isDirectory {
+      func holdsCoordination(_ value: FileSnapshot) -> Bool {
+        (value.children ?? []).contains { member in
+          let metadata =
+            member.name.utf8.elementsEqual(SharedResource.metadataName.utf8)
+            && member.snapshot.identity.isDirectory
+            && (member.snapshot.children ?? []).contains { domain in
+              domain.name.utf8.count == 64
+                && domain.name.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+                && domain.snapshot.identity.isDirectory
+                && domain.snapshot.child(named: "lock")?.isRegular == true
+            }
+          return metadata || holdsCoordination(member.snapshot)
+        }
+      }
+      guard !holdsCoordination(snapshot) else {
+        throw CoreError.unsafePath("container contains independently coordinated native targets")
+      }
+    }
     var security = TransactionSecurity()
     if let record = receiptState.records.targets[path] {
       let paths = TransactionPaths(store: store)
@@ -251,6 +301,10 @@ package final class FileTransaction {
       _ = try parent.requirePrivateAccess(destination.lastPathComponent, matching: record.access)
       security.preimage = .privateMaterialization
       security.preimageAccess = record.access
+      security.preimageTreeAccess = record.treeAccess
+      try TreeMemberAccess.verify(
+        record.treeAccess, snapshot: evidence.snapshot!, named: destination.lastPathComponent,
+        in: parent, requirePrivate: true)
       security.ancestry = try DirectoryAccessEvidence.capture(at: parent.url)
     }
     return (path, evidence, security)
@@ -261,16 +315,10 @@ package final class FileTransaction {
   ) throws -> Expectation {
     let physical = source.resolvingSymlinksInPath()
     let parent = try DirectoryHandle(at: physical.deletingLastPathComponent())
-    if let hash, let flags {
-      let info = try parent.info(physical.lastPathComponent)
-      return Expectation(
-        hash: hash, executableFlags: flags, kind: info.map(FileObjectIdentity.init)?.kind,
-        mode: info.map { $0.st_mode & 0o7777 })
-    }
     let capture = try FileSnapshot.capture(physical.lastPathComponent, from: parent)
     guard let snapshot = capture.snapshot else { throw CoreError.notFound(source.path) }
     return Expectation(
-      hash: hash ?? "sha256:" + capture.contentHash,
+      hash: hash ?? "sha256:" + capture.contentHash, objectDigest: snapshot.digest,
       executableFlags: flags ?? capture.executableFlags,
       kind: snapshot.identity.kind, mode: snapshot.mode)
   }
@@ -319,15 +367,17 @@ package final class FileTransaction {
       for (index, request) in requests.enumerated() {
         if let state = receiptIndices[index] {
           try session.stage(index, source: request.source, expectation: request.expectation) {
-            try StateStore.encode(
+            let bytes = try StateStore.encode(
               session.materializationReceipts(
                 previous: state.records,
                 targetRoot: NativeTargetRoute.metadataRoute(state.path)?.root))
+            try LedgerAdmission.check(bytes, limits: .standard)
+            return bytes
           }
         } else {
           try session.stage(
             index, source: request.source, expectation: request.expectation,
-            privateData: request.privateData)
+            privateData: request.privateData, privateTree: request.privateTree)
         }
       }
       try session.emit(.preconditions)
@@ -358,7 +408,16 @@ package final class FileTransaction {
 
   private func validateOverlap() throws {
     var targets: [URL] = []
+    var treeMembers = 0
+    var treeBytes = 0
     for request in requests {
+      if let tree = request.privateTree {
+        guard tree.entries.count <= LedgerLimits.standard.entries - treeMembers,
+          tree.inputBytes <= LedgerLimits.standard.resourceBytes - treeBytes
+        else { throw CoreError.invalidState("private trees exceed candidate limits") }
+        treeMembers += tree.entries.count
+        treeBytes += tree.inputBytes
+      }
       let target = request.evidence.physicalURL
       guard
         !targets.contains(where: {
@@ -426,12 +485,25 @@ package final class FileTransaction {
       roots.keys.compactMap { key in
         NativeTargetRoute.sharedRoute(key) ?? NativeTargetRoute.metadataRoute(key)
       })
-    let resources = try sharedRoutes.map { route in
+    let admittedResources = try sharedRoutes.map { route in
       guard let context = TransactionLockContext.current(store) else {
         throw CoreError.invalidState("shared transaction requires its held footprint")
       }
       return try context.resource(for: route)
     }.sorted { $0.identity < $1.identity }
+    var resources: [SharedResource] = []
+    for resource in admittedResources
+    where !resources.contains(where: { $0.identity == resource.identity }) {
+      resources.append(resource)
+    }
+    for index in entries.indices {
+      if let route = NativeTargetRoute.sharedRoute(entries[index].path)
+        ?? NativeTargetRoute.metadataRoute(entries[index].path)
+      {
+        let resource = try TransactionLockContext.current(store)!.resource(for: route)
+        entries[index].coordination = resources.firstIndex { $0.identity == resource.identity }
+      }
+    }
     let journal = TransactionJournal(
       id: id, scope: try directory.identity,
       roots: try roots.mapValues { try $0.identity }, entries: entries, containers: containers,
