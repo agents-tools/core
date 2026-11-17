@@ -183,6 +183,35 @@ struct ArrayAuthorityTests {
     }
   }
 
+  @Test func ancestorAppendPreservesStableIDNestedArrayWhileOuterArrayRotates() throws {
+    let original = try document(#"{"items":[{"id":"first","hooks":[1]}]}"#, .json)
+    let items = keyRegion("items")
+    let hooks = NativeRegion([
+      .key("items"), .occurrence(.init(idKey: "id", id: "first")), .key("hooks"),
+    ])
+    let old = try #require(try original.read(hooks))
+    let digest = try original.arrayDigest(hooks)
+    let appended = try original.prepare(
+      [
+        .append(
+          region: items, expected: owned(original, items), value: .object(["id": .string("second")])
+        )
+      ], retaining: [old], trackingArrays: [hooks, items])
+    #expect(appended.arrayTransitions[0].canRetainToken)
+    #expect(appended.arrayTransitions[0].digest == digest)
+    #expect(appended.arrayTransitions[0].region == hooks)
+    #expect(!appended.arrayTransitions[1].canRetainToken)
+    let fresh = try NativeDocument(bytes: appended.bytes, format: .json, budget: generousBudget())
+    #expect(try fresh.read(hooks)?.value == .array([.integer(1)]))
+    let surviving = try #require(appended.survivingRegions[0].observation)
+    let edited = try fresh.prepare(
+      [
+        .append(region: hooks, expected: .owned(surviving), value: .integer(2))
+      ], trackingArrays: [hooks])
+    #expect(!edited.arrayTransitions[0].canRetainToken)
+    #expect(edited.arrayTransitions[0].digest != digest)
+  }
+
   @Test func conditionalPruningReportsArrayDisappearanceAndSurvivorRemoval() throws {
     let original = try document(#"{"a":[1],"keep":true}"#, .json)
     let array = keyRegion("a")

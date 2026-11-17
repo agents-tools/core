@@ -442,7 +442,8 @@ package struct NativeDocument {
           try budget.step(
             path.reduce(0) { $0 + $1.work } + effect.address.reduce(0) { $0 + $1.work })
           let ancestor = path.starts(with: effect.address)
-          if ancestor || effect.address.starts(with: path) { touched = true }
+          let ancestorAppend = ancestor && effect.append && effect.address.count < path.count
+          if (ancestor && !ancestorAppend) || effect.address.starts(with: path) { touched = true }
           if ancestor && effect.removal { removedAncestor = true }
         }
         var region: NativeRegion?
