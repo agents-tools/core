@@ -36,7 +36,7 @@ extension ComponentDeclaration {
     }
   }
 
-  var resources: [ResourceDeclaration] {
+  package var resources: [ResourceDeclaration] {
     func run(_ value: ExecutableDeclaration) -> [ResourceDeclaration] {
       let executable =
         value.executable.contains("/") ? [ResourceDeclaration(path: value.executable)] : []
