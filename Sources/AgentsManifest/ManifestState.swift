@@ -11,14 +11,6 @@ extension StateStore {
     return try ManifestProjection.declaration(of: document, environment: environment)
   }
 
-  /// Existing skill/instruction deployment paths require a flat selection until linking and
-  /// native lowering are supplied by their owning lifecycle layer.
-  package func readDeploymentDeclaration(prepared: StatePrecondition? = nil) throws -> Declaration {
-    guard let document = try declarationDocument(prepared: prepared) else { return Declaration() }
-    try document.requireDeploymentSubset()
-    return try ManifestProjection.declaration(of: document, environment: environment)
-  }
-
   /// Plans `next` as an edit of the prepared document that `previous` was read from. Nil means
   /// no semantic change. A document that no longer projects to `previous` is a stale
   /// preparation.
@@ -41,38 +33,6 @@ extension StateStore {
     return output.map { DeclarationChange(bytes: Data($0)) }
   }
 
-  /// Commits state through the scope journal. Omitting watch preserves its existing bytes. A
-  /// scope without a declaration document receives one, so the saved lock is never orphaned.
-  package func save(
-    declaration: Declaration, resolved: ResolvedState, watch: WatchState? = nil
-  ) throws {
-    try withLock {
-      try declaration.validate(environment: environment)
-      try resolved.validate()
-      try watch?.validate()
-      let baseline = try StatePrecondition(store: self)
-      let previous = try readDeclaration(prepared: baseline)
-      _ = try readResolved(prepared: baseline)
-      var change = try planDeclaration(declaration, replacing: previous, prepared: baseline)
-      if change == nil, try declarationBytes(prepared: baseline) == nil {
-        change = DeclarationChange(
-          bytes: Data(
-            YAMLWriter.manifest(YAMLConstruction.root(declaration))))
-      }
-      let transaction = FileTransaction(store: self)
-      transaction.requireUnchanged(since: baseline)
-      try stageDeclaration(change, in: transaction, prepared: baseline)
-      try transaction.replace(
-        resolvedURL, with: .data(Self.encodeState(resolved.normalized)),
-        expecting: baseline.evidence(for: resolvedURL))
-      if let watch {
-        try transaction.replace(
-          watchURL, with: .data(Self.encode(watch)), expecting: baseline.evidence(for: watchURL))
-      }
-      try transaction.commit()
-    }
-  }
-
   /// Reads the complete declaration under a shared lock, without recovery or creating files.
   public func loadDeclaration() throws -> Declaration {
     try withReadLock { try readDeclaration() }
@@ -86,7 +46,7 @@ extension StateStore {
 
   private var declarationIdentity: DocumentIdentity { DocumentIdentity(declarationURL.path) }
 
-  private func declarationDocument(prepared: StatePrecondition?) throws -> DeclarationDocument? {
+  package func declarationDocument(prepared: StatePrecondition?) throws -> DeclarationDocument? {
     try declarationBytes(prepared: prepared).map {
       try DeclarationDocument(bytes: Array($0), identity: declarationIdentity)
     }

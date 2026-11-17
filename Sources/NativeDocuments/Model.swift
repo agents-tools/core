@@ -54,11 +54,13 @@ package enum NativePathStep: Equatable {
 package struct NativeOccurrenceEvidence: Equatable {
   package let idKey: String?
   package let id: String?
-  /// Versioned format owners may retain these semantic fingerprints and neighbor evidence.
-  /// They contain no byte offsets and do not authorize adoption of an observed occurrence.
-  /// Fingerprints contain value bytes: secret-bearing matches stay in E/D's private plan,
-  /// while only non-secret semantic evidence may enter a versioned locked layout.
+  /// Ephemeral semantic fingerprints contain value bytes and never grant adoption.
+  /// Keep the complete occurrence evidence in the current private operation; persisted
+  /// positions use versioned array digests or D-validated opaque private array tokens.
   package let snapshot: Data?
+  /// Insertion ownership pins the complete semantic array and its position. Changed arrays
+  /// require fresh evidence from an authorized same-snapshot prepare, never duplicate reselection.
+  package let arraySnapshot: Data?
   package let ordinal: Int?
   package let previous: Data?
   package let next: Data?
@@ -66,14 +68,18 @@ package struct NativeOccurrenceEvidence: Equatable {
     self.idKey = idKey
     self.id = id
     snapshot = nil
+    arraySnapshot = nil
     ordinal = nil
     previous = nil
     next = nil
   }
-  package init(snapshot: Data, ordinal: Int, previous: Data?, next: Data?) {
+  package init(
+    snapshot: Data, ordinal: Int, previous: Data?, next: Data?, arraySnapshot: Data? = nil
+  ) {
     idKey = nil
     id = nil
     self.snapshot = snapshot
+    self.arraySnapshot = arraySnapshot
     self.ordinal = ordinal
     self.previous = previous
     self.next = next
@@ -87,7 +93,8 @@ package struct NativeOccurrenceEvidence: Equatable {
       }
     }
     return same(a.idKey, b.idKey) && same(a.id, b.id) && a.snapshot == b.snapshot
-      && a.ordinal == b.ordinal && a.previous == b.previous && a.next == b.next
+      && a.arraySnapshot == b.arraySnapshot && a.ordinal == b.ordinal && a.previous == b.previous
+      && a.next == b.next
   }
 }
 
@@ -118,24 +125,63 @@ package enum NativeExpectedRegion {
 package enum NativeRegionEdit {
   case put(region: NativeRegion, expected: NativeExpectedRegion, value: NativeValue)
   case remove(region: NativeRegion, expected: NativeExpectedRegion)
+  /// Appends a distinct occurrence even when an equal unmanaged value exists. The precondition
+  /// observes the original array, or its absence. Several appends retain caller order.
+  case append(region: NativeRegion, expected: NativeExpectedRegion, value: NativeValue)
   /// The caller must hold durable creation authority for this object or array. The observation
   /// must match the preimage; removal is conditional on emptiness after all descendant edits.
   /// Unowned comments or ambiguous removal syntax retain the container.
   case pruneCreatedContainer(region: NativeRegion, observed: NativeObservation)
   var region: NativeRegion {
     switch self {
-    case .put(let r, _, _), .remove(let r, _), .pruneCreatedContainer(let r, _): r
+    case .put(let r, _, _), .append(let r, _, _), .remove(let r, _),
+      .pruneCreatedContainer(let r, _):
+      r
     }
   }
   var expected: NativeExpectedRegion {
     switch self {
-    case .put(_, let e, _), .remove(_, let e): e
+    case .put(_, let e, _), .append(_, let e, _), .remove(_, let e): e
     case .pruneCreatedContainer(_, let observation): .createdContainer(observation)
     }
+  }
+  var isAppend: Bool {
+    if case .append = self { true } else { false }
   }
   var isConditionalPrune: Bool {
     if case .pruneCreatedContainer = self { true } else { false }
   }
+}
+
+/// Versioned native semantics, not a NativeValue projection. The caller decides whether
+/// this digest is public-safe; private-array digests belong only in D's private receipt.
+package struct NativeArrayDigest: Equatable, CustomStringConvertible, CustomDebugStringConvertible {
+  package static let currentFormat = "native-array@1"
+  package let format: String
+  package let digest: String
+  package init(format: String, digest: String) {
+    self.format = format
+    self.digest = digest
+  }
+  package var description: String { "Native array semantic evidence." }
+  package var debugDescription: String { description }
+}
+
+/// Index refers to the caller's retaining observations. Nil means that the admitted edit
+/// removed the region or replaced its ancestry, so its old authority cannot be rematched.
+package struct NativeRegionRemap {
+  package let index: Int
+  package let observation: NativeObservation?
+}
+
+/// Index refers to trackingArrays. A present final region/digest does not confer ownership.
+/// Only canRetainToken proves unchanged structure, durable address and exact semantics.
+/// All fields remain private-operation evidence until E/D classify and encode them.
+package struct NativeArrayTransition {
+  package let index: Int
+  package let region: NativeRegion?
+  package let digest: NativeArrayDigest?
+  package let canRetainToken: Bool
 }
 
 package struct PreparedNativeChange {
@@ -143,6 +189,15 @@ package struct PreparedNativeChange {
   package let changedRegions: [NativeRegion]
   package let observations: [NativeObservation]
   package let createdContainers: [NativeRegion]
+  /// Input edit index associates each inserted owner with its final, rematchable observation.
+  package let appendedOccurrences: [NativeAppendedOccurrence]
+  package let survivingRegions: [NativeRegionRemap]
+  package let arrayTransitions: [NativeArrayTransition]
+}
+
+package struct NativeAppendedOccurrence {
+  package let editIndex: Int
+  package let observation: NativeObservation
 }
 
 struct Member {
@@ -155,6 +210,8 @@ struct Member {
 
 final class Node {
   enum Kind: String { case object, array, string, integer, decimal, boolean, null, atom }
+  // Parsed document nodes are immutable; expected edit copies never inherit this cache.
+  var cachedArrayDigest: NativeArrayDigest?
   var kind: Kind
   var text: String
   var raw: String

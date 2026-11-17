@@ -2,8 +2,10 @@ import AgentsCore
 import Foundation
 import NativeDocuments
 
-/// Structural semantic failures contain no imported field values or machine paths.
+/// Source coordinates are relative to the caller-selected producer root. Details contain
+/// no imported field values or machine paths.
 package struct NativeComponentFieldIssue: Error {
+  package let document: String
   package let field: [String]
   package let reason: NativeAdapterIssue.Reason
   package let detail: String
@@ -11,6 +13,8 @@ package struct NativeComponentFieldIssue: Error {
 
 /// Finite native field semantics shared by rendering and parsed source input.
 /// Callers own syntax, source locations, aggregate admission and source capture.
+/// Supply the document coordinate and the parsed value's field prefix; failures retain
+/// both, switching to producer-relative document roots for referenced plugin JSON.
 package enum NativeComponentFieldsV1 {
   static func markdownRules(_ surface: NativeClientSurface, kind: String) -> [String:
     MCPNativeField]
@@ -50,7 +54,8 @@ extension NativeComponentFieldsV1 {
   /// Explicit Claude commands/agents replace discovery; skills add and configs merge.
   /// Cursor explicit component fields replace default discovery for that component.
   package static func pluginDefaults(
-    surface: NativeClientSurface, explicitFields: Set<String>
+    surface: NativeClientSurface, document: String, fieldPrefix: [String] = [],
+    explicitFields: Set<String>
   ) throws -> [String: String] {
     let defaults: [String: String]
     switch surface {
@@ -69,18 +74,23 @@ extension NativeComponentFieldsV1 {
       ]
       return defaults.filter { !explicitFields.contains($0.key) }
     default:
-      throw failure([], .unverified, "native plugin defaults are not established for this surface")
+      throw failure(
+        document, fieldPrefix, .unverified,
+        "native plugin defaults are not established for this surface")
     }
   }
 
   /// Values are already parsed. Resource entries/documents are relative to the producer's
   /// explicit container root; they convey presence and kind, never deployment ownership.
   package static func plugin(
-    surface: NativeClientSurface, fields: [String: NativeValue],
+    surface: NativeClientSurface, document: String, fieldPrefix: [String] = [],
+    fields: [String: NativeValue],
     entries: [LedgerEntry], documents: [String: NativeValue], budget: NativeDocumentBudget
   ) throws -> [String: NativeValue] {
     guard surface == .claudeCode || surface == .cursorEditor else {
-      throw failure([], .unverified, "this container profile has no shared parsed-field contract")
+      throw failure(
+        document, fieldPrefix, .unverified,
+        "this container profile has no shared parsed-field contract")
     }
     try admit(.object(fields), budget: budget)
     try budget.step(entries.count)
@@ -91,7 +101,9 @@ extension NativeComponentFieldsV1 {
       guard (try? PathSafety.sanitizeSubpath(entry.path)) == entry.path,
         coordinates.insert(entry.path).inserted
       else {
-        throw failure([], .invalid, "native resource coordinates must be unique and contained")
+        throw failure(
+          document, fieldPrefix, .invalid,
+          "native resource coordinates must be unique and contained")
       }
     }
     for (path, value) in documents {
@@ -99,7 +111,8 @@ extension NativeComponentFieldsV1 {
       try admit(value, budget: budget)
     }
     let validator = NativePluginFieldsV1(
-      surface: surface, entries: entries, budget: budget, documents: documents)
+      surface: surface, document: document, fieldPrefix: fieldPrefix, entries: entries,
+      budget: budget, documents: documents)
     try validator.validate(fields)
     return fields
   }
@@ -107,13 +120,18 @@ extension NativeComponentFieldsV1 {
   /// One native Claude/OpenCode LSP entry, without launch or placeholder expansion. Native
   /// placeholders remain source syntax; G must convert bindings before canonical capture.
   package static func lsp(
-    surface: NativeClientSurface, fields: [String: NativeValue], budget: NativeDocumentBudget
+    surface: NativeClientSurface, document: String, fieldPrefix: [String] = [],
+    fields: [String: NativeValue],
+    budget: NativeDocumentBudget
   ) throws -> [String: NativeValue] {
     try admit(.object(fields), budget: budget)
     switch surface {
     case .claudeCode:
-      try NativePluginFieldsV1(surface: surface, entries: [], budget: budget, documents: [:])
-        .lsp(.object(fields), field: [])
+      try NativePluginFieldsV1(
+        surface: surface, document: document, fieldPrefix: fieldPrefix, entries: [], budget: budget,
+        documents: [:]
+      )
+      .lsp(.object(fields), field: [])
     case .openCodeCLI:
       // A disabled built-in entry has no explicit executable to project into a declaration.
       if fields == ["disabled": .boolean(true)] { return fields }
@@ -122,24 +140,32 @@ extension NativeComponentFieldsV1 {
       rules["env"] = .object
       rules["initialization"] = .object
       guard fields["command"] != nil else {
-        throw failure(["command"], .invalid, "native LSP server entry requires command argv")
+        throw failure(
+          document, fieldPrefix + ["command"], .invalid,
+          "native LSP server entry requires command argv")
       }
-      for (index, item) in fields.sorted(by: { $0.key < $1.key }).enumerated() {
+      for item in fields.sorted(by: { $0.key < $1.key }) {
         guard let rule = rules[item.key] else {
           throw failure(
-            [String(index)], .unverified, "native LSP field is outside the finite profile")
+            document, fieldPrefix + [item.key], .unverified,
+            "native LSP field is outside the finite profile")
         }
         guard rule.accepts(item.value) else {
-          throw failure([item.key], .invalid, "native LSP field has an invalid type or range")
+          throw failure(
+            document, fieldPrefix + [item.key], .invalid,
+            "native LSP field has an invalid type or range")
         }
         if item.key == "env", case .object(let values) = item.value,
           !values.values.allSatisfy({ if case .string = $0 { true } else { false } })
         {
-          throw failure(["env"], .invalid, "native LSP environment requires string values")
+          throw failure(
+            document, fieldPrefix + ["env"], .invalid,
+            "native LSP environment requires string values")
         }
       }
     default:
-      throw failure([], .unverified, "this surface has no shared native LSP input contract")
+      throw failure(
+        document, fieldPrefix, .unverified, "this surface has no shared native LSP input contract")
     }
     return fields
   }
@@ -148,13 +174,17 @@ extension NativeComponentFieldsV1 {
   /// used only by schemas that permit a filename fallback. inPlugin is the actual source
   /// registration context, not inferred from the desired deployment scope. No fields are dropped.
   package static func markdown(
-    surface: NativeClientSurface, kind: DeclaredComponentKind, name: String,
+    surface: NativeClientSurface, document: String, fieldPrefix: [String] = [],
+    kind: DeclaredComponentKind, name: String,
     fields: [String: NativeValue], inPlugin: Bool, budget: NativeDocumentBudget
   ) throws -> [String: NativeValue] {
     guard [.claudeCode, .cursorEditor, .geminiCLI].contains(surface),
       kind == .command || kind == .subagent,
       !(surface == .geminiCLI && kind == .command)
-    else { throw failure([], .unverified, "native Markdown input is outside this finite profile") }
+    else {
+      throw failure(
+        document, fieldPrefix, .unverified, "native Markdown input is outside this finite profile")
+    }
     try admit(.object(fields), budget: budget)
     try budget.allocate(name.utf8.count, stage: "native member coordinate")
     try budget.step(name.utf8.count)
@@ -163,11 +193,13 @@ extension NativeComponentFieldsV1 {
         (try? PathSafety.sanitizeSubpath(name)) == name
       else {
         throw failure(
-          ["name"], .invalid, "native command requires an exact contained relative name")
+          document, fieldPrefix + ["name"], .invalid,
+          "native command requires an exact contained relative name")
       }
       if surface == .cursorEditor, name.contains("/") {
         throw failure(
-          ["name"], .unverified, "nested command discovery is not established for this profile")
+          document, fieldPrefix + ["name"], .unverified,
+          "nested command discovery is not established for this profile")
       }
     }
 
@@ -180,10 +212,11 @@ extension NativeComponentFieldsV1 {
     } else if surface == .claudeCode {
       rules["description"] = .string
     }
-    for (index, item) in fields.sorted(by: { $0.key < $1.key }).enumerated() {
+    for item in fields.sorted(by: { $0.key < $1.key }) {
       guard let rule = rules[item.key] else {
         throw failure(
-          [String(index)], .unverified, "native frontmatter field has no verified projection")
+          document, fieldPrefix + [item.key], .unverified,
+          "native frontmatter field has no verified projection")
       }
       // The native source format also admits comma-separated tools. Preserve its source
       // spelling for G's canonical projection rather than guessing tool-pattern tokenization.
@@ -193,25 +226,31 @@ extension NativeComponentFieldsV1 {
         continue
       }
       guard rule.accepts(item.value) else {
-        throw failure([item.key], .invalid, "native frontmatter field has an invalid type or range")
+        throw failure(
+          document, fieldPrefix + [item.key], .invalid,
+          "native frontmatter field has an invalid type or range")
       }
     }
     if inPlugin, surface == .claudeCode, kind == .subagent, fields["permissionMode"] != nil {
       throw failure(
-        ["permissionMode"], .unsupported,
+        document, fieldPrefix + ["permissionMode"], .unsupported,
         "native plugin agents ignore this field; standalone policy projection would change meaning")
     }
     if surface == .claudeCode, kind == .command {
       for key in ["agent", "background"]
       where fields[key] != nil && fields["context"] != .string("fork") {
-        throw failure([key], .unsupported, "native command field requires context fork")
+        throw failure(
+          document, fieldPrefix + [key], .unsupported, "native command field requires context fork")
       }
     }
     if kind == .subagent {
       if surface != .cursorEditor {
         guard case .string(let description) = fields["description"], !description.isEmpty,
           fields["name"] != nil
-        else { throw failure([], .invalid, "native agent requires name and nonempty description") }
+        else {
+          throw failure(
+            document, fieldPrefix, .invalid, "native agent requires name and nonempty description")
+        }
       }
       let effective: String
       if case .string(let supplied) = fields["name"] {
@@ -221,13 +260,18 @@ extension NativeComponentFieldsV1 {
       }
       guard !effective.isEmpty, !effective.contains("/"), !effective.contains("\\"),
         effective != ".", effective != "..", !effective.utf8.contains(0)
-      else { throw failure(["name"], .invalid, "native agent requires a contained filename") }
+      else {
+        throw failure(
+          document, fieldPrefix + ["name"], .invalid, "native agent requires a contained filename")
+      }
       if surface == .claudeCode, effective.count > 256 || effective.contains(":") {
-        throw failure(["name"], .invalid, "native agent name exceeds its native domain")
+        throw failure(
+          document, fieldPrefix + ["name"], .invalid, "native agent name exceeds its native domain")
       }
       if surface == .geminiCLI {
         guard effective.range(of: #"^[a-z0-9_-]+$"#, options: .regularExpression) != nil else {
-          throw failure(["name"], .invalid, "native agent requires a lowercase slug")
+          throw failure(
+            document, fieldPrefix + ["name"], .invalid, "native agent requires a lowercase slug")
         }
         if case .array(let tools) = fields["tools"] {
           guard
@@ -235,7 +279,11 @@ extension NativeComponentFieldsV1 {
               if case .string(let tool) = $0 { return GeminiAdapter.validAgentTool(tool) }
               return false
             })
-          else { throw failure(["tools"], .invalid, "native tool is outside the pinned schema") }
+          else {
+            throw failure(
+              document, fieldPrefix + ["tools"], .invalid,
+              "native tool is outside the pinned schema")
+          }
         }
       }
     }
@@ -243,8 +291,10 @@ extension NativeComponentFieldsV1 {
   }
 
   private static func failure(
-    _ field: [String], _ reason: NativeAdapterIssue.Reason, _ detail: String
-  ) -> NativeComponentFieldIssue { .init(field: field, reason: reason, detail: detail) }
+    _ document: String, _ field: [String], _ reason: NativeAdapterIssue.Reason, _ detail: String
+  ) -> NativeComponentFieldIssue {
+    .init(document: document, field: field, reason: reason, detail: detail)
+  }
 
   private static func admit(_ value: NativeValue, budget: NativeDocumentBudget, depth: Int = 0)
     throws

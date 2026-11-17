@@ -18,11 +18,19 @@ public struct MCPConnectionResource: Sendable, CustomStringConvertible,
     let realPath: String
   }
   private let storage: Storage
+  private let sourcePath: String
   let directory: Bool
   let byteCount: Int
   var sensitivePaths: [String] {
     if case .live(let url, let identity) = storage { return [url.path, identity.realPath] }
     return []
+  }
+  var isCaptured: Bool {
+    if case .captured = storage { true } else { false }
+  }
+  var displayPath: String { sourcePath }
+  var readLocations: [URL] {
+    sensitivePaths.map { URL(fileURLWithPath: $0).standardizedFileURL }
   }
   public var description: String { "<MCP connection resource>" }
   public var debugDescription: String { description }
@@ -40,7 +48,8 @@ public struct MCPConnectionResource: Sendable, CustomStringConvertible,
       guard directory || attributes[.type] as? FileAttributeType == .typeRegular else {
         throw MCPConnectionPreparationError.invalidResource
       }
-      return Self(storage: .live(url, identity), directory: directory, byteCount: 0)
+      return Self(
+        storage: .live(url, identity), sourcePath: url.path, directory: directory, byteCount: 0)
     } catch { throw MCPConnectionPreparationError.invalidResource }
   }
 
@@ -73,12 +82,73 @@ public struct MCPConnectionResource: Sendable, CustomStringConvertible,
       let count = (captured.entries + captured.support).reduce(0) { $0 + ($1.byteCount ?? 0) }
       return Self(
         storage: .captured(resource, captured.objects, expectedExecutableFiles),
-        directory: directory, byteCount: count)
+        sourcePath: resource.path, directory: directory, byteCount: count)
     } catch is CancellationError {
       throw CancellationError()
     } catch let error as MCPConnectionPreparationError {
       throw error
     } catch { throw MCPConnectionPreparationError.invalidResource }
+  }
+
+  /// Selected retained closure only; never acquires a source or reads deployed settings.
+  static func retaining(
+    _ resource: LedgerResource, objects: [String: Data], gitRoot: URL?
+  ) throws -> Self {
+    let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "agents-mcp-capture-" + UUID().uuidString)
+    try FileManager.default.createDirectory(
+      at: workspace, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    let result = Result { () throws -> Self in
+      let root: URL
+      let path: String
+      if resource.kind == .git {
+        guard let gitRoot else { throw MCPConnectionPreparationError.invalidResource }
+        root = gitRoot
+        path = resource.path
+      } else {
+        guard resource.kind == .embedded || resource.kind == .artifact else {
+          throw MCPConnectionPreparationError.invalidResource
+        }
+        let destination = workspace.appendingPathComponent("tree")
+        var embedded = resource
+        embedded.kind = .embedded
+        try LedgerResources.materialize(embedded, objects: objects, at: destination)
+        root = resource.support.isEmpty ? workspace : destination
+        path = resource.support.isEmpty ? "tree" : resource.path
+      }
+      let view = try SourceSnapshot(
+        snapshot: .init(source: "selected", revision: resource.hash), pin: nil, root: root)
+      let file = try view.resource(path)
+      try view.validateResourceTree(file)
+      let captured = try LedgerResources.capture(
+        file, embed: true, limits: .standard, sourceRoot: root)
+      func metadata(_ entries: [LedgerEntry]) -> [LedgerEntry] {
+        entries.map { entry in
+          var entry = entry
+          entry.object = nil
+          return entry
+        }
+      }
+      guard captured.hash == resource.hash,
+        metadata(captured.entries) == metadata(resource.entries),
+        metadata(captured.support) == metadata(resource.support)
+      else { throw MCPConnectionPreparationError.resourceChanged }
+      let type =
+        try FileManager.default.attributesOfItem(atPath: file.resolvingSymlinksInPath().path)[.type]
+        as? FileAttributeType
+      guard type == .typeDirectory || type == .typeRegular else {
+        throw MCPConnectionPreparationError.invalidResource
+      }
+      let retained = LedgerResource(
+        kind: .embedded, source: "selected", path: path, hash: captured.hash,
+        entries: captured.entries, support: captured.support)
+      let count = (captured.entries + captured.support).reduce(0) { $0 + ($1.byteCount ?? 0) }
+      return Self(
+        storage: .captured(retained, captured.objects, captured.flags),
+        sourcePath: resource.path, directory: type == .typeDirectory, byteCount: count)
+    }
+    try FileManager.default.removeItem(at: workspace)
+    return try result.get()
   }
 
   func materialize(in workspace: URL, name: String) throws -> URL {

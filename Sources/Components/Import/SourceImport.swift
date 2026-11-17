@@ -3,6 +3,12 @@ import AgentsManifest
 import Foundation
 
 package enum SourceImport {
+  package static func admitsSourceCoordinates(_ source: SourceDeclaration) -> Bool {
+    source.kind == .git && ImportInput.safeLocator(source.location)
+      && (try? source.transportIdentity()) != nil
+      && (source.path.map { (try? ImportInput.path($0)) != nil } ?? true)
+  }
+
   /// First explicit config is the project config; the optional second is its local override.
   /// Each document retains its caller-selected boundary. No ambient config or lock is discovered.
   package static func previewRulesync(
@@ -26,6 +32,7 @@ package enum SourceImport {
         .invalidInput, .init(document: configs.first?.document ?? "", pointer: ""),
         "Explicit rulesync inputs are not admitted.")
     }
+    diagnostics.finalizeBindings()
     return diagnostics.proposal
   }
 
@@ -36,7 +43,8 @@ package enum SourceImport {
   ) throws -> SourceImportProposal {
     try Task.checkCancellation()
     let origin = ImportLocation(document: input.document, pointer: "")
-    var diagnostics = ImportDiagnostics(proposal: .init(profile: input.profile))
+    var diagnostics = ImportDiagnostics(
+      proposal: .init(profile: input.profile), bindingReferences: input.bindingReferences)
     do {
       _ = try ImportInput.path(input.document)
       switch input.profile {
@@ -47,6 +55,12 @@ package enum SourceImport {
       case .rulesyncSourcesV1, .rulesyncNpmV1:
         try RulesyncSourceImport.read(
           ImportInput.document(input, limits: limits), input: input, into: &diagnostics)
+      case .claudeSettingsV1, .codexConfigV1, .cursorMCPV1, .geminiSettingsV1, .openCodeConfigV2,
+        .claudePluginV1, .cursorPluginV1, .geminiExtensionV1, .claudeMarketplaceV1,
+        .claudeCommandV1, .claudeAgentV1, .geminiCommandV1, .geminiAgentV1,
+        .openCodeCommandV2, .openCodeAgentV2, .cursorCommandV1, .cursorAgentV1, .geminiIgnoreV1,
+        .cursorIgnoreV1:
+        try NativeSourceImport.read(input, limits: limits, into: &diagnostics)
       case .vercelProjectV2, .vercelUserV3:
         try VercelSourceImport.read(
           ImportInput.document(input, limits: limits), input: input, limits: limits,
@@ -65,6 +79,7 @@ package enum SourceImport {
       diagnostics.add(
         .invalidInput, origin, "Input is not an admitted, readable producer document.")
     }
+    diagnostics.finalizeBindings()
     return diagnostics.proposal
   }
 }

@@ -562,19 +562,6 @@ package struct SourceCache {
     }
   }
 
-  /// Retains pins and any cache tree containing a live edit source.
-  /// The caller holds the scope lock, including during failure cleanup.
-  package func prune(
-    referencedBy lock: ResolvedState, watch: WatchState? = nil,
-    transaction: FileTransaction? = nil
-  ) throws {
-    var references = try RetentionReferences(resolved: lock, cache: self)
-    try references.include(watch: watch ?? store.readWatch())
-    let transactionToUse = transaction ?? FileTransaction(store: store)
-    try prune(references: references, transaction: transactionToUse)
-    if transaction == nil { try transactionToUse.commit() }
-  }
-
   /// The caller stages pruning with its state generation and commits only after validation.
   package func prune(references: RetentionReferences, transaction: FileTransaction) throws {
     guard let scope = try store.openDirectoryIfPresent(), try scope.info("cache") != nil else {
@@ -604,7 +591,10 @@ package struct SourceCache {
           let tree = try source.child(pin)
           if !paths.contains(tree.url.path) && !edited(tree.url) { unused.append(pin) }
         }
-        if unused.count == pins.count {
+        let retainsDescendant = paths.contains {
+          PathSafety.isContained(URL(fileURLWithPath: $0), in: source.url)
+        }
+        if unused.count == pins.count && !retainsDescendant {
           try transactionToUse.delete(materialized.url.appendingPathComponent(name))
         } else {
           for pin in unused { try transactionToUse.delete(source.url.appendingPathComponent(pin)) }

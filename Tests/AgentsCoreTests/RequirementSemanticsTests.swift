@@ -77,26 +77,22 @@ struct RequirementSemanticsTests {
         == .upToNextMinor(from: "1.2.0"))
   }
 
-  @Test func fullLedgerComparisonPreservesBytesAndCanonicalizesOnlyRequiredRewrites() throws {
-    let bytes = Data(
-      #"{ "version":1,"sources":{"intranet/team":{"kind":"git","url":"https://intranet/team.git","requirement":{"from":"v1.2.0","to":"2.0.0+meta"}}},"skills":{},"instructions":{"sections":[],"chatgpt":{},"targets":{}}}"#
-        .utf8)
-    let old = try StateStore.decode(bytes, as: ResolvedState.self)
-    try old.validate()
-    var next = old
-    next.sources["intranet/team"] = LockedSource(
-      kind: .git, url: "https://intranet/team.git", requirement: .upToNextMajor(from: "1.2.0"))
-    #expect(try next.replacementData(comparedTo: bytes) == nil)
-    #expect(old.sources["intranet/team"]?.requirement == .range(from: "v1.2.0", to: "2.0.0+meta"))
-    next.sources["other/team"] = LockedSource(
-      kind: .git, url: "https://other/team.git", requirement: .range(from: "v1.2.0", to: "1.3.0"))
-    let rewritten = try #require(try next.replacementData(comparedTo: bytes))
-    let root = try #require(JSONSerialization.jsonObject(with: rewritten) as? [String: Any])
-    let sources = try #require(root["sources"] as? [String: [String: Any]])
-    #expect(sources["intranet/team"]?["requirement"] as? [String: String] == ["from": "1.2.0"])
-    #expect(
-      sources["other/team"]?["requirement"] as? [String: String] == ["upToNextMinor": "1.2.0"])
-    #expect(try ResolvedState().replacementData(comparedTo: nil) != nil)
+  @Test func fullLedgerComparisonPreservesEquivalentRequirementBytes() throws {
+    var ledger = ResolvedLedger()
+    ledger.sources["source"] = LedgerSource(
+      kind: .git, transport: "https://intranet/team.git",
+      revision: String(repeating: "a", count: 40))
+    ledger.sourceUses = [
+      .init(source: "source", root: ".", requirement: .range(from: "v1.2.0", to: "2.0.0+meta"))
+    ]
+    let bytes = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
+    var next = ledger
+    next.sourceUses[0].requirement = .upToNextMajor(from: "1.2.0")
+    #expect(try ResolvedLedgerCodec.replacement(next, existing: bytes, limits: .standard) == nil)
+    next.sourceUses[0].requirement = .upToNextMinor(from: "1.2.0")
+    let changed = try #require(
+      try ResolvedLedgerCodec.replacement(next, existing: bytes, limits: .standard))
+    #expect(try ResolvedLedgerCodec.decode(changed, limits: .standard) == next)
   }
 
   @Test func resolutionSessionsReuseEqualRequirementsAndCacheKeysKeepExactPins() throws {

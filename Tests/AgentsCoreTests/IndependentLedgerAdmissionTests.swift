@@ -1,5 +1,6 @@
 import AgentsManifest
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -199,7 +200,7 @@ struct IndependentLedgerAdmissionTests {
     }
   }
 
-  @Test func publicV1OperationsPreserveV2Files() throws {
+  @Test func publicDomainInventoryReadsV2WithoutRewriting() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
     let environment = RuntimeEnvironment(
@@ -209,10 +210,7 @@ struct IndependentLedgerAdmissionTests {
     let declaration = try Data(contentsOf: store.declarationURL)
     let bytes = try wire(fixture())
     try bytes.write(to: store.resolvedURL)
-    #expect(throws: (any Error).self) { _ = try store.loadResolved() }
-    #expect(throws: (any Error).self) {
-      try store.save(declaration: Declaration(), resolved: ResolvedState())
-    }
+    #expect(try store.loadResolved() == ResolvedState())
     #expect(try Data(contentsOf: store.resolvedURL) == bytes)
     #expect(try Data(contentsOf: store.declarationURL) == declaration)
   }

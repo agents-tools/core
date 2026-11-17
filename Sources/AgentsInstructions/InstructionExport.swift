@@ -25,10 +25,13 @@ public struct InstructionMapping: Sendable, Equatable {
   public let root: URL
   public let status: Status
   public let targets: [Target]
-  /// Project sections whose placement needs content that is not available without fetching: an
-  /// own file changed since the lock, or a source section missing from the cache.
+  /// Locked sections without a target assignment.
   public let unplaced: [LockedSection]
   public let prompts: [String: [LockedSection]]
+  /// Durable scope-state and read-admission dependencies, including absent leaves and their
+  /// scope directory. Retained for every status; section bodies, append files and target bytes
+  /// are not read by this mapping operation.
+  public let readLocations: [URL]
 }
 
 extension InstructionOperations {
@@ -52,48 +55,56 @@ extension InstructionOperations {
   {
     let store = StateStore(scope: scope, environment: environment)
     let root = scope == .project ? environment.projectDirectory : environment.homeDirectory
+    var readLocations = Set(
+      (store.readLockLocations + [store.declarationURL, store.resolvedURL, store.watchURL])
+        .map(\.standardizedFileURL))
+    func locations() -> [URL] { readLocations.sorted { $0.path < $1.path } }
     func empty(_ status: InstructionMapping.Status) -> InstructionMapping {
       InstructionMapping(
-        scope: scope, root: root, status: status, targets: [], unplaced: [], prompts: [:])
+        scope: scope, root: root, status: status, targets: [], unplaced: [], prompts: [:],
+        readLocations: locations())
     }
     do {
       return try store.withReadLock(
         onPendingRecovery: { empty(.pendingRecovery) },
+        onReadLocation: { readLocations.insert($0.standardizedFileURL) },
         {
-          _ = try store.readDeploymentDeclaration()
+          _ = try store.readDeclaration()
           guard try store.existingData(store.resolvedURL) != nil else {
             return empty(.missingLock)
           }
-          let lock = try store.readResolved()
-          let sources = InstructionSources(store: store)
-          var directories: [String: String] = [:]
-          var unplaced: [LockedSection] = []
-          // User targets receive every section, so their placement needs no content.
-          for record in lock.instructions.sections {
-            if scope == .user {
-              directories[InstructionSources.identity(record)] = ""
-            } else if let unit = try? sources.restore(
-              [record], sources: lock.sources, cachedOnly: true
-            ).first {
-              directories[InstructionSources.identity(record)] = unit.section.directory
-            } else {
-              unplaced.append(record)
+          let ledger = try store.readLedger()
+          let lock = try ledger.domainProjection(roots: store.ledgerRoots)
+          let targets = try ledger.deployments.filter {
+            ["agents/instructions@1", "agents/claude-import@1"].contains($0.route)
+          }.map { deployment in
+            let file = try deployment.target.resolve(roots: store.ledgerRoots)
+            let key = InstructionLocations.key(for: file, store: store)
+            let sections = try deployment.owners.compactMap { ledger.components[$0] }.compactMap {
+              component throws -> LockedSection? in
+              guard deployment.ownership != .importBlock, let id = component.resources.first,
+                let resource = ledger.resources[id]
+              else { return nil }
+              return LockedSection(
+                name: component.name,
+                source: try lock.instructions.sections.first(where: {
+                  $0.name == component.name && $0.path == resource.path
+                    && $0.revision == component.revision
+                })?.source
+                  ?? (try ledger.sourceIdentity(component.source, roots: store.ledgerRoots)),
+                revision: component.revision, version: component.version,
+                artifact: resource.artifact,
+                path: resource.path,
+                hash: component.payload.object?["sourceHash"]?.text ?? resource.hash)
             }
-          }
-          let targets = lock.instructions.targets.sorted { $0.key < $1.key }.map { key, value in
-            let directory = scope == .project ? (key as NSString).deletingLastPathComponent : ""
             return InstructionMapping.Target(
-              target: key, agents: value.agents,
-              sections: value.import != nil
-                ? []
-                : lock.instructions.sections.filter {
-                  directories[InstructionSources.identity($0)] == directory
-                },
-              import: value.import)
-          }
+              target: key, agents: deployment.recipients, sections: sections,
+              import: deployment.importReference)
+          }.sorted { $0.target < $1.target }
+
           return InstructionMapping(
-            scope: scope, root: root, status: .locked, targets: targets, unplaced: unplaced,
-            prompts: lock.instructions.chatgpt.mapValues(\.sections))
+            scope: scope, root: root, status: .locked, targets: targets, unplaced: [],
+            prompts: lock.instructions.chatgpt.mapValues(\.sections), readLocations: locations())
         })
     } catch {
       return empty(.unavailable(String(describing: error)))

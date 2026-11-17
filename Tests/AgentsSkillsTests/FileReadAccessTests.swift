@@ -34,8 +34,7 @@ struct SkillFileReadAccessTests {
     try fixture.skill("demo", body: "Original")
     let directory = fixture.repo.appendingPathComponent("skills/demo")
     let file = directory.appendingPathComponent("SKILL.md")
-    let lifecycle = try SkillLifecycle(store: fixture.store(), provider: WellKnownProvider())
-    try withUnreadableFile(file) { _ = try lifecycle.entries(directory) }
+    try withUnreadableFile(file) { _ = try SkillLifecycle.entries(directory) }
     try withUnreadableFile(file) { _ = try Discovery.parseSkill(at: file) }
   }
 

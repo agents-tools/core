@@ -2,7 +2,7 @@ import CPlatform
 import Foundation
 
 /// Closed physical routes; regional ownership and rendering belong to the native adapter.
-package enum NativeTargetRoute: String, Codable, Sendable, CaseIterable {
+enum FixedNativeTargetRoute: String, Codable, Sendable, CaseIterable {
   case claudeMCPProject = "claude.mcp.project"
   case claudeMCPLocal = "claude.mcp.local"
   case claudeMCPUser = "claude.mcp.user"
@@ -17,10 +17,20 @@ package enum NativeTargetRoute: String, Codable, Sendable, CaseIterable {
   case openCodeMCPUserJSON = "opencode.mcp.user.json"
   case openCodeMCPUserJSONC = "opencode.mcp.user.jsonc"
 
+  case claudeSettingsProject = "claude.settings.project"
+  case claudeSettingsUser = "claude.settings.user"
+  case codexHooksProject = "codex.hooks.project"
+  case codexHooksUser = "codex.hooks.user"
+  case cursorHooksProject = "cursor.hooks.project"
+  case cursorHooksUser = "cursor.hooks.user"
+  case geminiIgnoreProject = "gemini.ignore.project"
+  case cursorIgnoreProject = "cursor.ignore.project"
+
   var shared: Bool {
     switch self {
     case .claudeMCPLocal, .claudeMCPUser, .codexMCPUser, .geminiMCPUser, .cursorMCPUser,
-      .openCodeMCPUserJSON, .openCodeMCPUserJSONC:
+      .openCodeMCPUserJSON, .openCodeMCPUserJSONC, .claudeSettingsUser, .codexHooksUser,
+      .cursorHooksUser:
       true
     default: false
     }
@@ -42,6 +52,10 @@ package enum NativeTargetRoute: String, Codable, Sendable, CaseIterable {
   var metadata: String { root == Self.globalRoot ? Self.metadataRoot : root + "-metadata" }
   var basename: String {
     switch self {
+    case .claudeSettingsProject, .claudeSettingsUser: "settings.json"
+    case .codexHooksProject, .codexHooksUser, .cursorHooksProject, .cursorHooksUser: "hooks.json"
+    case .geminiIgnoreProject: ".geminiignore"
+    case .cursorIgnoreProject: ".cursorignore"
     case .claudeMCPProject: ".mcp.json"
     case .claudeMCPLocal, .claudeMCPUser: ".claude.json"
     case .codexMCPProject, .codexMCPUser: "config.toml"
@@ -54,7 +68,8 @@ package enum NativeTargetRoute: String, Codable, Sendable, CaseIterable {
   static var sharedRoutes: [Self] {
     [
       .claudeMCPLocal, .codexMCPUser, .geminiMCPUser, .cursorMCPUser,
-      .openCodeMCPUserJSON, .openCodeMCPUserJSONC,
+      .openCodeMCPUserJSON, .openCodeMCPUserJSONC, .claudeSettingsUser, .codexHooksUser,
+      .cursorHooksUser,
     ]
   }
   static func targetRoute(_ path: String) -> Self? {
@@ -69,7 +84,9 @@ package enum NativeTargetRoute: String, Codable, Sendable, CaseIterable {
     return sharedRoutes.first { $0.metadata == key }
   }
 
-  func logicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+  func logicalDirectory(_ environment: RuntimeEnvironment, validateExistingOverride: Bool = true)
+    throws -> URL
+  {
     func home() throws -> URL { try Self.absoluteDirectory(environment.homeDirectory) }
     func override(_ key: String) throws -> URL? {
       guard let value = environment.environment[key], !value.isEmpty else { return nil }
@@ -79,6 +96,19 @@ package enum NativeTargetRoute: String, Codable, Sendable, CaseIterable {
       return URL(fileURLWithPath: value).standardizedFileURL
     }
     switch self {
+    case .claudeSettingsProject:
+      return try Self.absoluteDirectory(environment.projectDirectory).appendingPathComponent(
+        ".claude")
+    case .claudeSettingsUser:
+      return try override("CLAUDE_CONFIG_DIR") ?? home().appendingPathComponent(".claude")
+    case .codexHooksProject: return try Self.codexMCPProject.logicalDirectory(environment)
+    case .codexHooksUser:
+      return try Self.codexMCPUser.logicalDirectory(
+        environment, validateExistingOverride: validateExistingOverride)
+    case .cursorHooksProject: return try Self.cursorMCPProject.logicalDirectory(environment)
+    case .cursorHooksUser: return try Self.cursorMCPUser.logicalDirectory(environment)
+    case .geminiIgnoreProject, .cursorIgnoreProject:
+      return try Self.absoluteDirectory(environment.projectDirectory)
     case .claudeMCPProject:
       return try Self.absoluteDirectory(environment.projectDirectory)
     case .claudeMCPLocal, .claudeMCPUser:
@@ -88,7 +118,7 @@ package enum NativeTargetRoute: String, Codable, Sendable, CaseIterable {
         ".codex")
     case .codexMCPUser:
       if let root = try override("CODEX_HOME") {
-        _ = try DirectoryHandle(at: root.resolvingSymlinksInPath())
+        if validateExistingOverride { _ = try DirectoryHandle(at: root.resolvingSymlinksInPath()) }
         return root
       }
       return try home().appendingPathComponent(".codex")
@@ -114,7 +144,7 @@ package enum NativeTargetRoute: String, Codable, Sendable, CaseIterable {
         .appendingPathComponent("opencode")
     }
   }
-  private static func absoluteDirectory(_ url: URL) throws -> URL {
+  static func absoluteDirectory(_ url: URL) throws -> URL {
     guard url.isFileURL, url.path.hasPrefix("/"), !url.path.contains("\0") else {
       throw CoreError.unsafePath("registered native root must be an absolute filesystem directory")
     }
@@ -128,6 +158,386 @@ package enum NativeTargetRoute: String, Codable, Sendable, CaseIterable {
   }
 }
 
+/// A closed loader recipe. Named routes carry only validated native member names;
+/// runtime directories remain owned by the recipe and explicit environment.
+package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable {
+  package enum Member: String, Codable, Sendable, CaseIterable {
+    case claudeCommand, claudeAgent, claudeSkillPlugin
+    case codexAgent, geminiCommand, geminiAgent, geminiExtension
+    case cursorCommand, cursorAgent, cursorLocalPlugin
+  }
+  package let rawValue: String
+  private let fixed: FixedNativeTargetRoute?
+  private let member: Member?
+  private let memberScope: InstallScope?
+  private let name: String?
+
+  private init(_ fixed: FixedNativeTargetRoute) {
+    self.fixed = fixed
+    member = nil
+    memberScope = nil
+    name = nil
+    rawValue = fixed.rawValue
+  }
+  package init?(rawValue: String) {
+    if let fixed = FixedNativeTargetRoute(rawValue: rawValue) {
+      self.init(fixed)
+      return
+    }
+    let parts = rawValue.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+    guard parts.count == 3, let member = Member(rawValue: String(parts[0])),
+      let scope = InstallScope(rawValue: String(parts[1])),
+      let value = try? Self.named(member, scope: scope, name: String(parts[2]))
+    else { return nil }
+    self = value
+  }
+  /// `name` is the adapter's exact extension-free name, including command subdirectories.
+  package static func named(_ member: Member, scope: InstallScope, name: String) throws -> Self {
+    let parts = name.split(separator: "/", omittingEmptySubsequences: false)
+    guard (member.rawValue + ":" + scope.rawValue + ":" + name).utf8.count <= 4096,
+      !parts.isEmpty,
+      parts.allSatisfy({
+        !$0.isEmpty && $0 != "." && $0 != ".."
+          && !$0.contains("\\") && !$0.contains("\0") && !$0.contains(":")
+          && !$0.hasPrefix(".agents-")
+      }),
+      member == .claudeCommand || member == .geminiCommand || parts.count == 1,
+      !(member == .cursorCommand && scope != .project),
+      !([Member.cursorLocalPlugin, .geminiExtension].contains(member) && scope != .user)
+    else { throw CoreError.unsafePath("unregistered native member or scope") }
+    return Self(member: member, scope: scope, name: name)
+  }
+  /// Accepts the adapter-owned relative file path, never an absolute destination.
+  package static func file(_ member: Member, scope: InstallScope, relativePath: String) throws
+    -> Self
+  {
+    let suffix: String
+    switch member {
+    case .claudeCommand, .claudeAgent, .cursorCommand, .cursorAgent, .geminiAgent: suffix = ".md"
+    case .codexAgent, .geminiCommand: suffix = ".toml"
+    default: throw CoreError.unsafePath("native container requires its registered bundle name")
+    }
+    guard relativePath.hasSuffix(suffix) else {
+      throw CoreError.unsafePath("native member has the wrong filename extension")
+    }
+    return try named(member, scope: scope, name: String(relativePath.dropLast(suffix.count)))
+  }
+  private init(member: Member, scope: InstallScope, name: String) {
+    fixed = nil
+    self.member = member
+    memberScope = scope
+    self.name = name
+    rawValue = member.rawValue + ":" + scope.rawValue + ":" + name
+  }
+  package init(from decoder: any Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    guard let route = Self(rawValue: try container.decode(String.self)) else {
+      throw CoreError.invalidState("unregistered native route")
+    }
+    self = route
+  }
+  package func encode(to encoder: any Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(rawValue)
+  }
+  package static let claudeMCPProject = Self(.claudeMCPProject)
+  package static let claudeMCPLocal = Self(.claudeMCPLocal)
+  package static let claudeMCPUser = Self(.claudeMCPUser)
+  package static let codexMCPProject = Self(.codexMCPProject)
+  package static let codexMCPUser = Self(.codexMCPUser)
+  package static let geminiMCPProject = Self(.geminiMCPProject)
+  package static let geminiMCPUser = Self(.geminiMCPUser)
+  package static let cursorMCPProject = Self(.cursorMCPProject)
+  package static let cursorMCPUser = Self(.cursorMCPUser)
+  package static let openCodeMCPProjectJSON = Self(.openCodeMCPProjectJSON)
+  package static let openCodeMCPProjectJSONC = Self(.openCodeMCPProjectJSONC)
+  package static let openCodeMCPUserJSON = Self(.openCodeMCPUserJSON)
+  package static let openCodeMCPUserJSONC = Self(.openCodeMCPUserJSONC)
+  package static let claudeSettingsProject = Self(.claudeSettingsProject)
+  package static let claudeSettingsUser = Self(.claudeSettingsUser)
+  package static let codexHooksProject = Self(.codexHooksProject)
+  package static let codexHooksUser = Self(.codexHooksUser)
+  package static let cursorHooksProject = Self(.cursorHooksProject)
+  package static let cursorHooksUser = Self(.cursorHooksUser)
+  package static let geminiIgnoreProject = Self(.geminiIgnoreProject)
+  package static let cursorIgnoreProject = Self(.cursorIgnoreProject)
+  package static var allCases: [Self] { FixedNativeTargetRoute.allCases.map(Self.init) }
+  static var mcpRoutes: [Self] { allCases.filter { $0.rawValue.contains(".mcp.") } }
+  static var sharedRoutes: [Self] {
+    FixedNativeTargetRoute.sharedRoutes.filter { $0.rawValue.contains(".mcp.") }.map(Self.init)
+  }
+  static let projectRoot = FixedNativeTargetRoute.projectRoot
+  static let globalRoot = FixedNativeTargetRoute.globalRoot
+  static let metadataRoot = FixedNativeTargetRoute.metadataRoot
+  package static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.rawValue.utf8.elementsEqual(rhs.rawValue.utf8)
+  }
+  package func hash(into hasher: inout Hasher) {
+    for byte in rawValue.utf8 { hasher.combine(byte) }
+  }
+  package var shared: Bool { fixed?.shared ?? (memberScope == .user) }
+  var isNamed: Bool { member != nil }
+  package var isContainer: Bool {
+    member.map { [.claudeSkillPlugin, .cursorLocalPlugin, .geminiExtension].contains($0) } ?? false
+  }
+  func permits(_ scope: InstallScope) -> Bool {
+    if let memberScope { return memberScope == scope }
+    if rawValue.contains(".mcp.") { return shared || scope == .project }
+    return shared ? scope == .user : scope == .project
+  }
+  /// Known readers are a lower bound; plugin/custom-root exclusivity needs reader evidence.
+  package var knownReaders: Set<AgentID> {
+    Self.knownReaders(rawValue: rawValue, fixed: fixed, member: member)
+  }
+  private static func knownReaders(
+    rawValue: String, fixed: FixedNativeTargetRoute?, member: Member?
+  ) -> Set<AgentID> {
+    if fixed == .claudeSettingsProject || fixed == .claudeSettingsUser || member == .claudeAgent {
+      return [.claudeCode, .cursor]
+    }
+    let prefix = rawValue.lowercased()
+    if prefix.hasPrefix("claude") { return [.claudeCode] }
+    if prefix.hasPrefix("codex") { return [.codex] }
+    if prefix.hasPrefix("gemini") { return [.geminiCLI] }
+    if prefix.hasPrefix("cursor") { return [.cursor] }
+    return [.opencode]
+  }
+  var root: String {
+    fixed?.root ?? "native-member-" + rawValue.utf8.map { String(format: "%02x", $0) }.joined()
+  }
+  var metadata: String { fixed?.metadata ?? root + "-metadata" }
+  var basename: String {
+    if let fixed { return fixed.basename }
+    let suffix: String
+    switch member! {
+    case .claudeCommand, .claudeAgent, .cursorCommand, .cursorAgent, .geminiAgent: suffix = ".md"
+    case .codexAgent, .geminiCommand: suffix = ".toml"
+    default: suffix = ""
+    }
+    return String(name!.split(separator: "/").last!) + suffix
+  }
+  private static func routeRoot(_ key: String) -> Self? {
+    if let fixed = FixedNativeTargetRoute.allCases.first(where: { $0.root == key }) {
+      return Self(fixed)
+    }
+    guard key.hasPrefix("native-member-") else { return nil }
+    let hex = Array(key.dropFirst("native-member-".count).utf8)
+    guard hex.count.isMultiple(of: 2), hex.count <= 8192 else { return nil }
+    var bytes: [UInt8] = []
+    for index in stride(from: 0, to: hex.count, by: 2) {
+      guard let byte = UInt8(String(decoding: hex[index...index + 1], as: UTF8.self), radix: 16)
+      else { return nil }
+      bytes.append(byte)
+    }
+    guard let raw = String(bytes: bytes, encoding: .utf8), let route = Self(rawValue: raw),
+      route.root == key
+    else { return nil }
+    return route
+  }
+  static func targetRoute(_ path: String) -> Self? {
+    routeRoot(String(path.split(separator: "/").first ?? ""))
+  }
+  static func sharedRoute(_ path: String) -> Self? {
+    targetRoute(path).flatMap { $0.shared ? $0 : nil }
+  }
+  static func metadataRoute(_ path: String) -> Self? {
+    let key = String(path.split(separator: "/").first ?? "")
+    if key == metadataRoot { return .claudeMCPLocal }
+    guard key.hasSuffix("-metadata"),
+      let route = routeRoot(String(key.dropLast("-metadata".count))), route.shared
+    else { return nil }
+    return route
+  }
+  func rootAuthority(_ environment: RuntimeEnvironment, validateExistingOverride: Bool = true)
+    throws -> NativeRootAuthority
+  {
+    if let fixed {
+      return NativeRootAuthority(
+        loader: try fixed.logicalDirectory(
+          environment, validateExistingOverride: validateExistingOverride), descendants: [])
+    }
+    let recipe = Self.memberRecipe(member!, scope: memberScope!)
+    return NativeRootAuthority(
+      loader: try recipe.base.logicalDirectory(
+        environment, validateExistingOverride: validateExistingOverride),
+      descendants: recipe.container + name!.split(separator: "/").dropLast().map(String.init))
+  }
+
+  private static func memberRecipe(_ member: Member, scope: InstallScope)
+    -> (base: FixedNativeTargetRoute, container: [String])
+  {
+    let base: FixedNativeTargetRoute
+    switch member {
+    case .claudeCommand, .claudeAgent, .claudeSkillPlugin:
+      base = scope == .project ? .claudeSettingsProject : .claudeSettingsUser
+    case .codexAgent: base = scope == .project ? .codexMCPProject : .codexMCPUser
+    case .geminiCommand, .geminiAgent, .geminiExtension:
+      base = scope == .project ? .geminiMCPProject : .geminiMCPUser
+    case .cursorCommand, .cursorAgent, .cursorLocalPlugin:
+      base = scope == .project ? .cursorMCPProject : .cursorMCPUser
+    }
+    let container: [String]
+    switch member {
+    case .claudeCommand, .geminiCommand, .cursorCommand: container = ["commands"]
+    case .claudeAgent, .codexAgent, .geminiAgent, .cursorAgent: container = ["agents"]
+    case .claudeSkillPlugin: container = ["skills"]
+    case .cursorLocalPlugin: container = ["plugins", "local"]
+    case .geminiExtension: container = ["extensions"]
+    }
+    return (base, container)
+  }
+
+  package struct ClientLocation {
+    package let identity: String
+    package let agents: Set<AgentID>
+    package let evidenceScope: String
+    package let container: Bool
+    package let location: Result<URL, any Error>
+  }
+
+  package static func clientLocations(scope: InstallScope, environment: RuntimeEnvironment)
+    -> [ClientLocation]
+  {
+    let fixed = FixedNativeTargetRoute.allCases.filter {
+      scope == .user ? $0.shared : !$0.shared || $0 == .claudeMCPLocal
+    }.map { route in
+      return ClientLocation(
+        identity: route.rawValue, agents: Self(route).knownReaders,
+        evidenceScope: route == .claudeMCPLocal ? "local" : scope.rawValue, container: false,
+        location: Result {
+          try route.logicalDirectory(environment, validateExistingOverride: false)
+            .appendingPathComponent(route.basename)
+        })
+    }
+    let members = Member.allCases.filter {
+      !($0 == .cursorCommand && scope != .project)
+        && !([Member.cursorLocalPlugin, .geminiExtension].contains($0) && scope != .user)
+    }.map { member in
+      let recipe = memberRecipe(member, scope: scope)
+      return ClientLocation(
+        identity: member.rawValue + "." + scope.rawValue,
+        agents: knownReaders(rawValue: member.rawValue, fixed: nil, member: member),
+        evidenceScope: scope.rawValue, container: true,
+        location: Result {
+          try recipe.container.reduce(
+            recipe.base.logicalDirectory(environment, validateExistingOverride: false)
+          ) { $0.appendingPathComponent($1) }
+        })
+    }
+    return fixed + members
+  }
+  func logicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+    try rootAuthority(environment).logicalDirectory
+  }
+  func physicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+    try rootAuthority(environment).physicalDirectory()
+  }
+
+  /// Detect closed user slots without creating a root or granting publication authority.
+  static func userRoute(at destination: URL, environment: RuntimeEnvironment) throws -> Self? {
+    let target = destination.deletingLastPathComponent().resolvingSymlinksInPath()
+      .appendingPathComponent(destination.lastPathComponent)
+    func matches(_ route: Self) throws -> Bool {
+      guard route.basename.utf8.elementsEqual(target.lastPathComponent.utf8) else { return false }
+      let authority = try route.rootAuthority(environment, validateExistingOverride: false)
+      let planned = try authority.plannedPhysicalDirectory
+      let targetParent = target.deletingLastPathComponent()
+      if planned.path.utf8.elementsEqual(targetParent.path.utf8) {
+        _ = try authority.physicalDirectory()
+        return true
+      }
+      if planned.resolvingSymlinksInPath().path.utf8.elementsEqual(targetParent.path.utf8) {
+        _ = try authority.physicalDirectory()
+        return true
+      }
+      // Unselected, disjoint roots do not impose access requirements on this target.
+      // Openable aliases still compare by descriptor identity, including bind aliases.
+      guard let candidate = try? DirectoryHandle(at: planned),
+        let parent = try? DirectoryHandle(at: targetParent),
+        try candidate.objectIdentity == parent.objectIdentity
+      else { return false }
+      _ = try authority.physicalDirectory()
+      return true
+    }
+    for route in allCases
+    where route.shared && route.basename.utf8.elementsEqual(target.lastPathComponent.utf8) {
+      if try matches(route) { return route }
+    }
+    for member in Member.allCases {
+      guard let probe = try? named(member, scope: .user, name: "probe") else { continue }
+      let suffix = String(probe.basename.dropFirst("probe".count))
+      guard target.lastPathComponent.hasSuffix(suffix) else { continue }
+      let authority = try probe.rootAuthority(environment, validateExistingOverride: false)
+      let container = try authority.plannedPhysicalDirectory
+      var ancestor = target.deletingLastPathComponent()
+      var relativeParts = [target.lastPathComponent]
+      let containerIdentity = try? DirectoryHandle(at: container).objectIdentity
+      while ancestor.path != "/" {
+        if let containerIdentity,
+          let opened = try? DirectoryHandle(at: ancestor),
+          try opened.objectIdentity == containerIdentity
+        {
+          break
+        }
+        relativeParts.insert(ancestor.lastPathComponent, at: 0)
+        ancestor.deleteLastPathComponent()
+      }
+      let relative: String
+      if ancestor.path != "/" {
+        // Descriptor-equivalent container aliases retain the entire validated nested name.
+        relative = relativeParts.joined(separator: "/")
+      } else {
+        let prefix = container.path + "/"
+        let bytes = Array(target.path.utf8)
+        guard bytes.starts(with: prefix.utf8) else { continue }
+        relative = String(decoding: bytes.dropFirst(prefix.utf8.count), as: UTF8.self)
+      }
+      let candidate =
+        probe.isContainer
+        ? try? named(member, scope: .user, name: relative)
+        : try? file(member, scope: .user, relativePath: relative)
+      if let candidate, try matches(candidate) { return candidate }
+    }
+    return nil
+  }
+  static func globalLogicalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+    try claudeMCPLocal.logicalDirectory(environment)
+  }
+  static func globalDirectory(_ environment: RuntimeEnvironment) throws -> URL {
+    try globalLogicalDirectory(environment).resolvingSymlinksInPath()
+  }
+}
+
+/// The configured loader boundary may be an admitted alias. Every descendant is no-follow.
+struct NativeRootAuthority {
+  let loader: URL
+  let descendants: [String]
+  var logicalDirectory: URL { descendants.reduce(loader) { $0.appendingPathComponent($1) } }
+  var plannedPhysicalDirectory: URL {
+    get throws {
+      try descendants.reduce(PathSafety.resolvedDirectoryBoundary(loader)) {
+        $0.appendingPathComponent($1)
+      }
+    }
+  }
+  func physicalDirectory() throws -> URL {
+    var result = try PathSafety.resolvedDirectoryBoundary(loader)
+    let ancestry = try DirectoryAccessEvidence.capture(at: result)
+    var opened =
+      ancestry.directories.count == result.pathComponents.count
+      ? try DirectoryHandle(at: result) : nil
+    for part in descendants {
+      result.appendPathComponent(part)
+      if let parent = opened, try parent.info(part) != nil {
+        opened = try parent.child(part)
+      } else {
+        opened = nil
+      }
+    }
+    return result
+  }
+}
+
 /// Pathname authorization is checked separately. Neither route nor caller participates here.
 struct SharedResourceIdentity: Codable, Equatable, Comparable {
   let parent: FileObjectIdentity
@@ -137,11 +547,17 @@ struct SharedResourceIdentity: Codable, Equatable, Comparable {
     "\(parent.device):\(parent.inode):\(parent.kind):\(basename.utf8.count):\(basename)"
   }
   var directoryName: String { FileHash.sha256Hex(data: Data(orderingKey.utf8)) }
-  static func < (lhs: Self, rhs: Self) -> Bool { lhs.orderingKey < rhs.orderingKey }
+  static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.parent == rhs.parent && lhs.basename.utf8.elementsEqual(rhs.basename.utf8)
+  }
+  static func < (lhs: Self, rhs: Self) -> Bool {
+    lhs.orderingKey.utf8.lexicographicallyPrecedes(rhs.orderingKey.utf8)
+  }
 
   func validate() throws {
     guard parent.isDirectory,
-      NativeTargetRoute.sharedRoutes.contains(where: { $0.basename == basename })
+      !basename.isEmpty, basename != ".", basename != "..",
+      !basename.contains("/"), !basename.contains("\\"), !basename.contains("\0")
     else {
       throw CoreError.invalidState("unregistered shared transaction resource")
     }
@@ -166,18 +582,35 @@ final class SharedResource {
   let ancestry: DirectoryAccessEvidence
   let metadataAccess: FileAccessEvidence?
   let metadataAncestry: DirectoryAccessEvidence?
-  let authorizedRoot: URL
+  let authority: NativeRootAuthority
   private var lockDescriptor: Int32?
   private var lockAccess: FileAccessEvidence?
 
-  init(store: StateStore, route: NativeTargetRoute = .claudeMCPLocal, create: Bool) throws {
+  init(
+    store: StateStore, route: NativeTargetRoute = .claudeMCPLocal, create: Bool,
+    existingRoot: ExistingProjectRoot? = nil, projectRoot: DirectoryHandle? = nil,
+    onReadLocation: ((URL) -> Void)? = nil
+  ) throws {
     guard route.shared else { throw CoreError.invalidState("project route has no shared resource") }
-    self.route = NativeTargetRoute.sharedRoutes.first { $0.root == route.root }!
-    authorizedRoot = try route.logicalDirectory(store.environment)
-    let url = authorizedRoot.resolvingSymlinksInPath()
-    parent = try DirectoryHandle(at: url, create: create)
+    self.route = NativeTargetRoute.targetRoute(route.root)!
+    authority = try route.rootAuthority(store.environment)
+    let url = try authority.physicalDirectory()
+    if let existingRoot, let projectRoot,
+      let anchored = try existingRoot.descendant(at: url, from: projectRoot, create: create)
+    {
+      parent = anchored
+    } else {
+      parent = try DirectoryHandle(at: url, create: create)
+    }
     ancestry = try DirectoryAccessEvidence.capture(at: url)
     identity = SharedResourceIdentity(parent: try parent.objectIdentity, basename: route.basename)
+    // Record the intended private domain before opening it: missing entries or invalid access
+    // can stop admission before a SharedResource exists.
+    let baseURL = parent.url.appendingPathComponent(Self.metadataName)
+    let metadataURL = baseURL.appendingPathComponent(identity.directoryName)
+    onReadLocation?(baseURL)
+    onReadLocation?(metadataURL)
+    onReadLocation?(metadataURL.appendingPathComponent("lock"))
     func child(_ parent: DirectoryHandle, _ name: String) throws -> DirectoryHandle? {
       if try parent.info(name) == nil {
         guard create else { return nil }
@@ -214,7 +647,7 @@ final class SharedResource {
     }
     try ancestry.validate(at: parent.url)
     guard
-      try DirectoryHandle(at: authorizedRoot.resolvingSymlinksInPath()).objectIdentity
+      try DirectoryHandle(at: authority.physicalDirectory()).objectIdentity
         == identity.parent,
       try DirectoryHandle(at: parent.url).objectIdentity == identity.parent
     else {
@@ -343,20 +776,20 @@ final class SharedResource {
 /// a writer must create and open the real parent before deriving its coordination domain.
 struct AbsentSharedRoot {
   let route: NativeTargetRoute
-  let logical: URL
+  let authority: NativeRootAuthority
   let physical: URL
   let ancestry: DirectoryAccessEvidence
 
   init?(store: StateStore, route: NativeTargetRoute) throws {
-    logical = try route.logicalDirectory(store.environment)
-    physical = logical.resolvingSymlinksInPath()
+    authority = try route.rootAuthority(store.environment)
+    physical = try authority.physicalDirectory()
     ancestry = try DirectoryAccessEvidence.capture(at: physical)
     guard ancestry.directories.count < physical.pathComponents.count else { return nil }
     self.route = route
   }
 
   func remainsAbsent() throws -> Bool {
-    guard logical.resolvingSymlinksInPath().path == physical.path else {
+    guard try authority.physicalDirectory().path.utf8.elementsEqual(physical.path.utf8) else {
       throw CoreError.invalidState("registered native root changed during inspection")
     }
     let current = try DirectoryAccessEvidence.capture(at: physical)
@@ -372,22 +805,35 @@ final class TransactionLockContext {
   private static let threadKey = "agents.core.transaction-lock-context"
   let scopeURL: URL
   let resources: [SharedResource]
+  var createdAncestry: [(URL, DirectoryAccessEvidence)] = []
+  let admissions: [SharedResource]
+  let requestedRoutes: Set<NativeTargetRoute>
   let writable: Bool
   let requestedShared: Bool
   let absentRoots: [AbsentSharedRoot]
+  var installations: [SkillInstallationTarget] = []
+  var existingProjectRoot: ExistingProjectRoot?
+  var projectRootDirectory: DirectoryHandle?
   private var scopeDirectory: DirectoryHandle?
   private var scopeDescriptor: Int32?
   private var scopeLockIdentity: FileObjectIdentity?
 
   init(
     store: StateStore, resources: [SharedResource], writable: Bool, requestedShared: Bool,
-    absentRoots: [AbsentSharedRoot] = []
+    absentRoots: [AbsentSharedRoot] = [], admissions: [SharedResource] = [],
+    requestedRoutes: Set<NativeTargetRoute> = []
   ) {
     scopeURL = store.directory.standardizedFileURL
     self.resources = resources
+    self.admissions = admissions.isEmpty ? resources : admissions
+    self.requestedRoutes = requestedRoutes
     self.writable = writable
     self.requestedShared = requestedShared
     self.absentRoots = absentRoots
+  }
+
+  static var currentForDisplay: TransactionLockContext? {
+    Thread.current.threadDictionary[threadKey] as? TransactionLockContext
   }
 
   static var isHeld: Bool { Thread.current.threadDictionary[threadKey] != nil }
@@ -428,6 +874,8 @@ final class TransactionLockContext {
   }
 
   func validateScope() throws {
+    try existingProjectRoot?.validate()
+    for target in installations { try target.validateAuthority() }
     guard let directory = scopeDirectory else { return }
     var info = stat()
     guard let descriptor = scopeDescriptor, let identity = scopeLockIdentity,
@@ -456,9 +904,10 @@ final class TransactionLockContext {
   }
 
   func resource(for route: NativeTargetRoute) throws -> SharedResource {
-    guard let resource = resources.first(where: { $0.route.root == route.root }) else {
+    guard let resource = admissions.first(where: { $0.route.root == route.root }) else {
       throw CoreError.invalidState("shared target is outside the held request footprint")
     }
+    try resource.validate()
     return try self.resource(resource.identity)
   }
 
@@ -489,65 +938,171 @@ final class TransactionLockContext {
 }
 
 extension StateStore {
+  func requireProjectNativeAuthority(at destination: URL) throws {
+    if scope == .project,
+      try NativeTargetRoute.userRoute(at: destination, environment: environment) != nil
+    {
+      throw CoreError.unsafePath("project target coincides with a registered shared user target")
+    }
+  }
+
   package func nativeTarget(for route: NativeTargetRoute) throws -> MaterializationTarget {
-    guard route.shared || scope == .project else {
+    guard route.permits(scope) else {
       throw CoreError.unsafePath("project native targets require their project scope")
     }
-    let logical = try route.logicalDirectory(environment)
+    if !route.shared, route.isNamed {
+      let target = try route.physicalDirectory(environment).appendingPathComponent(route.basename)
+      _ = try coordinationRoute(for: route)
+      if route.isContainer {
+        for shared in NativeTargetRoute.allCases where shared.shared {
+          let parent = try shared.rootAuthority(environment, validateExistingOverride: false)
+            .plannedPhysicalDirectory
+          if parent.path.utf8.elementsEqual(target.path.utf8)
+            || parent.path.utf8.starts(with: (target.path + "/").utf8)
+          {
+            throw CoreError.unsafePath("registered container encloses a shared native loader")
+          }
+        }
+      }
+    }
+    var canonical = route
     let parent: URL
-    if route.shared, let context = TransactionLockContext.current(self) {
-      parent = try context.targetDirectory(for: route)
+    let coordinated = try coordinationRoute(for: route)
+    if let coordinated, let context = TransactionLockContext.current(self) {
+      let held = try context.targetDirectory(for: coordinated)
+      parent = route.shared ? held : try route.physicalDirectory(environment)
+      if route.shared, try context.absentRoot(for: coordinated) == nil {
+        canonical = try context.resource(for: coordinated).route
+      }
     } else {
-      parent = logical.resolvingSymlinksInPath()
+      parent = try route.physicalDirectory(environment)
+    }
+    if !route.shared, let context = TransactionLockContext.current(self) {
+      for candidate in context.requestedRoutes.filter({ !$0.shared && $0.permits(scope) }).sorted(
+        by: {
+          $0.rawValue.utf8.lexicographicallyPrecedes($1.rawValue.utf8)
+        }) where candidate.basename.utf8.elementsEqual(route.basename.utf8)
+      {
+        if try candidate.physicalDirectory(environment).path.utf8.elementsEqual(parent.path.utf8) {
+          canonical = candidate
+          break
+        }
+      }
     }
     return MaterializationTarget(
       url: parent.appendingPathComponent(route.basename),
-      path: route.root + "/" + route.basename, scope: directory)
+      path: canonical.root + "/" + canonical.basename, scope: directory)
   }
 
   /// Acquire the union before the scope lock. Re-admission never replays a delivered callback.
   func withCoordination<T>(
-    routes: Set<NativeTargetRoute>, writable: Bool,
-    checkpoint: (String) throws -> Void = { _ in }, _ body: () throws -> T
+    routes: Set<NativeTargetRoute>, installations: [SkillInstallationTarget] = [], writable: Bool,
+    checkpoint: (String) throws -> Void = { _ in },
+    existingRoot: ExistingProjectRoot? = nil, projectRoot: DirectoryHandle? = nil,
+    onReadLocation: ((URL) -> Void)? = nil,
+    _ body: () throws -> T
   ) throws -> T {
+    func recordAncestry(_ url: URL) {
+      guard let onReadLocation else { return }
+      var ancestor = url.standardizedFileURL
+      while true {
+        onReadLocation(ancestor)
+        guard ancestor.path != "/" else { return }
+        ancestor.deleteLastPathComponent()
+      }
+    }
+    try existingRoot?.validate()
     if TransactionLockContext.isHeld {
       throw CoreError.invalidState("nested scope lock acquisition")
     }
+    guard routes.allSatisfy({ $0.permits(scope) }) else {
+      throw CoreError.unsafePath("registered native request belongs to another scope")
+    }
+    for target in installations {
+      try target.validateAuthority()
+      let current = try skillInstallationTarget(for: target.agent, named: target.name)
+      guard current.scope.path.utf8.elementsEqual(target.scope.path.utf8),
+        current.url.path.utf8.elementsEqual(target.url.path.utf8),
+        current.footprint == target.footprint
+      else { throw CoreError.invalidState("installation authority changed before admission") }
+    }
+    let installationRoutes = installations.reduce(into: Set<NativeTargetRoute>()) {
+      $0.formUnion($1.footprint)
+    }
+    for route in routes where !route.shared && route.isNamed { _ = try nativeTarget(for: route) }
     while true {
       let before = try pendingCoordinationJournal(diagnosing: !writable)
       var resources: [SharedResource] = []
+      var createdAncestry: [(URL, DirectoryAccessEvidence)] = []
+      if writable {
+        let evidence = try DirectoryAccessEvidence.capture(at: directory)
+        if evidence.directories.count < directory.pathComponents.count {
+          createdAncestry.append((directory, evidence))
+        }
+      }
       var absentRoots: [AbsentSharedRoot] = []
       let pending = before?.footprint ?? []
-      var requested = Set(
-        routes.filter(\.shared).map { route in
-          NativeTargetRoute.sharedRoutes.first { $0.root == route.root }!
+      var admissions: [SharedResource] = []
+      let recoveryRoutes = Set(
+        (before?.entries ?? []).compactMap { entry in
+          entry.coordinationRoot.flatMap { NativeTargetRoute.sharedRoute($0) }
+            ?? NativeTargetRoute.sharedRoute(entry.path)
+            ?? NativeTargetRoute.metadataRoute(entry.path)
         })
-      for identity in pending {
-        try identity.validate()
-        guard
-          let route = NativeTargetRoute.sharedRoutes.first(where: {
-            $0.basename == identity.basename
-          })
-        else {
-          throw CoreError.invalidState("unregistered shared recovery resource")
-        }
-        requested.insert(route)
-      }
-      // Validate every original recovery domain before creating any newly requested metadata.
+      var requested = Set(try routes.compactMap { try coordinationRoute(for: $0) })
+      requested.formUnion(installationRoutes)
+      let requestedShared = !requested.isEmpty
+      requested.formUnion(recoveryRoutes)
       let ordered = requested.sorted { left, right in
-        let leftPending = pending.contains { $0.basename == left.basename }
-        let rightPending = pending.contains { $0.basename == right.basename }
+        let leftPending = recoveryRoutes.contains(left)
+        let rightPending = recoveryRoutes.contains(right)
         return leftPending == rightPending ? left.rawValue < right.rawValue : leftPending
       }
+      let physicalTargets = try ordered.map { route in
+        if onReadLocation != nil {
+          let authority = try route.rootAuthority(environment, validateExistingOverride: false)
+          recordAncestry(authority.loader)
+          recordAncestry(authority.logicalDirectory)
+          recordAncestry(try authority.plannedPhysicalDirectory)
+        }
+        return try route.physicalDirectory(environment).appendingPathComponent(route.basename)
+      }
+      for parent in physicalTargets.map({ $0.deletingLastPathComponent() }) {
+        var ancestor = parent
+        while ancestor.path != "/" {
+          if let enclosing = try NativeTargetRoute.userRoute(
+            at: ancestor, environment: environment), enclosing.isContainer
+          {
+            throw CoreError.unsafePath("native coordination would be inside a registered container")
+          }
+          ancestor.deleteLastPathComponent()
+        }
+      }
+      for (index, target) in physicalTargets.enumerated() {
+        for (other, nested) in physicalTargets.enumerated() where index != other {
+          let parent = nested.deletingLastPathComponent()
+          if parent.path.utf8.elementsEqual(target.path.utf8)
+            || parent.path.hasPrefix(target.path + "/")
+          {
+            throw CoreError.unsafePath("nested native coordination domains conflict")
+          }
+        }
+      }
       for route in ordered {
-        let recovering = pending.contains { $0.basename == route.basename }
+        let recovering = recoveryRoutes.contains(route)
+        if writable, !recovering, let absent = try AbsentSharedRoot(store: self, route: route) {
+          createdAncestry.append((absent.physical, absent.ancestry))
+        }
         if !writable, !recovering, let absent = try AbsentSharedRoot(store: self, route: route) {
           absentRoots.append(absent)
           continue
         }
         let resource: SharedResource
         do {
-          resource = try SharedResource(store: self, route: route, create: writable && !recovering)
+          resource = try SharedResource(
+            store: self, route: route, create: writable && !recovering,
+            existingRoot: existingRoot, projectRoot: projectRoot,
+            onReadLocation: onReadLocation)
         } catch {
           if recovering {
             throw CoreError.invalidState(
@@ -564,20 +1119,31 @@ extension StateStore {
               "shared recovery requires the original runtime context and coordination lock")
           }
         }
+        admissions.append(resource)
         if !resources.contains(where: { $0.identity == resource.identity }) {
           resources.append(resource)
         }
       }
+      guard pending.allSatisfy({ identity in resources.contains { $0.identity == identity } })
+      else {
+        throw CoreError.invalidState("shared recovery footprint has no registered runtime resource")
+      }
       let context = TransactionLockContext(
         store: self, resources: resources.sorted { $0.identity < $1.identity }, writable: writable,
-        requestedShared: routes.contains(where: \.shared), absentRoots: absentRoots)
+        requestedShared: requestedShared, absentRoots: absentRoots,
+        admissions: admissions, requestedRoutes: routes)
+      context.installations = installations
+      context.createdAncestry = createdAncestry
+      context.existingProjectRoot = existingRoot
+      context.projectRootDirectory = projectRoot
       func locked(_ index: Int) throws -> T? {
         if index < context.resources.count {
           let resource = context.resources[index]
           guard let metadata = resource.metadata else {
             // No metadata means no prior registered writer. Recheck after the unlocked read.
             let result = Result { try locked(index + 1) }
-            let after = try SharedResource(store: self, route: resource.route, create: false)
+            let after = try SharedResource(
+              store: self, route: resource.route, create: false, onReadLocation: onReadLocation)
             guard after.metadata == nil else { return nil }
             return try result.get()
           }
@@ -648,6 +1214,13 @@ extension StateStore {
       guard let directory else { throw CoreError.invalidState("missing transaction scope") }
       try context.validate(journal, scope: directory)
     }
+    for target in context.installations {
+      let current = try skillInstallationTarget(for: target.agent, named: target.name)
+      guard current.url.path.utf8.elementsEqual(target.url.path.utf8),
+        current.footprint == target.footprint
+      else { throw CoreError.invalidState("installation authority changed during admission") }
+    }
+    for admission in context.admissions { try admission.validate() }
     for resource in context.resources {
       if journal?.finalized != true && (context.writable || journal == nil) {
         try resource.inspect(journal: journal, scope: directory?.identity ?? "")
@@ -665,5 +1238,68 @@ extension Optional where Wrapped == TransactionLockContext {
       throw CoreError.invalidState("shared target requires a held request footprint")
     }
     return try context.resource(identity)
+  }
+}
+
+/// Descriptor-derived physical file key. Absence deliberately has no fabricated key.
+package struct NativeTargetIdentity: Hashable, Sendable {
+  package let device: UInt64
+  package let inode: UInt64
+  package let kind: UInt32
+  package let basename: String
+  package static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.device == rhs.device && lhs.inode == rhs.inode && lhs.kind == rhs.kind
+      && lhs.basename.utf8.elementsEqual(rhs.basename.utf8)
+  }
+  package func hash(into hasher: inout Hasher) {
+    hasher.combine(device)
+    hasher.combine(inode)
+    hasher.combine(kind)
+    for byte in basename.utf8 { hasher.combine(byte) }
+  }
+}
+
+extension StateStore {
+  package func nativeTargetIdentity(for route: NativeTargetRoute) throws -> NativeTargetIdentity? {
+    let target = try nativeTarget(for: route)
+    let parent = target.url.deletingLastPathComponent()
+    let evidence = try DirectoryAccessEvidence.capture(at: parent)
+    guard evidence.directories.count == parent.pathComponents.count else { return nil }
+    let descriptor = try DirectoryHandle(at: parent)
+    let identity = try descriptor.objectIdentity
+    try evidence.validate(at: parent)
+    return NativeTargetIdentity(
+      device: identity.device, inode: identity.inode,
+      kind: UInt32(identity.kind), basename: target.url.lastPathComponent)
+  }
+}
+
+extension StateStore {
+  func coordinationRoute(for route: NativeTargetRoute) throws -> NativeTargetRoute? {
+    if route.shared { return route }
+    let target = try route.physicalDirectory(environment).appendingPathComponent(route.basename)
+    guard let shared = try NativeTargetRoute.userRoute(at: target, environment: environment)
+    else { return nil }
+    guard route.knownReaders == shared.knownReaders, route.isContainer == shared.isContainer else {
+      throw CoreError.unsafePath("native alias has incompatible reader or object authority")
+    }
+    return shared
+  }
+
+  func materializationReceiptKey(for path: String) throws -> String {
+    if let route = try TransactionPaths(store: self).coordinationRoute(for: path) {
+      let resource = try TransactionLockContext.current(self).requiredResourceForRoute(route)
+      return resource.route.root + "/" + resource.identity.basename
+    }
+    return path
+  }
+}
+
+extension Optional where Wrapped == TransactionLockContext {
+  func requiredResourceForRoute(_ route: NativeTargetRoute) throws -> SharedResource {
+    guard let context = self else {
+      throw CoreError.invalidState("shared target requires its held footprint")
+    }
+    return try context.resource(for: route)
   }
 }

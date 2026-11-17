@@ -77,6 +77,7 @@ package enum LedgerReplay {
       "agents/claude-import@1": { try forwarding($0, $1, $2, outputBytes: outputBytes) },
       "agents/chatgpt@1": { try chatGPT($0, $1, $2, outputBytes: outputBytes) },
     ].merging(MCPLayoutV1.renderers) { existing, _ in existing }
+      .merging(NativeComponentLayoutsV1.renderers(limits: .standard)) { existing, _ in existing }
   }
 
   package static func withReplay<T>(
@@ -87,7 +88,33 @@ package enum LedgerReplay {
     try run(
       ledger, store: store, roots: roots, limits: limits, renderers: renderers,
       recording: false
-    ) { artifacts, _ in try body(artifacts) }
+    ) { artifacts, _, _, _ in try body(artifacts) }
+  }
+
+  package static func withPreparedLowerings<T>(
+    _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
+    _ body: (ResolvedLedger, [ReplayedArtifact], [String: URL], URL) throws -> T
+  ) throws -> T {
+    try run(ledger, store: store, roots: roots, limits: limits, renderers: nil, recording: true) {
+      artifacts, lowerings, resources, workspace in
+      var candidate = ledger
+      candidate.lowerings = lowerings
+      try candidate.validate()
+      return try body(candidate, artifacts, resources, workspace)
+    }
+  }
+
+  package static func withLockedResources<T>(
+    _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
+    lowerings selected: Set<String>? = nil,
+    _ body: ([ReplayedArtifact], [String: URL], URL) throws -> T
+  ) throws -> T {
+    try run(
+      ledger, store: store, roots: roots, limits: limits, renderers: nil, recording: false,
+      selectedLowerings: selected
+    ) {
+      artifacts, _, resources, workspace in try body(artifacts, resources, workspace)
+    }
   }
 
   /// Seals renderer output identities into a candidate before encoding or publication.
@@ -98,7 +125,7 @@ package enum LedgerReplay {
     try run(
       ledger, store: store, roots: roots, limits: limits, renderers: renderers,
       recording: true
-    ) { _, lowerings in
+    ) { _, lowerings, _, _ in
       var candidate = ledger
       candidate.lowerings = lowerings
       try candidate.validate()
@@ -109,18 +136,25 @@ package enum LedgerReplay {
   private static func run<T>(
     _ ledger: ResolvedLedger, store: StateStore, roots: [String: URL], limits: LedgerLimits,
     renderers: [String: LedgerRenderer]?, recording: Bool,
-    _ body: ([ReplayedArtifact], [LockedLowering]) throws -> T
+    selectedLowerings: Set<String>? = nil,
+    _ body: ([ReplayedArtifact], [LockedLowering], [String: URL], URL) throws -> T
   ) throws -> T {
     try ResolvedLedgerCodec.checkModel(ledger, limits: limits)
     try ledger.validate()
     try Task.checkCancellation()
+    let lowerings = ledger.lowerings.filter { selectedLowerings?.contains($0.id) ?? true }
+    guard selectedLowerings.map({ $0.isSubset(of: Set(ledger.lowerings.map(\.id))) }) ?? true else {
+      throw CoreError.invalidState("unknown selected locked lowering")
+    }
+    let resourceIDs =
+      selectedLowerings == nil ? Set(ledger.resources.keys) : Set(lowerings.flatMap(\.resources))
     let platform = ProcessInfo.processInfo.operatingSystemVersionString
     #if os(macOS)
       let current = "macos"
     #else
       let current = "linux"
     #endif
-    for lowering in ledger.lowerings {
+    for lowering in lowerings {
       guard (renderers ?? compatibilityRenderers)[lowering.format] != nil else {
         throw CoreError.invalidState("unknown renderer format")
       }
@@ -134,7 +168,7 @@ package enum LedgerReplay {
       (resource.entries + resource.support).reduce(0) { $0 + ($1.byteCount ?? 0) }
     }
     var remaining = limits.resourceBytes
-    for lowering in ledger.lowerings {
+    for lowering in lowerings {
       for id in lowering.resources {
         let size = sizes[id]!
         guard size <= remaining else { throw CoreError.invalidState("replay input byte budget") }
@@ -147,7 +181,8 @@ package enum LedgerReplay {
     defer { try? FileManager.default.removeItem(at: workspace) }
     return try SourceResolutionSession.withTemporaryRead(store: store) { session in
       var acquired: [String: URL] = [:]
-      for (id, resource) in ledger.resources.sorted(by: { $0.key < $1.key }) {
+      for (id, resource) in ledger.resources.sorted(by: { $0.key < $1.key })
+      where resourceIDs.contains(id) {
         try Task.checkCancellation()
         let file: URL
         if resource.kind == .liveEdit {
@@ -204,7 +239,7 @@ package enum LedgerReplay {
       var result: [ReplayedArtifact] = []
       var sealed: [LockedLowering] = []
       var names = Set<String>()
-      for lowering in ledger.lowerings {
+      for lowering in lowerings {
         try Task.checkCancellation()
         let table = renderers ?? compatibilityRenderers(outputBytes: remaining)
         let rendered = try table[lowering.format]!(lowering, ledger, acquired)
@@ -241,7 +276,7 @@ package enum LedgerReplay {
         sealed.append(locked)
         result += rendered
       }
-      return try body(result, sealed)
+      return try body(result, sealed, acquired, workspace)
     }
   }
 
@@ -282,9 +317,29 @@ package enum LedgerReplay {
     ]
   }
 
+  package static func exportPrompt(
+    _ lowering: LockedLowering, ledger: ResolvedLedger, resources: [String: URL],
+    roots: [String: URL]
+  ) throws -> Data {
+    let locations = try lowering.inputs.compactMap {
+      try ledger.components[$0]?.payload.object?["localAppend"].map {
+        try LedgerLocation(ledgerValue: $0)
+      }
+    }
+    let paths = try Set(locations.map { try $0.resolve(roots: roots) })
+    guard paths.count <= 1 else {
+      throw CoreError.invalidState("prompt has conflicting consumer append locations")
+    }
+    let append = try locations.first.map { try $0.readContainedFile(roots: roots) }
+    return try chatGPT(
+      lowering, ledger, resources, outputBytes: LedgerLimits.standard.resourceBytes,
+      consumerAppend: append
+    ).first!.bytes!
+  }
+
   private static func chatGPT(
     _ lowering: LockedLowering, _ ledger: ResolvedLedger, _ resources: [String: URL],
-    outputBytes: Int
+    outputBytes: Int, consumerAppend: Data? = nil
   ) throws -> [ReplayedArtifact] {
     guard let count = lowering.layout.object?["sectionCount"]?.integer, count > 0,
       count <= lowering.resources.count, lowering.resources.count <= count + 1,
@@ -294,9 +349,17 @@ package enum LedgerReplay {
       guard let file = resources[id] else { throw CoreError.invalidState("missing prompt section") }
       return try FileSystem.read(at: file)
     }
-    let append = try lowering.resources.dropFirst(count).first.map { id in
+    var append = try lowering.resources.dropFirst(count).first.map { id in
       guard let file = resources[id] else { throw CoreError.invalidState("missing prompt append") }
       return try FileSystem.read(at: file)
+    }
+    if let consumerAppend, !consumerAppend.isEmpty {
+      if append?.isEmpty == false {
+        append!.append(Data("\n".utf8))
+        append!.append(consumerAppend)
+      } else {
+        append = consumerAppend
+      }
     }
     return [
       .init(

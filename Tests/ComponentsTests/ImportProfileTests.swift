@@ -28,6 +28,42 @@ struct ImportProfileTests {
     #expect(rulesync.components.isEmpty)
   }
 
+  @Test func apmPackageIdentityIsLocatedMetadataAndDoesNotBlockAuthoringContent() throws {
+    let fixture = try ImportProfileFixture()
+    // APM permits a manifest with only its required package identity fields.
+    try fixture.write("apm.yml", "name: example\nversion: '1.0.0'\n")
+    try fixture.write(
+      ".apm/skills/review/SKILL.md",
+      "---\nname: review\ndescription: Review\n---\n# Review\n")
+    let before = try fixture.hash()
+    let proposal = try SourceImport.preview(fixture.input(.apmManifest, "apm.yml"))
+    #expect(proposal.diagnostics.isEmpty)
+    #expect(proposal.bindings.isEmpty)
+    #expect(proposal.components.count == 1)
+    #expect(proposal.resources.first?.requiresStandaloneSource == true)
+    let metadata = try #require(proposal.packageMetadata)
+    #expect(metadata.name == "example")
+    #expect(metadata.version == "1.0.0")
+    #expect(metadata.nameLocation.document == "apm.yml")
+    #expect(metadata.nameLocation.span?.line == 1)
+    #expect(metadata.versionLocation?.span?.line == 2)
+    #expect(proposal.profile.producerRevision == "787a97cc52fbbcc344374e1567b2a1e5b8adf441")
+    #expect(try fixture.hash() == before)
+
+    try fixture.write("apm.yml", "name: example\nversion: '1.0.0'\nscripts: {start: never-run}\n")
+    let unresolved = try SourceImport.preview(fixture.input(.apmManifest, "apm.yml"))
+    #expect(unresolved.packageMetadata == metadata)
+    #expect(
+      unresolved.diagnostics.contains { $0.code == .unconverted && $0.location.span?.line == 3 })
+    #expect(!String(reflecting: unresolved).contains("never-run"))
+
+    try fixture.write("apm.yml", "name: https://user:METADATA_SECRET@host.test\nversion: '1.0.0'\n")
+    let privateMetadata = try SourceImport.preview(fixture.input(.apmManifest, "apm.yml"))
+    #expect(privateMetadata.packageMetadata == nil)
+    #expect(!privateMetadata.bindings.isEmpty)
+    #expect(!String(reflecting: privateMetadata).contains("METADATA_SECRET"))
+  }
+
   @Test func apmCompositionNeedsMatchingCoordinatesAndCapturesExplicitContentHonestly() throws {
     let fixture = try ImportProfileFixture()
     try fixture.write(

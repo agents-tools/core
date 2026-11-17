@@ -7,8 +7,9 @@ final class TransactionSession {
   let parents: [DirectoryHandle]
   let checkpoint: (String) throws -> Void
   let resources: [SharedResource]
+  private let outcome: TransactionOutcome?
   /// Logical project-root authorization is checked separately from opened physical parents.
-  private let nativeRoots: [String: URL]
+  private let nativeRoots: [String: NativeRootAuthority]
   /// Devices whose atomic renames passed a probe during this session only; `st_dev` values
   /// can be reused by another filesystem after an unmount.
   var capableDevices: Set<UInt64> = []
@@ -16,7 +17,7 @@ final class TransactionSession {
   init(
     journal: TransactionJournal, directory: DirectoryHandle, parents: [DirectoryHandle],
     checkpoint: @escaping (String) throws -> Void, resources: [SharedResource] = [],
-    nativeRoots: [String: URL] = [:]
+    nativeRoots: [String: NativeRootAuthority] = [:], outcome: TransactionOutcome? = nil
   ) {
     self.journal = journal
     self.directory = directory
@@ -24,15 +25,35 @@ final class TransactionSession {
     self.checkpoint = checkpoint
     self.resources = resources
     self.nativeRoots = nativeRoots
+    self.outcome = outcome
+  }
+
+  var privateTreeBytes = 0
+  var privateNativeArrays: [Int: [PrivateNativeArrayRecord]] = [:]
+
+  func sealNativeArrays(_ arrays: [PrivateNativeArrayRecord]?, for index: Int) throws {
+    var candidate = privateNativeArrays
+    candidate[index] = arrays
+    var count = 0
+    for records in candidate.values {
+      guard records.count <= LedgerLimits.standard.entries - count else {
+        throw CoreError.invalidState("private array candidate exceeds limits")
+      }
+      count += records.count
+    }
+    try LedgerAdmission.check(StateStore.encode(candidate), limits: .standard)
+    privateNativeArrays = candidate
   }
 
   func emit(_ point: TransactionCheckpoint) throws { try checkpoint(point.name) }
 
   func persist(_ change: TransactionCheckpoint.Change) throws {
     try requireScope()
+    let bytes = try StateStore.encode(journal)
+    try LedgerAdmission.check(bytes, limits: .standard)
     try directory.replaceFile(
       TransactionJournal.fileName, through: TransactionJournal.incompleteFileName,
-      with: StateStore.encode(journal),
+      with: bytes,
       afterWrite: {
         try emit(.persisted(journal.phase, change, .written))
       },
@@ -57,6 +78,7 @@ final class TransactionSession {
     journal.entries[index].progress = next
     journal.entries[index].conflict = nil
     try persist(.entry(index, next))
+    if next == .publishing { outcome?.publicationStarted = true }
     try emit(.progress(index, next))
   }
 
@@ -87,14 +109,11 @@ final class TransactionSession {
   }
 
   func requireParent(_ index: Int) throws {
-    if !resources.isEmpty { try requireScope() }
-    if let route = NativeTargetRoute.targetRoute(journal.entries[index].path), !route.shared {
-      guard let logical = nativeRoots[route.root],
-        try DirectoryHandle(at: logical.resolvingSymlinksInPath()).identity
-          == journal.roots[route.root]
-      else {
-        throw conflict(index, "registered native root changed after preparation")
-      }
+    try requireScope()
+    let root = String(journal.entries[index].path.split(separator: "/").first!)
+    if let logical = nativeRoots[root] {
+      guard try DirectoryHandle(at: logical.physicalDirectory()).identity == journal.roots[root]
+      else { throw conflict(index, "registered root changed after preparation") }
     }
     try journal.entries[index].security.ancestry?.validate(at: parents[index].url)
     guard
@@ -164,6 +183,23 @@ final class TransactionSession {
       try requireParent(index)
       try entry.security.validate(entry: entry)
       let target = parents[index].url.appendingPathComponent(entry.name)
+      if try paths.coordinationRoute(for: entry.path) != nil, entry.coordination == nil {
+        throw CoreError.invalidState("shared target lacks physical coordination")
+      }
+      if let coordination = entry.coordination {
+        let identity = journal.footprint[coordination]
+        if let route = NativeTargetRoute.metadataRoute(entry.path) {
+          guard let resource = resources.first(where: { $0.identity == identity }),
+            resource.route.basename.utf8.elementsEqual(route.basename.utf8),
+            try resource.metadata?.objectIdentity == parents[index].objectIdentity,
+            entry.name == "receipt"
+          else { throw CoreError.invalidState("invalid coordinated receipt entry") }
+        } else {
+          guard try parents[index].objectIdentity == identity.parent,
+            entry.name.utf8.elementsEqual(identity.basename.utf8)
+          else { throw CoreError.invalidState("entry contradicts physical coordination") }
+        }
+      }
       guard
         !targets.contains(where: {
           PathSafety.isContained(target, in: $0) || PathSafety.isContained($0, in: target)
@@ -259,14 +295,15 @@ final class TransactionSession {
       return layouts[0]
     }
     let container = try self.container(entry.container)
+    let permitsWrite = permittingDirectoryWrite && entry.progress.permitsDirectoryWrite
     var objects: [TransactionSlot: FileSnapshot] = [:]
     for slot in TransactionSlot.objectSlots {
       if let value = try FileSnapshot.read(slot.name(index), from: container) {
-        try entry.security.validateObject(value, named: slot.name(index), in: container)
+        try entry.security.validateObject(
+          value, named: slot.name(index), in: container, permittingDirectoryWrite: permitsWrite)
         objects[slot] = value
       }
     }
-    let permitsWrite = permittingDirectoryWrite && entry.progress.permitsDirectoryWrite
     for layout in layouts where Set(layout.objects.keys) == Set(objects.keys) {
       guard
         layout.objects.allSatisfy({ slot, expected in
@@ -275,12 +312,14 @@ final class TransactionSession {
         })
       else { continue }
       if layout.kind == .prepared, let original = entry.preimage {
-        try entry.security.validateObject(original, named: entry.name, in: parents[index])
+        try entry.security.validateObject(
+          original, named: entry.name, in: parents[index], permittingDirectoryWrite: permitsWrite)
       }
       if case .object(let expected) = layout.target,
         try parents[index].info(entry.name).map(FileObjectIdentity.init) == expected.identity
       {
-        try entry.security.validateObject(expected, named: entry.name, in: parents[index])
+        try entry.security.validateObject(
+          expected, named: entry.name, in: parents[index], permittingDirectoryWrite: permitsWrite)
       }
       if try layout.target.matches(
         entry.name, from: parents[index], permittingDirectoryWrite: permitsWrite)

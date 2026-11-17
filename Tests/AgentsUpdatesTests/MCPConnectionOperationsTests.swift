@@ -6,7 +6,7 @@ import Testing
 private final class MCPFacadeBundle: NSObject {}
 
 /// Only the call list mutates, under lock; values are immutable fixture input.
-private final class MCPBindingSpy: RuntimeBindingProvider, @unchecked Sendable {
+final class MCPBindingSpy: RuntimeBindingProvider, @unchecked Sendable {
   private let lock = NSLock()
   private var names: [String] = []
   let values: [String: Data]
@@ -32,7 +32,7 @@ private struct MCPRemovingDirectoryProvider: RuntimeBindingProvider {
   }
 }
 
-private final class MCPFacadeFixture {
+final class MCPFacadeFixture {
   let root: URL
   let observation: URL
   let environment: RuntimeEnvironment
@@ -146,6 +146,107 @@ private final class MCPFacadeFixture {
     let pid = try #require(Int32(fixture.text("pid") ?? ""))
     #expect(kill(pid, 0) == -1 && errno == ESRCH)
     try fixture.unchanged()
+  }
+
+  @Test func confirmationShowsFixedCommandAndSafeEndpointWithoutEffects() throws {
+    let fixture = try MCPFacadeFixture()
+    let live = try MCPConnectionResource.live(fixture.root)
+    let snapshot = try MCPConnectionOperations.snapshot(
+      selectionID: "description-only",
+      transport: .stdio(
+        .init(
+          executable: "safe-command", arguments: ["--mode", "read-only", "literal-\ncanary", "é"],
+          environment: ["TOKEN": .literal("literal-canary"), "SECRET": .secret("named-secret")])),
+      workingDirectory: live)
+    let before = try FileHash.folderHash(fixture.root)
+    let description = MCPConnectionOperations.describe(snapshot)
+    #expect(description.executable == "safe-command")
+    #expect(description.arguments == ["--mode", "read-only", "[redacted]", "é"])
+    #expect(description.workingDirectory == fixture.root.path)
+    #expect(!description.workingDirectoryIsCaptured && !description.executableIsCaptured)
+    #expect(description.endpoint == nil && description.startsOwnedProcess)
+    #expect(description.requiredBindings == ["named-secret"])
+    #expect(description.readLocations == snapshot.readLocations)
+    #expect(snapshot.readLocations.contains { $0.path == fixture.root.path })
+    #expect(try FileHash.folderHash(fixture.root) == before && fixture.text("pid") == nil)
+    for transport: MCPTransportDeclaration in [
+      .sse(
+        url: "http://127.0.0.1:1/private-path?token=query-canary",
+        headers: [
+          "Authorization": .literal("header-canary"), "X-Secret": .secret("remote-secret"),
+        ]),
+      .streamableHTTP(url: "http://127.0.0.1:1/private-path?token=query-canary", headers: [:]),
+    ] {
+      // Projection only. No test() call is admitted for these endpoint values.
+      let remote = try MCPConnectionOperations.snapshot(selectionID: "remote", transport: transport)
+      let info = MCPConnectionOperations.describe(remote)
+      #expect(info.endpoint == "http://127.0.0.1:1/[redacted]")
+      #expect(!info.startsOwnedProcess && info.executable == nil && info.arguments == nil)
+      #expect(info.workingDirectory == nil && info.readLocations.isEmpty)
+      let text = String(decoding: try JSONEncoder().encode(info), as: UTF8.self)
+      for hidden in ["private-path", "query-canary", "header-canary"] {
+        #expect(!text.contains(hidden))
+      }
+    }
+    let credentialInOrigin = try MCPConnectionOperations.snapshot(
+      selectionID: "header-redaction-only",
+      transport: .sse(
+        url: "http://127.0.0.1:1/mcp",
+        headers: [
+          "Authorization": .literal("Bearer 127.0.0.1")
+        ]))
+    #expect(
+      MCPConnectionOperations.describe(credentialInOrigin).endpoint
+        == "http://[redacted]:1/[redacted]")
+    let long = try MCPConnectionOperations.snapshot(
+      selectionID: "bounded",
+      transport: .stdio(
+        .init(
+          executable: "safe-command", arguments: ["a" + String(repeating: "é", count: 20_000)])),
+      workingDirectory: live)
+    let projected = try #require(MCPConnectionOperations.describe(long).arguments?.first)
+    #expect(projected.utf8.count == 4095 && projected.hasPrefix("a"))
+    #expect(String(data: Data(projected.utf8), encoding: .utf8) != nil)
+    #expect(fixture.text("pid") == nil)
+    try FileManager.default.removeItem(at: fixture.root)
+    #expect(MCPConnectionOperations.describe(snapshot) == description)
+  }
+
+  @Test func confirmationIdentifiesSelectedExecutableResourceInsteadOfDeclaration() throws {
+    let fixture = try MCPFacadeFixture()
+    let file = fixture.root.appendingPathComponent("selected-executable")
+    try Data("description-only resource".utf8).write(to: file)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+    let cwd = try MCPConnectionResource.live(fixture.root)
+    let declared = "/declared/different-executable"
+    let live = try MCPConnectionOperations.snapshot(
+      selectionID: "live-resource",
+      transport: .stdio(.init(executable: declared, arguments: ["fixed-argument"])),
+      workingDirectory: cwd, executable: .live(file))
+    let captured = try MCPConnectionOperations.snapshot(
+      selectionID: "captured-resource",
+      transport: .stdio(.init(executable: declared)), workingDirectory: cwd,
+      executable: .capture(
+        sourceRoot: fixture.root, path: "selected-executable",
+        expectedHash: "sha256:" + FileHash.sha256Hex(file: file),
+        expectedExecutableFiles: [".": true]))
+    let before = try FileHash.folderHash(fixture.root)
+    let liveDescription = MCPConnectionOperations.describe(live)
+    #expect(liveDescription.executable == file.path && !liveDescription.executableIsCaptured)
+    #expect(liveDescription.arguments == ["fixed-argument"])
+    #expect(liveDescription.readLocations.contains { $0.path == file.path })
+    let capturedDescription = MCPConnectionOperations.describe(captured)
+    #expect(capturedDescription.executable == "selected-executable")
+    #expect(capturedDescription.executableIsCaptured)
+    #expect(!capturedDescription.readLocations.contains { $0.path == file.path })
+    let path = try MCPConnectionOperations.snapshot(
+      selectionID: "path-command", transport: .stdio(.init(executable: "path-command")),
+      workingDirectory: cwd)
+    #expect(MCPConnectionOperations.describe(path).executable == "path-command")
+    #expect(try FileHash.folderHash(fixture.root) == before && fixture.text("pid") == nil)
+    try FileManager.default.removeItem(at: file)
+    #expect(MCPConnectionOperations.describe(live) == liveDescription)
+    #expect(MCPConnectionOperations.describe(captured) == capturedDescription)
   }
 
   @Test func invalidOptionsAndUnavailableEnvironmentDoNotConsultProvider() async throws {

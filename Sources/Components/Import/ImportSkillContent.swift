@@ -11,14 +11,28 @@ struct ImportSkillContent {
   let diagnostics: [SourceImportDiagnostic]
   let bindings: [ImportBindingRequirement]
 
-  static func read(_ path: String, input: SourceImportInput, limits: SourceImportLimits) throws
-    -> Self
-  {
+  static func read(
+    _ path: String, input: SourceImportInput, limits: SourceImportLimits,
+    nativeContainer: String? = nil
+  ) throws -> Self {
     let path = try ImportInput.path(path)
     let source = try ImportInput.snapshot(input.root)
     let directory = try source.resource(path)
-    // Admit the finite tree before readers that sort directory entries or recursively discover.
-    // This capture profile refuses links rather than changing their producer hash semantics.
+    let boundary: URL
+    if let nativeContainer {
+      guard [.claudePluginV1, .cursorPluginV1, .geminiExtensionV1].contains(input.profile) else {
+        throw ImportReadFailure.invalid
+      }
+      boundary = try source.resource(ImportInput.path(nativeContainer))
+      guard PathSafety.isContained(directory, in: boundary),
+        PathSafety.isContained(
+          directory.resolvingSymlinksInPath(), in: boundary.resolvingSymlinksInPath())
+      else { throw ImportReadFailure.invalid }
+    } else {
+      boundary = directory
+    }
+    // Bound the selected physical tree before discovery. Native supporting links are admitted
+    // by capture against the explicit enclosing container, never as discovered members.
     guard limits.resourceEntries > 0, limits.resourceBytes >= 0, limits.depth > 0,
       let iterator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil)
     else { throw ImportReadFailure.invalid }
@@ -34,7 +48,11 @@ struct ImportSkillContent {
       guard depth <= limits.depth else { throw ImportReadFailure.invalid }
       let attributes = try FileManager.default.attributesOfItem(atPath: entry.path)
       let type = attributes[.type] as? FileAttributeType
-      guard type == .typeDirectory || type == .typeRegular else { throw ImportReadFailure.invalid }
+      if type == .typeSymbolicLink, nativeContainer != nil {
+        iterator.skipDescendants()
+      } else if type != .typeDirectory && type != .typeRegular {
+        throw ImportReadFailure.invalid
+      }
       if type == .typeRegular {
         guard let size = (attributes[.size] as? NSNumber)?.intValue,
           size >= 0, size <= limits.resourceBytes - total
@@ -48,10 +66,14 @@ struct ImportSkillContent {
         encodedBytes: limits.resourceBytes, depth: limits.depth, nodes: limits.nodes,
         objectBytes: limits.resourceBytes, entries: limits.resourceEntries,
         keyBytes: limits.resourceBytes,
-        resourceBytes: limits.resourceBytes), sourceRoot: directory)
-    // Link identity and link-following producer hashes are different contracts. This bounded
-    // capture supports regular content; linked trees need explicit conversion before import.
-    guard frozen.entries.allSatisfy({ $0.kind != .symlink }), frozen.support.isEmpty else {
+        resourceBytes: limits.resourceBytes), sourceRoot: boundary)
+    // Producer-specific installed-content hashes retain their regular-file-only admission.
+    if nativeContainer == nil {
+      guard frozen.entries.allSatisfy({ $0.kind != .symlink }), frozen.support.isEmpty else {
+        throw ImportReadFailure.invalid
+      }
+    }
+    guard frozen.support.allSatisfy({ $0.path.split(separator: "/").count <= limits.depth }) else {
       throw ImportReadFailure.invalid
     }
     let files = try frozen.entries.filter { $0.kind == .file }.map { entry -> (String, Data) in

@@ -46,8 +46,10 @@ struct WatchPreparationTests {
     let cached = try FileSnapshot.read(at: unreferenced)
     let declaration = try FileSnapshot.read(at: fixture.store.declarationURL)
     let watchBefore = try FileSnapshot.read(at: fixture.store.watchURL)
-    let edited = try StateStore.encodeState(
-      ResolvedState(sources: ["local:/edited": LockedSource(kind: .local)]))
+    var ledger = try fixture.store.loadLedger()
+    ledger.sources["external"] = LedgerSource(
+      kind: .local, location: .init(kind: .absolute, path: "/edited"), revision: "live")
+    let edited = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
     let external = ExternalEdit()
     let watch = fixture.operations { [store = fixture.store] in
       try edited.write(to: store.resolvedURL)

@@ -141,6 +141,83 @@ enum ImportReadFailure: Error { case invalid }
 
 struct ImportDiagnostics {
   var proposal: SourceImportProposal
+  var bindingReferences: [String: RuntimeBinding] = [:]
+  var resolvedBindings: Set<ImportLocation> = []
+
+  struct CanonicalAttempt {
+    let components: Int
+    let slots: Set<ImportLocation>
+    let resolved: Set<ImportLocation>
+  }
+
+  func beginCanonicalAttempt() -> CanonicalAttempt {
+    .init(
+      components: proposal.components.count,
+      slots: Set(proposal.bindings.filter(\.canonicalSlot).map(\.location)),
+      resolved: resolvedBindings)
+  }
+
+  mutating func endCanonicalAttempt(_ attempt: CanonicalAttempt) {
+    guard proposal.components.count <= attempt.components else { return }
+    for index in proposal.bindings.indices
+    where !attempt.slots.contains(proposal.bindings[index].location) {
+      proposal.bindings[index].canonicalSlot = false
+    }
+    resolvedBindings = attempt.resolved
+  }
+
+  struct ChoiceCapture {
+    let index: Int
+    let components: Int
+    let sources: Int
+    let resources: Int
+    let diagnostics: Int
+  }
+
+  mutating func beginChoice(_ key: String, at location: ImportLocation) -> ChoiceCapture {
+    let index: Int
+    if let found = proposal.choices.firstIndex(where: { $0.key.utf8.elementsEqual(key.utf8) }) {
+      index = found
+      if !proposal.choices[index].locations.contains(location) {
+        proposal.choices[index].locations.append(location)
+      }
+    } else {
+      index = proposal.choices.count
+      proposal.choices.append(.init(key: key, locations: [location]))
+    }
+    return .init(
+      index: index, components: proposal.components.count, sources: proposal.sources.count,
+      resources: proposal.resources.count, diagnostics: proposal.diagnostics.count)
+  }
+
+  mutating func endChoice(_ capture: ChoiceCapture) {
+    proposal.choices[capture.index].components += Array(
+      capture.components..<proposal.components.count)
+    proposal.choices[capture.index].sources += Array(capture.sources..<proposal.sources.count)
+    proposal.choices[capture.index].resources += Array(capture.resources..<proposal.resources.count)
+    proposal.choices[capture.index].diagnostics += Array(
+      capture.diagnostics..<proposal.diagnostics.count)
+  }
+
+  mutating func requireInput(
+    _ kind: ImportInputMetadata.Kind, key: String, at location: ImportLocation
+  ) {
+    let value = ImportInputMetadata(kind: kind, key: key, location: location)
+    if !proposal.requiredInputs.contains(value) { proposal.requiredInputs.append(value) }
+  }
+
+  mutating func finalizeBindings() {
+    proposal.bindings.removeAll { resolvedBindings.contains($0.location) }
+    for requirement in proposal.bindings {
+      if !proposal.diagnostics.contains(where: {
+        $0.code == .credentialBinding && $0.location == requirement.location
+      }) {
+        add(
+          .credentialBinding, requirement.location,
+          "Credential literals cannot be retained in import proposals.")
+      }
+    }
+  }
 
   mutating func add(
     _ code: SourceImportDiagnostic.Code, _ location: ImportLocation, _ message: String
@@ -195,12 +272,14 @@ struct ImportDiagnostics {
   }
 
   mutating func binding(_ location: ImportLocation, environmentVariable: String? = nil) {
+    if environmentVariable == nil, !proposal.preservationBindings.contains(location) {
+      proposal.preservationBindings.append(location)
+    }
     guard !proposal.bindings.contains(where: { $0.location == location }) else { return }
     proposal.bindings.append(
       .init(
         location: location, reason: "Credential-bearing input requires an explicit local binding.",
         environmentVariable: environmentVariable)
     )
-    add(.credentialBinding, location, "Credential literals cannot be retained in import proposals.")
   }
 }

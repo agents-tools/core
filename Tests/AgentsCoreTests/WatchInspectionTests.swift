@@ -77,6 +77,11 @@ struct WatchInspectionTests {
       discoverSkills: { _ in [] },
       fetchArtifacts: { _ in throw CoreError.unsupported("no subscribed sources") })
 
+    let inspection = try watch.inspectStatus(scope: scope, environment: environment)
+    #expect(inspection.statuses.isEmpty)
+    #expect(
+      Set(inspection.readLocations)
+        == Set([store.declarationURL, store.resolvedURL, store.watchURL]))
     #expect(try watch.status(scope: scope, environment: environment).isEmpty)
     #expect(try FileHash.folderHash(root) == before)
     #expect(throws: CoreError.notFound("source is not subscribed: ./source")) {

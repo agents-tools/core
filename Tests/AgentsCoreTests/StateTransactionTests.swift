@@ -145,6 +145,8 @@ final class TransactionFixture {
   deinit { removeTemporaryDirectory(root) }
   func commit(checkpoint: @escaping (String) throws -> Void) throws {
     try store.withLock {
+      var ledger = ResolvedLedger()
+      ledger.sources["local:/new"] = LedgerSource(kind: .local, revision: "live")
       let transaction = FileTransaction(store: store, checkpoint: checkpoint)
       try transaction.replace(
         root.appendingPathComponent(".agents/skills/target"),
@@ -154,7 +156,7 @@ final class TransactionFixture {
       try transaction.replace(
         store.resolvedURL,
         with: .data(
-          StateStore.encode(ResolvedState(sources: ["local:/new": LockedSource(kind: .local)]))))
+          StateStore.encode(ledger)))
       try transaction.delete(root.appendingPathComponent(".agent/cache/artifact-content/pruned"))
       try transaction.replace(
         root.appendingPathComponent(".claude/skills/created"),
@@ -175,7 +177,7 @@ final class TransactionFixture {
         contentsOf: root.appendingPathComponent(".agents/skills/target/SKILL.md"), encoding: .utf8)
         == (committed ? "new" : "target"))
     #expect(try store.loadDeclaration().agents == (committed ? [.codex] : nil))
-    #expect(try store.loadResolved().sources.isEmpty == !committed)
+    #expect(try store.loadLedger().sources.isEmpty == !committed)
     #expect(
       FileManager.default.fileExists(
         atPath: root.appendingPathComponent(".claude/skills/created/SKILL.md").path) == committed)
@@ -220,8 +222,7 @@ extension StateTransactionTests {
     }
     #expect { try store.withLock {} } throws: { error in
       if json == "{broken" {
-        let error = error as NSError
-        return error.domain == NSCocoaErrorDomain && error.code == 3840
+        return error as? CoreError == .invalidState("invalid ledger JSON")
       }
       return error as? CoreError
         == .invalidState(
@@ -499,22 +500,18 @@ extension StateTransactionTests {
         text.data(using: .utf16BigEndian)!, text.data(using: .utf32)!,
         Data(text.utf8) + Data(" {}".utf8),
       ]
-      for (index, bytes) in encodings.enumerated() {
+      for bytes in encodings {
         try bytes.write(to: url)
         let snapshot = try FileSnapshot.read(at: fixture.root)
         #expect { try fixture.store.withLock {} } throws: { error in
-          if index < 4 {
-            return error as? CoreError
-              == .invalidState("JSON must be UTF-8 without a byte order mark")
-          }
-          let error = error as NSError
-          return error.domain == NSCocoaErrorDomain && error.code == 3840
+          guard case CoreError.invalidState = error else { return false }
+          return true
         }
         #expect(try FileSnapshot.read(at: fixture.root) == snapshot)
       }
     }
     try Data(duplicate.utf8).write(to: url)
-    #expect(throws: CoreError.invalidState("duplicate JSON key: phase")) {
+    #expect(throws: CoreError.invalidState("duplicate ledger key")) {
       try fixture.store.withLock {}
     }
     try original.write(to: url)
@@ -615,11 +612,9 @@ extension StateTransactionTests {
         }
         try transaction.replace(
           store.declarationURL, with: .data(manifestText("defaultAgents: [\"codex\"]\n")))
-        try transaction.replace(
-          store.resolvedURL,
-          with: .data(
-            StateStore.encode(
-              ResolvedState(sources: ["local:/new": LockedSource(kind: .local)]))))
+        var ledger = ResolvedLedger()
+        ledger.sources["local:/new"] = LedgerSource(kind: .local, revision: "live")
+        try transaction.replace(store.resolvedURL, with: .data(StateStore.encode(ledger)))
         try transaction.commit()
       }
     }
@@ -631,5 +626,286 @@ extension StateTransactionTests {
     #expect(try Data(contentsOf: store.resolvedURL) == before)
     #expect(try Data(contentsOf: fixture.store.resolvedURL) == projectBefore)
     #expect(try store.loadDeclaration().agents == nil)
+  }
+}
+
+extension StateTransactionTests {
+  @Test(arguments: [false, true])
+  func observedProjectCannotBeRecreatedOrReplacedBeforeAdmission(_ replace: Bool) throws {
+    let parent = try temporaryDirectory()
+    defer { removeTemporaryDirectory(parent) }
+    let project = parent.appendingPathComponent("project")
+    let moved = parent.appendingPathComponent("moved")
+    try FileManager.default.createDirectory(at: project, withIntermediateDirectories: false)
+    let store = StateStore(
+      scope: .project, environment: RuntimeEnvironment(projectDirectory: project))
+    let before = try FileSnapshot.read(at: parent)
+    let observed = try store.captureExistingProjectRoot()
+    #expect(try FileSnapshot.read(at: parent) == before)
+    try FileManager.default.moveItem(at: project, to: moved)
+    if replace {
+      try FileManager.default.createDirectory(at: project, withIntermediateDirectories: false)
+    }
+    #expect(throws: (any Error).self) {
+      try store.withLock(existingRoot: observed) { Issue.record("stale root admitted") }
+    }
+    #expect(!FileManager.default.fileExists(atPath: project.appendingPathComponent(".agent").path))
+    #expect(!FileManager.default.fileExists(atPath: moved.appendingPathComponent(".agent").path))
+    #expect(FileManager.default.fileExists(atPath: project.path) == replace)
+  }
+
+  @Test(arguments: [false, true])
+  func observedProjectMovementStopsPublication(_ replace: Bool) throws {
+    let parent = try temporaryDirectory()
+    defer { removeTemporaryDirectory(parent) }
+    let project = parent.appendingPathComponent("project")
+    let moved = parent.appendingPathComponent("moved")
+    try FileManager.default.createDirectory(at: project, withIntermediateDirectories: false)
+    let target = project.appendingPathComponent("AGENTS.md")
+    try Data("preimage".utf8).write(to: target)
+    let store = StateStore(
+      scope: .project, environment: RuntimeEnvironment(projectDirectory: project))
+    let observed = try store.captureExistingProjectRoot()
+    let outcome = TransactionOutcome()
+    #expect(throws: (any Error).self) {
+      try store.withLock(outcome: outcome, existingRoot: observed) {
+        let transaction = FileTransaction(store: store, outcome: outcome) { point in
+          if point == TransactionCheckpoint.publication(0, .validated).name {
+            try FileManager.default.moveItem(at: project, to: moved)
+            if replace {
+              try FileManager.default.createDirectory(
+                at: project, withIntermediateDirectories: false)
+            }
+          }
+        }
+        try transaction.replace(target, with: .data(Data("replacement".utf8)))
+        try transaction.commit()
+      }
+    }
+    #expect(
+      try Data(contentsOf: moved.appendingPathComponent("AGENTS.md")) == Data("preimage".utf8))
+    #expect(
+      !FileManager.default.fileExists(atPath: project.appendingPathComponent("AGENTS.md").path))
+    #expect(FileManager.default.fileExists(atPath: project.path) == replace)
+    #expect(outcome.publicationStarted && outcome.recoveryPending)
+    #expect(outcome.disposition == .recoveryRequired)
+    if replace { try FileManager.default.removeItem(at: project) }
+    try FileManager.default.moveItem(at: moved, to: project)
+    #expect(throws: CoreError.transactionRecovered(store.directory.path)) { try store.withLock {} }
+    #expect(try Data(contentsOf: target) == Data("preimage".utf8))
+  }
+
+  @Test(arguments: [false, true])
+  func terminalEvidenceSurvivesFailedDisposalRecovery(_ committed: Bool) throws {
+    let fixture = try TransactionFixture()
+    let parent = fixture.root.appendingPathComponent(".agents/skills")
+    let displaced = fixture.root.appendingPathComponent("displaced-skills")
+    let outcome = TransactionOutcome()
+    let stop =
+      committed
+      ? TransactionCheckpoint.phase(.committed).name
+      : TransactionCheckpoint.progress(0, .applied).name
+    #expect(throws: CoreError.invalidState("interrupted transaction")) {
+      try fixture.store.withLock(outcome: outcome) {
+        let transaction = FileTransaction(store: fixture.store, outcome: outcome) { point in
+          if point == stop {
+            try FileManager.default.moveItem(at: parent, to: displaced)
+            throw CoreError.invalidState("interrupted transaction")
+          }
+        }
+        try transaction.replace(
+          parent.appendingPathComponent("target"),
+          with: .copy(fixture.root.appendingPathComponent("new")))
+        try transaction.commit()
+      }
+    }
+    #expect(outcome.publicationStarted && outcome.recoveryPending)
+    #expect(outcome.disposition == (committed ? .committed : .recoveryRequired))
+    #expect(outcome.terminal == (committed ? .committed : nil))
+    #expect(
+      try Data(contentsOf: displaced.appendingPathComponent("target/SKILL.md")) == Data("new".utf8))
+    #expect(
+      FileManager.default.fileExists(
+        atPath: fixture.store.directory.appendingPathComponent(TransactionJournal.fileName).path))
+    let nextOperation = TransactionOutcome()
+    #expect(throws: (any Error).self) {
+      try fixture.store.withLock(outcome: nextOperation) {
+        Issue.record("pending recovery admitted a new operation")
+      }
+    }
+    #expect(!nextOperation.publicationStarted && nextOperation.terminal == nil)
+    #expect(nextOperation.disposition == .recoveryRequired && nextOperation.recoveryPending)
+    try FileManager.default.moveItem(at: displaced, to: parent)
+    #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
+      try fixture.store.withLock(outcome: outcome) {}
+    }
+    #expect(outcome.terminal == (committed ? .committed : .rolledBack))
+    #expect(!outcome.recoveryPending)
+    #expect(
+      try Data(contentsOf: parent.appendingPathComponent("target/SKILL.md"))
+        == Data((committed ? "new" : "target").utf8))
+  }
+
+  @Test func stagingRollbackDoesNotClaimPublication() throws {
+    let fixture = try TransactionFixture()
+    let outcome = TransactionOutcome()
+    try fixture.store.withLock(outcome: outcome) {
+      let transaction = FileTransaction(store: fixture.store, outcome: outcome) { point in
+        if point == TransactionCheckpoint.stage(0, .constructed).name {
+          throw CoreError.invalidState("stop staging")
+        }
+      }
+      try transaction.replace(
+        fixture.root.appendingPathComponent("AGENTS.md"), with: .data(Data("new".utf8)))
+      #expect(throws: CoreError.invalidState("stop staging")) { try transaction.commit() }
+    }
+    #expect(!outcome.publicationStarted && !outcome.recoveryPending)
+    #expect(outcome.terminal == .rolledBack && outcome.disposition == .unchanged)
+    #expect(
+      try Data(contentsOf: fixture.root.appendingPathComponent("AGENTS.md"))
+        == Data("old instructions".utf8))
+  }
+}
+
+extension StateTransactionTests {
+  @Test(arguments: [false, true])
+  func localSkillInitializationUsesTheSameJournalAtAnExistingAnchor(_ named: Bool) throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
+    let before = try FileSnapshot.read(at: root)
+    let observation = try store.captureExistingProjectRoot()
+    let target = try store.skillInitializationTarget(named: named ? "new-skill" : nil)
+    #expect(try FileSnapshot.read(at: root) == before)
+    let outcome = TransactionOutcome()
+    try store.withLock(outcome: outcome, existingRoot: observation) {
+      #expect(throws: CoreError.self) {
+        try FileTransaction(store: store).replace(target.file, with: .data(Data("unadmitted".utf8)))
+      }
+      let transaction = FileTransaction(store: store, outcome: outcome)
+      try transaction.initializeSkill(target, bytes: Data("skill template".utf8))
+      try transaction.commit()
+    }
+    #expect(outcome.terminal == .committed && !outcome.recoveryPending)
+    #expect(try Data(contentsOf: target.file) == Data("skill template".utf8))
+    #expect(throws: CoreError.self) {
+      try store.skillInitializationTarget(named: named ? "new-skill" : nil)
+    }
+    for name in ["../escape", ".", "a/b", "UPPER"] {
+      #expect(throws: CoreError.self) { try store.skillInitializationTarget(named: name) }
+    }
+  }
+
+  @Test func localSkillInitializationRollbackRetainsTheRecordedAbsence() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
+    let observed = try store.captureExistingProjectRoot()
+    let target = try store.skillInitializationTarget(named: "new-skill")
+    let outcome = TransactionOutcome()
+    try store.withLock(outcome: outcome, existingRoot: observed) {
+      let transaction = FileTransaction(store: store, outcome: outcome) { point in
+        if point == TransactionCheckpoint.publication(0, .created).name {
+          throw CoreError.invalidState("skill publication interrupted")
+        }
+      }
+      try transaction.initializeSkill(target, bytes: Data("template".utf8))
+      #expect(throws: CoreError.invalidState("skill publication interrupted")) {
+        try transaction.commit()
+      }
+    }
+    #expect(
+      outcome.publicationStarted && outcome.terminal == .rolledBack && !outcome.recoveryPending)
+    #expect(!FileManager.default.fileExists(atPath: target.file.path))
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: store.directory.appendingPathComponent(TransactionJournal.fileName).path))
+  }
+}
+
+extension StateTransactionTests {
+  @Test func localSkillInitializationCannotFollowAChildLink() throws {
+    let parent = try temporaryDirectory()
+    defer { removeTemporaryDirectory(parent) }
+    let root = parent.appendingPathComponent("project")
+    let outside = parent.appendingPathComponent("outside")
+    for directory in [root, outside] {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    }
+    try FileManager.default.createSymbolicLink(
+      at: root.appendingPathComponent("linked"), withDestinationURL: outside)
+    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
+    let observed = try store.captureExistingProjectRoot()
+    let target = try store.skillInitializationTarget(named: "linked")
+    #expect(throws: (any Error).self) {
+      try store.withLock(existingRoot: observed) {
+        let transaction = FileTransaction(store: store)
+        try transaction.initializeSkill(target, bytes: Data("template".utf8))
+        try transaction.commit()
+      }
+    }
+    #expect(
+      !FileManager.default.fileExists(atPath: outside.appendingPathComponent("SKILL.md").path))
+  }
+}
+
+extension StateTransactionTests {
+  @Test func explicitlySelectedLocalDirectoryRetainsItsExactSpelling() throws {
+    let parent = try temporaryDirectory()
+    defer { removeTemporaryDirectory(parent) }
+    let store = StateStore(
+      scope: .project, environment: RuntimeEnvironment(projectDirectory: parent))
+    let observed = try store.captureExistingProjectRoot()
+    let target = try store.skillInitializationTarget(inChildDirectory: "Selected Skill")
+    try store.withLock(existingRoot: observed) {
+      let transaction = FileTransaction(store: store)
+      try transaction.initializeSkill(target, bytes: Data("template".utf8))
+      try transaction.commit()
+    }
+    #expect(target.file.deletingLastPathComponent().lastPathComponent == "Selected Skill")
+    #expect(try Data(contentsOf: target.file) == Data("template".utf8))
+    for name in ["", ".", "..", "../outside", "a/b", "a\\b"] {
+      #expect(throws: CoreError.self) {
+        try store.skillInitializationTarget(inChildDirectory: name)
+      }
+    }
+  }
+}
+
+extension StateTransactionTests {
+  @Test func durableRollbackTerminalSurvivesLossOfScopeReachability() throws {
+    let fixture = try TransactionFixture()
+    let moved = fixture.root.deletingLastPathComponent().appendingPathComponent(
+      fixture.root.lastPathComponent + "-moved")
+    defer { removeTemporaryDirectory(moved) }
+    let observed = try fixture.store.captureExistingProjectRoot()
+    let outcome = TransactionOutcome()
+    #expect(throws: CoreError.invalidState("stop publication")) {
+      try fixture.store.withLock(outcome: outcome, existingRoot: observed) {
+        let transaction = FileTransaction(store: fixture.store, outcome: outcome) { point in
+          if point == TransactionCheckpoint.publication(0, .exchanged).name {
+            throw CoreError.invalidState("stop publication")
+          }
+          if point == "recovery." + TransactionCheckpoint.phase(.rolledBack).name {
+            try FileManager.default.moveItem(at: fixture.root, to: moved)
+            throw CoreError.invalidState("scope moved after durable rollback")
+          }
+        }
+        try transaction.replace(
+          fixture.root.appendingPathComponent("AGENTS.md"), with: .data(Data("replacement".utf8)))
+        try transaction.commit()
+      }
+    }
+    #expect(
+      outcome.publicationStarted && outcome.terminal == .rolledBack && outcome.recoveryPending)
+    #expect(
+      try Data(contentsOf: moved.appendingPathComponent("AGENTS.md"))
+        == Data("old instructions".utf8))
+    #expect(!FileManager.default.fileExists(atPath: fixture.root.path))
+    try FileManager.default.moveItem(at: moved, to: fixture.root)
+    #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
+      try fixture.store.withLock(outcome: outcome) {}
+    }
+    #expect(outcome.terminal == .rolledBack && !outcome.recoveryPending)
   }
 }

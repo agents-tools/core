@@ -24,6 +24,11 @@ extension ClaudeAdapter {
           route: .claudeCommand, path: name + ".md", selection: "file",
           value: .init(try input.frontmatter(fields, body: input.prompt()))))
     case "subagent":
+      if input.inPlugin, input.native["permissionMode"] != nil {
+        throw input.issue(
+          ["native", "claude-code", "permissionMode"], .unsupported,
+          "native plugin agents ignore this permission field")
+      }
       var fields = try input.checkedNative(
         NativeComponentFieldsV1.markdownRules(.claudeCode, kind: "subagent"))
       let name = try input.filename()

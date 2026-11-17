@@ -17,6 +17,14 @@ package struct FileAccessEvidence: Codable, Equatable, Sendable {
   let acl: Data
   let defaultACL: Data
 
+  func admits(_ current: Self, removal: Bool, directoryWrite: Bool = false) -> Bool {
+    if self == current { return true }
+    guard removal || directoryWrite, identity.isDirectory else { return false }
+    return Self(
+      identity: identity, owner: owner, group: group, mode: mode | (removal ? 0o700 : 0o200),
+      aclFormat: aclFormat, acl: acl, defaultACL: defaultACL) == current
+  }
+
   static func capture(descriptor: Int32) throws -> Self {
     try read(descriptor: descriptor).evidence
   }
@@ -119,10 +127,12 @@ extension DirectoryHandle {
 
   /// Returns an empty verified inode. No producer receives a writable payload
   /// path before verification; inherited ACLs are retained and evaluated as found.
-  func createPrivateFile(_ name: String) throws -> PrivateFileHandle {
+  func createPrivateFile(_ name: String, executable: Bool = false) throws -> PrivateFileHandle {
     try requireAccessComponent(name)
     let parentEvidence = try privateCreationParent()
-    let file = openat(descriptor, name, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    let file = openat(
+      descriptor, name, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+      executable ? 0o700 : 0o600)
     guard file >= 0 else { throw CoreError.invalidState("cannot create private file: \(errno)") }
     var retained = false
     defer { if !retained { close(file) } }

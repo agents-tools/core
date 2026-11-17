@@ -1,7 +1,7 @@
 import AgentsCore
 
 extension ComponentDeclaration {
-  var name: String? {
+  package var name: String? {
     switch self {
     case .skills, .instructions: nil
     case .mcpServer(let name, _, _, _, _), .hook(let name, _, _, _, _, _, _, _),
@@ -36,7 +36,7 @@ extension ComponentDeclaration {
     }
   }
 
-  var resources: [ResourceDeclaration] {
+  package var resources: [ResourceDeclaration] {
     func run(_ value: ExecutableDeclaration) -> [ResourceDeclaration] {
       let executable =
         value.executable.contains("/") ? [ResourceDeclaration(path: value.executable)] : []

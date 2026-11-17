@@ -801,7 +801,15 @@ final class PublicationFixture {
       guard case CoreError.invalidState(let reason) = error else { return false }
       return reason.contains(expected)
     }
-    #expect(outcome.disposition == .recoveryRequired)
+    let terminal = try #require(try lastJournal()).phase
+    #expect(outcome.recoveryPending)
+    if terminal == .committed {
+      #expect(outcome.disposition == .committed && outcome.terminal == .committed)
+    } else if terminal == .rolledBack {
+      #expect(outcome.disposition == .unchanged && outcome.terminal == .rolledBack)
+    } else {
+      #expect(outcome.disposition == .recoveryRequired && outcome.terminal == nil)
+    }
     let diagnostic = FileTransaction.recoveryDiagnostic(store: store)
     #expect(diagnostic.requiresOwner)
     #expect(diagnostic.message.contains("owner action"))

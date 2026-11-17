@@ -33,41 +33,12 @@ package struct RetentionReferences: Sendable {
       git.insert(.init(source: identity, revision: source.revision))
       sourceLocations[identity] = location
     }
+    artifacts.formUnion(ledger.resources.filter { $0.value.kind != .liveEdit }.keys)
     for resource in ledger.resources.values {
       if let artifact = resource.artifact { retain(artifact) }
       if resource.kind == .liveEdit, let location = resource.location {
         live.append(try location.resolve(roots: roots).resolvingSymlinksInPath())
       }
-    }
-  }
-
-  init(resolved: ResolvedState, cache: SourceCache) throws {
-    try resolved.validate()
-    for (id, source) in resolved.sources where source.kind != .wellKnown {
-      sourceLocations[id] = source.kind == .local ? String(id.dropFirst(6)) : source.url
-    }
-    for skill in resolved.skills.values {
-      if let revision = skill.revision {
-        git.insert(.init(source: skill.source, revision: revision))
-      }
-      if let artifact = skill.artifact { retain(artifact) }
-      if skill.installs.values.contains(.edit), let source = resolved.sources[skill.source] {
-        let root =
-          source.kind == .local
-          ? URL(fileURLWithPath: String(skill.source.dropFirst(6)))
-          : cache.store.directory
-        live.append(
-          try PathSafety.resolvedChild(base: root, subpath: skill.path ?? ".")
-            .resolvingSymlinksInPath())
-      }
-    }
-    for section in resolved.instructions.sections
-      + resolved.instructions.chatgpt.values.flatMap(\.sections)
-    {
-      if let revision = section.revision {
-        git.insert(.init(source: section.source, revision: revision))
-      }
-      if let artifact = section.artifact { retain(artifact) }
     }
   }
 

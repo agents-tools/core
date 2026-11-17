@@ -25,7 +25,7 @@ package enum NativeComponentLayoutsV1 {
       "agents/cursor-components@1": {
         try render($0, $1, $2, limits: limits, surface: .cursorEditor)
       },
-    ]
+    ].merging(NativeGeneratedPluginLayoutV1.renderers(limits: limits)) { existing, _ in existing }
   }
 
   private static func render(
@@ -55,7 +55,8 @@ package enum NativeComponentLayoutsV1 {
   ) throws -> ComponentRenderInput {
     func invalid() -> CoreError { .invalidState("invalid version 1 native component layout") }
     guard lowering.layout.kind == .object, let layout = lowering.layout.object,
-      Set(layout.keys) == ["surface", "scope", "occurrences"],
+      Set(layout.keys).subtracting(["inPlugin"]) == ["surface", "scope", "occurrences"],
+      layout["inPlugin"] == nil || layout["inPlugin"] == .init(boolean: true),
       layout["surface"]?.kind == .string,
       let declared = layout["surface"]?.text.flatMap(NativeClientSurface.init(rawValue:)),
       layout["scope"]?.kind == .string,
@@ -80,10 +81,18 @@ package enum NativeComponentLayoutsV1 {
           && ($0.condition.platforms?.contains(lowering.platform) ?? true)
       })
     else { throw invalid() }
+    if layout["inPlugin"] != nil,
+      !ledger.occurrences.filter({ occurrences.contains($0.id) }).allSatisfy({
+        $0.pluginMember != nil
+      })
+    {
+      throw invalid()
+    }
     let input = ComponentRenderInput(
       record: record, component: component,
       request: .init(surface: declared, scope: scope), occurrences: occurrences,
-      resources: resources ?? [:], ledger: ledger, limits: limits)
+      resources: resources ?? [:], ledger: ledger, limits: limits,
+      inPlugin: layout["inPlugin"] != nil)
     if let resources, !record.resources.allSatisfy({ resources[$0] != nil }) {
       throw invalid()
     }

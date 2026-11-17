@@ -32,6 +32,7 @@ struct LinkingDocument {
   let view: SourceSnapshot
   let manifestPath: String
   let producer: Bool
+  var importedSources: [String: SourceSnapshot] = [:]
 
 }
 
@@ -59,7 +60,7 @@ final class Linking {
   let session: SourceResolutionSession
   let directPins: [ComponentKey: SourceRevision]
   let retainedLedger: ResolvedLedger?
-  let budget = LinkBudget()
+  let budget: LinkBudget
   var documents: [GroupIdentity: LinkingDocument] = [:]
   var nonGit = Set<String>()
   var git = Set<String>()
@@ -71,7 +72,7 @@ final class Linking {
   init(
     document: DeclarationDocument, store: StateStore, platform: DeclarationPlatform,
     session: SourceResolutionSession, directPins: [ComponentKey: SourceRevision],
-    retainedLedger: ResolvedLedger?
+    retainedLedger: ResolvedLedger?, budget: LinkBudget = LinkBudget()
   ) {
     self.document = document
     self.store = store
@@ -79,6 +80,7 @@ final class Linking {
     self.session = session
     self.directPins = directPins
     self.retainedLedger = retainedLedger
+    self.budget = budget
   }
 
   /// An implicit selection admits only members owned by its recorded index. The component key
@@ -146,6 +148,16 @@ final class Linking {
 
   func solve(preserving pins: [String: SourceRevision]) throws -> LinkedComponents {
     try budget.step(document.metrics.evaluationSteps)
+    // Recorded commits preserve local Git provenance independently of current working-tree metadata.
+    if let ledger = retainedLedger {
+      for id in ledger.sources.keys.sorted() {
+        try budget.step()
+        let source = ledger.sources[id]!
+        if source.kind == .local, SourceCache.isObjectID(source.revision) {
+          git.insert(try retainedSourceIdentity(id, ledger: ledger))
+        }
+      }
+    }
     let declaration = try ManifestProjection.declaration(
       of: document, environment: store.environment)
     let packageRoot =
@@ -272,6 +284,11 @@ final class Linking {
       return SourceAddress(
         id: context.view.snapshot.source, source: nil,
         contained: context.view, root: context.view.discoveryPath)
+    }
+    if let view = context.importedSources[alias] {
+      return SourceAddress(
+        id: view.snapshot.source, source: nil, contained: view,
+        root: view.discoveryPath)
     }
     guard let source = context.declaration.sources[alias] else {
       throw LinkError.missing("source alias '\(alias)'", chain)

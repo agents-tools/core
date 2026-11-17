@@ -22,7 +22,7 @@ struct LedgerReplayTests {
     try fixture.manifest(
       """
       version: 1
-      components: [{"kind": "mcpServer", "name": "server", "transport": {"kind": "stdio", "executable": "./bin/server"}}, {"kind": "command", "name": "task", "description": "Task", "prompt": {"file": {"path": "prompts/task.md"}}}, {"kind": "plugin", "name": "vendor", "path": "vendor", "source": "."}]
+      components: [{"kind": "mcpServer", "name": "server", "transport": {"kind": "stdio", "executable": "./bin/server"}}, {"kind": "command", "name": "task", "description": "Task", "prompt": {"file": {"path": "prompts/task.md"}}}, {"kind": "plugin", "name": "vendor", "path": "vendor", "source": ".", "mode": "native", "agents": ["claude-code"]}]
       """, at: project)
     try run("ledger-freeze", root: project)
     let ledger = try fixture.store.loadLedger(limits: .standard)
@@ -185,7 +185,7 @@ struct LedgerResourceClosureTests {
       atPath: fixture.project.appendingPathComponent("vendor/reference").path,
       withDestinationPath: "../shared/text")
     let document = try fixture.document(
-      "version: 1\ncomponents: [{\"kind\": \"plugin\", \"name\": \"vendor\", \"path\": \"vendor\", \"source\": \".\"}]\n"
+      "version: 1\ncomponents: [{\"kind\": \"plugin\", \"name\": \"vendor\", \"path\": \"vendor\", \"source\": \".\", \"mode\": \"native\", \"agents\": [\"claude-code\"]}]\n"
     )
     var ledger = try ComponentLinker.withLinkedComponents(
       document: document, store: fixture.store, platform: .macOS

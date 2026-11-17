@@ -53,6 +53,8 @@ public struct GitError: Error, CustomStringConvertible, Equatable, Sendable {
   public let command: [String]
   /// Git's exit status, for debugging only. Classify with `operation`.
   public let exitCode: Int32
+  /// Declaration and reference locations attached without changing the sanitized Git diagnostic.
+  public var context: [SourceSpan] = []
 
   init(
     operation: Operation, source: String, stderr: String, command: [String], exitCode: Int32,
@@ -80,7 +82,9 @@ public struct GitError: Error, CustomStringConvertible, Equatable, Sendable {
 
   public var description: String {
     let summary = "Git could not \(operation.description) \(source)."
-    return stderr.isEmpty ? summary : summary + "\n" + stderr
+    let diagnostic = stderr.isEmpty ? summary : summary + "\n" + stderr
+    return diagnostic
+      + context.map { " at \($0.document.rawValue):\($0.line):\($0.column)" }.joined()
   }
 
   private static func isProgress(_ line: String) -> Bool {

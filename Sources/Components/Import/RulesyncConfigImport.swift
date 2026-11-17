@@ -81,6 +81,12 @@ extension NativeValue {
 }
 
 enum RulesyncConfigImport {
+  static func npmSelector(_ value: String) -> Bool {
+    value.range(
+      of: #"^(@[a-z0-9~][a-z0-9._~-]*/)?[a-z0-9~][a-z0-9._~-]*$"#, options: .regularExpression)
+      != nil
+  }
+
   static func read(
     _ input: SourceImportInput, limits: SourceImportLimits,
     into diagnostics: inout ImportDiagnostics
@@ -166,7 +172,16 @@ enum RulesyncConfigImport {
             .invalidInput, location, "Source fields require producer string identity.")
           continue
         }
-        if let selection = parsed.input.selection, !selection.contains(raw) { continue }
+        let admissibleKey =
+          object["transport"]?.importString == "npm"
+          ? npmSelector(raw) : (ImportInput.safeLocator(raw) || githubLocator(raw) != nil)
+        let choice = admissibleKey ? diagnostics.beginChoice(raw, at: location) : nil
+        defer { if let choice { diagnostics.endChoice(choice) } }
+        if !parsed.input.enumerateChoices, let selection = parsed.input.selection,
+          !selection.contains(raw)
+        {
+          continue
+        }
         let transport = object["transport"]?.importString ?? "github"
         guard ["github", "git", "npm"].contains(transport),
           object["skills"] == nil || object["skills"]?.importStrings != nil,
@@ -245,10 +260,7 @@ enum RulesyncConfigImport {
           }
           declaration = .init(kind: .git, location: raw)
         } else {
-          guard
-            raw.range(
-              of: #"^(@[a-z0-9~][a-z0-9._~-]*/)?[a-z0-9~][a-z0-9._~-]*$"#,
-              options: .regularExpression) != nil
+          guard npmSelector(raw)
           else {
             diagnostics.add(.invalidInput, location, "Invalid npm source package selector.")
             continue
@@ -324,6 +336,8 @@ enum RulesyncConfigImport {
     }
     var winners: Set<String> = []
     for (intent, declaration, lockKey) in entries {
+      let choice = diagnostics.beginChoice(intent.identity, at: intent.origin)
+      defer { diagnostics.endChoice(choice) }
       let key = (intent.transport == "npm" ? "npm:" : "git:") + lockKey
       var match = locked[key]
       if let candidate = match {

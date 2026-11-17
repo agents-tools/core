@@ -43,7 +43,7 @@ components:
   - {kind: skills, source: team, exclude: [retired]}
 ```
 
-### Deployable subset
+### Complete declarations
 
 `loadDeclaration()` projects every declared component family, including MCP,
 hooks, subagents, commands, LSP, permissions, ignores and plugins. It preserves
@@ -53,20 +53,14 @@ are the ordered owners; alias dictionaries and the flat skill/instruction access
 are derived views. Source aliases retain their declaring project and home
 directories so importing code cannot reinterpret their relative paths.
 
-The current skill/instruction deployment paths use
-`readDeploymentDeclaration(prepared:)`. This explicit boundary accepts root
-`defaultAgents`, `sources` and `watch`, and root `skills` and `instructions`
-components: at most one skills occurrence per alias and one instructions
-occurrence, with no condition on a component, section or prompt and empty native
-configuration. Unused groups and exports remain preserved. Active group uses,
-own-package skill discovery and other component families require linking or
-native lowering and fail with a located `manifest.unsupported` before source work
-or deployment. Repeated matching root selections fail with `manifest.ambiguous`
-and related occurrence locations. Full declaration reads do not use this gate.
+`AgentsUpdates` links the complete declaration, including group uses, conditions,
+producer restrictions and native payloads, before choosing concrete deployments.
+Concrete adapters own supported schemas and registered routes. A missing mapping
+or route is an explicit preparation error, not a declaration-reader restriction.
 
 `Declaration.skills` and `instructions` are throwing root-selection views: they
 reject multiple matching occurrences. `setSkills`, `setInstructions`,
-`updateSkills` and `updateInstructions` serve the current domain operations and
+`updateSkills` and `updateInstructions` serve unambiguous root selections and
 preserve unrelated components. Full occurrence edits use `components`, group
 payloads and typed section references directly. `Declaration.validate(environment:)`
 checks source identities using the aliases' declaring directories and validates
@@ -82,9 +76,10 @@ then a number is appended.
 A skill selection is all members, when `select` is omitted or `all`, or an
 explicit name array, with optional exclusions, recipients, mode and per-skill
 overrides. An all-member selection follows discovery membership on an unnamed
-update. Removing a member adds an exclusion. Explicitly named updates resolve
-only those members and fail if a requested member is missing. Skill filesystem
-identities are unique within a scope across sources.
+update. Removing a member adds an exclusion and uses recorded membership without
+installing newly discovered members. Explicitly named updates resolve only those
+members and fail if a requested member is missing. Physical skill targets have one
+compatible owner; distinct sources may serve the same name at disjoint targets.
 
 Requirements are `branch:`, `revision:`, `exact:`, `from:` (up to the next
 major version), `upToNextMinor:` or `{from:, to:}`. Ranges include
@@ -203,66 +198,54 @@ and newly serialized requirement fields.
 | --- | --- |
 | Declaration IR and dump | Canonical requirement kinds and normalized version strings; a factory and a literal range with equal bounds compare equal. |
 | Declaration writes and `upsertSource` | Semantic values are compared; an equal edit keeps the original source bytes. New or changed nodes print canonically; untouched spelling is retained. |
-| `LockedSource.requirement` in the lock | Newly written records use canonical requirements. Existing records keep their bytes and are compared through a semantic view. A requirement-spelling difference alone never changes pins, reports an update or stages a write. |
-| Skill and instruction lock producers, combined update conflicts and change detection | Source identity, discovery root and semantic requirement values are compared; equal ranges merge without a conflict. A semantically unchanged lock keeps its original bytes even when another state file changes; a necessary rewrite emits canonical requirements. |
+| `LedgerSourceUse.requirement` in the ledger | Newly written records use canonical requirements. Existing records keep their bytes and are compared through a semantic view. A requirement-spelling difference alone never changes pins, reports an update or stages a write. |
+| Linked component pins and change detection | Source identity, discovery root and semantic requirement values are compared; equal ranges have equal meaning. A semantically unchanged lock keeps its original bytes even when another state file changes; a necessary rewrite emits canonical requirements. |
 | Resolution-session reuse and cache descriptors | Requirements are keyed by semantic value. Cache identity and materialization keys use source identity and exact revision or artifact digest; restoration uses the stored pins without re-resolving requirements. |
 | `agents.watch` | Stores source identities and seen baselines, with no requirement. Re-evaluating an equivalent declaration preserves the subscription and baseline; watch-created lock descriptors follow the lock rule. |
 
 State transactions compare semantic state before choosing any serialization and
 never rewrite records on read.
 
-## Lock
+## Resolved ledger
 
-`agents.resolved` version 1 has identity-keyed `sources` and `skills`, and an
-`instructions` object containing `sections`, `chatgpt` and `targets`.
+`agents.resolved` is a version 2 JSON ledger. It records exact sources and source
+uses, symbolic components, ordered occurrences and group dependencies, complete
+resources, ownership, deployments and versioned lowerings. Local and artifact
+resources retain deduplicated non-secret content objects; Git resources retain
+exact acquisition coordinates and commits. Trees record empty directories,
+symlinks and execute flags. Runtime bindings remain symbolic.
 
-The lock is written with sorted keys in Prettier's default JSON layout:
-two-space indentation, `"key": value`, every non-empty object expanded, empty
-containers as `{}` and `[]`, and an array without objects on one line when it
-fits in 80 columns. A repository whose Prettier configuration uses another print
-width may lay out an array between the two widths differently. A semantically
-unchanged lock keeps its original bytes; a changed lock is written in that
-layout. When the prepared generation has neither a lock nor a declaration and
-the resulting lock is empty, no lock is created, because lock state without a
-declaration would stop every later access to the scope. A scope with a
-declaration receives a lock even when it is empty. Empty lock sections such as
-`"skills": {}` remain, because earlier readers require them. Journals,
-`agents.watch` and content hashes keep the encoder's fixed layout.
+The codec accepts one ledger version and rejects unknown fields, duplicate keys,
+invalid references, unsupported versions and corrupt content objects. Admission
+bounds bytes, depth, nodes, entries and decoded content before object decoding.
+Equivalent state preserves the original bytes. Newly encoded state is deterministic
+JSON with sorted map keys, meaningful array order, a trailing newline and no time
+or machine-temporary fields. Journals and watch state keep their own encoders.
 
-A locked source records its kind, Git URL where applicable, requirement and
-search path. A skill records its source ID, its own revision and optional
-version, relative directory path, content hash and `installs` mapping agent IDs
-to `link`, `copy` or `edit`. Every non-edit item carries an immutable pin.
-Updating one skill leaves other item pins unchanged.
+`StateStore.loadResolved()` supplies the existing skill/instruction inventory view
+by projecting the ledger. This view is not a second stored graph and is never
+saved as a lock. Native components and dependency relationships remain in the
+ledger. Listings, diagnostics and watch validate the same committed generation.
+An unconfigured empty scope needs no resolved file; a declaration-backed empty
+ledger remains valid.
 
-Well-known items record an artifact's `type`, `url` and SHA-256 `digest`.
-`files` artifacts additionally record every file's URL, path and digest. Their
-aggregate digest covers the sorted, deterministically encoded file records.
-Restoration reads these recorded URLs or verified digest cache entries and never
-reads an index. Missing pins or mismatched content stop restoration.
+Updates link the complete declaration and freeze one paired source result before
+lowering. Restore uses only locked format/layout/resources and verifies every
+rendered artifact. It never selects current producer requirements or refs.
+Embedded inputs can reconstruct without their authoring tree; live edit skills
+remain explicit live locations. Regional ownership is distinct from whole-file
+freshness, and existing unmanaged equal values do not grant ownership.
 
-Instruction section records carry name, source, revision or artifact, path and
-hash; a project's own files use source `.`, their project-relative path and
-hash, and no revision. Prompts hold ordered locked sections and optional append
-paths. Physical targets record agents, heading offset 0 or import, the hash of
-the generated file or import block, and `created`, which unit targets always
-record as false. Skill writes retain these records unchanged. Instruction
-lifecycle writes preserve skill records. Target keys are project relative or
-user-home relative; configured user files outside home use absolute keys checked
-against the runtime's registered instruction locations.
+`RetentionReferences` derives the complete source/resource closure, including
+empty groups, container parents, other component domains, watch pins and live
+locations. The last skill's removal cannot prune resources still referenced by
+instructions, native components or watch. New materializations and pruning share
+the configuration transaction. Source ref cleanup follows the committed closure
+only after physical commit or recovery.
 
-Maps are key sorted. Unordered selections and agent lists are sorted; section
-arrays and each prompt's section order are preserved. Files have a trailing
-newline and no timestamps. State and journal JSON must be UTF-8 without a byte
-order mark; validation consumes the entire document. Other encodings, invalid
-state, duplicate JSON keys at any depth and fields that would be discarded by
-decoding cause an error. Tree hashes use length-prefixed paths and typed entry
-payloads, including empty directories and symbolic link destinations.
-
-Tree hashes intentionally exclude permissions. Skill update snapshots compare
-the any-execute-bit Boolean separately for regular files. Preparation, retention
-and transaction staging verify that dimension without changing stored hashes,
-pins, the declaration or the version 1 lock and watch schemas.
+Tree content hashes exclude permissions. Resource entries and staging separately
+verify regular-file execute flags. Pinned resource bytes, modes and locked renderer
+outputs must agree before publication.
 
 ## State Transaction and Recovery
 
@@ -646,6 +629,11 @@ do not claim native parser, adapter or real-client acceptance.
 
 ### Read-only access
 
+Configuration preview additionally keeps all source acquisition temporary and never
+creates persistent cache or shared coordination locks, retains content or invokes
+a runtime binding provider. Exact cached objects are reused only through existing
+read locks; missing objects and extraction are cleaned on every exit.
+
 Non-applying skill and instruction operations, listings, previews, watch status
 and watch diff take an existing shared lock, report pending recovery and never
 replay it or create state files. With no lock, inspection rechecks for a new
@@ -764,13 +752,14 @@ that content as a directory and rejects links escaping the installed subtree.
 Links to content within the same project or user state root are relative, so
 moving that root preserves them; external live edit links are absolute. `edit`
 points directly at a live local skill without pin or hash and requires a source
-without a requirement. Local non-Git directories support edit mode. Git-backed
-link and copy operations read committed trees, including when the source has
-uncommitted changes.
+without a requirement. Link and copy freeze non-Git local directories into embedded
+resources that support cold restore; an explicit Git requirement needs a Git source.
+Git-backed link and copy operations read committed trees, including when the source
+has uncommitted changes.
 
-An update preview or source listing can fetch into a mirror. Inspection
-snapshots are disposable and do not move an installed tree or write state or
-targets. Skill and instruction `add` discover choices through the read path when
+Source listing and configuration previews use temporary acquisition and never
+mutate persistent mirrors, refs, cache contents or locks. Inspection snapshots are
+disposable and do not move an installed tree or write state or targets. Skill and instruction `add` discover choices through the read path when
 no names or `all` are supplied, and for `listOnly`. Their discovery uses
 disposable mirrors and locks, leaving the scope unchanged. Exact cached commits
 can be extracted under an existing mirror lock without fetching. Pending
@@ -779,23 +768,20 @@ single-item addition carries the normalized source ID and exact discovered name
 into the writer path separately from user-entered names. Rediscovery must match
 that identity or fail with an error asking the caller to retry; its content and
 pin can refresh. Explicit names and `all` enter the writer path directly.
-Applying prepares all selected content, computes differences, stages
-replacements, and commits target changes and state under the scope lock.
-Combined updates share a source-resolution session and baseline across skills
-and instructions. The coordinator merges their owned records and rejects
-incompatible source records and overlapping targets before exposing an apply
-handle. It holds the writer lock while the consumer renders, revalidates
-state-file bytes/presence and target/source identities, then retains pinned
-content before the combined journal starts. Live edit content remains live; its
-source identity and usable metadata are checked instead of a content pin.
+Applying captures the complete declaration, ledger and watch baseline under the
+admitted locks. One source session links the graph with independent retained pins;
+freeze keeps its ledger and source mapping paired through real lowering. Physical
+aggregation rejects incompatible contributions and prepares shared native documents
+once. The synchronous prepared handle retains these borrowed resources and writer
+locks while the consumer renders its report and applies it. Live edit content stays
+live; its identity and usable metadata are checked instead of a content pin.
 
-After retention, preconditions are checked again. One transaction queues
-physical skill targets, instruction/forwarding targets, changed declaration and
-lock files, and pruning against the merged lock and existing watch state. Paths
-are sorted within target groups. No-change combined apply returns receipts
-without rewriting state. Cancellation before apply publishes no targets, state
-or retained trees; fetched mirror objects and the scope container/lock may
-remain.
+Apply validates state, targets and source evidence, retains the complete ledger/watch
+reference closure, and validates again. One transaction stages resource trees and
+capsules, selected physical targets, declaration, ledger, receipts and cache pruning.
+No-change apply returns receipts without rewriting state. Exiting before apply
+publishes no targets, state or retained trees; writer lock containers may remain.
+Temporary source and replay resources are released at closure exit.
 
 Commit outcome tracking is bound to the combined journal's UUID. Recovering a
 separate cache publication cannot claim that the combined generation committed.
@@ -827,44 +813,15 @@ matching Git resolutions and uncommitted changes in selected local source paths.
 `install` restores all recorded recipients and modes without changing lock
 bytes. The consuming CLI controls presentation and user interaction.
 
-## Version 2 ledger package interfaces
+## Ledger composition interfaces
 
-`ResolvedLedger` is the package-internal version 2 representation of the same
-`agents.resolved` file. `ResolvedLedgerCodec` accepts version 2 only. It preserves
-unchanged bytes and rejects unknown fields, duplicate keys, invalid references,
-corrupt embedded objects and unsupported versions. `LedgerAdmission` bounds
-encoded bytes, structural depth and nodes, embedded decoded bytes and tree
-entries before decoding. Scope reads also bound file bytes while reading.
+`LedgerFreeze.freezeWithSources` returns the ledger and its ephemeral source map
+from one linked result. Native lowering consumes that paired result inside the
+source session. `LedgerReplay.withPreparedLowerings` seals artifact identities and
+keeps all acquired resources alive through its callback. `withLockedResources`
+replays a locked candidate with the same resource lifetime. Borrowed URLs never
+escape into public reports or outlive a prepared handle's synchronous closure.
+The production renderer table is explicit and format-versioned. Tests supply
+separate renderers without registering production fallback behavior.
 
-The ledger stores source uses and independent pins, complete symbolic component
-payloads, ordered occurrences and group child closures, producer manifest
-hashes, resource trees, deployment ownership and format-pinned lowerings.
-Content objects embed deduplicated non-secret bytes for local and artifact
-resources. Trees preserve directories, symlinks and executable files. Actual
-local edit skills retain explicit live locations. Registered-root-relative
-locations relocate with their registered root; explicit absolute locations keep
-their authored meaning. Runtime secret values are not binding inputs to this
-codec or the pure renderers.
-
-`Components.LedgerFreeze` consumes borrowed B graph resources inside the source
-session. Its caller supplies explicit authoring coordinates and lowering/layout
-choices. `LedgerReplay.prepareLowerings` seals symbolic output identities;
-`withReplay` reconstructs exact resources, selects only the locked renderer
-format and verifies outputs before returning borrowed artifacts and owned-value
-intentions. Exact Git acquisition uses the recorded commit. Embedded resources
-require no authoring tree or cache. Compatibility formats cover existing skill,
-instruction, ChatGPT and Claude import rendering. Production native format
-registration and document editing are owned by the native adapters.
-
-`RetentionReferences` validates and derives the complete source/resource closure,
-including container ancestry and empty groups, then unions watch references.
-Cache pruning stages deletions in the caller's `FileTransaction`. Ref cleanup
-runs only after physical journal recovery or commit; unfinished journals prevent
-independent pruning. Recovery interprets physical evidence and does not invoke
-renderers or source providers.
-
-The existing public lifecycle methods continue to use their version 1 model and
-reject version 2 input. Public lifecycle composition owns their eventual version
-2 integration. Conversion tooling is external to the package and requires old
-locks, original authoring inputs and explicit target layouts; it does not adopt
-current deployed bytes.
+`StateStore.loadLedger()` returns the complete public ledger model without resolving sources or recovering transactions. `loadResolved()` returns the derived skill/instruction summary for domain consumers; it is never a persisted state format.
