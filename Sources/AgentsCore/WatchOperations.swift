@@ -65,14 +65,28 @@ public struct WatchOperations: Sendable {
   public func status(
     scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> [WatchStatus] {
+    try inspectStatus(scope: scope, environment: environment).statuses
+  }
+
+  /// Captures statuses and durable inputs, including absent state files in an empty scope.
+  public func inspectStatus(
+    scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
+  ) throws -> WatchInspection {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
-      let declaration = try declarations.read(store, nil)
-      _ = try store.readLedger()
-      let watch = try store.readWatch()
-      return try (declaration.watch ?? []).sorted().map { alias in
-        try inspect(alias: alias, declaration: declaration, watch: watch, store: store)
+      let baseline = try StatePrecondition(store: store)
+      let declaration = try declarations.read(store, baseline)
+      _ = try store.readLedger(prepared: baseline)
+      let watch = try store.readWatch(prepared: baseline)
+      let statuses = try (declaration.watch ?? []).sorted().map { alias in
+        try inspect(
+          alias: alias, declaration: declaration, watch: watch, store: store, baseline: baseline)
       }
+      try baseline.validate()
+      return WatchInspection(
+        statuses: statuses,
+        readLocations: durableReadLocations(
+          store, sources: (declaration.watch ?? []).compactMap { declaration.sources[$0] }))
     }
   }
 
@@ -83,14 +97,17 @@ public struct WatchOperations: Sendable {
   ) throws -> WatchStatus {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
-      let declaration = try declarations.read(store, nil)
-      _ = try store.readLedger()
-      let watch = try store.readWatch()
+      let baseline = try StatePrecondition(store: store)
+      let declaration = try declarations.read(store, baseline)
+      _ = try store.readLedger(prepared: baseline)
+      let watch = try store.readWatch(prepared: baseline)
       let alias = try subscription(source, declaration: declaration, environment: environment)
-      var result = try inspect(alias: alias, declaration: declaration, watch: watch, store: store)
+      var result = try inspect(
+        alias: alias, declaration: declaration, watch: watch, store: store, baseline: baseline)
       result.changes = result.changes.filter {
         (name == nil || $0.name == name) && (kind == nil || $0.kind == kind)
       }
+      try baseline.validate()
       return result
     }
   }
@@ -102,8 +119,18 @@ public struct WatchOperations: Sendable {
     scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> WatchChange {
+    try seen(
+      source, revision: revision, ifCurrentIs: expected, ifSourceIs: expectedSource,
+      scope: scope, environment: environment, preview: nil, outcome: TransactionOutcome())
+  }
+
+  private func seen(
+    _ source: String, revision: String? = nil, ifCurrentIs expected: WatchSeen?,
+    ifSourceIs expectedSource: String?, scope: InstallScope, environment: RuntimeEnvironment,
+    preview: WatchMutationPreview?, outcome: TransactionOutcome
+  ) throws -> WatchChange {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withLock(checkpoint: checkpoint) {
+    return try store.withLock(checkpoint: checkpoint, outcome: outcome) {
       let baseline = try StatePrecondition(store: store)
       let declaration = try declarations.read(store, baseline)
       let lock = try store.readLedger(prepared: baseline)
@@ -114,12 +141,18 @@ public struct WatchOperations: Sendable {
       guard expectedSource == nil || expectedSource == id else {
         throw CoreError.invalidState("watch source changed; refresh before acknowledging")
       }
+      if let preview {
+        try requireFingerprint(
+          preview, baseline: baseline, change: nil, seen: expected, store: store,
+          alias: alias, sourceID: id, removing: false)
+      }
       let current = try acknowledge(declared, revision: revision, expected: expected, store: store)
       guard expected == nil || expected == current else {
         throw CoreError.invalidState("watch content changed; refresh before acknowledging")
       }
       watch.sources[id] = WatchSourceState(seen: current)
-      try commit(nil, watch: watch, lock: lock, store: store, baseline: baseline)
+      try commit(
+        nil, watch: watch, lock: lock, store: store, baseline: baseline, outcome: outcome)
       return WatchChange(alias: alias, sourceID: id, seen: current)
     }
   }
@@ -130,9 +163,16 @@ public struct WatchOperations: Sendable {
     _ status: WatchStatus, scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> WatchChange {
-    try seen(
-      status.alias, ifCurrentIs: status.current, ifSourceIs: status.sourceID,
-      scope: scope, environment: environment)
+    guard status.acknowledgment.matches(scope: scope, environment: environment) else {
+      throw CoreError.invalidState(
+        "watch scope or environment changed; refresh before acknowledging")
+    }
+    return try apply(previewSeen(status))
+  }
+
+  /// Confirms the displayed status in its captured scope and environment without acquiring resources.
+  public func previewSeen(_ status: WatchStatus) -> WatchMutationPreview {
+    status.acknowledgment
   }
 
   /// Removes only the subscription and baseline. Source declarations and installations remain.
@@ -241,6 +281,11 @@ public struct WatchOperations: Sendable {
         source, alias: alias, requirement: requirement, path: path,
         scope: preview.store.scope, environment: preview.store.environment, expected: preview,
         outcome: outcome)
+    case .seen(let source):
+      return try seen(
+        source, ifCurrentIs: preview.seen, ifSourceIs: preview.sourceID,
+        scope: preview.store.scope, environment: preview.store.environment,
+        preview: preview, outcome: outcome)
     case .remove(let source):
       return try remove(
         source, scope: preview.store.scope, environment: preview.store.environment,
@@ -249,8 +294,14 @@ public struct WatchOperations: Sendable {
   }
 
   private func mutationReadLocations(_ store: StateStore, source: SourceDeclaration) -> [URL] {
-    [store.declarationURL, store.resolvedURL, store.watchURL]
-      + (source.kind == .local ? [source.localURL(environment: store.environment)] : [])
+    durableReadLocations(store, sources: [source])
+  }
+
+  private func durableReadLocations(_ store: StateStore, sources: [SourceDeclaration]) -> [URL] {
+    let paths =
+      [store.declarationURL, store.resolvedURL, store.watchURL]
+      + sources.filter { $0.kind == .local }.map { $0.localURL(environment: store.environment) }
+    return Array(Set(paths.map(\.standardizedFileURL))).sorted { $0.path < $1.path }
   }
 
   private func mutationFingerprint(
@@ -259,6 +310,8 @@ public struct WatchOperations: Sendable {
   ) throws -> String {
     struct Evidence: Encodable {
       let scope: InstallScope
+      let projectDirectory: String
+      let homeDirectory: String
       let alias: String
       let sourceID: String
       let removing: Bool
@@ -268,7 +321,9 @@ public struct WatchOperations: Sendable {
     }
     return try ResolvedLedgerCodec.digest(
       Evidence(
-        scope: store.scope, alias: alias, sourceID: sourceID, removing: removing,
+        scope: store.scope, projectDirectory: store.environment.projectDirectory.path,
+        homeDirectory: store.environment.homeDirectory.path,
+        alias: alias, sourceID: sourceID, removing: removing,
         state: [store.declarationURL, store.resolvedURL, store.watchURL].map {
           try baseline.bytes(for: $0).map { FileHash.sha256Hex(data: $0) }
         }, declaration: change.map { FileHash.sha256Hex(data: $0.bytes) }, seen: seen))
@@ -492,7 +547,8 @@ public struct WatchOperations: Sendable {
   }
 
   private func inspect(
-    alias: String, declaration: Declaration, watch: WatchState, store: StateStore
+    alias: String, declaration: Declaration, watch: WatchState, store: StateStore,
+    baseline: StatePrecondition
   ) throws -> WatchStatus {
     let source = declaration.sources[alias]!
     let id = try source.identity(environment: store.environment)
@@ -557,9 +613,17 @@ public struct WatchOperations: Sendable {
         oldPath: old?.path, newPath: new?.path, oldDigest: old?.digest, newDigest: new?.digest,
         files: files)
     }
+    let acknowledgment = WatchMutationPreview(
+      action: .seen(alias), store: store, alias: alias, sourceID: id, seen: current,
+      displayedFingerprint: try mutationFingerprint(
+        baseline: baseline, change: nil, seen: current, store: store, alias: alias,
+        sourceID: id, removing: false),
+      readLocations: mutationReadLocations(store, source: source))
     return WatchStatus(
-      alias: alias, sourceID: id, seen: seen, current: current, commitCount: count, changes: changes
-    )
+      alias: alias, sourceID: id, seen: seen, current: current, commitCount: count,
+      changes: changes,
+      acknowledgment: acknowledgment)
+
   }
 
   private func units(
@@ -651,10 +715,11 @@ private struct WatchUnit: Equatable {
 }
 
 /// Immutable subscription confirmation; no locks or borrowed resources escape preview.
-public struct WatchMutationPreview: Sendable {
-  fileprivate enum Action: Sendable {
+public struct WatchMutationPreview: Equatable, Sendable {
+  fileprivate enum Action: Equatable, Sendable {
     case add(String, String?, SourceRequirement?, String?)
     case remove(String)
+    case seen(String)
   }
   fileprivate let action: Action
   package let store: StateStore
@@ -663,4 +728,19 @@ public struct WatchMutationPreview: Sendable {
   public let seen: WatchSeen?
   public let displayedFingerprint: String
   public let readLocations: [URL]
+
+  fileprivate func matches(scope: InstallScope, environment: RuntimeEnvironment) -> Bool {
+    store.scope == scope
+      && store.environment.projectDirectory == environment.projectDirectory
+      && store.environment.homeDirectory == environment.homeDirectory
+      && store.environment.environment == environment.environment
+  }
+
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.action == rhs.action
+      && lhs.matches(scope: rhs.store.scope, environment: rhs.store.environment)
+      && lhs.alias == rhs.alias && lhs.sourceID == rhs.sourceID && lhs.seen == rhs.seen
+      && lhs.displayedFingerprint == rhs.displayedFingerprint
+      && lhs.readLocations == rhs.readLocations
+  }
 }

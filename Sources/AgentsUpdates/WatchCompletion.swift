@@ -2,6 +2,14 @@ import AgentsCore
 import AgentsSkills
 
 extension UpdateOperations {
+  /// Acknowledges exactly the displayed content in its captured scope and environment.
+  public static func performWatch(
+    _ status: WatchStatus,
+    operations: WatchOperations = SkillOperations.watchOperations()
+  ) -> UpdateCompletion<WatchChange> {
+    performWatch(operations.previewSeen(status), operations: operations)
+  }
+
   /// Uses WatchOperations' single subscription writer, then reports its actual outer terminal.
   public static func performWatch(
     _ preview: WatchMutationPreview,
