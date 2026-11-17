@@ -172,19 +172,60 @@ extension InstructionOperations {
     prompt name: String, scope: InstallScope = .project,
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> Data {
+    try inspectChatGPTExport(prompt: name, scope: scope, environment: environment).bytes
+  }
+
+  /// Locked ordered content plus the live consumer appendix, with the actual durable read inputs.
+  public static func inspectChatGPTExport(
+    prompt name: String, scope: InstallScope = .project,
+    environment: RuntimeEnvironment = RuntimeEnvironment()
+  ) throws -> InstructionExportInspection {
     let store = StateStore(scope: scope, environment: environment)
     return try store.withReadLock {
-      _ = try store.readDeclaration()
-      let ledger = try store.readLedger()
+      let baseline = try StatePrecondition(store: store)
+      let declaration = try store.readDeclaration(prepared: baseline)
+      let ledger = try store.readLedger(prepared: baseline)
       guard let lowering = ledger.lowerings.first(where: { $0.id == "prompt:" + name }) else {
         throw InstructionError.emptyPrompt
       }
       return try LedgerReplay.withLockedResources(
         ledger, store: store, roots: store.ledgerRoots, limits: .standard
       ) { _, resources, _ in
-        try LedgerReplay.exportPrompt(
+        let bytes = try LedgerReplay.exportPrompt(
           lowering, ledger: ledger, resources: resources, roots: store.ledgerRoots)
+        let paths = try UpdateOperations.readLocations(
+          declarations: [declaration], ledgers: [ledger], store: store)
+        try baseline.validate()
+        return InstructionExportInspection(bytes: bytes, readLocations: paths)
       }
     }
   }
+
+  public static func inspectOwnInstructions(
+    environment: RuntimeEnvironment = RuntimeEnvironment()
+  ) throws -> OwnInstructionsInspection {
+    let store = StateStore(scope: .project, environment: environment)
+    return try store.withReadLock {
+      let baseline = try StatePrecondition(store: store)
+      _ = try store.readDeclaration(prepared: baseline)
+      let paths = ownReadLocations(environment: environment)
+      let evidence = try paths.map(TargetPrecondition.init)
+      let units = try inspectOwn(names: [], environment: environment)
+      for input in evidence { try input.validate() }
+      try baseline.validate()
+      return OwnInstructionsInspection(
+        units: units,
+        readLocations: ownReadLocations(names: units.map(\.record.name), environment: environment))
+    }
+  }
+}
+
+public struct InstructionExportInspection: Sendable {
+  public let bytes: Data
+  public let readLocations: [URL]
+}
+
+public struct OwnInstructionsInspection: Sendable {
+  public let units: [InstructionUnit]
+  public let readLocations: [URL]
 }

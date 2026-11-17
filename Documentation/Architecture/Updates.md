@@ -197,6 +197,35 @@ operation's result, refresh a changed candidate and reprepare for confirmation.
 Agents CLI restores the full scope once with `UpdateOperations.restore`; domain
 consumers continue using their restricted lifecycle methods.
 
+`CombinedUpdateReport.readLocations`, discovery and scope inspection expose durable
+state, source, own-instruction, resource and deployment inputs, including absent
+leaves introduced by an unsaved declaration. `inspectOwnInstructions` and
+`inspectChatGPTExport` pair their results with their owner-computed read locations.
+Export reads the consumer appendix at export time; an absent appendix is allowed
+while installing, but must exist when explicitly exported.
+
+Initialization uses a pure `describeInstructionsInitialization` or
+`describeProjectSkillInitialization` and then `UpdateOperations.initialize`.
+The immutable description contains the exact file/template and captured existing
+project identity. `describeSkillInitialization(directory:)` is explicit standalone
+authoring and can select a new direct child of an existing parent. Apply holds
+that observed root through the lower domain's sole transaction. Registered roots
+removed or replaced after description are never recreated. Existing URL-returning
+initializers use the same lower writer; consumers needing terminal evidence use
+the description/completion API. A committed operation with pending cleanup stays
+committed; durable rollback stays rolled back even with pending cleanup. Earlier
+recovery failure has unchanged current disposition and pending recovery evidence.
+No executing resource or borrowed descriptor outlives the synchronous return.
+
+`WatchOperations.previewAdd` and `previewRemove` produce immutable confirmation
+requests with a stable fingerprint, selected source/content and read locations.
+Add resolves Git in disposable storage or uses the existing verified index reader;
+preview never retains content, changes scope files or recovers. `apply(preview)`
+revalidates scope state and exact content in the existing subscription writer.
+`UpdateOperations.performWatch(preview)` returns that writer's outer
+`UpdateCompletion<WatchChange>` without nesting a transaction. Subscriptions do
+not deploy native targets or skills.
+
 Watch consumers can pass a displayed `WatchStatus` to `WatchOperations.seen`.
 The existing writer revalidates both normalized source identity and the exact Git
 commit or artifact digest map before retention and watch-state publication. A

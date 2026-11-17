@@ -329,6 +329,22 @@ final class UpdatePlan {
         },
         targets: (aggregation.fingerprints
           + (try decisionInputs.map { try $0.displayEvidence(includeContent: false) })).sorted()))
+    var readDeclarations: [Declaration] = []
+    if case .restore = request.operation {
+    } else {
+      readDeclarations.append(try store.readDeclaration(prepared: baseline))
+    }
+    if let change {
+      readDeclarations.append(
+        try ManifestProjection.declaration(
+          of: DeclarationDocument(
+            bytes: Array(change.bytes), identity: DocumentIdentity(store.declarationURL.path)),
+          environment: store.environment))
+    }
+    let readPaths =
+      try UpdateOperations.readLocations(
+        declarations: readDeclarations, ledgers: [previous, self.next], store: store)
+      + decisionInputs.map(\.url)
     let finalNext = self.next
     report = CombinedUpdateReport(
       scope: store.scope, skills: publicResults, instructions: instructions,
@@ -336,6 +352,7 @@ final class UpdatePlan {
       hasChanges: self.next != previous || change != nil
         || aggregation.changes.contains(where: \.changed),
       displayedFingerprint: fingerprint,
+      readLocations: Array(Set(readPaths)).sorted { $0.path < $1.path },
       components: try aggregation.changes.filter { change in
         guard change.native else { return false }
         guard let identities = request.selectedIdentities else { return true }

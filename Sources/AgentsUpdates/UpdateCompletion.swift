@@ -35,7 +35,7 @@ extension UpdateOperations {
     checkpoint: @escaping (String) throws -> Void,
     _ body: (PreparedUpdate) throws -> Value
   ) -> UpdateCompletion<Value> {
-    var disposition = UpdateTerminalDisposition.unchanged
+    var capturedOutcome = TransactionOutcome()
     var delivered = false
     var recovered = false
     let result = Result {
@@ -43,13 +43,7 @@ extension UpdateOperations {
         return try prepare(
           request, scope: scope, environment: environment, checkpoint: checkpoint,
           provider: bindingProvider ?? RequiredBindingProvider(),
-          completion: { outcome in
-            switch outcome.disposition {
-            case .committed: disposition = .committed
-            case .recoveryRequired: disposition = .recoveryRequired
-            case .unchanged: disposition = outcome.publicationStarted ? .rolledBack : .unchanged
-            }
-          }
+          completion: { capturedOutcome = $0 }
         ) { update in
           delivered = true
           return try body(update)
@@ -60,8 +54,24 @@ extension UpdateOperations {
         throw error
       }
     }
-    let store = StateStore(scope: scope, environment: environment)
-    let recovery: RecoveryInspection
+    return completion(
+      result, outcome: capturedOutcome, recovered: recovered,
+      store: StateStore(scope: scope, environment: environment))
+  }
+
+  static func completion<Value>(
+    _ result: Result<Value, any Error>, outcome: TransactionOutcome, recovered: Bool,
+    store: StateStore
+  ) -> UpdateCompletion<Value> {
+    let disposition: UpdateTerminalDisposition
+    switch outcome.terminal {
+    case .committed: disposition = .committed
+    case .rolledBack: disposition = outcome.publicationStarted ? .rolledBack : .unchanged
+    case nil:
+      disposition =
+        outcome.publicationStarted && outcome.recoveryPending ? .recoveryRequired : .unchanged
+    }
+    var recovery: RecoveryInspection
     do {
       recovery = try store.withReadLock(
         onPendingRecovery: {
@@ -70,12 +80,15 @@ extension UpdateOperations {
             pending: true, requiresOwner: diagnostic.requiresOwner, diagnostic: diagnostic.message)
         }, { .init(pending: false, requiresOwner: false, diagnostic: nil) })
     } catch {
-      // Failure to inspect cleanup is itself material; do not downgrade it to success.
       recovery = .init(
         pending: true, requiresOwner: true,
         diagnostic: "recovery or cleanup could not be verified; retain this scope for diagnosis")
     }
-    if recovery.pending, disposition != .committed { disposition = .recoveryRequired }
+    if outcome.recoveryPending && !recovery.pending {
+      recovery = .init(
+        pending: true, requiresOwner: true,
+        diagnostic: "transaction recovery or cleanup remains pending at the captured scope")
+    }
     return UpdateCompletion(
       result: result, disposition: disposition,
       recoveredBeforePreparation: recovered, recovery: recovery)

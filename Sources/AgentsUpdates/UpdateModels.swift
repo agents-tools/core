@@ -1,6 +1,7 @@
 import AgentsCore
 import AgentsInstructions
 import AgentsSkills
+import Foundation
 
 public struct CombinedUpdateReport: Codable, Sendable, Equatable {
   public let scope: InstallScope
@@ -10,6 +11,8 @@ public struct CombinedUpdateReport: Codable, Sendable, Equatable {
   /// Includes normalized state changes and missing-lock reconstruction, even without file diffs.
   public let hasChanges: Bool
   public let displayedFingerprint: String
+  /// Durable inputs and absent leaves used to invalidate this exact preview.
+  public let readLocations: [URL]
   public let components: [ComponentUpdateChange]
 }
 

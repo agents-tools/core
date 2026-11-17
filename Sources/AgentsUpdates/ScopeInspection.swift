@@ -219,16 +219,8 @@ extension UpdateOperations {
                 name: g.name, requirement: g.requirement, manifestHash: g.manifestHash,
                 children: g.children)
             }
-            var paths =
-              stateLocations + sources.compactMap(\.location) + resources.compactMap(\.location)
-              + deployments.map(\.location)
-            for declaration in declaration.sources.values where declaration.kind == .local {
-              let environment = declaration.environment?.runtime ?? environment
-              let id = try declaration.identity(environment: environment)
-              if id.hasPrefix("local:") {
-                paths.append(URL(fileURLWithPath: String(id.dropFirst(6))))
-              }
-            }
+            let paths = try readLocations(
+              declarations: [declaration], ledgers: [ledger], store: store)
             try baseline.validate()
             return ScopeInspection(
               scope: scope, document: document, declaration: declaration, generation: generation,

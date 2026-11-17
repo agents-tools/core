@@ -197,28 +197,10 @@ public enum SkillOperations {
   }
 
   public static func initializeSkill(named name: String?, directory: URL) throws -> URL {
-    let store = StateStore(
-      scope: .project, environment: RuntimeEnvironment(projectDirectory: directory))
-    return try store.withLock(createIfMissing: false) {
-      _ = try store.readDeclaration()
-      _ = try store.readResolved()
-      let name = name.map(PathSafety.sanitizeName)
-      let root = name.map { directory.appendingPathComponent($0) } ?? directory
-      let file = root.appendingPathComponent("SKILL.md")
-      if FileManager.default.fileExists(atPath: file.path) {
-        try FileSystem.requireWritableFile(at: file)
-        throw CoreError.invalidSkill("SKILL.md already exists at \(file.path)")
-      }
-      try FileSystem.createDirectory(at: root)
-      let title = name ?? PathSafety.sanitizeName(root.lastPathComponent)
-      try FileSystem.withAccessErrors(at: file) {
-        try
-          "---\nname: \(title)\ndescription: Describe when to use this skill\n---\n\n# \(title)\n\nWrite the skill instructions here.\n"
-          .write(to: file, atomically: true, encoding: .utf8)
-      }
-      try FileSystem.requireWritableFile(at: file)
-      return root
-    }
+    try SkillInitialization(
+      named: name, directory: directory, environment: RuntimeEnvironment(), validateState: false
+    )
+    .apply(outcome: TransactionOutcome(), checkpoint: { _ in })
   }
 
 }

@@ -31,33 +31,13 @@ public enum InstructionOperations {
   }
 
   /// Creates the project's own `.agent/instructions/<name>.md` with the required front matter,
-  /// without replacing an existing entry or creating a declaration or lock.
+  /// without replacing an existing entry or creating a declaration or resolved ledger.
   @discardableResult
   public static func initializeInstructions(
     named name: String, environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> URL {
-    guard Declaration.isInstructionName(name), !name.contains("/") else {
-      throw CoreError.invalidSource(
-        "instruction names use lowercase letters, digits and hyphens: \(name)")
-    }
-    let store = StateStore(scope: .project, environment: environment)
-    return try store.withLock {
-      _ = try store.declarationBytes()
-      let file = environment.projectDirectory.resolvingSymlinksInPath()
-        .appendingPathComponent(InstructionSources.ownContainer)
-        .appendingPathComponent(name + ".md")
-      guard try InstructionTargets.read(file) == nil else {
-        throw CoreError.invalidSource("instruction file already exists: \(file.path)")
-      }
-      let bytes = Data(
-        "---\ndescription: Describe what these instructions make the agent do.\n---\n# \(name)\n\nWrite the instructions here.\n"
-          .utf8)
-      _ = try Instructions.validateSource(bytes, id: name)
-      let transaction = FileTransaction(store: store)
-      try transaction.replace(file, with: .data(bytes))
-      try transaction.commit()
-      return file
-    }
+    try InstructionInitialization(named: name, environment: environment, validateState: false)
+      .apply(outcome: TransactionOutcome(), checkpoint: { _ in })
   }
 
   static func operate<T>(
@@ -105,5 +85,16 @@ extension InstructionOperations {
             path: unit.path, hash: unit.section.hash), section: unit.section)
       }
     }
+  }
+}
+
+extension InstructionOperations {
+  /// Includes the absent own container and explicitly selected leaves for file-event invalidation.
+  package static func ownReadLocations(names: [String] = [], environment: RuntimeEnvironment)
+    -> [URL]
+  {
+    let directory = environment.projectDirectory.resolvingSymlinksInPath()
+      .appendingPathComponent(InstructionSources.ownContainer)
+    return [directory] + names.map { directory.appendingPathComponent($0 + ".md") }
   }
 }
