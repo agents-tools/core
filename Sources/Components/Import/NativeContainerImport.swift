@@ -394,7 +394,36 @@ enum NativeContainerImport {
       }
       return
     }
+    guard
+      try FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType
+        != .typeSymbolicLink
+    else {
+      diagnostics.add(
+        .unconverted, .init(document: relative, pointer: ""),
+        "Native member discovery through a link requires explicit contained support closure.")
+      return
+    }
+    // A regular member directory reached through a linked ancestor is still link discovery.
+    let memberPath =
+      relative == root ? "." : root == "." ? relative : String(relative.dropFirst(root.count + 1))
+    let memberParts = memberPath.split(separator: "/")
+    if memberParts.count > 1 {
+      for count in 1..<memberParts.count {
+        let prefix = memberParts.prefix(count).joined(separator: "/")
+        let ancestor = root == "." ? prefix : root + "/" + prefix
+        if try FileManager.default.attributesOfItem(atPath: snapshot.resource(ancestor).path)[.type]
+          as? FileAttributeType == .typeSymbolicLink
+        {
+          diagnostics.add(
+            .unconverted, .init(document: ancestor, pointer: ""),
+            "Native member discovery through a link requires explicit contained support closure.")
+          return
+        }
+      }
+    }
     var files: [String] = []
+    var links: [String] = []
+    var admittedSkills: [String] = []
     if directory.boolValue {
       guard let iterator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
       else { throw ImportReadFailure.invalid }
@@ -404,9 +433,7 @@ enum NativeContainerImport {
         let location = try snapshot.relativePath(file)
         let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
         guard attributes[.type] as? FileAttributeType != .typeSymbolicLink else {
-          diagnostics.add(
-            .unconverted, .init(document: location, pointer: ""),
-            "Native member discovery through a link requires explicit contained support closure.")
+          links.append(location)
           iterator.skipDescendants()
           continue
         }
@@ -419,7 +446,8 @@ enum NativeContainerImport {
       if kind == .skills {
         guard URL(fileURLWithPath: file).lastPathComponent == "SKILL.md" else { continue }
         let skillPath = (file as NSString).deletingLastPathComponent
-        let content = try ImportSkillContent.read(skillPath, input: input, limits: limits)
+        let content = try ImportSkillContent.read(
+          skillPath, input: input, limits: limits, nativeContainer: root)
         diagnostics.proposal.diagnostics += content.diagnostics
         diagnostics.proposal.bindings += content.bindings
         diagnostics.proposal.preservationBindings += content.bindings.filter {
@@ -443,12 +471,15 @@ enum NativeContainerImport {
           selector: .skill(name: content.skill.name),
           origin: .init(document: file, pointer: "/frontmatter"), container: root,
           profile: input.profile, into: &diagnostics, admission: admission)
-        diagnostics.proposal.resources.append(
-          .init(
-            origin: .init(document: file, pointer: ""), sourceAlias: alias,
-            producerName: content.skill.name, path: ".", producerIntegrity: nil,
-            observedHash: content.hash,
-            executableFlags: content.flags, requiresStandaloneSource: true, kind: .skills))
+        let preservationPath =
+          root == "." ? skillPath : String(skillPath.dropFirst(root.count + 1))
+        let resourceIndex = diagnostics.proposal.resources.count
+        try NativeImportInput.resource(
+          preservationPath, root: root, input: input,
+          origin: .init(document: file, pointer: ""), limits: limits,
+          into: &diagnostics, admission: admission)
+        diagnostics.proposal.resources[resourceIndex].kind = .skills
+        admittedSkills.append(skillPath)
       } else {
         let ext = URL(fileURLWithPath: file).pathExtension
         let allowed =
@@ -465,6 +496,11 @@ enum NativeContainerImport {
           kind: kind, limits: limits, into: &diagnostics, admission: admission,
           discoveryRoot: relative, inPlugin: true)
       }
+    }
+    for link in links where !admittedSkills.contains(where: { link.hasPrefix($0 + "/") }) {
+      diagnostics.add(
+        .unconverted, .init(document: link, pointer: ""),
+        "Native member discovery through a link requires explicit contained support closure.")
     }
   }
 }
