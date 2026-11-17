@@ -75,6 +75,45 @@ struct OccurrenceInsertionTests {
     #expect(text(removed) == "{\"other\":7}")
   }
 
+  @Test func createdContainersUnderSnapshotParentsResolveAndPrune() throws {
+    for removeEarlier in [false, true] {
+      let source =
+        removeEarlier
+        ? #"{"items":[{"remove":true},{"keep":true}]}"# : #"{"items":[{"keep":true}]}"#
+      let original = try document(source, .json)
+      let items = keyRegion("items")
+      let occurrences = try #require(try original.read(items)).occurrences
+      let parent = NativeRegion(items.steps + [.occurrence(occurrences[removeEarlier ? 1 : 0])])
+      let array = NativeRegion(parent.steps + [.key("nested"), .key("hooks")])
+      var edits: [NativeRegionEdit] = [
+        .append(region: array, expected: .absent, value: .integer(1)),
+        .append(region: array, expected: .absent, value: .integer(2)),
+      ]
+      if removeEarlier {
+        let first = NativeRegion(items.steps + [.occurrence(occurrences[0])])
+        edits.append(.remove(region: first, expected: try owned(original, first)))
+      }
+      let changed = try original.prepare(edits)
+      let live = try NativeDocument(bytes: changed.bytes, format: .json, budget: generousBudget())
+      #expect(changed.createdContainers.count == 2)
+      var removals: [NativeRegionEdit] = []
+      for region in changed.createdContainers {
+        let observed = try #require(try live.read(region))
+        removals.append(.pruneCreatedContainer(region: region, observed: observed))
+      }
+      for insertion in changed.appendedOccurrences {
+        removals.append(
+          .remove(region: insertion.observation.region, expected: .owned(insertion.observation)))
+      }
+      let restored = try live.prepare(removals)
+      let restoredDocument = try NativeDocument(
+        bytes: restored.bytes, format: .json, budget: generousBudget())
+      #expect(
+        try restoredDocument.read(items)?.value == .array([.object(["keep": .boolean(true)])]))
+      #expect(!text(restored).contains("nested"))
+    }
+  }
+
   @Test func tomlOccurrencesAppendWithoutNativeIDsAndPreserveUnrelatedBytes() throws {
     for source in [
       "hooks = [{ command = 'keep' }] # retained\nother = 7\n",

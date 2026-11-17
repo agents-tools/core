@@ -1157,7 +1157,7 @@ struct NativeComponentTests {
       _ = try prepared(skipped, fixture)
       Issue.record("accepted a handler type the native event skips")
     } catch let issue as NativeComponentIssue {
-      #expect(issue.field == ["manifest", "hooks", "PermissionRequest", "type"])
+      #expect(issue.field == ["manifest", "hooks", "PermissionRequest", "0", "hooks", "0", "type"])
       #expect(issue.reason == .unsupported)
     }
     invalid["hooks"] = [
@@ -1173,7 +1173,7 @@ struct NativeComponentTests {
       _ = try prepared(ignored, fixture)
       Issue.record("accepted a native failure policy with no effect")
     } catch let issue as NativeComponentIssue {
-      #expect(issue.field == ["manifest", "hooks", "Stop", "onFailure"])
+      #expect(issue.field == ["manifest", "hooks", "Stop", "0", "hooks", "0", "onFailure"])
       #expect(issue.reason == .unsupported)
     }
     let locked = try ResolvedLedgerCodec.encode(ledger, limits: .standard)
@@ -1264,7 +1264,7 @@ struct NativeComponentTests {
       _ = try prepared(bad, fixture)
       Issue.record("accepted a prompt handler in a Cursor plugin")
     } catch let issue as NativeComponentIssue {
-      #expect(issue.field == ["manifest", "hooks", "stop", "type"])
+      #expect(issue.field == ["manifest", "hooks", "stop", "0", "type"])
       #expect(issue.reason == .unsupported)
     }
     changed["hooks"] = ["hooks": ["stop": [["command": "fixture"]]]]

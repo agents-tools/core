@@ -6,14 +6,16 @@ import NativeDocuments
 /// bytes and discovery precedence are preserved; this is not decomposition or installation.
 struct NativePluginFieldsV1 {
   let surface: NativeClientSurface
+  let document: String
   let entries: [LedgerEntry]
   let budget: NativeDocumentBudget
   let readJSON: (String, [String]) throws -> NativeValue
-  let issue: ([String], String, NativeAdapterIssue.Reason) -> Error
+  var issue: ([String], String, NativeAdapterIssue.Reason) -> Error
   var claude: Bool { surface == .claudeCode }
 
   init(input: ComponentRenderInput, resource: LedgerResource, root: URL) {
     surface = input.request.surface
+    document = surface == .claudeCode ? ".claude-plugin/plugin.json" : ".cursor-plugin/plugin.json"
     entries = resource.entries
     budget = input.budget
     issue = { input.issue(["manifest"] + $0, $2, $1) }
@@ -45,19 +47,25 @@ struct NativePluginFieldsV1 {
   }
 
   init(
-    surface: NativeClientSurface, entries: [LedgerEntry], budget: NativeDocumentBudget,
+    surface: NativeClientSurface, document: String, fieldPrefix: [String] = [],
+    entries: [LedgerEntry],
+    budget: NativeDocumentBudget,
     documents: [String: NativeValue]
   ) {
     self.surface = surface
+    self.document = document
     self.entries = entries
     self.budget = budget
-    issue = { NativeComponentFieldIssue(field: $0, reason: $2, detail: $1) }
+    issue = {
+      NativeComponentFieldIssue(document: document, field: fieldPrefix + $0, reason: $2, detail: $1)
+    }
     readJSON = { relative, field in
       guard entries.contains(where: { $0.path == relative && $0.kind == .file }),
         let value = documents[relative]
       else {
         throw NativeComponentFieldIssue(
-          field: field, reason: .invalid, detail: "referenced native JSON document was not supplied"
+          document: document, field: fieldPrefix + field, reason: .invalid,
+          detail: "referenced native JSON document was not supplied"
         )
       }
       return value
@@ -248,50 +256,71 @@ struct NativePluginFieldsV1 {
     }
     // Native defaults retain their own merge/replacement behavior. They are not rewritten.
     let defaults = try NativeComponentFieldsV1.pluginDefaults(
-      surface: surface, explicitFields: Set(fields.keys))
+      surface: surface, document: document, explicitFields: Set(fields.keys))
     try budget.step(entries.count * 3)
     for field in claude ? ["hooks", "mcpServers", "lspServers"] : ["hooks", "mcpServers"] {
       guard let file = defaults[field], entries.contains(where: { $0.path == file }) else {
         continue
       }
-      let value = try json(file, field: [field, "default"])
-      try configuration(value, field: field, wrapped: true)
+      try configurationFile(file, field: field, coordinate: [field])
     }
   }
 
-  func configurations(_ value: NativeValue, field: String) throws {
+  /// The reference is located in the current document; values loaded through it are
+  /// located in the referenced document, regardless of later native merge winners.
+  func configurationFile(_ relative: String, field: String, coordinate: [String]) throws {
+    let value = try json(relative, field: coordinate)
+    var validator = self
+    validator.issue = { path, detail, reason in
+      let original = self.issue(path, detail, reason)
+      guard original is NativeComponentFieldIssue else { return original }
+      let local = field == "lspServers" && path.first == field ? Array(path.dropFirst()) : path
+      return NativeComponentFieldIssue(
+        document: relative, field: local, reason: reason, detail: detail)
+    }
+    try validator.configuration(value, field: field, wrapped: true)
+  }
+
+  func configurations(_ value: NativeValue, field: String, coordinate: [String]? = nil) throws {
     try budget.step()
+    let coordinate = coordinate ?? [field]
     if case .array(let values) = value {
       guard claude || field == "mcpServers" else {
-        throw fail([field], "native hooks do not accept an array of configuration sources")
+        throw fail(coordinate, "native hooks do not accept an array of configuration sources")
       }
-      for value in values { try configurations(value, field: field) }
+      for (index, value) in values.enumerated() {
+        try configurations(value, field: field, coordinate: coordinate + [String(index)])
+      }
     } else if case .string = value {
       if claude, field == "mcpServers" {
-        let source = try text(value, [field])
+        let source = try text(value, coordinate)
         if source.hasSuffix(".mcpb") || source.hasSuffix(".dxt") {
           throw fail(
-            [field],
+            coordinate,
             "native MCP bundle extraction and registration require frozen typed children and closed E/D routes",
             .integrationRequired)
         }
       }
-      let relative = try path(value, [field], kind: .file, suffix: ".json")
-      try configuration(json(relative, field: [field]), field: field, wrapped: true)
+      let relative = try path(value, coordinate, kind: .file, suffix: ".json")
+      try configurationFile(relative, field: field, coordinate: coordinate)
     } else {
       guard claude else {
         throw fail(
-          [field],
+          coordinate,
           "the exact inline Cursor container wrapper requires a primary schema/example beyond its documented object type",
           .unverified)
       }
-      try configuration(value, field: field, wrapped: false)
+      var validator = self
+      validator.issue = { path, detail, reason in
+        self.issue(coordinate + path.dropFirst(), detail, reason)
+      }
+      try validator.configuration(value, field: field, wrapped: false)
     }
   }
 
   func configuration(_ value: NativeValue, field: String, wrapped: Bool) throws {
     guard case .object(let root) = value else {
-      throw fail([field], "native config requires an object")
+      throw fail(wrapped ? [] : [field], "native config requires an object")
     }
     let map: [String: NativeValue]
     if wrapped && field != "lspServers" {
@@ -301,9 +330,9 @@ struct NativePluginFieldsV1 {
       } else {
         allowed = claude ? [field, "description"] : [field, "version"]
       }
-      guard Set(root.keys).isSubset(of: allowed) else {
+      if let unknown = root.keys.sorted().first(where: { !allowed.contains($0) }) {
         throw fail(
-          [field], "native file root contains fields outside the captured wrapper profile",
+          [unknown], "native file root contains fields outside the captured wrapper profile",
           .unverified)
       }
       guard case .object(let entries) = root[field] else {
@@ -312,9 +341,9 @@ struct NativePluginFieldsV1 {
           field == "mcpServers" ? .unverified : .invalid)
       }
       if let description = root["description"] {
-        _ = try text(description, [field, "description"])
+        _ = try text(description, ["description"])
       }
-      if let schema = root["$schema"] { _ = try text(schema, [field, "$schema"]) }
+      if let schema = root["$schema"] { _ = try text(schema, ["$schema"]) }
       if let version = root["version"] {
         let one: Bool
         switch version {
@@ -324,7 +353,7 @@ struct NativePluginFieldsV1 {
         }
         guard one else {
           throw fail(
-            [field, "version"], "native hook file version is outside the fixed version-one profile",
+            ["version"], "native hook file version is outside the fixed version-one profile",
             .unverified)
         }
       }
@@ -351,50 +380,53 @@ struct NativePluginFieldsV1 {
       else {
         throw fail(["hooks", event], "native hook event or handler array is invalid")
       }
-      for entry in entries {
+      for (index, entry) in entries.enumerated() {
+        let path = ["hooks", event, String(index)]
         guard case .object(let object) = entry else {
-          throw fail(["hooks", event], "native hook entry requires an object")
+          throw fail(path, "native hook entry requires an object")
         }
         if claude {
           guard Set(object.keys).isSubset(of: ["matcher", "hooks"]),
             case .array(let handlers) = object["hooks"]
           else {
-            throw fail(["hooks", event], "Claude hook group requires matcher/hooks fields")
+            throw fail(path, "Claude hook group requires matcher/hooks fields")
           }
           if let matcher = object["matcher"] {
-            let pattern = try text(matcher, ["hooks", event, "matcher"])
+            let pattern = try text(matcher, path + ["matcher"])
             guard NativeDocumentedHooksV1.admittedMatcher(pattern) else {
               throw fail(
-                ["hooks", event, "matcher"],
+                path + ["matcher"],
                 "exact native JavaScript regex admission is required beyond this fragment profile",
                 .unverified)
             }
             guard !NativeDocumentedHooksV1.claudeWithoutMatcher.contains(event) else {
               throw fail(
-                ["hooks", event, "matcher"], "this native event ignores matchers", .unsupported)
+                path + ["matcher"], "this native event ignores matchers", .unsupported)
             }
           }
-          for handler in handlers { try handlerFields(handler, event: event) }
+          for (handlerIndex, handler) in handlers.enumerated() {
+            try handlerFields(handler, event: event, path: path + ["hooks", String(handlerIndex)])
+          }
         } else {
-          try handlerFields(entry, event: event)
+          try handlerFields(entry, event: event, path: path)
         }
       }
     }
   }
 
-  func handlerFields(_ value: NativeValue, event: String) throws {
+  func handlerFields(_ value: NativeValue, event: String, path: [String]) throws {
     try budget.step()
     guard case .object(let handler) = value else {
-      throw fail(["hooks", event], "native handler requires an object")
+      throw fail(path, "native handler requires an object")
     }
     let type = try text(
-      handler["type"] ?? (claude ? .null : .string("command")), ["hooks", event, "type"])
+      handler["type"] ?? (claude ? .null : .string("command")), path + ["type"])
     guard
       claude
         ? ["command", "http", "prompt", "agent", "mcp_tool"].contains(type) : type == "command"
     else {
       throw fail(
-        ["hooks", event, "type"],
+        path + ["type"],
         claude ? "native handler type is not established" : "Cursor plugin hooks are command-only",
         .unsupported)
     }
@@ -410,7 +442,7 @@ struct NativePluginFieldsV1 {
         || (type == "http" && ["SessionStart", "Setup"].contains(event))
       {
         throw fail(
-          ["hooks", event, "type"], "native event skips this handler type", .unsupported)
+          path + ["type"], "native event skips this handler type", .unsupported)
       }
     }
     let required: [String]
@@ -420,7 +452,7 @@ struct NativePluginFieldsV1 {
     case "prompt", "agent": required = ["prompt"]
     default: required = ["server", "tool"]
     }
-    for key in required { _ = try text(handler[key] ?? .null, ["hooks", event, key]) }
+    for key in required { _ = try text(handler[key] ?? .null, path + [key]) }
     let specific: Set<String>
     switch type {
     case "command":
@@ -433,7 +465,7 @@ struct NativePluginFieldsV1 {
     default: specific = ["server", "tool", "input"]
     }
     for (key, value) in handler {
-      let field = ["hooks", event, key]
+      let field = path + [key]
       guard
         specific.contains(key)
           || (claude ? ["type", "if", "timeout", "statusMessage"] : ["type", "timeout"]).contains(
@@ -527,14 +559,14 @@ struct NativePluginFieldsV1 {
     }
     if claude, type == "mcp_tool", ["SessionStart", "Setup"].contains(event) {
       throw fail(
-        ["hooks", event, "type"], "MCP hook availability is not guaranteed during native startup",
+        path + ["type"], "MCP hook availability is not guaranteed during native startup",
         .unverified)
     }
     if claude, handler["timeout"] != nil,
       handler["async"] == .boolean(true) || handler["asyncRewake"] == .boolean(true)
     {
       throw fail(
-        ["hooks", event, "timeout"], "native background hook ignores timeout", .unsupported)
+        path + ["timeout"], "native background hook ignores timeout", .unsupported)
     }
   }
 

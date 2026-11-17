@@ -121,7 +121,7 @@ package struct NativeDocument {
       }
       var current = self
       var changed: [NativeRegion] = []
-      var created: [NativeRegion] = []
+      var created: [(region: NativeRegion, address: [AddressStep])] = []
       var observed: [Int] = []
       var appended: [(editIndex: Int, ordinal: Int)] = []
       var removed: [([AddressStep], Int)] = []
@@ -209,15 +209,17 @@ package struct NativeDocument {
             throw NativeDocumentError.unsupportedEdit(.ambiguousTrivia, edit.region, old.headers)
           }
         }
+        var editCreated: [NativeRegion] = []
         if edit.isAppend && old == nil {
           try budget.allocate(effective.steps.count + 1, stage: "created array evidence")
-          created.append(effective)
+          editCreated.append(effective)
         }
-        try current.createdObjects(old: old, new: desired, path: effective.steps, into: &created)
+        try current.createdObjects(
+          old: old, new: desired, path: effective.steps, into: &editCreated)
         let expected = try current.root.copy(budget)
         try current.change(
           expected, steps: effective.steps[...], desired: desired, region: effective,
-          created: &created)
+          created: &editCreated)
         var editor = PatchBuilder(document: current, region: effective)
         let checked: NativeDocument
         do {
@@ -255,6 +257,22 @@ package struct NativeDocument {
           if edit.isConditionalPrune { continue }
           throw NativeDocumentError.unsupportedEdit(
             .wouldRewriteUnownedStructure, edit.region, editor.patches.map(\.range))
+        }
+        // Creation paths share the admitted edit's original address. Any suffix is a
+        // newly created object member, so no snapshot selector is reselected by value.
+        for container in editCreated {
+          let shared = min(container.steps.count, edit.region.steps.count)
+          try budget.allocate(container.steps.count * 2 + 1, stage: "created container address")
+          var address = Array(addresses[editIndex].prefix(shared))
+          let suffix = container.steps.dropFirst(shared)
+          for step in suffix {
+            guard case .key(let key) = step else {
+              throw NativeDocumentError.ownershipMismatch(container)
+            }
+            try budget.allocate(key.utf8.count, stage: "created member address")
+            address.append(.key(Data(key.utf8)))
+          }
+          created.append((NativeRegion(Array(edit.region.steps.prefix(shared)) + suffix), address))
         }
         if edit.isAppend {
           var ordinal = old?.elements.count ?? 0
@@ -301,9 +319,30 @@ package struct NativeDocument {
             editIndex: index,
             observation: try current.observation(array.elements[ordinal], region: region)))
       }
+      var createdContainers: [NativeRegion] = []
+      for container in created {
+        var deleted = false
+        for (parent, ordinal) in removed {
+          try budget.step(parent.reduce(0) { $0 + $1.work } + container.address.count)
+          if container.address.count > parent.count,
+            container.address.starts(with: parent),
+            container.address[parent.count] == .element(ordinal)
+          {
+            deleted = true
+            break
+          }
+        }
+        if deleted { continue }
+        let region = try current.region(
+          container.region, at: container.address, removed: removed)
+        if try current.resolve(region, on: current.root) != nil {
+          try budget.allocate(region.steps.count + 1, stage: "final created container evidence")
+          createdContainers.append(region)
+        }
+      }
       return PreparedNativeChange(
         bytes: current.bytes, changedRegions: changed, observations: observations,
-        createdContainers: created, appendedOccurrences: appendedOccurrences)
+        createdContainers: createdContainers, appendedOccurrences: appendedOccurrences)
     }
   }
 
