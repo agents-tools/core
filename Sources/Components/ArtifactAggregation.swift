@@ -1,5 +1,6 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsSkills
 import Foundation
 import NativeDocuments
 
@@ -37,6 +38,9 @@ package final class ArtifactAggregation: PreparedEvidence {
   private var writes: [String: FileTransaction.Source] = [:]
   private var deletes = Set<String>()
   private var capsules: [String: URL] = [:]
+  private var skillTargets: [String: SkillInstallationTarget] = [:]
+  private var skillWritePaths = Set<String>()
+  private var skillDeletePaths = Set<String>()
   private var skillContent: [String: (String, [String: Bool])] = [:]
   private var privateWrites:
     [(PreparedPrivateMaterialization, Set<String>, (RuntimeBindingValues) throws -> Data)] = []
@@ -49,12 +53,14 @@ package final class ArtifactAggregation: PreparedEvidence {
     resources: [String: URL], workspace: URL, store: StateStore, replace: Bool,
     changingAccess: Bool,
     kinds: Set<DeclaredComponentKind>? = nil, names: Set<String> = [],
-    selectedIdentities: Set<String>? = nil
+    selectedIdentities: Set<String>? = nil,
+    installations: [SkillInstallationTarget] = []
   ) throws {
     self.ledger = ledger
     self.store = store
     self.resources = resources
     self.replace = replace
+    for target in installations { skillTargets[target.url.path] = target }
     selectedKinds = kinds
     selectedNames = names
     self.selectedIdentities = selectedIdentities
@@ -107,10 +113,10 @@ package final class ArtifactAggregation: PreparedEvidence {
     let previousByPath = try Dictionary(
       grouping: previous.deployments.filter { selected($0, in: previous) }
     ) {
-      InstructionLocations.physical(try $0.target.resolve(roots: roots)).path
+      try installationURL($0).path
     }
     var byPath = try Dictionary(grouping: ledger.deployments.filter { selected($0, in: ledger) }) {
-      InstructionLocations.physical(try $0.target.resolve(roots: roots)).path
+      try installationURL($0).path
     }
     var native: [String: [(LockedLowering, NativeMCPContribution, MaterializationTarget)]] = [:]
     for lowering in ledger.lowerings
@@ -210,6 +216,7 @@ package final class ArtifactAggregation: PreparedEvidence {
         guard let deployment = old.first else { continue }
         if deployment.route == "agents/skill@1" {
           deletes.insert(path)
+          skillDeletePaths.insert(path)
           changes.append(
             .init(
               deployment: deployment, url: url, before: nil, after: nil,
@@ -295,7 +302,10 @@ package final class ArtifactAggregation: PreparedEvidence {
         {
           skillContent[path] = (resource.hash, try FileHash.executableFlags(tree))
         }
-        if changed { writes[path] = source }
+        if changed {
+          writes[path] = source
+          skillWritePaths.insert(path)
+        }
         changes.append(
           .init(
             deployment: deployment, url: url, before: nil, after: nil,
@@ -328,6 +338,20 @@ package final class ArtifactAggregation: PreparedEvidence {
 
   private func resourceDestination(_ id: String, in selected: ResolvedLedger? = nil) throws -> URL {
     try Self.resourceDestination(id, ledger: selected ?? ledger, store: store)
+  }
+
+  private func installationURL(_ deployment: LedgerDeployment) throws -> URL {
+    guard deployment.route == "agents/skill@1" else {
+      return InstructionLocations.physical(try deployment.target.resolve(roots: store.ledgerRoots))
+    }
+    guard let agent = deployment.recipients.first else {
+      throw CoreError.invalidState("missing skill recipient")
+    }
+    let target = try store.skillInstallationTarget(for: agent, named: deployment.target.path)
+    guard let admitted = skillTargets[target.url.path] else {
+      throw CoreError.invalidState("skill installation was not admitted")
+    }
+    return admitted.url
   }
 
   package static func resourceDestination(_ id: String, ledger: ResolvedLedger, store: StateStore)
@@ -537,6 +561,27 @@ package final class ArtifactAggregation: PreparedEvidence {
     _ manifest: NativeComponentValue, values: RuntimeBindingValues?
   ) throws -> Data {
     try Self.generatedManifestBytes(manifest, values: values, selected: ledger, store: store)
+  }
+
+  /// Renders a selected symbolic value with the native JSON serializer, without physical input.
+  package static func configurationPreview(_ value: NativeValue) throws -> String {
+    func document(_ bytes: Data) throws -> NativeDocument {
+      try NativeDocument(
+        bytes: bytes, format: .json,
+        budget: NativeDocumentBudget(
+          limits: .init(
+            storage: LedgerLimits.standard.resourceBytes, work: LedgerLimits.standard.encodedBytes,
+            nodes: LedgerLimits.standard.nodes, depth: LedgerLimits.standard.depth,
+            uninterruptedBytes: LedgerLimits.standard.keyBytes)))
+    }
+    let region = NativeRegion(keys: ["selected"])
+    let bytes = try document(Data("{}".utf8)).prepare([
+      .put(region: region, expected: .absent, value: value)
+    ]).bytes
+    guard let range = try document(bytes).read(region)?.valueRange else {
+      throw CoreError.invalidState("selected configuration has no rendered range")
+    }
+    return String(decoding: bytes.subdata(in: range), as: UTF8.self)
   }
 
   private static func generatedManifestBytes(
@@ -1195,14 +1240,23 @@ package final class ArtifactAggregation: PreparedEvidence {
       }
     }
     for path in writes.keys.sorted() {
-      try transaction.replace(
-        URL(fileURLWithPath: path), with: writes[path]!,
-        expectedHash: { if case .link = writes[path]! { nil } else { skillContent[path]?.0 } }(),
-        executableFlags: { if case .link = writes[path]! { nil } else { skillContent[path]?.1 } }(),
-        expecting: targets[path])
+      let source = writes[path]!
+      let hash: String? = { if case .link = source { nil } else { skillContent[path]?.0 } }()
+      if skillWritePaths.contains(path), let target = skillTargets[path] {
+        try transaction.replaceSkill(
+          target, with: source, expectedHash: hash, expecting: targets[path])
+      } else {
+        try transaction.replace(
+          URL(fileURLWithPath: path), with: source, expectedHash: hash,
+          executableFlags: skillContent[path]?.1, expecting: targets[path])
+      }
     }
     for path in deletes.sorted() {
-      try transaction.delete(URL(fileURLWithPath: path), expecting: targets[path])
+      if skillDeletePaths.contains(path), let target = skillTargets[path] {
+        try transaction.deleteSkill(target, expecting: targets[path])
+      } else {
+        try transaction.delete(URL(fileURLWithPath: path), expecting: targets[path])
+      }
     }
     for (prepared, entries) in privateTrees {
       try transaction.replacePrivateTree(prepared, entries: entries, provider: provider)
@@ -1288,6 +1342,26 @@ extension ArtifactAggregation {
     }
     do {
       if deployment.route == "agents/skill@1" {
+        if let lowering = ledger.lowerings.first(where: { $0.deployments.contains(deployment.id) }),
+          lowering.layout.object?["mode"]?.text == InstallMode.edit.rawValue
+        {
+          guard let owner = deployment.owners.first.flatMap({ ledger.components[$0] }),
+            let name = owner.payload.object?["name"]?.text,
+            let resource = owner.resources.first.flatMap({ ledger.resources[$0] }),
+            resource.kind == .liveEdit, let source = resource.location,
+            let link = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)
+          else { return ("drifted", "live skill is not linked to its recorded source") }
+          let observed = URL(fileURLWithPath: link, relativeTo: url.deletingLastPathComponent())
+            .standardizedFileURL
+          let expected = try source.resolve(roots: store.ledgerRoots).standardizedFileURL
+          guard observed.path == expected.path else {
+            return ("drifted", "live skill is not linked to its recorded source")
+          }
+          do { try SkillOperations.validateLiveMetadata(at: expected, name: name) } catch {
+            return ("drifted", "live skill source metadata changed")
+          }
+          return ("current", nil)
+        }
         let expected = deployment.expectedHash
         let hash = "sha256:" + (try FileHash.folderHash(url))
         let flags = try FileHash.executableFlags(url)

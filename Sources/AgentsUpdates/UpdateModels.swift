@@ -1,6 +1,7 @@
 import AgentsCore
 import AgentsInstructions
 import AgentsSkills
+import Components
 import Foundation
 
 public struct CombinedUpdateReport: Codable, Sendable, Equatable {
@@ -54,7 +55,10 @@ public struct ComponentUpdateChange: Codable, Sendable, Equatable {
   public let effectiveReaders: [AgentID]
   public let privateMaterialization: Bool
   public let permissionChange: ComponentPermissionChange?
+  /// Readable selected configuration JSON with symbolic environment/secret references.
+  /// Nil means the old selected value is unavailable; native sibling values are never included.
   public let symbolicBefore: String?
+  /// Readable selected configuration JSON, using the same symbolic projection as inspection.
   public let symbolicAfter: String?
   public let kind: String
   public let name: String
@@ -86,4 +90,11 @@ public struct ComponentMemberPermissionChange: Codable, Sendable, Equatable {
   public let beforeMode: UInt32
   public let afterOwner: UInt32
   public let afterMode: UInt32
+}
+
+// Public preview text uses the inspection projection, never the ledger wire representation.
+extension UpdateOperations {
+  static func symbolicConfigurationText(_ value: LedgerValue) throws -> String {
+    try ArtifactAggregation.configurationPreview(symbolicValue(value))
+  }
 }

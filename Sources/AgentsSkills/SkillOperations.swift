@@ -16,7 +16,7 @@ public enum SkillOperations {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> [InstalledSkill] {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withReadLock {
+    return try SkillLifecycle.withInstallationReadLock(store: store) {
       _ = try store.readDeclaration()
       let ledger = try store.readLedger()
       return try managedInventory(store: store, ledger: ledger, agents: agents)
@@ -78,7 +78,7 @@ public enum SkillOperations {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> [InstalledSkill] {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withReadLock {
+    return try SkillLifecycle.withInstallationReadLock(store: store) {
       _ = try store.readDeclaration()
       let ledger = try store.readLedger()
       var result = try managedInventory(store: store, ledger: ledger, agents: agents).filter {
@@ -126,7 +126,8 @@ public enum SkillOperations {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> DoctorReport {
     let store = StateStore(scope: scope, environment: environment)
-    return try store.withReadLock(
+    return try SkillLifecycle.withInstallationReadLock(
+      store: store,
       onPendingRecovery: {
         let recovery = FileTransaction.recoveryDiagnostic(store: store)
         return DoctorReport(checks: [

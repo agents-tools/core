@@ -23,15 +23,21 @@ public enum UpdateOperations {
   ) throws -> CombinedUpdateReport {
     let store = StateStore(scope: scope, environment: environment)
     var admitted = Set<NativeTargetRoute>()
+    var installations: [String: SkillInstallationTarget] = [:]
     while true {
       do {
-        return try store.withReadLock(footprint: admitted) {
+        return try store.withReadLock(
+          footprint: admitted, installations: Array(installations.values)
+        ) {
           try UpdatePlan.withPlan(
-            request: request, store: store, admitted: admitted,
+            request: request, store: store, admitted: admitted, installations: installations,
             checkpoint: checkpoint, provider: RequiredBindingProvider()
           ) { $0.report }
         }
-      } catch let required as RequiredRoutes { admitted.formUnion(required.routes) }
+      } catch let required as RequiredRoutes {
+        admitted.formUnion(required.routes)
+        installations.merge(required.installations, uniquingKeysWith: { _, next in next })
+      }
     }
   }
 
@@ -70,11 +76,15 @@ public enum UpdateOperations {
     var delivered = false
     var returned = false
     var admitted = Set<NativeTargetRoute>()
+    var installations: [String: SkillInstallationTarget] = [:]
     while true {
       do {
-        return try store.withLock(checkpoint: checkpoint, outcome: outcome, footprint: admitted) {
+        return try store.withLock(
+          checkpoint: checkpoint, outcome: outcome, footprint: admitted,
+          installations: Array(installations.values)
+        ) {
           try UpdatePlan.withPlan(
-            request: request, store: store, admitted: admitted,
+            request: request, store: store, admitted: admitted, installations: installations,
             checkpoint: checkpoint, provider: provider
           ) { plan in
             try plan.requireSkillOwnership()
@@ -88,6 +98,7 @@ public enum UpdateOperations {
         }
       } catch let required as RequiredRoutes where !delivered {
         admitted.formUnion(required.routes)
+        installations.merge(required.installations, uniquingKeysWith: { _, next in next })
       } catch {
         if returned || error is UpdateApplyError {
           throw UpdateApplyError(outcome: outcome, underlyingError: error)

@@ -103,6 +103,48 @@ package final class SkillLifecycle {
     return selected
   }
 
+  package static func installationTargets(_ ledger: ResolvedLedger, store: StateStore) throws
+    -> [String: SkillInstallationTarget]
+  {
+    var targets: [String: SkillInstallationTarget] = [:]
+    for deployment in ledger.deployments where deployment.route == "agents/skill@1" {
+      guard deployment.target.kind == .registered,
+        let agent = deployment.recipients.first, deployment.recipients.count == 1,
+        deployment.target.root == "skills-" + agent.rawValue
+      else { throw CoreError.invalidState("invalid skill installation recipient") }
+      let name = deployment.target.path
+      targets[agent.rawValue + "/" + name] = try store.skillInstallationTarget(
+        for: agent, named: name)
+    }
+    return targets
+  }
+
+  private struct RequiredInstallations: Error {
+    let targets: [String: SkillInstallationTarget]
+  }
+
+  /// Capture all managed slots before admitting physical reads; never recover during inventory.
+  static func withInstallationReadLock<T>(
+    store: StateStore, onPendingRecovery: (() throws -> T)? = nil, _ body: () throws -> T
+  ) throws -> T {
+    var targets: [String: SkillInstallationTarget] = [:]
+    while true {
+      do {
+        return try store.withReadLock(
+          onPendingRecovery: onPendingRecovery, installations: Array(targets.values)
+        ) {
+          let required = try installationTargets(store.readLedger(), store: store)
+          guard Set(required.keys).isSubset(of: Set(targets.keys)) else {
+            throw RequiredInstallations(targets: required)
+          }
+          return try body()
+        }
+      } catch let required as RequiredInstallations {
+        targets.merge(required.targets, uniquingKeysWith: { _, next in next })
+      }
+    }
+  }
+
   package static func target(name: String, agent: AgentID, store: StateStore) -> URL {
     AgentRegistry.installSkillsDirectory(
       for: agent, scope: store.scope, environment: store.environment

@@ -23,22 +23,18 @@ package struct SkillInitialization: Sendable {
       name = canonicalName
       selectedChild = nil
     } else {
-      guard canonicalName == nil else {
-        throw CoreError.unsupported(
-          "initializing a named skill below a new directory requires admission of both creating levels"
-        )
-      }
       environment.projectDirectory = directory.deletingLastPathComponent()
-      name = nil
+      name = canonicalName
       selectedChild = directory.lastPathComponent
     }
     store = StateStore(scope: .project, environment: environment)
     root = try store.captureExistingProjectRoot()
     let observedDirectory = root.directory.resolvingSymlinksInPath()
-    file =
-      (selectedChild ?? name).map { observedDirectory.appendingPathComponent($0) }
-      .map { $0.appendingPathComponent("SKILL.md") }
-      ?? root.directory.resolvingSymlinksInPath().appendingPathComponent("SKILL.md")
+    let selectedDirectory =
+      selectedChild.map { observedDirectory.appendingPathComponent($0) }
+      ?? observedDirectory
+    file = (name.map { selectedDirectory.appendingPathComponent($0) } ?? selectedDirectory)
+      .appendingPathComponent("SKILL.md")
     let title = canonicalName ?? PathSafety.sanitizeName(directory.lastPathComponent)
     template = Data(
       "---\nname: \(title)\ndescription: Describe when to use this skill\n---\n\n# \(title)\n\nWrite the skill instructions here.\n"
@@ -46,8 +42,9 @@ package struct SkillInitialization: Sendable {
     if validateState {
       try store.withReadLock {
         let target =
-          try selectedChild.map { try store.skillInitializationTarget(inChildDirectory: $0) }
-          ?? store.skillInitializationTarget(named: name)
+          try selectedChild.map {
+            try store.skillInitializationTarget(inChildDirectory: $0, named: name)
+          } ?? store.skillInitializationTarget(named: name)
         guard target.file == file else {
           throw CoreError.invalidState("skill initialization target changed")
         }
@@ -64,8 +61,9 @@ package struct SkillInitialization: Sendable {
       _ = try store.declarationBytes()
       _ = try store.readLedger()
       let target =
-        try selectedChild.map { try store.skillInitializationTarget(inChildDirectory: $0) }
-        ?? store.skillInitializationTarget(named: name)
+        try selectedChild.map {
+          try store.skillInitializationTarget(inChildDirectory: $0, named: name)
+        } ?? store.skillInitializationTarget(named: name)
       guard target.file == file else {
         throw CoreError.invalidState("skill initialization target changed")
       }

@@ -39,6 +39,22 @@ import Testing
     #expect(try UpdateOperations.initialize(description).result.get().path == directory.path)
   }
 
+  @Test func namedSkillUnderAbsentSelectedDirectoryCapturesBothLevels() throws {
+    let f = try UpdateFixture()
+    let directory = f.root.appendingPathComponent("Chosen Directory")
+    let before = try FileSnapshot.read(at: f.root)
+    let description = try UpdateOperations.describeSkillInitialization(
+      named: "My Skill", directory: directory, environment: f.environment)
+    #expect(description.existingRoot.path == f.root.path)
+    #expect(description.file == directory.appendingPathComponent("my-skill/SKILL.md"))
+    #expect(try FileSnapshot.read(at: f.root) == before)
+    let completion = UpdateOperations.initialize(description)
+    let result = try completion.result.get()
+    #expect(result.path == directory.appendingPathComponent("my-skill").path)
+    #expect(completion.disposition == .committed && !completion.recovery.pending)
+    #expect(try String(contentsOf: description.file, encoding: .utf8) == description.template)
+  }
+
   @Test(arguments: [false, true])
   func missingOrReplacedObservedProjectIsNeverRecreated(_ replace: Bool) throws {
     let f = try UpdateFixture()

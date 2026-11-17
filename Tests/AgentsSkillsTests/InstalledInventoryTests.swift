@@ -37,9 +37,16 @@ struct InstalledInventoryTests {
       to: universal.appendingPathComponent("invalid/SKILL.md"))
     let claude = AgentRegistry.installSkillsDirectory(
       for: .claudeCode, scope: scope, environment: environment)
+    try FileManager.default.createDirectory(
+      at: claude.deletingLastPathComponent(), withIntermediateDirectories: true)
     _ = try SkillOperations.initializeSkill(named: "claude-only", directory: claude)
     var expectedCodex = Set(["linked"])
     if scope == .user {
+      for agent in [AgentID.codex, .opencode] {
+        let selected = AgentRegistry.userSkillsDirectory(for: agent, environment: environment)
+        try FileManager.default.createDirectory(
+          at: selected.deletingLastPathComponent(), withIntermediateDirectories: true)
+      }
       _ = try SkillOperations.initializeSkill(
         named: "codex-native",
         directory: AgentRegistry.userSkillsDirectory(for: .codex, environment: environment))

@@ -30,7 +30,11 @@ Reports include skill membership and typed file differences, instruction targets
 and prompts, selected native changes, missing-lock status, `hasChanges` and a
 `displayedFingerprint`. Native reports contain the owned symbolic values; complete
 shared documents, unrelated siblings, runtime secret values and private freshness
-evidence remain internal. Equal unmanaged values do not establish ownership.
+evidence remain internal. `ComponentUpdateChange.symbolicBefore` and `symbolicAfter`
+are readable selected configuration JSON, rendered through the native JSON owner.
+Environment and secret references remain symbolic objects; `nil` means the selected
+value is unavailable. Consumers can display these strings directly. Equal unmanaged
+values do not establish ownership.
 `hasChanges` includes declaration and ledger changes even when target bytes agree.
 
 The versioned display fingerprint covers the operation and selection, complete
@@ -45,7 +49,9 @@ the same fingerprint. This is a presentation comparison, not an authorization to
 `withPreparedUpdate(_:scope:environment:_:)` acquires the request and pending-journal
 footprint before the scope writer lock. Source linking can discover a larger
 footprint; preparation releases the locks and readmits the union before delivering
-the consumer closure. This never repeats a delivered callback or binding provider.
+the consumer closure. Finite skill installation targets for current and previous
+slots join this admission union and retain their legacy directory/link intention.
+This never repeats a delivered callback or binding provider.
 It captures declaration, ledger and watch together, links and freezes one paired
 source result, lowers it and aggregates contributions by physical destination.
 Shared native files receive one aggregated regional edit with all logical owners.

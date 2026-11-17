@@ -139,9 +139,12 @@ struct PrivateNativeCompositionTests {
 }
 
 extension PrivateNativeCompositionTests {
-  @Test func opaqueFrozenTreeRetainsPrivateClassificationWithoutProviderReplay() throws {
+  @Test(arguments: [false, true])
+  func opaqueFrozenTreeRetainsPrivateClassificationWithoutProviderReplay(_ separateProducer: Bool)
+    throws
+  {
     let f = try UpdateFixture()
-    let source = f.root.appendingPathComponent("native-source")
+    let source = separateProducer ? f.root.appendingPathComponent("native-source") : f.root
     let tree = source.appendingPathComponent("demo-plugin")
     let manifest = Data("{\"name\":\"demo-plugin\",\"version\":\"1.0.0\"}".utf8)
     let executable = Data("#!/bin/sh\n# Not executed.\n".utf8)
@@ -200,6 +203,15 @@ extension PrivateNativeCompositionTests {
     #expect(
       try FileManager.default.destinationOfSymbolicLink(
         atPath: location.appendingPathComponent("current").path) == "bin/check")
+    // Exact locked replay must not consult a mutable producer or request a binding.
+    try FileManager.default.removeItem(at: tree)
+    try FileManager.default.removeItem(at: location)
+    _ = try UpdateOperations.restore(
+      environment: f.environment, bindingProvider: RefuseNativeBindings())
+    #expect(try FileHash.folderHash(location) == bytes)
+    #expect(
+      try UpdateOperations.inspect(environment: f.environment).deployments.first?.status == .current
+    )
     _ = try UpdateOperations.withPreparedUpdate(
       .init(operation: .remove, selections: [try #require(current.components.first?.selection)]),
       environment: f.environment, bindingProvider: RefuseNativeBindings()

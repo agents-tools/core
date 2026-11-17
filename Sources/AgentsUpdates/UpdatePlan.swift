@@ -5,7 +5,10 @@ import AgentsSkills
 import Components
 import Foundation
 
-struct RequiredRoutes: Error { let routes: Set<NativeTargetRoute> }
+struct RequiredRoutes: Error {
+  let routes: Set<NativeTargetRoute>
+  var installations: [String: SkillInstallationTarget] = [:]
+}
 
 /// The composition plan borrows both source/replay resources and the admitted writer scope.
 final class UpdatePlan {
@@ -25,6 +28,7 @@ final class UpdatePlan {
 
   static func withPlan<T>(
     request: UpdateRequest, store: StateStore, admitted: Set<NativeTargetRoute>,
+    installations: [String: SkillInstallationTarget],
     checkpoint: @escaping (String) throws -> Void, provider: any RuntimeBindingProvider,
     _ body: (UpdatePlan) throws -> T
   ) throws -> T {
@@ -78,7 +82,9 @@ final class UpdatePlan {
     }
     if restoring {
       let routes = try DeploymentConstruction.routes(previous)
-      guard routes.isSubset(of: admitted) else { throw RequiredRoutes(routes: routes) }
+      let required = try SkillLifecycle.installationTargets(previous, store: store)
+      guard routes.isSubset(of: admitted), Set(required.keys).isSubset(of: Set(installations.keys))
+      else { throw RequiredRoutes(routes: routes, installations: required) }
       return try LedgerReplay.withLockedResources(
         previous, store: store, roots: store.ledgerRoots, limits: .standard
       ) { artifacts, resources, workspace in
@@ -88,7 +94,7 @@ final class UpdatePlan {
             watch: watch, change: nil, artifacts: artifacts, resources: resources,
             workspace: workspace,
             decisionInputs: [], originalInputs: [],
-            checkpoint: checkpoint, provider: provider))
+            checkpoint: checkpoint, provider: provider, installations: Array(installations.values)))
       }
     }
     var document: DeclarationDocument
@@ -198,6 +204,12 @@ final class UpdatePlan {
       }
       let complete = try DeploymentConstruction.complete(
         native, linked: linked, store: store, previous: previous, platform: platform)
+      let required = try SkillLifecycle.installationTargets(previous, store: store).merging(
+        SkillLifecycle.installationTargets(complete.ledger, store: store),
+        uniquingKeysWith: { _, next in next })
+      guard Set(required.keys).isSubset(of: Set(installations.keys)) else {
+        throw RequiredRoutes(routes: routes, installations: required)
+      }
       let originals = try linked.components.flatMap { c -> [TargetPrecondition] in
         if case .skill(_, .edit, _) = c.payload { return [] }
         return try c.resources.filter { $0.snapshot.revision == "live" }.map {
@@ -214,7 +226,7 @@ final class UpdatePlan {
             watch: watch, change: change, artifacts: artifacts, resources: resources,
             workspace: workspace,
             decisionInputs: complete.inputs, originalInputs: originals + importInputs,
-            checkpoint: checkpoint, provider: provider))
+            checkpoint: checkpoint, provider: provider, installations: Array(installations.values)))
       }
     }
   }
@@ -225,7 +237,8 @@ final class UpdatePlan {
     change: DeclarationChange?, artifacts: [ReplayedArtifact], resources: [String: URL],
     workspace: URL,
     decisionInputs: [TargetPrecondition], originalInputs: [TargetPrecondition],
-    checkpoint: @escaping (String) throws -> Void, provider: any RuntimeBindingProvider
+    checkpoint: @escaping (String) throws -> Void, provider: any RuntimeBindingProvider,
+    installations: [SkillInstallationTarget]
   ) throws {
     self.store = store
     self.baseline = baseline
@@ -239,7 +252,8 @@ final class UpdatePlan {
       ledger: next, previous: previous, artifacts: artifacts,
       resources: resources, workspace: workspace, store: store, replace: request.replace,
       changingAccess: request.changingAccess, kinds: request.kinds,
-      names: Set(request.names), selectedIdentities: request.selectedIdentities)
+      names: Set(request.names), selectedIdentities: request.selectedIdentities,
+      installations: installations)
     if let imported = request.importPreparation {
       for resource in imported.proposal.resources
       where resource.selected && resource.requiresStandaloneSource {
@@ -344,7 +358,7 @@ final class UpdatePlan {
     let readPaths =
       try UpdateOperations.readLocations(
         declarations: readDeclarations, ledgers: [previous, self.next], store: store)
-      + decisionInputs.map(\.url)
+      + decisionInputs.map(\.url) + installations.map(\.url)
     let finalNext = self.next
     report = CombinedUpdateReport(
       scope: store.scope, skills: publicResults, instructions: instructions,
@@ -391,10 +405,10 @@ final class UpdatePlan {
               })
           },
           symbolicBefore: try change.symbolicBefore.map {
-            String(decoding: try ResolvedLedgerCodec.bytes($0), as: UTF8.self)
+            try UpdateOperations.symbolicConfigurationText($0)
           },
           symbolicAfter: try change.symbolicAfter.map {
-            String(decoding: try ResolvedLedgerCodec.bytes($0), as: UTF8.self)
+            try UpdateOperations.symbolicConfigurationText($0)
           },
           kind: component.kind, name: component.name, path: change.url.path,
           agents: change.deployment.recipients, changed: change.changed)

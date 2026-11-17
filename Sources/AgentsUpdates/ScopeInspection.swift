@@ -1,6 +1,7 @@
 import AgentsCore
 import AgentsInstructions
 import AgentsManifest
+import AgentsSkills
 import Components
 import Foundation
 
@@ -141,6 +142,7 @@ extension UpdateOperations {
   ) throws -> ScopeInspection {
     let store = StateStore(scope: scope, environment: environment)
     var admitted = Set<NativeTargetRoute>()
+    var installations: [String: SkillInstallationTarget] = [:]
     let stateLocations = [store.declarationURL, store.resolvedURL, store.watchURL]
     while true {
       do {
@@ -154,14 +156,17 @@ extension UpdateOperations {
                 pending: true, requiresOwner: diagnostic.requiresOwner,
                 diagnostic: diagnostic.message),
               readLocations: stateLocations)
-          }, footprint: admitted,
+          }, footprint: admitted, installations: Array(installations.values),
           {
             let baseline = try StatePrecondition(store: store)
             let document = try store.declarationDocument(prepared: baseline)
             let declaration = try store.readDeclaration(prepared: baseline)
             let ledger = try store.readLedger(prepared: baseline)
             let routes = try DeploymentConstruction.routes(ledger)
-            guard routes.isSubset(of: admitted) else { throw RequiredRoutes(routes: routes) }
+            let required = try SkillLifecycle.installationTargets(ledger, store: store)
+            guard routes.isSubset(of: admitted),
+              Set(required.keys).isSubset(of: Set(installations.keys))
+            else { throw RequiredRoutes(routes: routes, installations: required) }
             let watch = try store.readWatch(prepared: baseline)
             let generation = try ResolvedLedgerCodec.digest([
               ResolvedLedgerCodec.digest(ledger), document?.digest ?? "absent",
@@ -219,8 +224,10 @@ extension UpdateOperations {
                 name: g.name, requirement: g.requirement, manifestHash: g.manifestHash,
                 children: g.children)
             }
-            let paths = try readLocations(
-              declarations: [declaration], ledgers: [ledger], store: store)
+            let paths =
+              try readLocations(
+                declarations: [declaration], ledgers: [ledger], store: store)
+              + installations.values.map(\.url)
             try baseline.validate()
             return ScopeInspection(
               scope: scope, document: document, declaration: declaration, generation: generation,
@@ -229,7 +236,10 @@ extension UpdateOperations {
               recovery: .init(pending: false, requiresOwner: false, diagnostic: nil),
               readLocations: Array(Set(paths)).sorted { $0.path < $1.path })
           })
-      } catch let required as RequiredRoutes { admitted.formUnion(required.routes) }
+      } catch let required as RequiredRoutes {
+        admitted.formUnion(required.routes)
+        installations.merge(required.installations, uniquingKeysWith: { _, next in next })
+      }
     }
   }
 
@@ -265,7 +275,7 @@ extension UpdateOperations {
     }
   }
 
-  private static func symbolicValue(_ value: LedgerValue) -> NativeValue {
+  static func symbolicValue(_ value: LedgerValue) -> NativeValue {
     switch value.kind {
     case .environment: return .object(["environment": .string(value.text!)])
     case .secret: return .object(["secret": .string(value.text!)])

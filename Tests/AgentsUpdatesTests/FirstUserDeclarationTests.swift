@@ -1,8 +1,9 @@
 import AgentsCore
 import AgentsManifest
-import AgentsUpdates
 import Foundation
 import Testing
+
+@testable import AgentsUpdates
 
 struct FirstUserDeclarationTests {
   @Test func firstUserMCPDeclarationCanConfirmPurePreview() throws {
@@ -23,6 +24,11 @@ struct FirstUserDeclarationTests {
     let before = try FileHash.folderHash(root)
     let preview = try UpdateOperations.preview(request, scope: .user, environment: environment)
     #expect(try FileHash.folderHash(root) == before)
+    let selectedText = try #require(preview.components.first?.symbolicAfter)
+    let selectedFields = try #require(
+      JSONSerialization.jsonObject(with: Data(selectedText.utf8)) as? [String: Any])
+    #expect(selectedFields["command"] as? String == "fixture-command")
+    #expect(selectedFields["kind"] == nil && selectedFields["object"] == nil)
     #expect(
       try UpdateOperations.preview(request, scope: .user, environment: environment)
         .displayedFingerprint == preview.displayedFingerprint)
@@ -36,6 +42,48 @@ struct FirstUserDeclarationTests {
     let config = root.appendingPathComponent(".codex/config.toml")
     #expect(try String(contentsOf: config, encoding: .utf8).contains("fixture-command"))
   }
+  @Test func readablePreviewContainsOnlySelectedSymbolicConfiguration() throws {
+    let f = try UpdateFixture()
+    let sibling = "UNMANAGED-SIBLING-MUST-STAY-PRIVATE"
+    let config = f.root.appendingPathComponent(".mcp.json")
+    try f.write(
+      "{\"mcpServers\":{\"unmanaged\":{\"command\":\"" + sibling + "\"}}}", to: config)
+    try f.store.save(
+      declaration: Declaration(components: [
+        .mcpServer(
+          name: "selected", transport: .stdio(.init(executable: "fixture-command")),
+          agents: [.claudeCode])
+      ]), ledger: ResolvedLedger())
+    let before = try FileHash.folderHash(f.root)
+    let preview = try f.preview()
+    #expect(try FileHash.folderHash(f.root) == before)
+    #expect(preview.components.first?.symbolicBefore == nil)
+    let after = try #require(preview.components.first?.symbolicAfter)
+    #expect(after.contains("fixture-command"))
+    #expect(!after.contains(sibling) && !after.contains("unmanaged"))
+    #expect(!String(decoding: try JSONEncoder().encode(preview), as: UTF8.self).contains(sibling))
+    _ = try UpdateOperations.withPreparedUpdate(environment: f.environment) {
+      try $0.apply(ifUnchangedFrom: preview.displayedFingerprint)
+    }
+    #expect(try String(contentsOf: config, encoding: .utf8).contains(sibling))
+  }
+
+  @Test func readableProjectionPreservesNumericLexemesAndSymbolicReferences() throws {
+    let payload = LedgerValue(object: [
+      "limit": .init("1e200", kind: .decimal),
+      "environment": .init("FIXTURE_INPUT", kind: .environment),
+      "credential": .init("fixture-token", kind: .secret),
+      "text": .init("quoted \"field\"\nnext line"),
+    ])
+    let rendered = try UpdateOperations.symbolicConfigurationText(payload)
+    #expect(rendered.contains("1e200"))
+    let fields = try #require(
+      JSONSerialization.jsonObject(with: Data(rendered.utf8)) as? [String: Any])
+    #expect((fields["environment"] as? [String: String])?["environment"] == "FIXTURE_INPUT")
+    #expect((fields["credential"] as? [String: String])?["secret"] == "fixture-token")
+    #expect(fields["text"] as? String == "quoted \"field\"\nnext line")
+  }
+
   @Test func nativeAccessChangeInvalidatesDisplayedConfirmation() throws {
     let f = try UpdateFixture(scope: .user)
     try f.store.save(
