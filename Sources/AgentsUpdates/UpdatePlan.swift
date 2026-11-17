@@ -38,7 +38,8 @@ final class UpdatePlan {
     let importInputs = try (request.importPreparation?.capture() ?? []) + catalogInputs
     let baseline = try StatePrecondition(store: store)
     let previous = try store.readLedger(prepared: baseline)
-    try resolveSelection(&request, ledger: previous, store: store, baseline: baseline)
+    let instructionReferences = try resolveSelection(
+      &request, ledger: previous, store: store, baseline: baseline)
     let restoringRequest: Bool
     if case .restore = request.operation {
       restoringRequest = true
@@ -79,7 +80,9 @@ final class UpdatePlan {
         previous, kinds: request.kinds ?? Set(DeclaredComponentKind.allCases),
         names: Set(request.names), roots: store.ledgerRoots,
         selectedIdentities: request.selectedIdentities)
-      candidate = try removing(request, from: declaration, ledger: previous, store: store)
+      candidate = try removing(
+        request, from: declaration, ledger: previous, store: store,
+        selectedInstructionReferences: instructionReferences)
       change = try store.planDeclaration(candidate, replacing: declaration, prepared: baseline)
     }
     let retargetedInstructions: Set<String>
@@ -519,12 +522,42 @@ final class UpdatePlan {
   private static func resolveSelection(
     _ request: inout UpdateRequest, ledger: ResolvedLedger, store: StateStore,
     baseline: StatePrecondition
-  ) throws {
+  ) throws -> Set<String>? {
     let kinds = request.kinds ?? Set(DeclaredComponentKind.allCases)
     func name(_ c: LedgerComponent) -> String {
       c.kind == "skills" ? PathSafety.sanitizeName(c.name) : c.name
     }
     if request.selections.isEmpty {
+      if case .remove = request.operation, request.kinds == [.instructions] {
+        let declaration = try store.readDeclaration(prepared: baseline)
+        let references = try selectedInstructionReferences(Set(request.names), in: declaration)
+        let sections = declaration.components.flatMap { component -> [SectionDeclaration] in
+          guard case .instructions(let selection) = component else { return [] }
+          return selection.sectionReferences
+            + selection.prompts.flatMap { $0.prompt.sectionReferences }
+        }
+        var selected = Set<String>()
+        for section in sections where references.contains(section.reference) {
+          let source: String
+          if let alias = section.source, alias != "." {
+            guard let sourceDeclaration = declaration.sources[alias] else { continue }
+            source = try sourceDeclaration.identity(environment: store.environment)
+          } else {
+            source = "local:" + store.environment.projectDirectory.resolvingSymlinksInPath().path
+          }
+          for component in ledger.components.values
+          where component.kind == "instructions" && component.group == nil
+            && component.name == section.name
+          {
+            if try ledger.sourceIdentity(component.source, roots: store.ledgerRoots) == source {
+              selected.insert(
+                try LedgerImpact.identity(component, ledger: ledger, roots: store.ledgerRoots))
+            }
+          }
+        }
+        request.selectedIdentities = selected
+        return references
+      }
       for requested in request.names {
         let matches = try ledger.components.values.filter {
           kinds.contains(DeclaredComponentKind(rawValue: $0.kind)!) && name($0) == requested
@@ -534,7 +567,7 @@ final class UpdatePlan {
             "component name is ambiguous; select a component from inspection: " + requested)
         }
       }
-      return
+      return nil
     }
     guard request.names.isEmpty else {
       throw CoreError.invalidState("use names or precise selections, not both")
@@ -583,25 +616,43 @@ final class UpdatePlan {
     request.selectedIdentities = selected
     request.names = names.sorted()
     request.kinds = selectedKinds
+    return nil
+  }
+
+  private static func selectedInstructionReferences(
+    _ names: Set<String>, in declaration: Declaration
+  ) throws -> Set<String> {
+    let references = Set(
+      declaration.components.flatMap { component -> [String] in
+        guard case .instructions(let selection) = component else { return [] }
+        return selection.sectionReferences.map(\.reference)
+          + selection.prompts.flatMap { $0.prompt.sectionReferences.map(\.reference) }
+      })
+    var selected = Set<String>()
+    for name in names {
+      let exact = references.filter { $0 == name }
+      let matches =
+        exact.isEmpty
+        ? references.filter { $0.split(separator: ":").last.map(String.init) == name } : exact
+      guard matches.count == 1, let reference = matches.first else {
+        throw CoreError.notFound("instruction name is missing or ambiguous: " + name)
+      }
+      selected.insert(reference)
+    }
+    return selected
   }
 
   private static func removing(
     _ request: UpdateRequest, from declaration: Declaration, ledger: ResolvedLedger,
-    store: StateStore
+    store: StateStore, selectedInstructionReferences: Set<String>?
   ) throws -> Declaration {
     var result = declaration
     let names = Set(request.names)
     let kinds = request.kinds ?? Set(DeclaredComponentKind.allCases)
-    let references = Set(
-      declaration.components.flatMap { component -> [String] in
-        if case .instructions(let value) = component {
-          return value.sectionReferences.map(\.reference)
-            + value.prompts.flatMap { $0.prompt.sectionReferences.map(\.reference) }
-        }
-        return []
-      })
     var instructionReferences = Set<String>()
-    if kinds.contains(.instructions), let identities = request.selectedIdentities {
+    if let selectedInstructionReferences {
+      instructionReferences = selectedInstructionReferences
+    } else if kinds.contains(.instructions), let identities = request.selectedIdentities {
       let sections = declaration.components.flatMap { component -> [SectionDeclaration] in
         guard case .instructions(let selection) = component else { return [] }
         return selection.sectionReferences
@@ -625,16 +676,7 @@ final class UpdatePlan {
         }
       }
     } else if kinds.contains(.instructions) {
-      for name in names {
-        let exact = references.filter { $0 == name }
-        let matches =
-          exact.isEmpty
-          ? references.filter { $0.split(separator: ":").last.map(String.init) == name } : exact
-        guard matches.count == 1, let reference = matches.first else {
-          throw CoreError.notFound("instruction name is missing or ambiguous: " + name)
-        }
-        instructionReferences.insert(reference)
-      }
+      instructionReferences = try Self.selectedInstructionReferences(names, in: declaration)
     }
     result.components = declaration.components.compactMap { component in
       switch component {
