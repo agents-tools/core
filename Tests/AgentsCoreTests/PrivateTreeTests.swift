@@ -259,7 +259,7 @@ struct PrivateTreeTests {
       } else {
         var access = try #require(record["access"] as? [String: Any])
         var identity = try #require(access["identity"] as? [String: Any])
-        identity["kind"] = Int(S_IFREG)
+        identity["kind"] = Int(CPlatform.S_IFREG)
         access["identity"] = identity
         record["access"] = access
       }
