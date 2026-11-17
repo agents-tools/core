@@ -224,7 +224,11 @@ package final class SourceResolutionSession {
     }
     let live = source.localURL(environment: store.environment)
     let root = workspace.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.copyItem(at: live, to: root)
+    let origin = try DirectoryHandle(at: live.resolvingSymlinksInPath())
+    let destination = try DirectoryHandle(at: workspace)
+    try destination.copy(root.lastPathComponent, from: origin, named: ".") { _ in
+      try Task.checkCancellation()
+    }
     try Self.validateLinks(root)
     let flags = try FileHash.executableFlags(root)
     let content = try FileHash.folderHash(root)
