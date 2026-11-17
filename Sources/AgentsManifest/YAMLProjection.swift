@@ -157,11 +157,13 @@ final class YAMLProjection {
     case "run", "transport":
       defaults = [
         "arguments": .array([]), "environment": .dictionary([:]), "workingDirectory": .null,
+        "executableSource": .null,
       ]
     case "parameter": defaults = ["defaultValue": .null]
     case "skills":
       defaults.merge([
-        "select": .string("all"), "exclude": .array([]), "mode": .null, "overrides": .array([]),
+        "path": .null, "select": .string("all"), "exclude": .array([]), "mode": .null,
+        "overrides": .array([]),
       ]) { _, r in r }
     case "instructions":
       defaults.merge(["sections": .array([]), "chatGPT": .array([])]) { _, r in r }

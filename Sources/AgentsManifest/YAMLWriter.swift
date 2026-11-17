@@ -117,7 +117,7 @@ enum YAMLWriter {
         "name", "source", "url", "path", "index", "requirement", "subpath", "select", "exclude",
         "mode", "overrides", "sections", "chatGPT", "description", "prompt", "model", "tools",
         "parameters", "transport", "event", "run", "matcher", "timeoutSeconds", "executable",
-        "arguments", "environment", "workingDirectory", "headers", "languages",
+        "executableSource", "arguments", "environment", "workingDirectory", "headers", "languages",
         "initializationOptions", "rules", "operation", "pattern", "patterns", "purpose",
         "components", "uses", "append", "agents", "scopes", "platforms", "condition", "native",
       ]

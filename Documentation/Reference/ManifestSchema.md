@@ -110,6 +110,7 @@ A declared invocation, preserved as data until a consuming operation explicitly 
 | `arguments` |  | sequence of string (at most 10000 items) | Arguments in invocation order, passed as individual strings. Omission or an empty sequence supplies no arguments. |
 | `environment` |  | name → binding (at most 10000 properties) | Environment variable names mapped to literals or local bindings. Omission or an empty mapping supplies no declared entries; reading the declaration does not resolve bindings. |
 | `workingDirectory` |  | resource | Working directory resource, resolved by the consuming operation. Omission leaves the directory unspecified in the declaration. |
+| `executableSource` |  | string | Source alias for a resource executable path. Omission uses the declaring source; a bare PATH command cannot specify a source. |
 
 ## transport
 
@@ -126,6 +127,7 @@ Local MCP server invocation over standard input/output.
 | `arguments` |  | sequence of string (at most 10000 items) | Arguments in invocation order, passed as individual strings. Omission or an empty sequence supplies no arguments. |
 | `environment` |  | name → binding (at most 10000 properties) | Environment variable names mapped to literals or local bindings. Omission or an empty mapping supplies no declared entries; reading the declaration does not resolve bindings. |
 | `workingDirectory` |  | resource | Working directory resource, resolved by the consuming operation. Omission leaves the directory unspecified in the declaration. |
+| `executableSource` |  | string | Source alias for a resource executable path. Omission uses the declaring source; a bare PATH command cannot specify a source. |
 
 ### Alternative 2
 
@@ -326,6 +328,7 @@ Examples: <code>{"kind": "skills", "source": "team", "select": ["review"], "agen
 | `exclude` |  | sequence of string (at most 10000 items) | Skill names removed from the selection. Omission or an empty sequence excludes none. |
 | `mode` |  | `link` / `copy` / `edit` | link shares cached content, copy creates an installed directory, and edit links live local content. Omission defaults to link. edit requires a local source without a requirement or pin. |
 | `overrides` |  | name → override (at most 10000 properties) | Skill names mapped to recipient/mode overrides. Omission or an empty mapping supplies none; omitted override fields inherit the component settings. |
+| `path` |  | string | Optional discovery path relative to the selected filesystem source view. Narrows discovery without changing containment. Not supported for index sources. |
 
 ## component_instructions
 

@@ -120,6 +120,7 @@ enum LedgerPayload {
       "executable": .init(run.executable), "arguments": strings(run.arguments),
       "environment": .init(object: run.environment.mapValues(binding)),
     ]
+    fields["executableSource"] = run.executableSource.map { .init($0) }
     fields["workingDirectory"] = run.workingDirectory.map(resource)
     return .init(object: fields)
   }

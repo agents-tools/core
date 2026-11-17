@@ -149,7 +149,8 @@ enum YAMLConstruction {
     record(
       kind,
       [
-        "executable": .string(value.executable), "arguments": strings(value.arguments),
+        "executable": .string(value.executable), "executableSource": text(value.executableSource),
+        "arguments": strings(value.arguments),
         "environment": .dictionary(value.environment.mapValues(binding)),
         "workingDirectory": value.workingDirectory.map { .record(resource($0)) } ?? .null,
       ])
@@ -253,7 +254,8 @@ enum YAMLConstruction {
       case .names(let values): selection = strings(values)
       }
       fields = [
-        "source": .string(source), "select": selection, "exclude": strings(value.exclude ?? []),
+        "source": .string(source), "path": text(value.path), "select": selection,
+        "exclude": strings(value.exclude ?? []),
         "mode": text(value.mode?.rawValue),
         "overrides": .array(value.overrideDeclarations.map { .record(override($0)) }),
       ]

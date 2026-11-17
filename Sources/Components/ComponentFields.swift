@@ -39,7 +39,8 @@ extension ComponentDeclaration {
   package var resources: [ResourceDeclaration] {
     func run(_ value: ExecutableDeclaration) -> [ResourceDeclaration] {
       let executable =
-        value.executable.contains("/") ? [ResourceDeclaration(path: value.executable)] : []
+        value.executable.contains("/")
+        ? [ResourceDeclaration(path: value.executable, source: value.executableSource)] : []
       return executable + (value.workingDirectory.map { [$0] } ?? [])
     }
     func prompt(_ value: PromptBody) -> [ResourceDeclaration] {
@@ -62,6 +63,7 @@ extension ComponentDeclaration {
   var comparisonPayload: ComponentDeclaration {
     func run(_ value: ExecutableDeclaration) -> ExecutableDeclaration {
       var result = value
+      result.executableSource = nil
       if let path = value.workingDirectory {
         result.workingDirectory = ResourceDeclaration(path: path.path)
       }

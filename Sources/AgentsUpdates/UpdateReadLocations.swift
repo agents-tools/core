@@ -27,9 +27,10 @@ extension UpdateOperations {
               paths.append(try PathSafety.resolvedChild(base: root, subpath: resource.path))
             }
           }
-          if case .skills(let alias, _) = component, let root = try resourceRoot(alias) {
+          if case .skills(let alias, let selection) = component, let root = try resourceRoot(alias)
+          {
             // Discovery reads the root even when it finds no selected members.
-            paths.append(root)
+            paths.append(try PathSafety.resolvedChild(base: root, subpath: selection.path ?? "."))
           }
           guard case .instructions(let instructions) = component else { continue }
           let sections =

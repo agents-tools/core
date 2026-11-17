@@ -127,11 +127,14 @@ extension MCPConnectionOperations {
     switch try string(fields["kind"]) {
     case "stdio":
       guard Set(fields.keys) == ["kind", "run"], let run = fields["run"]?.object,
-        Set(run.keys).subtracting(["workingDirectory"]) == [
+        Set(run.keys).subtracting(["workingDirectory", "executableSource"]) == [
           "executable", "arguments", "environment",
         ],
         run["arguments"]?.kind == .array, let arguments = run["arguments"]?.array
       else { throw invalid() }
+      let executable = try string(run["executable"])
+      let executableSource = try run["executableSource"].map { try string($0) }
+      if executableSource != nil && !executable.contains("/") { throw invalid() }
       let cwd: ResourceDeclaration?
       if let directory = run["workingDirectory"] {
         guard let object = directory.object, Set(object.keys).isSubset(of: ["path", "source"])
@@ -145,7 +148,8 @@ extension MCPConnectionOperations {
       }
       return try .stdio(
         .init(
-          executable: string(run["executable"]), arguments: arguments.map { try string($0) },
+          executable: executable, executableSource: executableSource,
+          arguments: arguments.map { try string($0) },
           environment: bindings(run["environment"]), workingDirectory: cwd))
     case "streamableHTTP", "sse":
       guard Set(fields.keys) == ["kind", "url", "headers"] else { throw invalid() }

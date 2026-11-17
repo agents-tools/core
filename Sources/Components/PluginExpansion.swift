@@ -217,7 +217,9 @@ extension Expansion {
     func run(_ value: ExecutableDeclaration) throws -> ExecutableDeclaration {
       var value = value
       if value.executable.contains("/") {
-        value.executable = try path(.init(path: value.executable)).path
+        let relative = try path(.init(path: value.executable, source: value.executableSource)).path
+        value.executable = relative.contains("/") ? relative : "./" + relative
+        value.executableSource = nil
       }
       value.workingDirectory = try value.workingDirectory.map(path)
       return value

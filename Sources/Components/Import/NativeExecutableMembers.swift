@@ -47,7 +47,7 @@ extension NativeSourceImport {
         {
           diagnostics.add(
             .unconverted, groupLocation,
-            "F's native event/matcher contract cannot preserve this matcher.")
+            "This native event and matcher combination cannot be preserved.")
           continue
         }
         for (handlerIndex, handler) in handlers.enumerated() {
@@ -108,7 +108,10 @@ extension NativeSourceImport {
           let name = base + (occurrence == 1 ? "" : "-\(occurrence)")
           NativeImportInput.emit(
             .hook(
-              name: name, event: .native(event), run: .init(executable: executable),
+              name: name, event: .native(event),
+              run: .init(
+                executable: executable,
+                executableSource: executable.contains("/") ? "native-input" : nil),
               matcher: matcher, timeoutSeconds: timeout, agents: [agent]),
             selector: .hook(name: name),
             origin: origin, container: container, profile: parsed.input.profile, into: &diagnostics,
@@ -251,7 +254,9 @@ extension NativeSourceImport {
       NativeImportInput.emit(
         .lspServer(
           name: name,
-          run: .init(executable: program, arguments: arguments, environment: environment),
+          run: .init(
+            executable: program, executableSource: program.contains("/") ? "native-input" : nil,
+            arguments: arguments, environment: environment),
           languages: languages, initializationOptions: options, agents: [agent], native: native),
         selector: .lspServer(name: name),
         origin: origin, container: container, profile: parsed.input.profile, into: &diagnostics,

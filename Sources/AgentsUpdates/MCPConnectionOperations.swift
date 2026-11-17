@@ -133,6 +133,12 @@ public enum MCPConnectionOperations {
         !run.executable.isEmpty, run.executable.contains("/") == (executable != nil),
         executable?.directory != true
       else { throw MCPConnectionPreparationError.invalidConfiguration }
+      if let source = run.executableSource {
+        guard !source.isEmpty, run.executable.contains("/") else {
+          throw MCPConnectionPreparationError.invalidConfiguration
+        }
+        try charge(source)
+      }
       try charge(run.executable)
       for argument in run.arguments { try charge(argument) }
       for (key, binding) in run.environment {

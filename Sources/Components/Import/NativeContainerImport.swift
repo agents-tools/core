@@ -276,7 +276,7 @@ enum NativeContainerImport {
     if diagnostics.proposal.components.isEmpty {
       diagnostics.add(
         .unconverted, parsed.location(),
-        "No typed child was converted; native container preservation/registration remains an explicit B/F operation."
+        "No typed child was converted; native container registration is required to preserve this container."
       )
     }
     _ = alias
@@ -461,25 +461,17 @@ enum NativeContainerImport {
           $0.environmentVariable == nil
         }.map(\.location)
         if !content.bindings.isEmpty { continue }
-        let alias = "native-skill-" + String(diagnostics.proposal.sources.count)
-        diagnostics.proposal.sources.append(
-          .init(
-            alias: alias, origin: .init(document: file, pointer: ""),
-            declaration: .init(
-              kind: .local, location: skillPath,
-              environment: .init(projectDirectory: input.root, homeDirectory: input.root)),
-            pin: .init(), requestedRef: nil, producerPath: skillPath))
+        let preservationPath =
+          root == "." ? skillPath : String(skillPath.dropFirst(root.count + 1))
         NativeImportInput.emit(
           .skills(
-            source: alias,
+            source: "native-input",
             .init(
-              select: .names([content.skill.name]),
+              select: .names([content.skill.name]), path: preservationPath,
               agents: [NativeImportInput.agent(input.profile)], condition: content.skill.condition)),
           selector: .skill(name: content.skill.name),
           origin: .init(document: file, pointer: "/frontmatter"), container: root,
           profile: input.profile, into: &diagnostics, admission: admission)
-        let preservationPath =
-          root == "." ? skillPath : String(skillPath.dropFirst(root.count + 1))
         let resourceIndex = diagnostics.proposal.resources.count
         try NativeImportInput.resource(
           preservationPath, root: root, input: input,

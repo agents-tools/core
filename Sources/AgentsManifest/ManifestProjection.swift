@@ -103,7 +103,8 @@ package enum ManifestProjection {
       uniqueKeysWithValues: lhs.overrideDeclarations.map { ($0.name, $0.override) })
     let right = Dictionary(
       uniqueKeysWithValues: rhs.overrideDeclarations.map { ($0.name, $0.override) })
-    return selections && Set(lhs.exclude ?? []) == Set(rhs.exclude ?? []) && lhs.mode == rhs.mode
+    return lhs.path == rhs.path && selections && Set(lhs.exclude ?? []) == Set(rhs.exclude ?? [])
+      && lhs.mode == rhs.mode
       && sameRecipients(lhs.agents, rhs.agents) && left.keys == right.keys
       && left.allSatisfy { equivalent($1, right[$0]!) }
       && lhs.condition == rhs.condition && lhs.native == rhs.native
@@ -171,7 +172,8 @@ private struct Projection {
   }
   func executable(_ r: DeclarationRecord) -> ExecutableDeclaration {
     ExecutableDeclaration(
-      executable: r["executable"]!.string!, arguments: strings(r["arguments"]),
+      executable: r["executable"]!.string!, executableSource: r["executableSource"]?.string,
+      arguments: strings(r["arguments"]),
       environment: dictionary(r["environment"]).mapValues(binding),
       workingDirectory: r["workingDirectory"]?.record.map(resource))
   }
@@ -253,6 +255,7 @@ private struct Projection {
       }
       var result = SkillDeclaration(
         select: r["select"]?.elements.map { .names($0.map { $0.string! }) } ?? .all,
+        path: r["path"]?.string,
         exclude: strings(r["exclude"]).isEmpty ? nil : strings(r["exclude"]), agents: agents,
         mode: r["mode"]?.string.flatMap(InstallMode.init(rawValue:)),
         overrides: nil, condition: condition, native: native)

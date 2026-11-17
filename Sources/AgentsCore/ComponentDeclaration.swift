@@ -89,15 +89,19 @@ public enum PromptBody: Equatable, Sendable {
 
 public struct ExecutableDeclaration: Equatable, Sendable {
   public var executable: String
+  /// Source alias for a resource executable; nil uses the declaring source.
+  public var executableSource: String?
   public var arguments: [String]
   public var environment: [String: RuntimeBinding]
   public var workingDirectory: ResourceDeclaration?
 
   public init(
-    executable: String, arguments: [String] = [], environment: [String: RuntimeBinding] = [:],
+    executable: String, executableSource: String? = nil, arguments: [String] = [],
+    environment: [String: RuntimeBinding] = [:],
     workingDirectory: ResourceDeclaration? = nil
   ) {
     self.executable = executable
+    self.executableSource = executableSource
     self.arguments = arguments
     self.environment = environment
     self.workingDirectory = workingDirectory

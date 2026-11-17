@@ -174,6 +174,12 @@ struct YAMLDomainValidation {
       throw fail(pointer, "invalid executable")
     }
     if executable.contains("/") || executable.hasPrefix("~") { try resource(executable, pointer) }
+    if let alias = record["executableSource"]?.string {
+      try self.alias(alias, pointer + "/executableSource")
+      guard executable.contains("/") else {
+        throw fail(pointer + "/executableSource", "executable source requires a resource path")
+      }
+    }
     if let directory = record["workingDirectory"]?.record { try resource(directory, pointer) }
   }
   private func component(_ record: DeclarationRecord, _ pointer: String) throws {
@@ -184,6 +190,12 @@ struct YAMLDomainValidation {
     case "skills":
       let source = record["source"]!.string!
       try alias(source, pointer)
+      if let path = record["path"]?.string {
+        try resource(path, pointer + "/path")
+        guard sources[source]?.kind != "index" else {
+          throw fail(pointer + "/path", "skill paths require a filesystem source")
+        }
+      }
       let selected = record["select"]?.elements.map { $0.map { $0.string! } }
       let excluded = strings(record["exclude"])
       do {

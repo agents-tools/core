@@ -272,6 +272,10 @@
         "workingDirectory": {
           "$ref": "#/$defs/resource",
           "description": "Working directory resource, resolved by the consuming operation. Omission leaves the directory unspecified in the declaration."
+        },
+        "executableSource": {
+          "type": "string",
+          "description": "Source alias for a resource executable path. Omission uses the declaring source; a bare PATH command cannot specify a source."
         }
       },
       "required": [
@@ -312,6 +316,10 @@
             "workingDirectory": {
               "$ref": "#/$defs/resource",
               "description": "Working directory resource, resolved by the consuming operation. Omission leaves the directory unspecified in the declaration."
+            },
+            "executableSource": {
+              "type": "string",
+              "description": "Source alias for a resource executable path. Omission uses the declaring source; a bare PATH command cannot specify a source."
             }
           },
           "required": [
@@ -795,6 +803,10 @@
           },
           "maxProperties": 10000,
           "description": "Skill names mapped to recipient/mode overrides. Omission or an empty mapping supplies none; omitted override fields inherit the component settings."
+        },
+        "path": {
+          "type": "string",
+          "description": "Optional discovery path relative to the selected filesystem source view. Narrows discovery without changing containment. Not supported for index sources."
         }
       },
       "required": [
