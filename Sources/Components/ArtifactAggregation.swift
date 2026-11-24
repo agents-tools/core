@@ -1987,7 +1987,8 @@ extension Dictionary {
 
 extension ArtifactAggregation {
   package static func nativeExposure(
-    _ deployment: LedgerDeployment, ledger: ResolvedLedger, store: StateStore
+    _ deployment: LedgerDeployment, ledger: ResolvedLedger, store: StateStore,
+    roots admittedRoots: [String: URL]? = nil
   ) throws -> (readers: [AgentID]?, sensitive: Bool) {
     guard
       deployment.ownership == .ownedValues || deployment.route.hasSuffix("-components@1")
@@ -1995,7 +1996,8 @@ extension ArtifactAggregation {
     else {
       return (nil, false)
     }
-    let path = try deployment.target.resolve(roots: store.ledgerRoots).path
+    let roots = admittedRoots ?? store.ledgerRoots
+    let path = try deployment.target.resolve(roots: roots).path
     var identities = Set<NativeTargetIdentity>()
     for route in try DeploymentConstruction.routes(ledger) {
       let target = try store.nativeTarget(for: route)
@@ -2071,9 +2073,11 @@ extension ArtifactAggregation {
 
   /// Observes only the owned region. Private receipts validate the entire physical preimage.
   package static func inspectDeployment(
-    _ deployment: LedgerDeployment, ledger: ResolvedLedger, store: StateStore
+    _ deployment: LedgerDeployment, ledger: ResolvedLedger, store: StateStore,
+    roots admittedRoots: [String: URL]? = nil
   ) throws -> (status: String, diagnostic: String?) {
-    let url = try deployment.target.resolve(roots: store.ledgerRoots)
+    let roots = admittedRoots ?? store.ledgerRoots
+    let url = try deployment.target.resolve(roots: roots)
     guard FileManager.default.fileExists(atPath: url.path) else {
       return ("missing", "managed target is missing")
     }
@@ -2090,7 +2094,7 @@ extension ArtifactAggregation {
           else { return ("drifted", "live skill is not linked to its recorded source") }
           let observed = URL(fileURLWithPath: link, relativeTo: url.deletingLastPathComponent())
             .standardizedFileURL
-          let expected = try source.resolve(roots: store.ledgerRoots).standardizedFileURL
+          let expected = try source.resolve(roots: roots).standardizedFileURL
           guard observed.path == expected.path else {
             return ("drifted", "live skill is not linked to its recorded source")
           }
@@ -2143,14 +2147,14 @@ extension ArtifactAggregation {
           return ("missing", "managed native region is missing")
         }
         return try observed.value
-          == nativeValue(c, values: nil, ledger: ledger, store: store, roots: store.ledgerRoots)
+          == nativeValue(c, values: nil, ledger: ledger, store: store, roots: roots)
           ? ("current", nil) : ("drifted", "managed native region changed")
       }
       if deployment.route.hasSuffix("-generated-plugin@1"),
         let lowering = ledger.lowerings.first(where: { $0.deployments.contains(deployment.id) })
       {
         return try LedgerReplay.withLockedResources(
-          ledger, store: store, roots: store.ledgerRoots, limits: .standard,
+          ledger, store: store, roots: roots, limits: .standard,
           lowerings: [lowering.id]
         ) { artifacts, _, _ in
           let contribution = try NativeGeneratedPluginContribution.decode(
@@ -2175,7 +2179,7 @@ extension ArtifactAggregation {
         let lowering = ledger.lowerings.first(where: { $0.deployments.contains(deployment.id) })
       {
         return try LedgerReplay.withLockedResources(
-          ledger, store: store, roots: store.ledgerRoots, limits: .standard
+          ledger, store: store, roots: roots, limits: .standard
         ) {
           artifacts, _, _ in
           let table = Dictionary(uniqueKeysWithValues: artifacts.map { ($0.name, $0) })
@@ -2221,7 +2225,7 @@ extension ArtifactAggregation {
             matches =
               try document.read(.init(keys: member.keys))?.value
               == componentValue(
-                value, values: nil, selected: ledger, store: store, roots: store.ledgerRoots)
+                value, values: nil, selected: ledger, store: store, roots: roots)
           case .claudePermissions(let policy):
             let document = try NativeDocument(
               bytes: Data(contentsOf: url), format: .json, budget: budget)
@@ -2283,13 +2287,13 @@ extension ArtifactAggregation {
               }
               && generatedManifestMatches(
                 manifest, observed: document.read(.init(keys: []))?.value, selected: ledger,
-                privateGeneration: privateGeneration, store: store, roots: store.ledgerRoots)
+                privateGeneration: privateGeneration, store: store, roots: roots)
           case .hook, .orderedPermissions:
             let document = try NativeDocument(
               bytes: Data(contentsOf: url), format: output.route.documentFormat!, budget: budget)
             guard
               let authority = ledger.nativeAuthorities?.first(where: {
-                (try? $0.target.resolve(roots: store.ledgerRoots)) == url
+                (try? $0.target.resolve(roots: roots)) == url
               })
             else {
               return ("unverified", "managed native occurrence authority is missing")
@@ -2300,7 +2304,7 @@ extension ArtifactAggregation {
             case .hook(let hook):
               expected = [
                 try componentValue(
-                  hook.value, values: nil, selected: ledger, store: store, roots: store.ledgerRoots)
+                  hook.value, values: nil, selected: ledger, store: store, roots: roots)
               ]
             case .orderedPermissions(let rules):
               expected = rules.map {
