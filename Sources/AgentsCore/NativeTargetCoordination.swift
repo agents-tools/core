@@ -437,6 +437,15 @@ package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable 
   static func userRoute(at destination: URL, environment: RuntimeEnvironment) throws -> Self? {
     let target = destination.deletingLastPathComponent().resolvingSymlinksInPath()
       .appendingPathComponent(destination.lastPathComponent)
+    // The candidate routes share ancestors. Reuse opens only within this lookup.
+    var opened: [Data: DirectoryHandle?] = [:]
+    func directory(at url: URL) -> DirectoryHandle? {
+      let key = Data(url.path.utf8)
+      if let known = opened[key] { return known }
+      let handle = try? DirectoryHandle(at: url)
+      opened[key] = .some(handle)
+      return handle
+    }
     func matches(_ route: Self) throws -> Bool {
       guard route.basename.utf8.elementsEqual(target.lastPathComponent.utf8) else { return false }
       let authority = try route.rootAuthority(environment, validateExistingOverride: false)
@@ -452,8 +461,7 @@ package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable 
       }
       // Unselected, disjoint roots do not impose access requirements on this target.
       // Openable aliases still compare by descriptor identity, including bind aliases.
-      guard let candidate = try? DirectoryHandle(at: planned),
-        let parent = try? DirectoryHandle(at: targetParent),
+      guard let candidate = directory(at: planned), let parent = directory(at: targetParent),
         try candidate.objectIdentity == parent.objectIdentity
       else { return false }
       _ = try authority.physicalDirectory()
@@ -471,10 +479,10 @@ package struct NativeTargetRoute: RawRepresentable, Hashable, Codable, Sendable 
       let container = try authority.plannedPhysicalDirectory
       var ancestor = target.deletingLastPathComponent()
       var relativeParts = [target.lastPathComponent]
-      let containerIdentity = try? DirectoryHandle(at: container).objectIdentity
+      let containerIdentity = try? directory(at: container)?.objectIdentity
       while ancestor.path != "/" {
         if let containerIdentity,
-          let opened = try? DirectoryHandle(at: ancestor),
+          let opened = directory(at: ancestor),
           try opened.objectIdentity == containerIdentity
         {
           break
@@ -539,7 +547,7 @@ struct NativeRootAuthority {
 }
 
 /// Pathname authorization is checked separately. Neither route nor caller participates here.
-struct SharedResourceIdentity: Codable, Equatable, Comparable {
+struct SharedResourceIdentity: Codable, Hashable, Comparable {
   let parent: FileObjectIdentity
   let basename: String
 
@@ -549,6 +557,10 @@ struct SharedResourceIdentity: Codable, Equatable, Comparable {
   var directoryName: String { FileHash.sha256Hex(data: Data(orderingKey.utf8)) }
   static func == (lhs: Self, rhs: Self) -> Bool {
     lhs.parent == rhs.parent && lhs.basename.utf8.elementsEqual(rhs.basename.utf8)
+  }
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(parent)
+    hasher.combine(Data(basename.utf8))
   }
   static func < (lhs: Self, rhs: Self) -> Bool {
     lhs.orderingKey.utf8.lexicographicallyPrecedes(rhs.orderingKey.utf8)
@@ -574,6 +586,13 @@ struct SharedReservation: Codable, Equatable {
 
 /// An opened, verified physical coordination domain. Its lock inode is never removed.
 final class SharedResource {
+  private struct ParentValidationKey: Hashable {
+    let loader: Data
+    let descendants: [Data]
+    let parent: Data
+    let identity: FileObjectIdentity
+  }
+
   static let metadataName = ".agents-native"
   let identity: SharedResourceIdentity
   let route: NativeTargetRoute
@@ -583,8 +602,11 @@ final class SharedResource {
   let metadataAccess: FileAccessEvidence?
   let metadataAncestry: DirectoryAccessEvidence?
   let authority: NativeRootAuthority
+  private let parentValidationKey: ParentValidationKey
   private var lockDescriptor: Int32?
   private var lockAccess: FileAccessEvidence?
+
+  var receiptPath: String { route.metadata + "/receipt" }
 
   init(
     store: StateStore, route: NativeTargetRoute = .claudeMCPLocal, create: Bool,
@@ -604,6 +626,10 @@ final class SharedResource {
     }
     ancestry = try DirectoryAccessEvidence.capture(at: url)
     identity = SharedResourceIdentity(parent: try parent.objectIdentity, basename: route.basename)
+    parentValidationKey = ParentValidationKey(
+      loader: Data(authority.loader.path.utf8),
+      descendants: authority.descendants.map { Data($0.utf8) },
+      parent: Data(parent.url.path.utf8), identity: identity.parent)
     // Record the intended private domain before opening it: missing entries or invalid access
     // can stop admission before a SharedResource exists.
     let baseURL = parent.url.appendingPathComponent(Self.metadataName)
@@ -637,6 +663,29 @@ final class SharedResource {
   }
 
   func validate() throws {
+    try validateLock()
+    try validateParent()
+    try validateMetadata()
+  }
+
+  /// Each pass revalidates the root and every domain's lock and metadata.
+  static func validateAll(_ resources: [SharedResource]) throws {
+    var parents: [ParentValidationKey: DirectoryAccessEvidence] = [:]
+    for resource in resources {
+      try resource.validateLock()
+      if let ancestry = parents[resource.parentValidationKey] {
+        guard ancestry == resource.ancestry else {
+          throw CoreError.invalidState("filesystem access ancestry changed during preparation")
+        }
+      } else {
+        try resource.validateParent()
+        parents[resource.parentValidationKey] = resource.ancestry
+      }
+      try resource.validateMetadata()
+    }
+  }
+
+  private func validateLock() throws {
     if let descriptor = lockDescriptor, let access = lockAccess {
       guard let metadata,
         try metadata.info("lock").map(FileObjectIdentity.init) == access.identity
@@ -645,6 +694,9 @@ final class SharedResource {
       }
       try access.validate(descriptor: descriptor)
     }
+  }
+
+  private func validateParent() throws {
     try ancestry.validate(at: parent.url)
     guard
       try DirectoryHandle(at: authority.physicalDirectory()).objectIdentity
@@ -653,6 +705,9 @@ final class SharedResource {
     else {
       throw CoreError.invalidState("shared target parent identity changed")
     }
+  }
+
+  private func validateMetadata() throws {
     if let metadata {
       try metadataAncestry?.validate(at: metadata.url)
       let current = try DirectoryHandle(at: metadata.url)
@@ -807,11 +862,14 @@ final class TransactionLockContext {
   let resources: [SharedResource]
   var createdAncestry: [(URL, DirectoryAccessEvidence)] = []
   let admissions: [SharedResource]
+  private let resourcesByIdentity: [SharedResourceIdentity: SharedResource]
+  private let admissionsByRoot: [String: SharedResource]
   let requestedRoutes: Set<NativeTargetRoute>
   let writable: Bool
   let requestedShared: Bool
   let absentRoots: [AbsentSharedRoot]
-  var installations: [SkillInstallationTarget] = []
+  let installations: [SkillInstallationTarget]
+  private let installationAuthorities: [SkillInstallationTarget]
   var existingProjectRoot: ExistingProjectRoot?
   var projectRootDirectory: DirectoryHandle?
   private var scopeDirectory: DirectoryHandle?
@@ -821,15 +879,21 @@ final class TransactionLockContext {
   init(
     store: StateStore, resources: [SharedResource], writable: Bool, requestedShared: Bool,
     absentRoots: [AbsentSharedRoot] = [], admissions: [SharedResource] = [],
-    requestedRoutes: Set<NativeTargetRoute> = []
+    requestedRoutes: Set<NativeTargetRoute> = [], installations: [SkillInstallationTarget] = []
   ) {
     scopeURL = store.directory.standardizedFileURL
     self.resources = resources
     self.admissions = admissions.isEmpty ? resources : admissions
+    resourcesByIdentity = Dictionary(
+      resources.map { ($0.identity, $0) }, uniquingKeysWith: { first, _ in first })
+    admissionsByRoot = Dictionary(
+      self.admissions.map { ($0.route.root, $0) }, uniquingKeysWith: { first, _ in first })
     self.requestedRoutes = requestedRoutes
     self.writable = writable
     self.requestedShared = requestedShared
     self.absentRoots = absentRoots
+    self.installations = installations
+    installationAuthorities = SkillInstallationTarget.distinctAuthorities(installations)
   }
 
   static var currentForDisplay: TransactionLockContext? {
@@ -875,7 +939,7 @@ final class TransactionLockContext {
 
   func validateScope() throws {
     try existingProjectRoot?.validate()
-    for target in installations { try target.validateAuthority() }
+    for target in installationAuthorities { try target.validateAuthority() }
     guard let directory = scopeDirectory else { return }
     var info = stat()
     guard let descriptor = scopeDescriptor, let identity = scopeLockIdentity,
@@ -894,9 +958,13 @@ final class TransactionLockContext {
 
   func resource(_ identity: SharedResourceIdentity? = nil) throws -> SharedResource {
     try validateScope()
-    guard identity != nil || resources.count == 1,
-      let resource = resources.first(where: { identity == nil || $0.identity == identity })
-    else {
+    let resource =
+      if let identity {
+        resourcesByIdentity[identity]
+      } else {
+        resources.count == 1 ? resources.first : nil
+      }
+    guard let resource else {
       throw CoreError.invalidState("shared target is outside the held request footprint")
     }
     try resource.validate()
@@ -904,10 +972,10 @@ final class TransactionLockContext {
   }
 
   func resource(for route: NativeTargetRoute) throws -> SharedResource {
-    guard let resource = admissions.first(where: { $0.route.root == route.root }) else {
+    guard let resource = admissionsByRoot[route.root] else {
       throw CoreError.invalidState("shared target is outside the held request footprint")
     }
-    try resource.validate()
+    if resource !== resourcesByIdentity[resource.identity] { try resource.validate() }
     return try self.resource(resource.identity)
   }
 
@@ -1018,8 +1086,10 @@ extension StateStore {
     guard routes.allSatisfy({ $0.permits(scope) }) else {
       throw CoreError.unsafePath("registered native request belongs to another scope")
     }
-    for target in installations {
+    for target in SkillInstallationTarget.distinctAuthorities(installations) {
       try target.validateAuthority()
+    }
+    for target in installations {
       let current = try skillInstallationTarget(for: target.agent, named: target.name)
       guard current.scope.path.utf8.elementsEqual(target.scope.path.utf8),
         current.url.path.utf8.elementsEqual(target.url.path.utf8),
@@ -1131,8 +1201,7 @@ extension StateStore {
       let context = TransactionLockContext(
         store: self, resources: resources.sorted { $0.identity < $1.identity }, writable: writable,
         requestedShared: requestedShared, absentRoots: absentRoots,
-        admissions: admissions, requestedRoutes: routes)
-      context.installations = installations
+        admissions: admissions, requestedRoutes: routes, installations: installations)
       context.createdAncestry = createdAncestry
       context.existingProjectRoot = existingRoot
       context.projectRootDirectory = projectRoot
@@ -1220,7 +1289,7 @@ extension StateStore {
         current.footprint == target.footprint
       else { throw CoreError.invalidState("installation authority changed during admission") }
     }
-    for admission in context.admissions { try admission.validate() }
+    try SharedResource.validateAll(context.admissions)
     for resource in context.resources {
       if journal?.finalized != true && (context.writable || journal == nil) {
         try resource.inspect(journal: journal, scope: directory?.identity ?? "")
@@ -1287,11 +1356,15 @@ extension StateStore {
   }
 
   func materializationReceiptKey(for path: String) throws -> String {
+    try materializationReceiptLocation(for: path).key
+  }
+
+  func materializationReceiptLocation(for path: String) throws -> (path: String, key: String) {
     if let route = try TransactionPaths(store: self).coordinationRoute(for: path) {
       let resource = try TransactionLockContext.current(self).requiredResourceForRoute(route)
-      return resource.route.root + "/" + resource.identity.basename
+      return (resource.receiptPath, resource.route.root + "/" + resource.identity.basename)
     }
-    return path
+    return ("state/" + MaterializationReceipts.fileName, path)
   }
 }
 
