@@ -3,6 +3,11 @@
     {
       "name": "manifest-schema-generation",
       "run": "python3 Scripts/generate-manifest-schema.py --check"
+    },
+    {
+      "name": "linux-swift-6.4.1",
+      "runner": "ubuntu-24.04",
+      "run": "python3 Scripts/test-linux.py swift:6.4.1-noble@sha256:6304481cf2717966b7ba175162e397ea2f2cc3161909f2b2a5cf40036079a0f7"
     }
   ],
   "test_configurations": [
@@ -16,12 +21,5 @@
       "xcode": "26.6"
     }
   ],
-  "platforms": {
-    "linux": [
-      {
-        "name": "linux-swift-6.4.1",
-        "image": "swift:6.4.1-noble@sha256:6304481cf2717966b7ba175162e397ea2f2cc3161909f2b2a5cf40036079a0f7"
-      }
-    ]
-  }
+  "timeout_minutes": 75
 }

@@ -336,8 +336,9 @@ publication matrix; the full publication matrix is not part of CI. macOS also
 runs a release build and strict formatting with `.swift-format` over
 `Package.swift`, `Sources` and `Tests`. The test suites include subprocess
 recovery tests. The configuration owns the Linux compiler version and image
-digest. Tests also require Perl, which is included by the Linux image's Git
-dependencies.
+digest. Linux runs the suites serially as the checkout owner to exercise kernel
+permission checks and subprocess deadlines. The test image includes Python 3
+for the loopback HTTP fixture and Perl through Git.
 
 Render and check the committed
 [social preview](.github/assets/social-preview/social-preview.png) locally with
