@@ -8,7 +8,8 @@ import Foundation
 enum UpdateReporting {
   static func skills(
     previous: ResolvedLedger, next: ResolvedLedger, resources: [String: URL],
-    changes: [AggregatedChange], store: StateStore, lockMissing: Bool, included: Bool,
+    changes: [AggregatedChange], store: StateStore, roots: [String: URL], lockMissing: Bool,
+    included: Bool,
     selectedIdentities: Set<String>? = nil, names: Set<String> = []
   ) throws -> [UpdateResult] {
     guard included else { return [] }
@@ -23,7 +24,7 @@ enum UpdateReporting {
       where component.kind == "skills" && !component.recipients.isEmpty {
         if let selectedIdentities,
           !selectedIdentities.contains(
-            try LedgerImpact.identity(component, ledger: ledger, roots: store.ledgerRoots))
+            try LedgerImpact.identity(component, ledger: ledger, roots: roots))
         {
           continue
         }
@@ -33,9 +34,9 @@ enum UpdateReporting {
         guard let id = component.resources.first, let resource = ledger.resources[id] else {
           continue
         }
-        let source = try ledger.sourceIdentity(component.source, roots: store.ledgerRoots)
+        let source = try ledger.sourceIdentity(component.source, roots: roots)
         let producer = try ledger.sourceIdentity(
-          component.declaringSource, roots: store.ledgerRoots)
+          component.declaringSource, roots: roots)
         let identity = try ResolvedLedgerCodec.digest(
           LedgerValue(object: [
             "producer": LedgerValue(producer), "source": .init(source),

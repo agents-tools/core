@@ -29,6 +29,7 @@ package final class ArtifactAggregation: PreparedEvidence {
   package private(set) var changes: [AggregatedChange] = []
   package private(set) var fingerprints: [String] = []
   private let store: StateStore
+  private let roots: [String: URL]
   private let resources: [String: URL]
   private let replace: Bool
   private let selectedKinds: Set<DeclaredComponentKind>?
@@ -58,7 +59,8 @@ package final class ArtifactAggregation: PreparedEvidence {
 
   package init(
     ledger: ResolvedLedger, previous: ResolvedLedger, artifacts: [ReplayedArtifact],
-    resources: [String: URL], workspace: URL, store: StateStore, replace: Bool,
+    resources: [String: URL], workspace: URL, store: StateStore, roots: [String: URL],
+    replace: Bool,
     changingAccess: Bool,
     kinds: Set<DeclaredComponentKind>? = nil, names: Set<String> = [],
     selectedIdentities: Set<String>? = nil,
@@ -66,6 +68,7 @@ package final class ArtifactAggregation: PreparedEvidence {
   ) throws {
     self.ledger = ledger
     self.store = store
+    self.roots = roots
     self.resources = resources
     self.replace = replace
     for target in installations { skillTargets[target.url.path] = target }
@@ -112,7 +115,6 @@ package final class ArtifactAggregation: PreparedEvidence {
         resourceEvidence.append(try TargetPrecondition(capsule))
       }
     }
-    let roots = store.ledgerRoots
     let artifacts = Dictionary(uniqueKeysWithValues: artifacts.map { ($0.name, $0) })
     let affectedPaths = try Set(
       previous.deployments.filter { try selected($0, in: previous) }.map {
@@ -370,12 +372,12 @@ package final class ArtifactAggregation: PreparedEvidence {
   }
 
   private func resourceDestination(_ id: String, in selected: ResolvedLedger? = nil) throws -> URL {
-    try Self.resourceDestination(id, ledger: selected ?? ledger, store: store)
+    try Self.resourceDestination(id, ledger: selected ?? ledger, store: store, roots: roots)
   }
 
   private func installationURL(_ deployment: LedgerDeployment) throws -> URL {
     guard deployment.route == "agents/skill@1" else {
-      return InstructionLocations.physical(try deployment.target.resolve(roots: store.ledgerRoots))
+      return InstructionLocations.physical(try deployment.target.resolve(roots: roots))
     }
     guard let agent = deployment.recipients.first else {
       throw CoreError.invalidState("missing skill recipient")
@@ -387,14 +389,16 @@ package final class ArtifactAggregation: PreparedEvidence {
     return admitted.url
   }
 
-  package static func resourceDestination(_ id: String, ledger: ResolvedLedger, store: StateStore)
-    throws -> URL
-  {
+  package static func resourceDestination(
+    _ id: String, ledger: ResolvedLedger, store: StateStore, roots: [String: URL]? = nil
+  ) throws -> URL {
     guard let resource = ledger.resources[id] else {
       throw CoreError.invalidState("missing deployment resource")
     }
-    if let location = resource.location { return try location.resolve(roots: store.ledgerRoots) }
-    if let root = try gitDestination(resource, ledger: ledger, store: store) {
+    if let location = resource.location {
+      return try location.resolve(roots: roots ?? store.ledgerRoots)
+    }
+    if let root = try gitDestination(resource, ledger: ledger, store: store, roots: roots) {
       return root.appendingPathComponent(resource.path)
     }
     let base = store.cacheDirectory.appendingPathComponent(
@@ -402,12 +406,8 @@ package final class ArtifactAggregation: PreparedEvidence {
     return base.appendingPathComponent(resource.support.isEmpty ? "payload" : resource.path)
   }
 
-  private func gitDestination(_ resource: LedgerResource, ledger: ResolvedLedger) throws -> URL? {
-    try Self.gitDestination(resource, ledger: ledger, store: store)
-  }
-
   private static func gitDestination(
-    _ resource: LedgerResource, ledger: ResolvedLedger, store: StateStore
+    _ resource: LedgerResource, ledger: ResolvedLedger, store: StateStore, roots: [String: URL]?
   ) throws -> URL? {
     guard resource.kind == .git else { return nil }
     var sourceID = resource.source
@@ -416,7 +416,7 @@ package final class ArtifactAggregation: PreparedEvidence {
       throw CoreError.invalidState("missing resource source")
     }
     return SourceCache(store: store).materializedURL(
-      sourceID: try ledger.sourceIdentity(sourceID, roots: store.ledgerRoots),
+      sourceID: try ledger.sourceIdentity(sourceID, roots: roots ?? store.ledgerRoots),
       revision: source.revision)
   }
 
@@ -435,13 +435,13 @@ package final class ArtifactAggregation: PreparedEvidence {
   private func isSelected(_ id: String, in selected: ResolvedLedger) throws -> Bool {
     guard let c = selected.components[id] else { return false }
     if try retargetedInstructions.contains(
-      LedgerImpact.identity(c, ledger: selected, roots: store.ledgerRoots))
+      LedgerImpact.identity(c, ledger: selected, roots: roots))
     {
       return true
     }
     if let selectedIdentities {
       return try selectedIdentities.contains(
-        LedgerImpact.identity(c, ledger: selected, roots: store.ledgerRoots))
+        LedgerImpact.identity(c, ledger: selected, roots: roots))
     }
     return (selectedKinds?.contains(DeclaredComponentKind(rawValue: c.kind)!) ?? true)
       && (selectedNames.isEmpty
@@ -496,9 +496,9 @@ package final class ArtifactAggregation: PreparedEvidence {
     bindings: [String] = [], ownership: LedgerDeployment.Ownership = .ownedValues
   ) throws {
     let identity = try LedgerImpact.identity(
-      ledger.components[entry.contribution.component]!, ledger: ledger, roots: store.ledgerRoots)
+      ledger.components[entry.contribution.component]!, ledger: ledger, roots: roots)
     let oldComponent = try previous.components.values.first {
-      try LedgerImpact.identity($0, ledger: previous, roots: store.ledgerRoots) == identity
+      try LedgerImpact.identity($0, ledger: previous, roots: roots) == identity
     }
     let deployment = LedgerDeployment(
       id: entry.id, target: location(entry.target), route: entry.lowering.format,
@@ -506,7 +506,7 @@ package final class ArtifactAggregation: PreparedEvidence {
       ownership: ownership, expectedHash: entry.lowering.artifacts[0].hash,
       created: previous.deployments.first {
         $0.route == entry.lowering.format
-          && (try? $0.target.resolve(roots: store.ledgerRoots).path) == entry.target.url.path
+          && (try? $0.target.resolve(roots: roots).path) == entry.target.url.path
       }?.created ?? !FileManager.default.fileExists(atPath: entry.target.url.path))
     ledger.deployments.removeAll { $0.id == entry.id }
     ledger.deployments.append(deployment)
@@ -530,12 +530,12 @@ package final class ArtifactAggregation: PreparedEvidence {
     _ value: NativeComponentValue, values: RuntimeBindingValues?,
     selected: ResolvedLedger
   ) throws -> NativeValue {
-    try Self.componentValue(value, values: values, selected: selected, store: store)
+    try Self.componentValue(value, values: values, selected: selected, store: store, roots: roots)
   }
 
   private static func componentValue(
     _ value: NativeComponentValue, values: RuntimeBindingValues?,
-    selected: ResolvedLedger, store: StateStore, symbolicVariant: Int = 0
+    selected: ResolvedLedger, store: StateStore, roots: [String: URL], symbolicVariant: Int = 0
   ) throws -> NativeValue {
     var environment = store.environment
     var symbolic: [String: Data] = [:]
@@ -556,7 +556,7 @@ package final class ArtifactAggregation: PreparedEvidence {
       }
     }
     let paths = try selected.resources.keys.reduce(into: [String: String]()) {
-      $0[$1] = try Self.resourceDestination($1, ledger: selected, store: store).path
+      $0[$1] = try Self.resourceDestination($1, ledger: selected, store: store, roots: roots).path
     }
     return try value.stagedValue(
       bindings: values ?? RuntimeBindingValues(symbolic), environment: environment,
@@ -571,13 +571,14 @@ package final class ArtifactAggregation: PreparedEvidence {
 
   private static func generatedManifestMatches(
     _ manifest: NativeComponentValue, observed: NativeValue?, selected: ResolvedLedger,
-    privateGeneration: Bool, store: StateStore
+    privateGeneration: Bool, store: StateStore, roots: [String: URL]
   ) throws -> Bool {
     guard let observed else { return false }
-    let first = try Self.componentValue(manifest, values: nil, selected: selected, store: store)
+    let first = try Self.componentValue(
+      manifest, values: nil, selected: selected, store: store, roots: roots)
     guard privateGeneration, !manifest.bindings.isEmpty else { return observed == first }
     let second = try Self.componentValue(
-      manifest, values: nil, selected: selected, store: store, symbolicVariant: 1)
+      manifest, values: nil, selected: selected, store: store, roots: roots, symbolicVariant: 1)
     // F determines the native positions. Only leaves changed by its binding conversion vary.
     func matches(_ actual: NativeValue, _ a: NativeValue, _ b: NativeValue) -> Bool {
       if a == b { return actual == a }
@@ -598,7 +599,8 @@ package final class ArtifactAggregation: PreparedEvidence {
   private func generatedManifestBytes(
     _ manifest: NativeComponentValue, values: RuntimeBindingValues?
   ) throws -> Data {
-    try Self.generatedManifestBytes(manifest, values: values, selected: ledger, store: store)
+    try Self.generatedManifestBytes(
+      manifest, values: values, selected: ledger, store: store, roots: roots)
   }
 
   /// Renders a selected symbolic value with the native JSON serializer, without physical input.
@@ -624,11 +626,11 @@ package final class ArtifactAggregation: PreparedEvidence {
 
   private static func generatedManifestBytes(
     _ manifest: NativeComponentValue, values: RuntimeBindingValues?,
-    selected: ResolvedLedger, store: StateStore
+    selected: ResolvedLedger, store: StateStore, roots: [String: URL]
   ) throws -> Data {
     guard
       case .object(let fields) = try componentValue(
-        manifest, values: values, selected: selected, store: store)
+        manifest, values: values, selected: selected, store: store, roots: roots)
     else { throw CoreError.invalidState("generated native manifest must be an object") }
     let document = try NativeDocument(
       bytes: Data("{}".utf8), format: .json,
@@ -759,7 +761,7 @@ package final class ArtifactAggregation: PreparedEvidence {
         guard
           try Self.generatedManifestMatches(
             manifest, observed: current.read(.init(keys: []))?.value, selected: previous,
-            privateGeneration: receipt != nil, store: store)
+            privateGeneration: receipt != nil, store: store, roots: roots)
         else { throw CoreError.invalidState("owned generated native tree drifted") }
       default: throw CoreError.invalidState("invalid whole-object ownership")
       }
@@ -789,7 +791,8 @@ package final class ArtifactAggregation: PreparedEvidence {
               content: .boundFile(bindings: bindingNames(entry)) {
                 values in
                 try Self.generatedManifestBytes(
-                  manifest, values: values, selected: selected, store: selectedStore)
+                  manifest, values: values, selected: selected, store: selectedStore,
+                  roots: selectedStore.ledgerRoots(recordedIn: previous))
               }))
           privateTrees.append((privatePlan, members))
         case .nativePlugin:
@@ -880,7 +883,7 @@ package final class ArtifactAggregation: PreparedEvidence {
     if changed {
       if after.isEmpty,
         previous.deployments.contains(where: {
-          $0.created && (try? $0.target.resolve(roots: store.ledgerRoots).path) == path
+          $0.created && (try? $0.target.resolve(roots: roots).path) == path
         })
       {
         deletes.insert(path)
@@ -894,7 +897,7 @@ package final class ArtifactAggregation: PreparedEvidence {
     for entry in next { try record(entry, previous: previous, changed: changed, readers: readers) }
     if next.isEmpty {
       for deployment in previous.deployments
-      where (try? deployment.target.resolve(roots: store.ledgerRoots).path) == path {
+      where (try? deployment.target.resolve(roots: roots).path) == path {
         changes.append(
           .init(
             deployment: deployment, url: url, before: nil, after: nil, changed: changed,
@@ -949,6 +952,10 @@ package final class ArtifactAggregation: PreparedEvidence {
       bytes: capture.bytes ?? Data((format == .toml ? "" : "{}\n").utf8),
       format: format, budget: budget)
     let selectedStore = store
+    let planningRoots = roots
+    func valueRoots(_ values: RuntimeBindingValues?) -> [String: URL] {
+      values == nil ? planningRoots : selectedStore.ledgerRoots(recordedIn: previous)
+    }
     func names(_ bindings: [NativeComponentBindingPlacement]) -> Set<String> {
       Set(
         bindings.compactMap {
@@ -991,7 +998,11 @@ package final class ArtifactAggregation: PreparedEvidence {
               $0.inputs.contains(c.component) && $0.format.hasSuffix("-mcp@1")
             })!.id
         ], bindings: bindings, symbolic: c.value,
-        render: { try Self.nativeValue(c, values: $0, ledger: selected, store: selectedStore) })
+        render: {
+          try Self.nativeValue(
+            c, values: $0, ledger: selected, store: selectedStore,
+            roots: valueRoots($0))
+        })
     }
     func regional(_ entry: ComponentOutputEntry, selected: ResolvedLedger) throws
       -> [NativeRegionOwner]
@@ -1020,7 +1031,8 @@ package final class ArtifactAggregation: PreparedEvidence {
             member.keys, symbolic: selected.components[entry.contribution.component]!.payload,
             bindings: names(value.bindings),
             render: {
-              try Self.componentValue(value, values: $0, selected: selected, store: selectedStore)
+              try Self.componentValue(
+                value, values: $0, selected: selected, store: selectedStore, roots: valueRoots($0))
             })
         ]
       case .claudePermissions(let policy):
@@ -1039,7 +1051,7 @@ package final class ArtifactAggregation: PreparedEvidence {
       case .hook(let hook):
         let identity = try LedgerImpact.identity(
           selected.components[entry.contribution.component]!, ledger: selected,
-          roots: store.ledgerRoots)
+          roots: roots)
         return [
           .init(
             key: "hook:" + identity + ":" + String(entry.index), region: .init(keys: hook.keys),
@@ -1049,13 +1061,14 @@ package final class ArtifactAggregation: PreparedEvidence {
             symbolic: selected.components[entry.contribution.component]!.payload,
             render: {
               try Self.componentValue(
-                hook.value, values: $0, selected: selected, store: selectedStore)
+                hook.value, values: $0, selected: selected, store: selectedStore,
+                roots: valueRoots($0))
             })
         ]
       case .orderedPermissions(let rules):
         let identity = try LedgerImpact.identity(
           selected.components[entry.contribution.component]!, ledger: selected,
-          roots: store.ledgerRoots)
+          roots: roots)
         let selectedOwner = try isSelected(entry.contribution.component, in: selected)
         return rules.enumerated().map { index, rule in
           .init(
@@ -1124,7 +1137,7 @@ package final class ArtifactAggregation: PreparedEvidence {
         requiringReceiptForExistingTarget: recordedOldBindings) : nil
     let receiptArrays = try store.materializationReceipt(for: target)?.nativeArrays ?? []
     let authority = previous.nativeAuthorities?.first {
-      (try? $0.target.resolve(roots: store.ledgerRoots).path) == path
+      (try? $0.target.resolve(roots: roots).path) == path
     }
     var retained: [NativeObservation] = []
     var retainedOwners: [[String]] = []
@@ -1374,20 +1387,20 @@ package final class ArtifactAggregation: PreparedEvidence {
         privatePlan: privatePlan, bindings: ownBindings)
     }
     for deployment in previous.deployments
-    where (try? deployment.target.resolve(roots: store.ledgerRoots).path) == path {
+    where (try? deployment.target.resolve(roots: roots).path) == path {
       let oldOwners = try Set(
         deployment.owners.map {
           try LedgerImpact.identity(
-            previous.components[$0]!, ledger: previous, roots: store.ledgerRoots)
+            previous.components[$0]!, ledger: previous, roots: roots)
         })
       let retained = try ledger.deployments.contains { next in
         guard next.route == deployment.route,
-          (try? next.target.resolve(roots: store.ledgerRoots).path) == path
+          (try? next.target.resolve(roots: roots).path) == path
         else { return false }
         return try Set(
           next.owners.map {
             try LedgerImpact.identity(
-              ledger.components[$0]!, ledger: ledger, roots: store.ledgerRoots)
+              ledger.components[$0]!, ledger: ledger, roots: roots)
           }) == oldOwners
       }
       if retained { continue }
@@ -1405,7 +1418,7 @@ package final class ArtifactAggregation: PreparedEvidence {
     route: String, path: String, format: NativeDocumentFormat
   ) {
     var records = ledger.nativeAuthorities ?? []
-    records.removeAll { (try? $0.target.resolve(roots: store.ledgerRoots).path) == path }
+    records.removeAll { (try? $0.target.resolve(roots: roots).path) == path }
     if !result.regions.isEmpty {
       records.append(
         .init(
@@ -1830,13 +1843,14 @@ package final class ArtifactAggregation: PreparedEvidence {
 
   private static func nativeValue(
     _ contribution: NativeMCPContribution, values: RuntimeBindingValues?, ledger: ResolvedLedger,
-    store: StateStore
+    store: StateStore, roots: [String: URL]
   ) throws -> NativeValue {
     func convert(_ value: LedgerValue, path: [MCPValueStep]) throws -> NativeValue {
       if let resource = contribution.resourcePlacements.first(where: { $0.path == path }),
         ledger.resources[resource.resource] != nil
       {
-        let destination = try resourceDestination(resource.resource, ledger: ledger, store: store)
+        let destination = try resourceDestination(
+          resource.resource, ledger: ledger, store: store, roots: roots)
         return .string(destination.path)
       }
       switch value.kind {
@@ -1902,12 +1916,14 @@ package final class ArtifactAggregation: PreparedEvidence {
     }
   }
 
-  package func stage(transaction: FileTransaction, provider: any RuntimeBindingProvider) throws {
+  package func stage(
+    transaction: FileTransaction, provider: any RuntimeBindingProvider, roots: [String: URL]
+  ) throws {
     var staged = Set<String>()
     for (id, source) in resources.sorted(by: { $0.key < $1.key }) {
       guard let resource = ledger.resources[id], resource.kind != .liveEdit else { continue }
-      let destination = try resourceDestination(id)
-      let git = try gitDestination(resource, ledger: ledger)
+      let destination = try Self.resourceDestination(id, ledger: ledger, store: store, roots: roots)
+      let git = try Self.gitDestination(resource, ledger: ledger, store: store, roots: roots)
       let container =
         git
         ?? store.cacheDirectory.appendingPathComponent(
@@ -2126,7 +2142,8 @@ extension ArtifactAggregation {
         guard let observed = try document.read(region) else {
           return ("missing", "managed native region is missing")
         }
-        return try observed.value == nativeValue(c, values: nil, ledger: ledger, store: store)
+        return try observed.value
+          == nativeValue(c, values: nil, ledger: ledger, store: store, roots: store.ledgerRoots)
           ? ("current", nil) : ("drifted", "managed native region changed")
       }
       if deployment.route.hasSuffix("-generated-plugin@1"),
@@ -2203,7 +2220,8 @@ extension ArtifactAggregation {
               bytes: Data(contentsOf: url), format: output.route.documentFormat!, budget: budget)
             matches =
               try document.read(.init(keys: member.keys))?.value
-              == componentValue(value, values: nil, selected: ledger, store: store)
+              == componentValue(
+                value, values: nil, selected: ledger, store: store, roots: store.ledgerRoots)
           case .claudePermissions(let policy):
             let document = try NativeDocument(
               bytes: Data(contentsOf: url), format: .json, budget: budget)
@@ -2265,7 +2283,7 @@ extension ArtifactAggregation {
               }
               && generatedManifestMatches(
                 manifest, observed: document.read(.init(keys: []))?.value, selected: ledger,
-                privateGeneration: privateGeneration, store: store)
+                privateGeneration: privateGeneration, store: store, roots: store.ledgerRoots)
           case .hook, .orderedPermissions:
             let document = try NativeDocument(
               bytes: Data(contentsOf: url), format: output.route.documentFormat!, budget: budget)
@@ -2281,7 +2299,8 @@ extension ArtifactAggregation {
             switch output.content {
             case .hook(let hook):
               expected = [
-                try componentValue(hook.value, values: nil, selected: ledger, store: store)
+                try componentValue(
+                  hook.value, values: nil, selected: ledger, store: store, roots: store.ledgerRoots)
               ]
             case .orderedPermissions(let rules):
               expected = rules.map {

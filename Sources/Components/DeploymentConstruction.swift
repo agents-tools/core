@@ -272,7 +272,7 @@ package enum DeploymentConstruction {
 
   package static func complete(
     _ native: ResolvedLedger, linked: LinkedComponents, store: StateStore,
-    previous: ResolvedLedger, platform: DeclarationPlatform
+    previous: ResolvedLedger, platform: DeclarationPlatform, roots: [String: URL]
   ) throws -> Result {
     var ledger = native
     var inputs: [TargetPrecondition] = []
@@ -318,7 +318,7 @@ package enum DeploymentConstruction {
     let instructions = linked.components.filter {
       if case .instruction = $0.payload { true } else { false }
     }
-    let old = try previous.domainProjection(roots: store.ledgerRoots).instructions
+    let old = try previous.domainProjection(roots: roots).instructions
     var merged: [String: (LockedTarget, [String], [String])] = [:]
     for agent in AgentID.allCases {
       let selected = instructions.filter { $0.recipients.contains(agent) }
@@ -330,7 +330,7 @@ package enum DeploymentConstruction {
       let planned = try InstructionTargets(store: store).plan(
         sections: sections, agents: [agent], previous: old)
       for (id, source) in ledger.sources where source.kind == .local && source.location != nil {
-        let identity = try ledger.sourceIdentity(id, roots: store.ledgerRoots)
+        let identity = try ledger.sourceIdentity(id, roots: roots)
         let roots = ledger.sourceUses.filter { $0.source == id }.map(\.root)
         for root in roots.isEmpty ? ["."] : roots {
           try InstructionTargets.validateSourceDirectories(

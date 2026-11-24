@@ -6,7 +6,8 @@ import Foundation
 extension UpdateOperations {
   /// Only durable inputs are exposed; replay workspaces and borrowed source URLs stay private.
   static func readLocations(
-    declarations: [Declaration], ledgers: [ResolvedLedger], store: StateStore
+    declarations: [Declaration], ledgers: [ResolvedLedger], store: StateStore,
+    roots admittedRoots: [String: URL]? = nil
   ) throws -> [URL] {
     var paths = [store.declarationURL, store.resolvedURL, store.watchURL]
     let scopeRoot = store.scope == .user ? store.directory : store.environment.projectDirectory
@@ -54,17 +55,18 @@ extension UpdateOperations {
       try collect(declaration.components)
       for group in declaration.groups { try collect(group.components) }
     }
+    let roots = admittedRoots ?? store.ledgerRoots
     for ledger in ledgers {
       func localRoot(_ id: String) throws -> URL? {
         guard let source = ledger.sources[id], source.kind == .local else { return nil }
-        if let location = source.location { return try location.resolve(roots: store.ledgerRoots) }
+        if let location = source.location { return try location.resolve(roots: roots) }
         if let container = source.container { return try localRoot(container) }
         return nil
       }
       let explicitSources = Set(ledger.sourceUses.map(\.source))
       for (id, source) in ledger.sources {
         if let location = source.location {
-          let root = try location.resolve(roots: store.ledgerRoots)
+          let root = try location.resolve(roots: roots)
           // The linker's implicit live snapshot supplies provenance, not a whole-tree read.
           // Explicit local declarations above retain their independent whole-tree interests.
           let implicit =
@@ -100,14 +102,16 @@ extension UpdateOperations {
               base: root, subpath: component.containerRoot ?? component.root))
         }
         if let value = component.payload.object?["localAppend"] {
-          paths.append(try LedgerLocation(ledgerValue: value).resolve(roots: store.ledgerRoots))
+          paths.append(try LedgerLocation(ledgerValue: value).resolve(roots: roots))
         }
       }
       for deployment in ledger.deployments {
-        paths.append(try deployment.target.resolve(roots: store.ledgerRoots))
+        paths.append(try deployment.target.resolve(roots: roots))
       }
       for (id, resource) in ledger.resources {
-        paths.append(try ArtifactAggregation.resourceDestination(id, ledger: ledger, store: store))
+        paths.append(
+          try ArtifactAggregation.resourceDestination(
+            id, ledger: ledger, store: store, roots: roots))
         if let root = try localRoot(resource.source) {
           let selected = try PathSafety.resolvedChild(base: root, subpath: resource.path)
           paths.append(selected)

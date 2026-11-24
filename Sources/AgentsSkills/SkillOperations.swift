@@ -16,15 +16,15 @@ public enum SkillOperations {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> [InstalledSkill] {
     let store = StateStore(scope: scope, environment: environment)
-    return try SkillLifecycle.withInstallationReadLock(store: store) {
+    return try SkillLifecycle.withInstallationReadLock(store: store) { ledger in
       _ = try store.readDeclaration()
-      let ledger = try store.readLedger()
-      return try managedInventory(store: store, ledger: ledger, agents: agents)
+      let roots = store.ledgerRoots(recordedIn: ledger)
+      return try managedInventory(store: store, ledger: ledger, roots: roots, agents: agents)
     }
   }
 
   private static func managedInventory(
-    store: StateStore, ledger: ResolvedLedger, agents: [AgentID]?
+    store: StateStore, ledger: ResolvedLedger, roots: [String: URL], agents: [AgentID]?
   ) throws -> [InstalledSkill] {
     var result: [InstalledSkill] = []
     for deployment in ledger.deployments where deployment.route == "agents/skill@1" {
@@ -34,7 +34,7 @@ public enum SkillOperations {
         let resource = component.resources.first.flatMap({ ledger.resources[$0] })
       else { continue }
       let mode = lowering.layout.object?["mode"]?.text.flatMap(InstallMode.init(rawValue:)) ?? .copy
-      let target = try deployment.target.resolve(roots: store.ledgerRoots)
+      let target = try deployment.target.resolve(roots: roots)
       let present = FileManager.default.fileExists(
         atPath: target.appendingPathComponent("SKILL.md").path)
       var status: InstalledSkillStatus =
@@ -63,7 +63,7 @@ public enum SkillOperations {
             InstalledSkill(
               name: PathSafety.sanitizeName(component.name), agent: agent, scope: store.scope,
               path: target.path,
-              sourceIdentity: try ledger.sourceIdentity(component.source, roots: store.ledgerRoots),
+              sourceIdentity: try ledger.sourceIdentity(component.source, roots: roots),
               isInstalled: present, status: status, mode: mode))
         }
       }
@@ -78,15 +78,16 @@ public enum SkillOperations {
     environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> [InstalledSkill] {
     let store = StateStore(scope: scope, environment: environment)
-    return try SkillLifecycle.withInstallationReadLock(store: store) {
+    return try SkillLifecycle.withInstallationReadLock(store: store) { ledger in
       _ = try store.readDeclaration()
-      let ledger = try store.readLedger()
-      var result = try managedInventory(store: store, ledger: ledger, agents: agents).filter {
-        $0.isInstalled
-          && (try? Discovery.parseSkill(
-            at: URL(fileURLWithPath: $0.path).appendingPathComponent("SKILL.md"),
-            includeInternal: true)) != nil
-      }
+      let roots = store.ledgerRoots(recordedIn: ledger)
+      var result = try managedInventory(store: store, ledger: ledger, roots: roots, agents: agents)
+        .filter {
+          $0.isInstalled
+            && (try? Discovery.parseSkill(
+              at: URL(fileURLWithPath: $0.path).appendingPathComponent("SKILL.md"),
+              includeInternal: true)) != nil
+        }
       for agent in agents ?? AgentID.allCases {
         let roots =
           scope == .project
@@ -138,10 +139,12 @@ public enum SkillOperations {
             path: store.directory.path)
         ])
       },
-      {
+      { ledger in
         let declaration = try store.readDeclaration()
-        let ledger = try store.readLedger()
-        var checks = try managedInventory(store: store, ledger: ledger, agents: agents).filter {
+        let roots = store.ledgerRoots(recordedIn: ledger)
+        var checks = try managedInventory(
+          store: store, ledger: ledger, roots: roots, agents: agents
+        ).filter {
           $0.status != .installed && $0.status != .editLinked
         }.map {
           DoctorCheck(
@@ -153,7 +156,7 @@ public enum SkillOperations {
           let id = try source.identity(environment: environment)
           let skills = try ledger.components.values.filter {
             guard $0.kind == "skills", !$0.recipients.isEmpty else { return false }
-            return try ledger.sourceIdentity($0.source, roots: store.ledgerRoots) == id
+            return try ledger.sourceIdentity($0.source, roots: roots) == id
           }
           guard !skills.isEmpty else { continue }
           if source.kind == .local {
