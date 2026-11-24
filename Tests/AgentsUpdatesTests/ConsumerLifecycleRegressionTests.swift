@@ -250,6 +250,40 @@ struct ConsumerLifecycleRegressionTests {
     #expect(try f.snapshot() == before)
   }
 
+  @Test func installedSkillsAndUnchangedUpdateKeepRecordedNamedTarget() throws {
+    let f = try UpdateFixture()
+    try f.declare(agents: [.codex, .claudeCode])
+    var declaration = try f.store.loadDeclaration()
+    declaration.components.append(
+      .command(
+        name: "review", description: "Review", prompt: .literal("Review exact sources."),
+        agents: [.claudeCode]))
+    try f.store.save(declaration: declaration, ledger: ResolvedLedger())
+    _ = try f.apply()
+
+    let ledger = try f.store.loadLedger()
+    let command = try #require(ledger.deployments.first { $0.route.hasSuffix("-components@1") })
+    let commandURL = try command.target.resolve(roots: f.store.ledgerRoots(recordedIn: ledger))
+    let commandBytes = try f.bytes(commandURL)
+    let managed = try SkillOperations.listManaged(environment: f.environment)
+    #expect(managed.map(\.name) == ["demo", "demo"])
+    #expect(Set(managed.map(\.agent)) == [.codex, .claudeCode])
+    #expect(managed.allSatisfy { $0.status == .installed })
+
+    let request = UpdateRequest(kinds: [.skills])
+    let before = try f.snapshot()
+    let preview = try UpdateOperations.preview(request, environment: f.environment)
+    #expect(!preview.hasChanges)
+    #expect(preview.readLocations.contains { $0.path == commandURL.path })
+    let skills = try SkillOperations.updateInstalled(environment: f.environment)
+    #expect(skills.map(\.skill) == preview.skills.map(\.skill))
+    _ = try UpdateOperations.withPreparedUpdate(request, environment: f.environment) {
+      try $0.apply(ifUnchangedFrom: preview.displayedFingerprint)
+    }
+    #expect(try f.snapshot() == before)
+    #expect(try f.bytes(commandURL) == commandBytes)
+  }
+
   @Test func missingLiveSkillReconciliationReplaysOnlyPreviousNativeResources() throws {
     let f = try UpdateFixture()
     try f.declare(mode: .edit, agents: [.codex])

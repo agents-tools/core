@@ -17,6 +17,7 @@ final class UpdatePlan {
   let report: CombinedUpdateReport
   private let store: StateStore
   private let baseline: StatePrecondition
+  private let previous: ResolvedLedger
   private let next: ResolvedLedger
   private let watch: WatchState
   private let declarationChange: DeclarationChange?
@@ -38,8 +39,9 @@ final class UpdatePlan {
     let importInputs = try (request.importPreparation?.capture() ?? []) + catalogInputs
     let baseline = try StatePrecondition(store: store)
     let previous = try store.readLedger(prepared: baseline)
+    let roots = store.ledgerRoots(recordedIn: previous)
     let instructionReferences = try resolveSelection(
-      &request, ledger: previous, store: store, baseline: baseline)
+      &request, ledger: previous, store: store, roots: roots, baseline: baseline)
     let restoringRequest: Bool
     if case .restore = request.operation {
       restoringRequest = true
@@ -78,10 +80,10 @@ final class UpdatePlan {
       restoring = false
       try LedgerImpact.requireEditable(
         previous, kinds: request.kinds ?? Set(DeclaredComponentKind.allCases),
-        names: Set(request.names), roots: store.ledgerRoots,
+        names: Set(request.names), roots: roots,
         selectedIdentities: request.selectedIdentities)
       candidate = try removing(
-        request, from: declaration, ledger: previous, store: store,
+        request, from: declaration, ledger: previous, store: store, roots: roots,
         selectedInstructionReferences: instructionReferences)
       change = try store.planDeclaration(candidate, replacing: declaration, prepared: baseline)
     }
@@ -94,7 +96,7 @@ final class UpdatePlan {
           guard let component = previous.components[$0.component], component.kind == "instructions",
             component.group == nil
           else { return nil }
-          return try LedgerImpact.identity(component, ledger: previous, roots: store.ledgerRoots)
+          return try LedgerImpact.identity(component, ledger: previous, roots: roots)
         })
     } else {
       retargetedInstructions = []
@@ -105,11 +107,12 @@ final class UpdatePlan {
       guard routes.isSubset(of: admitted), Set(required.keys).isSubset(of: Set(installations.keys))
       else { throw RequiredRoutes(routes: routes, installations: required) }
       return try LedgerReplay.withLockedResources(
-        previous, store: store, roots: store.ledgerRoots, limits: .standard
+        previous, store: store, roots: roots, limits: .standard
       ) { artifacts, resources, workspace in
         try body(
           UpdatePlan(
-            request: request, store: store, baseline: baseline, previous: previous, next: previous,
+            request: request, store: store, roots: roots, baseline: baseline, previous: previous,
+            next: previous,
             watch: watch, change: nil, artifacts: artifacts, resources: resources,
             workspace: workspace,
             decisionInputs: [], originalInputs: [],
@@ -144,7 +147,7 @@ final class UpdatePlan {
         let identity = try source.identity(environment: store.environment)
         let existing = try previous.components.values.filter { component in
           guard component.kind == "skills", component.group == nil else { return false }
-          return try previous.sourceIdentity(component.source, roots: store.ledgerRoots) == identity
+          return try previous.sourceIdentity(component.source, roots: roots) == identity
         }.map { PathSafety.sanitizeName($0.name) }.sorted()
         let selected = request.names.filter { name in
           !previous.components.values.contains { $0.kind == "skills" && $0.name == name }
@@ -172,7 +175,7 @@ final class UpdatePlan {
       }
     }
     let impact = try LedgerImpact(
-      ledger: previous, roots: store.ledgerRoots,
+      ledger: previous, roots: roots,
       kinds: request.kinds ?? Set(DeclaredComponentKind.allCases), names: Set(request.names),
       updating: updating, selectedIdentities: request.selectedIdentities)
     #if os(macOS)
@@ -207,7 +210,7 @@ final class UpdatePlan {
       let frozen = try LedgerFreeze.freezeWithSources(
         linked, session: session, locations: .init(sources: locations), limits: .standard)
       if let expected = request.expectedDiscoveryFingerprint,
-        expected != (try LedgerImpact.discoveryFingerprint(frozen.ledger, roots: store.ledgerRoots))
+        expected != (try LedgerImpact.discoveryFingerprint(frozen.ledger, roots: roots))
       {
         throw CoreError.invalidState("discovered source content changed; refresh discovery")
       }
@@ -220,11 +223,11 @@ final class UpdatePlan {
         let kinds = request.kinds ?? Set(DeclaredComponentKind.allCases)
         try LedgerImpact.requireProtected(
           previous: previous, next: native, kinds: kinds, names: Set(request.names),
-          roots: store.ledgerRoots, selectedIdentities: request.selectedIdentities,
+          roots: roots, selectedIdentities: request.selectedIdentities,
           retargetedInstructions: retargetedInstructions)
       }
       let complete = try DeploymentConstruction.complete(
-        native, linked: linked, store: store, previous: previous, platform: platform)
+        native, linked: linked, store: store, previous: previous, platform: platform, roots: roots)
       let required = try SkillLifecycle.installationTargets(previous, store: store).merging(
         SkillLifecycle.installationTargets(complete.ledger, store: store),
         uniquingKeysWith: { _, next in next })
@@ -238,12 +241,14 @@ final class UpdatePlan {
         }
       }
       try checkpoint("plan.skills")
+      let roots = store.ledgerRoots(recordedIn: previous)
       return try LedgerReplay.withPreparedLowerings(
-        complete.ledger, store: store, roots: store.ledgerRoots, limits: .standard
+        complete.ledger, store: store, roots: roots, limits: .standard
       ) { next, artifacts, resources, workspace in
         try body(
           UpdatePlan(
-            request: request, store: store, baseline: baseline, previous: previous, next: next,
+            request: request, store: store, roots: roots, baseline: baseline, previous: previous,
+            next: next,
             watch: watch, change: change, artifacts: artifacts, resources: resources,
             workspace: workspace,
             decisionInputs: complete.inputs, originalInputs: originals + importInputs,
@@ -254,7 +259,7 @@ final class UpdatePlan {
   }
 
   private init(
-    request: UpdateRequest, store: StateStore, baseline: StatePrecondition,
+    request: UpdateRequest, store: StateStore, roots: [String: URL], baseline: StatePrecondition,
     previous: ResolvedLedger, next: ResolvedLedger, watch: WatchState,
     change: DeclarationChange?, artifacts: [ReplayedArtifact], resources: [String: URL],
     workspace: URL,
@@ -264,6 +269,7 @@ final class UpdatePlan {
   ) throws {
     self.store = store
     self.baseline = baseline
+    self.previous = previous
     self.watch = watch
     declarationChange = change
     self.checkpoint = checkpoint
@@ -272,7 +278,8 @@ final class UpdatePlan {
       ledger: next, resources: resources, decisions: decisionInputs, originals: originalInputs)
     aggregation = try ArtifactAggregation(
       ledger: next, previous: previous, artifacts: artifacts,
-      resources: resources, workspace: workspace, store: store, replace: request.replace,
+      resources: resources, workspace: workspace, store: store, roots: roots,
+      replace: request.replace,
       changingAccess: request.changingAccess, kinds: request.kinds,
       names: Set(request.names), selectedIdentities: request.selectedIdentities,
       installations: installations, retargetedInstructions: retargetedInstructions)
@@ -300,11 +307,11 @@ final class UpdatePlan {
     self.next = aggregation.ledger
     try self.next.validate()
     let lockMissing = try baseline.bytes(for: store.resolvedURL) == nil
-    let before = try previous.domainProjection(roots: store.ledgerRoots)
-    let after = try self.next.domainProjection(roots: store.ledgerRoots)
+    let before = try previous.domainProjection(roots: roots)
+    let after = try self.next.domainProjection(roots: roots)
     let allResults = try UpdateReporting.skills(
       previous: previous, next: self.next, resources: resources,
-      changes: aggregation.changes, store: store, lockMissing: lockMissing,
+      changes: aggregation.changes, store: store, roots: roots, lockMissing: lockMissing,
       included: request.kinds == nil || request.kinds!.contains(.skills),
       selectedIdentities: request.selectedIdentities, names: Set(request.names))
     let results =
@@ -384,7 +391,7 @@ final class UpdatePlan {
     }
     let readPaths =
       try UpdateOperations.readLocations(
-        declarations: readDeclarations, ledgers: [previous, self.next], store: store)
+        declarations: readDeclarations, ledgers: [previous, self.next], store: store, roots: roots)
       + decisionInputs.map(\.url) + installations.map(\.url)
     let finalNext = self.next
     report = CombinedUpdateReport(
@@ -403,14 +410,14 @@ final class UpdatePlan {
           let ledger = finalNext.components[owner] == nil ? previous : finalNext
           return try identities.contains(
             LedgerImpact.identity(
-              ledger.components[owner]!, ledger: ledger, roots: store.ledgerRoots))
+              ledger.components[owner]!, ledger: ledger, roots: roots))
         }
       }.map { change in
         let owner = change.deployment.owners[0]
         let ledger = finalNext.components[owner] == nil ? previous : finalNext
         let component = ledger.components[owner]!
         return ComponentUpdateChange(
-          sourceIdentity: try ledger.sourceIdentity(component.source, roots: store.ledgerRoots),
+          sourceIdentity: try ledger.sourceIdentity(component.source, roots: roots),
           revision: component.revision, version: component.version,
           format: change.deployment.route, ownership: change.deployment.ownership.rawValue,
           resources: component.resources.compactMap { ledger.resources[$0] }.map { resource in
@@ -453,7 +460,8 @@ final class UpdatePlan {
     try aggregation.requireOwnership()
     try inputs.validate()
     if report.hasChanges {
-      var references = try RetentionReferences(ledger: next, roots: store.ledgerRoots)
+      let roots = store.ledgerRoots(recordedIn: previous)
+      var references = try RetentionReferences(ledger: next, roots: roots)
       try references.include(watch: watch)
       let cache = SourceCache(store: store, checkpoint: checkpoint)
       try cache.retain(references: references)
@@ -463,7 +471,9 @@ final class UpdatePlan {
       try inputs.validate()
       let transaction = FileTransaction(store: store, outcome: outcome, checkpoint: checkpoint)
       transaction.requireUnchanged(since: baseline, aggregation, inputs)
-      try aggregation.stage(transaction: transaction, provider: provider)
+      try aggregation.stage(
+        transaction: transaction, provider: provider, roots: store.ledgerRoots(recordedIn: previous)
+      )
       try store.stageDeclaration(declarationChange, in: transaction, prepared: baseline)
       // Empty scopes need no lock file; a declaration edit always accompanies first deployment.
       if try store.declarationBytes(prepared: baseline) != nil || declarationChange != nil {
@@ -521,7 +531,7 @@ final class UpdatePlan {
 
   private static func resolveSelection(
     _ request: inout UpdateRequest, ledger: ResolvedLedger, store: StateStore,
-    baseline: StatePrecondition
+    roots: [String: URL], baseline: StatePrecondition
   ) throws -> Set<String>? {
     let kinds = request.kinds ?? Set(DeclaredComponentKind.allCases)
     func name(_ c: LedgerComponent) -> String {
@@ -549,9 +559,9 @@ final class UpdatePlan {
           where component.kind == "instructions" && component.group == nil
             && component.name == section.name
           {
-            if try ledger.sourceIdentity(component.source, roots: store.ledgerRoots) == source {
+            if try ledger.sourceIdentity(component.source, roots: roots) == source {
               selected.insert(
-                try LedgerImpact.identity(component, ledger: ledger, roots: store.ledgerRoots))
+                try LedgerImpact.identity(component, ledger: ledger, roots: roots))
             }
           }
         }
@@ -561,7 +571,7 @@ final class UpdatePlan {
       for requested in request.names {
         let matches = try ledger.components.values.filter {
           kinds.contains(DeclaredComponentKind(rawValue: $0.kind)!) && name($0) == requested
-        }.map { try LedgerImpact.identity($0, ledger: ledger, roots: store.ledgerRoots) }
+        }.map { try LedgerImpact.identity($0, ledger: ledger, roots: roots) }
         guard Set(matches).count <= 1 else {
           throw CoreError.invalidState(
             "component name is ambiguous; select a component from inspection: " + requested)
@@ -590,7 +600,7 @@ final class UpdatePlan {
         throw CoreError.invalidState("inspection changed; refresh component selection")
       }
       let entries = try ledger.components.filter {
-        try LedgerImpact.identity($0.value, ledger: ledger, roots: store.ledgerRoots)
+        try LedgerImpact.identity($0.value, ledger: ledger, roots: roots)
           == selection.identity
       }
       guard let entry = entries.first,
@@ -644,7 +654,7 @@ final class UpdatePlan {
 
   private static func removing(
     _ request: UpdateRequest, from declaration: Declaration, ledger: ResolvedLedger,
-    store: StateStore, selectedInstructionReferences: Set<String>?
+    store: StateStore, roots: [String: URL], selectedInstructionReferences: Set<String>?
   ) throws -> Declaration {
     var result = declaration
     let names = Set(request.names)
@@ -668,9 +678,9 @@ final class UpdatePlan {
         }
         if try ledger.components.values.contains(where: { c in
           try c.kind == "instructions" && c.name == section.name
-            && ledger.sourceIdentity(c.source, roots: store.ledgerRoots) == source
+            && ledger.sourceIdentity(c.source, roots: roots) == source
             && identities.contains(
-              LedgerImpact.identity(c, ledger: ledger, roots: store.ledgerRoots))
+              LedgerImpact.identity(c, ledger: ledger, roots: roots))
         }) {
           instructionReferences.insert(section.reference)
         }
@@ -685,8 +695,8 @@ final class UpdatePlan {
           let source = try? declaration.sources[alias]?.identity(environment: store.environment)
           let matches = ledger.components.values.contains { c in
             c.kind == "skills"
-              && (try? ledger.sourceIdentity(c.source, roots: store.ledgerRoots)) == source
-              && (try? LedgerImpact.identity(c, ledger: ledger, roots: store.ledgerRoots)).map(
+              && (try? ledger.sourceIdentity(c.source, roots: roots)) == source
+              && (try? LedgerImpact.identity(c, ledger: ledger, roots: roots)).map(
                 identities.contains) == true
           }
           if !matches { return component }
@@ -705,7 +715,7 @@ final class UpdatePlan {
             for name in names {
               let current = ledger.components.values.first {
                 $0.kind == "skills" && PathSafety.sanitizeName($0.name) == name
-                  && (try? ledger.sourceIdentity($0.source, roots: store.ledgerRoots))
+                  && (try? ledger.sourceIdentity($0.source, roots: roots))
                     == (try? declaration.sources[alias]?.identity(environment: store.environment))
               }
               var overrides = original.overrides ?? [:]

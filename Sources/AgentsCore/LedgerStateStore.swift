@@ -27,6 +27,12 @@ extension StateStore {
   }
 
   package var ledgerRoots: [String: URL] {
+    ledgerRoots(recordedIn: try? readLedger())
+  }
+
+  /// Resolves roots using the committed ledger already read for this operation.
+  /// These URLs locate content; transaction admission independently checks filesystem identity.
+  package func ledgerRoots(recordedIn committed: ResolvedLedger?) -> [String: URL] {
     var roots = [
       "project": environment.projectDirectory, "home": environment.homeDirectory,
       "state": directory,
@@ -52,8 +58,8 @@ extension StateStore {
     where route.isNamed && route.permits(scope) {
       roots[route.root] = try? route.physicalDirectory(environment)
     }
-    if let ledger = try? readLedger() {
-      for deployment in ledger.deployments {
+    if let committed {
+      for deployment in committed.deployments {
         guard deployment.target.kind == .registered, let key = deployment.target.root,
           let route = NativeTargetRoute.targetRoute(key), route.isNamed,
           route.permits(scope), deployment.target.path.utf8.elementsEqual(route.basename.utf8),
@@ -105,7 +111,7 @@ extension StateStore {
   /// Ref cleanup consumes the committed closure after physical journal recovery.
   func retentionReferences() throws -> RetentionReferences {
     guard let bytes = try ledgerBytes(limits: .standard) else { return RetentionReferences() }
-    return try RetentionReferences(
-      ledger: ResolvedLedgerCodec.decode(bytes, limits: .standard), roots: ledgerRoots)
+    let committed = try ResolvedLedgerCodec.decode(bytes, limits: .standard)
+    return try RetentionReferences(ledger: committed, roots: ledgerRoots(recordedIn: committed))
   }
 }

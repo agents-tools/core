@@ -125,7 +125,8 @@ package final class SkillLifecycle {
 
   /// Capture all managed slots before admitting physical reads; never recover during inventory.
   static func withInstallationReadLock<T>(
-    store: StateStore, onPendingRecovery: (() throws -> T)? = nil, _ body: () throws -> T
+    store: StateStore, onPendingRecovery: (() throws -> T)? = nil,
+    _ body: (ResolvedLedger) throws -> T
   ) throws -> T {
     var targets: [String: SkillInstallationTarget] = [:]
     while true {
@@ -133,11 +134,12 @@ package final class SkillLifecycle {
         return try store.withReadLock(
           onPendingRecovery: onPendingRecovery, installations: Array(targets.values)
         ) {
-          let required = try installationTargets(store.readLedger(), store: store)
+          let ledger = try store.readLedger()
+          let required = try installationTargets(ledger, store: store)
           guard Set(required.keys).isSubset(of: Set(targets.keys)) else {
             throw RequiredInstallations(targets: required)
           }
-          return try body()
+          return try body(ledger)
         }
       } catch let required as RequiredInstallations {
         targets.merge(required.targets, uniquingKeysWith: { _, next in next })
