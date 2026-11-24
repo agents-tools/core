@@ -8,12 +8,20 @@ import Testing
 
 @Suite("Frozen generated native plugins")
 struct GeneratedPluginTests {
+  private var platform: DeclarationPlatform {
+    #if os(macOS)
+      .macOS
+    #else
+      .linux
+    #endif
+  }
+
   private func freeze(
     _ fixture: LinkFixture, _ expression: String, scope: InstallScope = .project
   ) throws -> ([LinkedComponent], LedgerFreeze.Result) {
     let store = StateStore(scope: scope, environment: fixture.environment)
     return try ComponentLinker.withLinkedComponents(
-      document: fixture.document(expression), store: store, platform: .macOS
+      document: fixture.document(expression), store: store, platform: platform
     ) { graph, session in
       let locations = Dictionary(
         (graph.sourceSnapshots + graph.declaringSnapshots).filter {
@@ -45,7 +53,7 @@ struct GeneratedPluginTests {
   ) throws -> LockedLowering {
     try NativeGeneratedPluginLayoutV1.lower(
       components.first { $0.key.kind == .plugin }!, members: components, frozen: frozen,
-      request: .init(surface: surface, scope: scope), id: "generated", platform: .macOS)
+      request: .init(surface: surface, scope: scope), id: "generated", platform: platform)
   }
 
   @Test func frozenClosureColdReplayPreservesOrderBindingsResourcesAndRegistration() throws {
@@ -244,7 +252,7 @@ struct GeneratedPluginTests {
       try NativeGeneratedPluginLayoutV1.lower(
         parent, members: components, frozen: frozen,
         request: .init(surface: .claudeCode, scope: .project), id: "parent/" + String(index),
-        platform: .macOS)
+        platform: platform)
     }
     ledger = try LedgerReplay.prepareLowerings(
       ledger, store: fixture.store, roots: [:], limits: .standard)
