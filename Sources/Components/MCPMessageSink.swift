@@ -164,6 +164,10 @@ struct MCPSSEParser {
   private var firstLine = true
   let limit: Int
 
+  init(limit: Int) {
+    self.limit = limit
+  }
+
   mutating func restart() {
     line.removeAll(keepingCapacity: true)
     data.removeAll(keepingCapacity: true)

@@ -104,10 +104,9 @@ if scenario == "holder" || scenario == "ignore-input" || scenario == "blocked-in
   }
 #endif
 if scenario == "descendant" || scenario == "thread-descendant" {
-  let argv =
-    [arguments[0], scenario == "descendant" ? "holder" : "thread-holder", root.path].map {
-      strdup($0)
-    } + [nil]
+  let childScenario = scenario == "descendant" ? "holder" : "thread-holder"
+  let childArguments = [arguments[0], childScenario, root.path(percentEncoded: false)]
+  let argv = childArguments.map { strdup($0) } + [nil]
   let environment =
     ProcessInfo.processInfo.environment.map { strdup($0.key + "=" + $0.value) } + [nil]
   var pid: pid_t = 0
