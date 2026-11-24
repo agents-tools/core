@@ -76,7 +76,14 @@ package enum LedgerAdmission {
           guard range.count <= limits.keyBytes else {
             throw CoreError.invalidState("ledger key budget")
           }
-          let key = try JSONDecoder().decode(String.self, from: data.subdata(in: range))
+          let contents = data[(range.lowerBound + 1)..<(range.upperBound - 1)]
+          // The whole input is valid UTF-8 and string() has checked the token's grammar.
+          let key =
+            if contents.contains(92) {
+              try JSONDecoder().decode(String.self, from: data.subdata(in: range))
+            } else {
+              String(decoding: contents, as: UTF8.self)
+            }
           guard keys.insert(key).inserted else {
             throw CoreError.invalidState("duplicate ledger key")
           }
