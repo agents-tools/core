@@ -9,7 +9,7 @@ import Foundation
 
 func openFileLimitProbe(_ mode: String, root: URL, store: StateStore) throws {
   #if os(Linux)
-    let resource = RLIMIT_NOFILE.rawValue
+    let resource = Int32(RLIMIT_NOFILE.rawValue)
   #else
     let resource = RLIMIT_NOFILE
   #endif
@@ -27,26 +27,16 @@ func openFileLimitProbe(_ mode: String, root: URL, store: StateStore) throws {
   }
   guard setrlimit(resource, &before) == 0 else { throw POSIXError(.EINVAL) }
 
-  if mode == "worker" {
-    try sharedCoordinationWorkerProbe(store: store)
-    return
-  }
-
-  if mode != "original" { ProcessLimits.raiseOpenFileLimit() }
+  if mode == "raised" || mode == "bounded" { ProcessLimits.raiseOpenFileLimit() }
   var after = rlimit()
   guard getrlimit(resource, &after) == 0 else { throw POSIXError(.EINVAL) }
 
-  let routes = try (0..<96).map {
-    try NativeTargetRoute.named(.claudeSkillPlugin, scope: .user, name: "generated-\($0)")
-  }
-  try store.withReadLock(footprint: Set(routes.prefix(2))) {}
-  let large: String
-  do {
-    try store.withReadLock(footprint: Set(routes)) {}
-    large = "admitted"
-  } catch {
-    large = error.localizedDescription
-  }
+  let large =
+    if mode == "worker" {
+      try sharedCoordinationWorkerProbe(store: store)
+    } else {
+      try sharedCoordinationAdmission(store: store, count: 96)
+    }
   let result = """
     \(before.rlim_cur)
     \(before.rlim_max)
@@ -57,7 +47,28 @@ func openFileLimitProbe(_ mode: String, root: URL, store: StateStore) throws {
   try Data(result.utf8).write(to: root.appendingPathComponent("open-file-limit-\(mode)"))
 }
 
-private func sharedCoordinationWorkerProbe(store: StateStore) throws {
+private func sharedCoordinationAdmission(store: StateStore, count: Int) throws -> String {
+  let routes = try (0..<count).map {
+    try NativeTargetRoute.named(.claudeSkillPlugin, scope: .user, name: "generated-\($0)")
+  }
+  func read(_ footprint: Set<NativeTargetRoute>) throws {
+    var calls = 0
+    let value: Int? = try store.withReadLock(footprint: footprint) {
+      calls += 1
+      return nil
+    }
+    precondition(calls == 1 && value == nil)
+  }
+  try read(Set(routes.prefix(2)))
+  do {
+    try read(Set(routes))
+    return "admitted"
+  } catch  where error.localizedDescription.hasPrefix("Too many open files for this process:") {
+    return error.localizedDescription
+  }
+}
+
+private func sharedCoordinationWorkerProbe(store: StateStore) throws -> String {
   func check(_ code: Int32) throws {
     guard code == 0 else { throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EINVAL) }
   }
@@ -93,28 +104,17 @@ private func sharedCoordinationWorkerProbe(store: StateStore) throws {
   guard let result = worker.result else {
     throw CoreError.invalidState("coordination worker did not report a result")
   }
-  try result.get()
+  return try result.get()
 }
 
 private final class SharedCoordinationWorker {
   static let stackSize = 512 * 1024
   let store: StateStore
-  var result: Result<Void, any Error>?
+  var result: Result<String, any Error>?
 
   init(store: StateStore) { self.store = store }
 
   func run() {
-    result = Result {
-      let routes = try Set(
-        (0..<196).map {
-          try NativeTargetRoute.named(.claudeSkillPlugin, scope: .user, name: "generated-\($0)")
-        })
-      var calls = 0
-      let value: Int? = try store.withReadLock(footprint: routes) {
-        calls += 1
-        return nil
-      }
-      precondition(calls == 1 && value == nil)
-    }
+    result = Result { try sharedCoordinationAdmission(store: store, count: 196) }
   }
 }

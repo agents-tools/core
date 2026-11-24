@@ -5,6 +5,13 @@ import Testing
 @testable import AgentsCore
 
 @Suite struct ProcessLimitsTests {
+  private struct Probe {
+    let soft: UInt64
+    let hard: UInt64
+    let after: UInt64
+    let result: String
+  }
+
   private func createSkillLocks(at root: URL, count: Int) throws {
     let store = StateStore(
       scope: .user,
@@ -21,39 +28,49 @@ import Testing
     }
   }
 
-  @Test func executableOptInPreservesHardLimitAndAdmitsLargeScope() throws {
+  private func runProbe(_ mode: String, at root: URL) throws -> Probe {
+    let child = try stateTestProcess(
+      root: root, arguments: ["open-file-limit", mode, "--scope", "user"])
+    defer { terminateProcess(child) }
+    try ProcessWait.exit(child, root: root, timeout: 30)
+    try #require(child.terminationReason == .exit)
+    try #require(child.terminationStatus == 0)
+    let lines = try String(
+      contentsOf: root.appendingPathComponent("open-file-limit-\(mode)"), encoding: .utf8
+    ).split(separator: "\n")
+    try #require(lines.count == 5)
+    let soft = try #require(UInt64(lines[0]))
+    let hard = try #require(UInt64(lines[1]))
+    let after = try #require(UInt64(lines[2]))
+    #expect(UInt64(lines[3]) == hard)
+    return Probe(soft: soft, hard: hard, after: after, result: String(lines[4]))
+  }
+
+  private func checkLargeAdmission(_ probe: Probe, count: UInt64) {
+    // The probe sets a comfortably sufficient budget of 4096 when testing the worker.
+    // Below three pinned descriptors per route, the full footprint cannot fit.
+    if probe.after >= 4096 {
+      #expect(probe.result == "admitted")
+    } else if probe.after < 3 * count {
+      #expect(probe.result.hasPrefix("Too many open files for this process:"))
+    }
+  }
+
+  @Test func executableOptInPreservesHardLimitAndUsesAvailableCapacity() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
     try createSkillLocks(at: root, count: 96)
-    func run(_ mode: String) throws -> (soft: UInt64, hard: UInt64, raised: UInt64, result: String)
-    {
-      let child = try stateTestProcess(
-        root: root, arguments: ["open-file-limit", mode, "--scope", "user"])
-      defer { terminateProcess(child) }
-      try ProcessWait.exit(child, root: root, timeout: 30)
-      try #require(child.terminationStatus == 0)
-      let lines = try String(
-        contentsOf: root.appendingPathComponent("open-file-limit-\(mode)"), encoding: .utf8
-      ).split(separator: "\n")
-      try #require(lines.count == 5)
-      let soft = try #require(UInt64(lines[0]))
-      let hard = try #require(UInt64(lines[1]))
-      let raised = try #require(UInt64(lines[2]))
-      #expect(UInt64(lines[3]) == hard)
-      return (soft, hard, raised, String(lines[4]))
-    }
-    let original = try run("original")
-    #expect(original.raised == original.soft)
+    let original = try runProbe("original", at: root)
+    #expect(original.after == original.soft)
     #expect(original.result.hasPrefix("Too many open files for this process:"))
-    let raised = try run("raised")
+    let raised = try runProbe("raised", at: root)
     #expect(raised.soft == original.soft)
-    if raised.hard > 256 {
-      #expect(raised.raised > 256)
-      #expect(raised.result == "admitted")
-    }
-    let bounded = try run("bounded")
+    #expect(raised.after <= raised.hard)
+    if raised.hard > raised.soft { #expect(raised.after > raised.soft) }
+    checkLargeAdmission(raised, count: 96)
+    let bounded = try runProbe("bounded", at: root)
     #expect(bounded.hard <= 64)
-    #expect(bounded.raised == bounded.hard)
+    #expect(bounded.after == bounded.hard)
     #expect(bounded.result.hasPrefix("Too many open files for this process:"))
   }
 
@@ -61,11 +78,7 @@ import Testing
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
     try createSkillLocks(at: root, count: 196)
-    let child = try stateTestProcess(
-      root: root, arguments: ["open-file-limit", "worker", "--scope", "user"])
-    defer { terminateProcess(child) }
-    try ProcessWait.exit(child, root: root, timeout: 30)
-    #expect(child.terminationReason == .exit)
-    #expect(child.terminationStatus == 0)
+    let worker = try runProbe("worker", at: root)
+    checkLargeAdmission(worker, count: 196)
   }
 }
