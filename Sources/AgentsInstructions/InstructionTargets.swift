@@ -1,16 +1,21 @@
 import AgentsCore
 import Foundation
 
-struct InstructionTargets {
+package struct InstructionTargets {
+  package init(store: StateStore) { self.store = store }
   let store: StateStore
 
   /// Plans every generated target from `sections` in declared order, the Claude import, and the
   /// removal of targets that no longer receive sections. `restoring` keeps the locked targets,
   /// recipients and Claude imports, and requires each rendering to match its locked hash.
-  func plan(
+  package func plan(
     sections: [InstructionSection], agents: [AgentID], previous: LockedInstructions,
     restoring: Bool = false
-  ) throws -> (targets: [String: LockedTarget], changes: [InstructionTargetChange]) {
+  ) throws -> (
+    targets: [String: LockedTarget], changes: [InstructionTargetChange],
+    expectations: [String: TargetPrecondition]
+  ) {
+    var expectations: [String: TargetPrecondition] = [:]
     var targets: [String: LockedTarget] = [:]
     var rendered: [String: String] = [:]
     if !sections.isEmpty {
@@ -43,16 +48,26 @@ struct InstructionTargets {
         }
       }
       if !restoring, store.scope == .project, recipients.contains(.claudeCode),
-        targets["AGENTS.md"] != nil, let path = try forwardingPath()
+        targets["AGENTS.md"] != nil
       {
-        let file = store.environment.projectDirectory.appendingPathComponent(path.rawValue)
-        let key = InstructionLocations.key(for: InstructionLocations.physical(file), store: store)
-        guard targets[key] == nil else {
-          throw CoreError.invalidState("forwarding overlaps an instruction target")
+        for path in ClaudeInstructionPath.allCases {
+          let file = store.environment.projectDirectory.appendingPathComponent(path.rawValue)
+          expectations[file.path] = try TargetPrecondition(file)
+          let physical = file.resolvingSymlinksInPath()
+          if physical.path != file.path {
+            expectations[physical.path] = try TargetPrecondition(physical)
+          }
         }
-        targets[key] = LockedTarget(
-          agents: [.claudeCode], import: String(path.importLine.dropFirst()), blockHash: "",
-          created: false)
+        if let path = try forwardingPath() {
+          let file = store.environment.projectDirectory.appendingPathComponent(path.rawValue)
+          let key = InstructionLocations.key(for: InstructionLocations.physical(file), store: store)
+          guard targets[key] == nil else {
+            throw CoreError.invalidState("forwarding overlaps an instruction target")
+          }
+          targets[key] = LockedTarget(
+            agents: [.claudeCode], import: String(path.importLine.dropFirst()), blockHash: "",
+            created: false)
+        }
       }
     }
     if restoring {
@@ -65,7 +80,16 @@ struct InstructionTargets {
     var problems: [InstructionLinkProblem] = []
     for key in Set(previous.targets.keys).union(targets.keys).sorted() {
       let file = try InstructionLocations.file(for: key, store: store)
-      let before = try Self.read(file)
+      let input = try TargetPrecondition.readingFile(file)
+      let before = input.bytes
+      if let earlier = expectations[file.path] {
+        guard earlier.sameGeneration(as: input.evidence) else {
+          throw CoreError.invalidState(
+            "instruction target changed during preparation: \(file.path)")
+        }
+      } else {
+        expectations[file.path] = input.evidence
+      }
       let old = previous.targets[key]
       var after: Data?
       var foreign = false
@@ -116,7 +140,8 @@ struct InstructionTargets {
           afterAgents: targets[key]?.agents ?? [], drift: drift, foreign: foreign))
     }
     guard problems.isEmpty else { throw InstructionError.invalidLinks(problems) }
-    return (targets, changes)
+    for evidence in expectations.values { try evidence.validate() }
+    return (targets, changes, expectations)
   }
 
   /// The file an agent reads for sections placed in `directory`, or nil when the agent has no file.
@@ -172,6 +197,16 @@ struct InstructionTargets {
         try file.map { try MarkdownDocument(bytes: $0.bytes).managedBlock() != nil } ?? false
       return file?.isSymbolicLinkToAgents == true || !managed ? nil : candidate
     }
+  }
+
+  /// Checks frozen rendered output against its receiving checkout, not mutable authoring input.
+  package func validateRenderedLinks(_ bytes: Data, at file: URL) throws {
+    guard let text = String(data: bytes, encoding: .utf8) else {
+      throw InstructionError.invalidLockedBlock
+    }
+    let problems = linkProblems(
+      in: text, file: file, key: InstructionLocations.key(for: file, store: store))
+    guard problems.isEmpty else { throw InstructionError.invalidLinks(problems) }
   }
 
   /// Links in a rendered target that do not resolve, from the target file, to a regular file in
@@ -260,7 +295,7 @@ struct InstructionTargets {
   }
 
   /// Rejects targets inside an instructions container of a local source.
-  static func validateSourceDirectories(
+  package static func validateSourceDirectories(
     _ changes: [InstructionTargetChange], sources: [String: LockedSource]
   ) throws {
     for source in sources where source.value.kind == .local {
@@ -288,10 +323,16 @@ struct InstructionTargets {
     guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
       throw CoreError.unsafePath("instruction target is not a regular file: \(file.path)")
     }
-    return try Data(contentsOf: file)
+    return try FileSystem.read(at: file)
   }
 
-  private static func importBlock(in bytes: Data, at path: ClaudeInstructionPath) throws
+  package static func ownedImportBytes(_ bytes: Data?) throws -> Data? {
+    guard let bytes else { return nil }
+    let document = try MarkdownDocument(bytes: bytes)
+    return try document.managedBlock().map { Data(document.normalized($0).utf8) }
+  }
+
+  package static func importBlock(in bytes: Data, at path: ClaudeInstructionPath) throws
     -> (bytes: Data, blockHash: String)
   {
     let document = try MarkdownDocument(bytes: bytes)

@@ -122,3 +122,24 @@ public enum PathSafety {
     return components.isEmpty ? "." : components.joined(separator: "/")
   }
 }
+
+extension PathSafety {
+  /// Resolve the configured loader boundary's existing prefix; missing suffixes carry no identity.
+  static func resolvedDirectoryBoundary(_ directory: URL) throws -> URL {
+    var prefix = directory.standardizedFileURL
+    var suffix: [String] = []
+    while true {
+      if let physical = realPath(prefix.path) {
+        return suffix.reduce(URL(fileURLWithPath: physical).resolvingSymlinksInPath()) {
+          $0.appendingPathComponent($1)
+        }
+      }
+      var info = stat()
+      guard lstat(prefix.path, &info) != 0, errno == ENOENT, prefix.path != "/" else {
+        throw CoreError.unsafePath("cannot resolve registered loader boundary")
+      }
+      suffix.insert(prefix.lastPathComponent, at: 0)
+      prefix.deleteLastPathComponent()
+    }
+  }
+}

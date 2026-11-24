@@ -1,5 +1,28 @@
 {
+  "commands": [
+    {
+      "name": "manifest-schema-generation",
+      "run": "python3 Scripts/generate-manifest-schema.py --check"
+    },
+    {
+      "name": "linux-swift-6.4.1",
+      "runner": "ubuntu-24.04",
+      "run": "python3 Scripts/test-linux.py swift:6.4.1-noble@sha256:6304481cf2717966b7ba175162e397ea2f2cc3161909f2b2a5cf40036079a0f7"
+    }
+  ],
+  "test_configurations": [
+    "debug",
+    "release"
+  ],
   "compilers": [
-    {"name": "macos-26-xcode-26.6", "runner": "macos-26", "xcode": "26.6"}
-  ]
+    {
+      "name": "macos-26-xcode-26.6",
+      "runner": "macos-26",
+      "xcode": "26.6"
+    }
+  ],
+  "timeout_minutes": 120,
+  "environment": {
+    "SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH": "1"
+  }
 }

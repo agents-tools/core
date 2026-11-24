@@ -1,5 +1,5 @@
 import AgentsCore
-import Darwin
+import CPlatform
 import Foundation
 import Testing
 
@@ -42,7 +42,7 @@ struct WatchMirrorConcurrencyTests {
     #expect(currentLocks == locks)
 
     // Recovery and re-acknowledgment must follow the surviving Git child's completion.
-    try finishProcesses([acknowledger], resuming: pause)
+    try finishProcesses([acknowledger], root: fixture.root, resuming: pause)
     #expect(try fixture.store.loadWatch().sources[fixture.id]?.seen == .revision(first))
     #expect(try fixture.watchRefs() == [first])
     #expect(try gitLocks(fixture).isEmpty)
@@ -51,53 +51,48 @@ struct WatchMirrorConcurrencyTests {
     #expect(try fixture.cachedInstruction(first).contains("initial"))
   }
 
-  @Test(arguments: [false, true])
-  func listingAndFirstWatchMutationShareMirrorLock(_ existingMirror: Bool) throws {
+  @Test func temporaryListingAndFirstSubscriptionCompleteWithoutSharedMirror() throws {
     let fixture = try WatchGitFixture()
     try FileManager.default.removeItem(at: fixture.store.directory)
-    let scopeLock = fixture.store.directory.appendingPathComponent(".agents.lock")
+
+    let initial = try stateTestProcess(root: fixture.root, arguments: ["instruction-list", ""])
+    defer { terminateProcess(initial) }
+    try finishProcesses([initial], root: fixture.root)
+    let listingResult = fixture.root.appendingPathComponent("listing-finished")
+    #expect(try String(contentsOf: listingResult, encoding: .utf8) == "rule")
+    #expect(!exists(fixture.store.directory))
+    #expect(!exists(fixture.store.cacheDirectory))
+    try FileManager.default.removeItem(at: listingResult)
+
     let template = fixture.root.appendingPathComponent("template")
-    if existingMirror {
-      let listing = try stateTestProcess(root: fixture.root, arguments: ["instruction-list", ""])
-      defer { terminateProcess(listing) }
-      try finishProcesses([listing])
-      try #require(exists(fixture.mirror))
-      try #require(!exists(scopeLock))
-      try FileManager.default.removeItem(
-        at: fixture.root.appendingPathComponent("listing-finished"))
-      try Data("---\ndescription: Fixture instructions.\n---\n# Rule\nupdated\n".utf8).write(
-        to: fixture.repo.appendingPathComponent("instructions/rule.md"))
-      try fixture.git(["commit", "-am", "update"])
-    }
     let pause = try GitTransactionPause(
-      root: fixture.root,
-      hooks: (existingMirror ? fixture.mirror : template).appendingPathComponent("hooks"),
+      root: fixture.root, hooks: template.appendingPathComponent("hooks"),
       condition: "[ \"${ref#refs/heads/}\" != \"$ref\" ]")
     defer { pause.terminate() }
     let listing = try stateTestProcess(
       root: fixture.root, arguments: ["instruction-list", ""],
-      environment: existingMirror ? [:] : ["GIT_TEMPLATE_DIR": template.path])
+      environment: ["GIT_TEMPLATE_DIR": template.path])
     defer { terminateProcess(listing) }
     try pause.wait()
-    try #require(!exists(scopeLock))
-    let mirrorLock = fixture.store.cacheDirectory.appendingPathComponent("locks")
-      .appendingPathComponent(fixture.mirror.deletingPathExtension().lastPathComponent + ".lock")
-    try #require(exists(mirrorLock))
-    let contention = try ProcessSignal(at: fixture.root.appendingPathComponent("writer-contended"))
+    #expect(listing.isRunning)
+    #expect(!exists(listingResult))
+    #expect(!exists(fixture.store.directory))
+    #expect(!exists(fixture.store.cacheDirectory))
 
     let writer = try stateTestProcess(root: fixture.root, arguments: ["watch-subscribe", ""])
     defer { terminateProcess(writer) }
-    #expect(try contention.receive() == "contended")
-    #expect(exists(scopeLock))
-    #expect(writer.isRunning)
-    #expect(!exists(fixture.store.watchURL))
-    #expect(!exists(fixture.root.appendingPathComponent("writer-finished")))
+    try finishProcesses([writer], root: fixture.root)
+    #expect(listing.isRunning)
+    #expect(!exists(listingResult))
+    #expect(exists(fixture.root.appendingPathComponent("writer-finished")))
+    #expect(try fixture.store.loadWatch().sources[fixture.id]?.seen == .revision(fixture.head()))
+    #expect(try fixture.watchRefs() == [fixture.head()])
+    #expect(try gitLocks(fixture).isEmpty)
+    let published = try FileHash.folderHash(fixture.store.directory)
 
-    try finishProcesses([listing, writer], resuming: pause)
-    #expect(
-      try String(
-        contentsOf: fixture.root.appendingPathComponent("listing-finished"), encoding: .utf8)
-        == "rule")
+    try finishProcesses([listing], root: fixture.root, resuming: pause)
+    #expect(try String(contentsOf: listingResult, encoding: .utf8) == "rule")
+    #expect(try FileHash.folderHash(fixture.store.directory) == published)
     #expect(try fixture.store.loadWatch().sources[fixture.id]?.seen == .revision(fixture.head()))
     #expect(try fixture.watchRefs() == [fixture.head()])
     #expect(try gitLocks(fixture).isEmpty)

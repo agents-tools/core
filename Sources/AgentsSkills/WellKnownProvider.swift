@@ -2,24 +2,31 @@ import AgentsCore
 import Foundation
 import Yams
 
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
+
 struct WellKnownRemoteSkill: Equatable, Sendable {
   var installName: String
   var description: String
   var sourceURL: URL
   var digest: String?
   var files: [String: Data]
+  var executableFlags: [String: Bool]
   var artifact: LockedArtifact
   var payloads: [String: Data]
 
   init(
     installName: String, description: String, sourceURL: URL, digest: String? = nil,
-    files: [String: Data], artifact: LockedArtifact? = nil, payloads: [String: Data] = [:]
+    files: [String: Data], artifact: LockedArtifact? = nil, payloads: [String: Data] = [:],
+    executableFlags: [String: Bool] = [:]
   ) {
     self.installName = installName
     self.description = description
     self.sourceURL = sourceURL
     self.digest = digest
     self.files = files
+    self.executableFlags = executableFlags
     self.artifact =
       artifact
       ?? LockedArtifact(type: .skillMD, url: sourceURL.absoluteString, digest: digest ?? "")
@@ -162,11 +169,15 @@ struct WellKnownProvider: Sendable {
           let data = try fetch(artifactURL)
           try verifyDigest(data: data, expected: entry.digest)
           let files: [String: Data]
+          let executableFlags: [String: Bool]
           switch entry.type {
           case "skill-md":
             files = ["SKILL.md": data]
+            executableFlags = [:]
           case "archive":
-            files = try unpackArchive(data, artifactURL: artifactURL)
+            let unpacked = try unpackArchive(data, artifactURL: artifactURL)
+            files = unpacked.files
+            executableFlags = unpacked.executableFlags
           default:
             throw CoreError.invalidSource("unsupported well-known artifact type: \(entry.type)")
           }
@@ -179,7 +190,7 @@ struct WellKnownProvider: Sendable {
             artifact: LockedArtifact(
               type: entry.type == "archive" ? .archive : .skillMD, url: artifactURL.absoluteString,
               digest: entry.digest),
-            payloads: [entry.digest: data]
+            payloads: [entry.digest: data], executableFlags: executableFlags
           )
         }
     }
@@ -194,7 +205,7 @@ struct WellKnownProvider: Sendable {
       let cached = try cache.artifactURL(digest: digest)
       let data =
         FileManager.default.fileExists(atPath: cached.path)
-        ? try Data(contentsOf: cached) : try fetch(URL(string: url)!)
+        ? try FileSystem.read(at: cached) : try fetch(URL(string: url)!)
       try verifyDigest(data: data, expected: digest)
       payloads[digest] = data
       return data
@@ -205,7 +216,7 @@ struct WellKnownProvider: Sendable {
       return (["SKILL.md": data], payloads)
     case .archive:
       let data = try download(artifact.url, digest: artifact.digest)
-      return (try unpackArchive(data, artifactURL: URL(string: artifact.url)!), payloads)
+      return (try unpackArchive(data, artifactURL: URL(string: artifact.url)!).files, payloads)
     case .files:
       let records = artifact.files ?? []
       guard try LockedArtifact.filesDigest(records) == artifact.digest else {
@@ -246,7 +257,9 @@ struct WellKnownProvider: Sendable {
     )
   }
 
-  private func unpackArchive(_ data: Data, artifactURL: URL) throws -> [String: Data] {
+  private func unpackArchive(_ data: Data, artifactURL: URL) throws -> (
+    files: [String: Data], executableFlags: [String: Bool]
+  ) {
     let lowerPath = artifactURL.path.lowercased()
     if lowerPath.hasSuffix(".zip") || data.starts(with: [0x50, 0x4b]) {
       return try unpackZip(data)
@@ -254,13 +267,15 @@ struct WellKnownProvider: Sendable {
     return try unpackTarGz(data)
   }
 
-  private func unpackTarGz(_ data: Data) throws -> [String: Data] {
+  private func unpackTarGz(_ data: Data) throws -> (
+    files: [String: Data], executableFlags: [String: Bool]
+  ) {
     let tempRoot = FileManager.default.temporaryDirectory
       .appendingPathComponent("agents-artifact-" + UUID().uuidString)
     let archive = tempRoot.appendingPathComponent("artifact.tar.gz")
     let extract = tempRoot.appendingPathComponent("extract")
-    try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)
-    try data.write(to: archive)
+    try FileSystem.createDirectory(at: extract)
+    try FileSystem.write(data, to: archive)
     defer {
       try? FileManager.default.removeItem(at: tempRoot)
     }
@@ -294,13 +309,15 @@ struct WellKnownProvider: Sendable {
     return try collectExtractedFiles(from: extract)
   }
 
-  private func unpackZip(_ data: Data) throws -> [String: Data] {
+  private func unpackZip(_ data: Data) throws -> (
+    files: [String: Data], executableFlags: [String: Bool]
+  ) {
     let tempRoot = FileManager.default.temporaryDirectory
       .appendingPathComponent("agents-artifact-" + UUID().uuidString)
     let archive = tempRoot.appendingPathComponent("artifact.zip")
     let extract = tempRoot.appendingPathComponent("extract")
-    try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)
-    try data.write(to: archive)
+    try FileSystem.createDirectory(at: extract)
+    try FileSystem.write(data, to: archive)
     defer {
       try? FileManager.default.removeItem(at: tempRoot)
     }
@@ -334,7 +351,9 @@ struct WellKnownProvider: Sendable {
     return try collectExtractedFiles(from: extract)
   }
 
-  private func collectExtractedFiles(from extract: URL) throws -> [String: Data] {
+  private func collectExtractedFiles(from extract: URL) throws -> (
+    files: [String: Data], executableFlags: [String: Bool]
+  ) {
     guard
       let enumerator = FileManager.default.enumerator(
         at: extract,
@@ -342,7 +361,7 @@ struct WellKnownProvider: Sendable {
         options: [.skipsPackageDescendants]
       )
     else {
-      return [:]
+      return ([:], [:])
     }
 
     var totalBytes = 0
@@ -364,7 +383,7 @@ struct WellKnownProvider: Sendable {
     guard files.keys.contains(where: { $0.lowercased() == "skill.md" }) else {
       throw CoreError.invalidSource("well-known archive has no SKILL.md")
     }
-    return files
+    return (files, try FileHash.executableFlags(extract))
   }
 }
 

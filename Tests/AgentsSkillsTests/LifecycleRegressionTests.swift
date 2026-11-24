@@ -1,4 +1,7 @@
+import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -44,8 +47,8 @@ struct LifecycleRegressionTests {
         source: fixture.repo.path, alias: "fixture", agents: [.codex, .claudeCode], mode: .copy,
         environment: fixture.environment))
     var declaration = try fixture.store().loadDeclaration()
-    declaration.skills?["fixture"]?.agents = [.codex]
-    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
+    try declaration.updateSkills { $0?["fixture"]?.agents = [.codex] }
+    try fixture.store().save(declaration: declaration, ledger: fixture.store().loadLedger())
     let target = fixture.target("demo")
     try FileManager.default.createDirectory(
       at: target.appendingPathComponent("empty"), withIntermediateDirectories: true)
@@ -101,8 +104,10 @@ struct LifecycleRegressionTests {
     try fixture.commit()
     _ = try fixture.add(mode: .copy)
     var declaration = try fixture.store().loadDeclaration()
-    declaration.skills?["fixture"]?.overrides = ["demo": SkillOverride(mode: .edit)]
-    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
+    try declaration.updateSkills {
+      $0?["fixture"]?.overrides = ["demo": SkillOverride(mode: .edit)]
+    }
+    try fixture.store().save(declaration: declaration, ledger: fixture.store().loadLedger())
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
     try FileManager.default.removeItem(at: fixture.repo.appendingPathComponent("skills/demo"))
     #expect(throws: CoreError.self) {
@@ -118,7 +123,7 @@ struct LifecycleRegressionTests {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "A")
     try fixture.commit()
-    try fixture.store().save(declaration: Declaration(agents: [.codex]), resolved: ResolvedState())
+    try fixture.store().save(declaration: Declaration(agents: [.codex]), ledger: ResolvedLedger())
     _ = try SkillOperations.add(
       AddOptions(
         source: fixture.repo.path, agents: [.codex, .claudeCode], environment: fixture.environment))
@@ -160,5 +165,32 @@ extension LifecycleRegressionTests {
     #expect(
       try SkillOperations.listManaged(agents: [.codex], environment: fixture.environment).first?
         .status == .missing)
+  }
+}
+
+extension LifecycleRegressionTests {
+  @Test func namedUpdatePreservesUnselectedCanonicalIdentityAndExactPin() throws {
+    let fixture = try SkillFixture()
+    try fixture.skill("example", body: "A")
+    try fixture.skill("selected", body: "A")
+    let file = fixture.repo.appendingPathComponent("skills/example/SKILL.md")
+    try Data("---\nname: Example Skill\ndescription: Example\n---\nOriginal".utf8).write(to: file)
+    try fixture.commit()
+    _ = try fixture.add(mode: .copy)
+    let original = try #require(fixture.store().loadResolved().skills["example-skill"])
+    try Data("---\nname: Example Skill\ndescription: Example\n---\nChanged".utf8).write(to: file)
+    try fixture.skill("selected", body: "B")
+    try fixture.commit()
+    _ = try SkillOperations.updateInstalled(
+      environment: fixture.environment, skillNames: ["selected"], apply: true)
+    let lock = try fixture.store().loadResolved()
+    #expect(lock.skills["example-skill"] == original)
+    #expect(lock.skills["selected"]?.revision == (try fixture.head()))
+    #expect(try fixture.body(fixture.target("example-skill")).hasSuffix("Original"))
+    #expect(try fixture.body(fixture.target("selected")).contains("B"))
+    let ledger = try fixture.store().loadLedger()
+    #expect(
+      ledger.components.values.filter { $0.kind == "skills" }.compactMap(\.revision).contains(
+        original.revision!))
   }
 }

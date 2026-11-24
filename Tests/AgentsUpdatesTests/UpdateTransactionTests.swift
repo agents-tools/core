@@ -1,9 +1,10 @@
-import AgentsCore
 import AgentsSkills
-import Darwin
+import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
 
+@testable import AgentsCore
 @testable import AgentsUpdates
 
 @Suite("Combined update transactions")
@@ -19,7 +20,7 @@ struct UpdateTransactionTests {
       _ = try UpdateOperations.withPreparedUpdate(
         environment: fixture.environment,
         checkpoint: { step in
-          if step == "replace.0" {
+          if step == TransactionCheckpoint.progress(0, .applied).name {
             // Exchange a journal-bound root so every automatic recovery attempt must stop.
             try FileManager.default.moveItem(at: root, to: moved)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -34,8 +35,10 @@ struct UpdateTransactionTests {
     let journal = fixture.store.directory.appendingPathComponent("transaction.json")
     #expect(FileManager.default.fileExists(atPath: journal.path))
     let retained = try FileManager.default.contentsOfDirectory(atPath: moved.path)
-    #expect(retained.contains { $0.hasSuffix(".old") })
-    #expect(throws: CoreError.self) { try fixture.store.loadResolved() }
+    #expect(retained.contains { $0.hasPrefix(".agents-") })
+    #expect(throws: CoreError.invalidState("transaction root identity changed")) {
+      try fixture.store.withLock {}
+    }
     #expect(try FileManager.default.contentsOfDirectory(atPath: moved.path) == retained)
     try FileManager.default.removeItem(at: root)
     try FileManager.default.moveItem(at: moved, to: root)
@@ -48,8 +51,41 @@ struct UpdateTransactionTests {
   }
 
   @Test(arguments: [
-    "between-kinds", "journal.preparing", "journal.applying.renamed",
-    "journal.committed.renamed", "journal.committed", "cleanup.0", "journal.removed",
+    (TransactionCheckpoint.phase(.preparing).name, UpdateTerminalDisposition.unchanged),
+    (
+      TransactionCheckpoint.persisted(.applying, .entry(0, .publishing), .renamed).name, .rolledBack
+    ),
+    (TransactionCheckpoint.phase(.committed).name, .committed),
+  ])
+  func outerTerminalReportsTheDurablePublication(
+    point: String, expected: UpdateTerminalDisposition
+  ) throws {
+    let fixture = try UpdateFixture()
+    try fixture.install()
+    let before = try fixture.snapshot()
+    try fixture.advance()
+    var interrupted = false
+    let result = UpdateOperations.perform(
+      environment: fixture.environment,
+      checkpoint: { step in
+        if step == point {
+          interrupted = true
+          throw CoreError.invalidState("terminal fixture failure")
+        }
+      }, { try $0.apply() })
+    #expect(interrupted)
+    #expect(result.disposition == expected)
+    #expect(!result.recovery.pending)
+    #expect(throws: UpdateApplyError.self) { try result.result.get() }
+    if expected != .committed { #expect(try fixture.snapshot() == before) }
+  }
+
+  @Test(arguments: [
+    "between-kinds", TransactionCheckpoint.phase(.preparing).name,
+    TransactionCheckpoint.persisted(.applying, .entry(0, .publishing), .renamed).name,
+    TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name,
+    TransactionCheckpoint.phase(.committed).name, TransactionCheckpoint.containerRemoved(0).name,
+    TransactionCheckpoint.journalRemoved.name,
   ])
   func failuresReportTheRecoveredGeneration(_ failure: String) throws {
     let fixture = try UpdateFixture()
@@ -66,11 +102,12 @@ struct UpdateTransactionTests {
       _ = try UpdateOperations.withPreparedUpdate(
         environment: fixture.environment,
         checkpoint: { step in
-          if step == "journal.preparing" {
+          if step == TransactionCheckpoint.phase(.preparing).name {
             lastSkill = try lastSkillIndex(fixture.store)
           }
           if step == failure
-            || (failure == "between-kinds" && step == lastSkill.map { "replace.\($0)" })
+            || (failure == "between-kinds"
+              && step == lastSkill.map { TransactionCheckpoint.progress($0, .applied).name })
           {
             failed = true
             throw CoreError.invalidState("injected update failure")
@@ -79,9 +116,7 @@ struct UpdateTransactionTests {
         { try $0.apply() })
       Issue.record("failure checkpoint was not reached")
     } catch let error as UpdateApplyError {
-      let committed =
-        failure.hasPrefix("journal.committed") || failure == "cleanup.0"
-        || failure == "journal.removed"
+      let committed = committedPoints.contains(failure)
       #expect(error.disposition == (committed ? .committed : .unchanged))
       #expect(error.underlyingError as? CoreError == .invalidState("injected update failure"))
       if committed {
@@ -98,8 +133,10 @@ struct UpdateTransactionTests {
   }
 
   @Test(arguments: [
-    "between-kinds", "journal.preparing", "journal.applying.renamed",
-    "journal.committed.renamed", "cleanup.0",
+    "between-kinds", TransactionCheckpoint.phase(.preparing).name,
+    TransactionCheckpoint.persisted(.applying, .entry(0, .publishing), .renamed).name,
+    TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name,
+    TransactionCheckpoint.containerRemoved(0).name,
   ])
   func killedCombinedWriterRecoversThenPreparesTheWholeUpdate(_ checkpoint: String) throws {
     let fixture = try UpdateFixture()
@@ -110,11 +147,26 @@ struct UpdateTransactionTests {
     defer { terminate(child) }
     try waitFor("ready", fixture: fixture, child: child)
     terminate(child)
-    #expect(throws: CoreError.self) { try fixture.preview() }
-    #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
-      try fixture.apply()
+    #expect(throws: CoreError.recoveryPending(TransactionRecoveryDiagnostic.pendingMessage)) {
+      try fixture.preview()
     }
-    let committed = checkpoint.hasPrefix("journal.committed") || checkpoint == "cleanup.0"
+    let inspection = try UpdateOperations.inspect(environment: fixture.environment)
+    #expect(inspection.recovery.pending)
+    #expect(inspection.components.isEmpty)
+    var delivered = false
+    let recovered: UpdateCompletion<Void> = UpdateOperations.perform(
+      environment: fixture.environment
+    ) { _ in
+      delivered = true
+    }
+    #expect(!delivered)
+    #expect(recovered.recoveredBeforePreparation)
+    #expect(recovered.disposition == .unchanged)
+    #expect(!recovered.recovery.pending)
+    #expect(throws: CoreError.transactionRecovered(fixture.store.directory.path)) {
+      try recovered.result.get()
+    }
+    let committed = committedPoints.contains(checkpoint)
     if !committed { #expect(try fixture.snapshot() == before) }
     var displayed = 0
     _ = try UpdateOperations.withPreparedUpdate(environment: fixture.environment) { update in
@@ -144,11 +196,12 @@ struct UpdateTransactionTests {
     #expect(
       !FileManager.default.fileExists(
         atPath: fixture.root.appendingPathComponent("contender-finished").path))
+    try ProcessWait.stopped(prepared, root: fixture.root)
     kill(prepared.processIdentifier, SIGCONT)
-    prepared.waitUntilExit()
+    try ProcessWait.exit(prepared, root: fixture.root)
     #expect(prepared.terminationStatus == 0)
     try waitFor("contender-finished", fixture: fixture, child: contender)
-    contender.waitUntilExit()
+    try ProcessWait.exit(contender, root: fixture.root)
     #expect(contender.terminationStatus == 0)
   }
 
@@ -192,31 +245,77 @@ private func lastSkillIndex(_ store: StateStore) throws -> Int {
 
 private final class UpdateTestBundle: NSObject {}
 
+/// Interruptions at or after the terminal commit marker.
+private let committedPoints = [
+  TransactionCheckpoint.persisted(.committed, .terminal, .renamed), .phase(.committed),
+  .containerRemoved(0), .journalRemoved,
+].map(\.name)
+
 private func launch(_ fixture: UpdateFixture, command: String, argument: String) throws -> Process {
-  var directory = Bundle(for: UpdateTestBundle.self).bundleURL.deletingLastPathComponent()
+  var directory = Bundle(for: UpdateTestBundle.self).bundleURL
   while !FileManager.default.isExecutableFile(
     atPath: directory.appendingPathComponent("StateTestProcess").path),
     directory.path != "/"
   { directory.deleteLastPathComponent() }
   let process = Process()
   process.executableURL = directory.appendingPathComponent("StateTestProcess")
-  process.arguments = [fixture.root.path, command, argument, fixture.store.scope.rawValue]
+  process.arguments = [
+    fixture.root.path, command, argument, "--scope", fixture.store.scope.rawValue,
+  ]
+  let scratch = fixture.root.appendingPathComponent("process-temporary")
+  try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+  var environment = ProcessInfo.processInfo.environment
+  environment["TMPDIR"] = scratch.path + "/"
+  process.environment = environment
   try process.run()
   return process
 }
 
 private func waitFor(_ name: String, fixture: UpdateFixture, child: Process) throws {
   let file = fixture.root.appendingPathComponent(name)
-  let deadline = Date().addingTimeInterval(20)
-  while !FileManager.default.fileExists(atPath: file.path), Date() < deadline, child.isRunning {
-    Thread.sleep(forTimeInterval: 0.01)
-  }
-  try #require(FileManager.default.fileExists(atPath: file.path))
+  try ProcessWait.marker(file, child: child, root: fixture.root)
 }
 
+/// A child that survives the termination deadline fails the test instead of blocking the run.
 private func terminate(_ process: Process) {
-  if process.isRunning {
-    kill(process.processIdentifier, SIGKILL)
-    process.waitUntilExit()
+  do { try ProcessWait.terminate(process) } catch { Issue.record(error) }
+}
+
+extension UpdateTransactionTests {
+  @Test func combinedNativeFileAndSharedDocumentFaultRollBackTogether() throws {
+    let fixture = try UpdateFixture()
+    let config = fixture.root.appendingPathComponent(".codex/config.toml")
+    let role = fixture.root.appendingPathComponent(".codex/agents/researcher.toml")
+    try fixture.write("# User setting\ntheme = 'fixture'\n", to: config)
+    let initial = Declaration(components: [
+      .subagent(
+        name: "researcher", description: "Research sources", prompt: .literal("Before."),
+        agents: [.codex]),
+      .mcpServer(name: "db", transport: .stdio(.init(executable: "before")), agents: [.codex]),
+    ])
+    try fixture.store.save(declaration: initial, ledger: ResolvedLedger())
+    _ = try fixture.apply()
+    let files = [fixture.store.declarationURL, fixture.store.resolvedURL, config, role]
+    let before = try files.map { try Data(contentsOf: $0) }
+    let next = Declaration(components: [
+      .subagent(
+        name: "researcher", description: "Research sources", prompt: .literal("After."),
+        agents: [.codex]),
+      .mcpServer(name: "db", transport: .stdio(.init(executable: "after")), agents: [.codex]),
+    ])
+    var reached = false
+    let completion = UpdateOperations.perform(
+      .init(operation: .declaration(next)), environment: fixture.environment,
+      checkpoint: { step in
+        if step == TransactionCheckpoint.progress(0, .applied).name {
+          reached = true
+          throw CoreError.invalidState("combined native fault fixture")
+        }
+      }, { try $0.apply() })
+    #expect(reached)
+    #expect(completion.disposition == .rolledBack)
+    #expect(!completion.recovery.pending)
+    #expect(throws: UpdateApplyError.self) { try completion.result.get() }
+    #expect(try files.map { try Data(contentsOf: $0) } == before)
   }
 }

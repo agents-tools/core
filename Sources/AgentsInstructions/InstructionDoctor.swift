@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 
 extension InstructionOperations {
@@ -12,19 +13,19 @@ extension InstructionOperations {
     let store = StateStore(scope: scope, environment: environment)
     let other = StateStore(scope: scope == .project ? .user : .project, environment: environment)
     func pendingRecovery(_ store: StateStore) -> InstructionDiagnostic {
-      InstructionDiagnostic(
-        kind: .pendingRecovery,
-        message:
-          "Transaction recovery is pending; the next command that changes this scope will recover it.",
+      let recovery = FileTransaction.recoveryDiagnostic(store: store)
+      return InstructionDiagnostic(
+        kind: recovery.requiresOwner ? .unresolvedTransaction : .pendingRecovery,
+        message: recovery.message,
         path: store.directory)
     }
-    let otherSections: [LockedSection]? = try other.withReadLock(
-      onPendingRecovery: { nil },
-      {
-        _ = try other.readDeclaration()
-        return try other.readResolved().instructions.sections
-      })
-    let otherDiagnostics = otherSections == nil ? [pendingRecovery(other)] : []
+    let (otherSections, otherDiagnostics): ([LockedSection]?, [InstructionDiagnostic]) =
+      try other.withReadLock(
+        onPendingRecovery: { (nil, [pendingRecovery(other)]) },
+        {
+          _ = try other.readDeclaration()
+          return (try other.readResolved().instructions.sections, [])
+        })
     let root = scope == .project ? environment.projectDirectory : environment.homeDirectory
     return try store.withReadLock(
       onPendingRecovery: {
@@ -39,8 +40,13 @@ extension InstructionOperations {
           diagnostics.append(InstructionDiagnostic(kind: kind, message: message, path: path))
         }
         if !FileManager.default.fileExists(atPath: store.resolvedURL.path),
-          !(declaration.instructions?.sections.isEmpty ?? true)
-            || !(declaration.instructions?.chatgpt?.isEmpty ?? true)
+          declaration.components.contains(where: {
+            if case .instructions(let s) = $0 {
+              !s.sectionReferences.isEmpty || !s.prompts.isEmpty
+            } else {
+              false
+            }
+          })
         {
           report(
             .missingLock, "Instruction declaration has no lock; update can reconstruct it.",
@@ -57,7 +63,7 @@ extension InstructionOperations {
           for record in records
           where record.source == InstructionSources.own && seen.insert(record.path).inserted {
             let file = project.appendingPathComponent(record.path)
-            let current = try? Data(contentsOf: file)
+            let current = try FileSystem.readUnlessDenied(at: file)
             if current.map(Instructions.hash) != record.hash {
               unchanged = false
               report(
@@ -72,10 +78,18 @@ extension InstructionOperations {
           ? try? sources.restore(
             lock.instructions.sections, sources: lock.sources, cachedOnly: true
           ).map(\.section) : nil
+        // Targets already reported as unreadable; the Codex chain must not report them again.
+        var unreadableTargets = Set<String>()
         for (key, target) in lock.instructions.targets.sorted(by: { $0.key < $1.key }) {
           do {
             let file = try InstructionLocations.file(for: key, store: store)
-            let bytes = try InstructionTargets.read(file)
+            let bytes: Data?
+            do {
+              bytes = try InstructionTargets.read(file)
+            } catch {
+              unreadableTargets.insert(file.resolvingSymlinksInPath().path)
+              throw error
+            }
             if target.import != nil {
               switch try Instructions.detectDrift(
                 in: bytes ?? Data(), lockedBlockHash: target.blockHash)
@@ -117,8 +131,15 @@ extension InstructionOperations {
             report(.duplicateScope, "Section is installed at both scopes: \(id)")
           }
         }
-        let agents = Set(lock.instructions.targets.values.flatMap(\.agents))
-          .union(declaration.instructions?.agents ?? declaration.defaultAgents)
+        let selections = declaration.components.compactMap {
+          component -> InstructionsDeclaration? in
+          if case .instructions(let selection) = component { selection } else { nil }
+        }
+        let declaredAgents =
+          selections.isEmpty
+          ? declaration.defaultAgents
+          : selections.flatMap { $0.agents ?? declaration.defaultAgents }
+        let agents = Set(lock.instructions.targets.values.flatMap(\.agents)).union(declaredAgents)
         let claudeTargets = lock.instructions.targets.filter {
           $0.value.import == nil && $0.value.agents.contains(.claudeCode)
         }.keys.sorted()
@@ -171,7 +192,8 @@ extension InstructionOperations {
         }
         if agents.contains(.codex), scope == .user || otherSections != nil {
           diagnostics += InstructionDoctor.codex(
-            scope: scope, environment: environment, lock: lock, configuration: codexConfiguration)
+            scope: scope, environment: environment, lock: lock, configuration: codexConfiguration,
+            reportedUnreadable: unreadableTargets)
         }
         diagnostics += InstructionSourceDiagnostics.inspect(
           store: store, declaration: declaration, lock: lock)
@@ -219,9 +241,11 @@ private enum InstructionDoctor {
     return result
   }
 
+  /// `reportedUnreadable` holds resolved paths the caller already reported as unreadable.
   static func codex(
     scope: InstallScope, environment: RuntimeEnvironment, lock: ResolvedState,
-    configuration supplied: CodexInstructionConfiguration?
+    configuration supplied: CodexInstructionConfiguration?,
+    reportedUnreadable: Set<String> = []
   ) -> [InstructionDiagnostic] {
     var result: [InstructionDiagnostic] = []
     let user = InstructionLocations.file(for: .codex, scope: .user, environment: environment)!
@@ -229,7 +253,7 @@ private enum InstructionDoctor {
     var configuration = supplied ?? CodexInstructionConfiguration()
     do {
       if supplied == nil, FileManager.default.fileExists(atPath: config.path) {
-        configuration = try CodexInstructionConfiguration(Data(contentsOf: config))
+        configuration = try CodexInstructionConfiguration(FileSystem.read(at: config))
       }
     } catch {
       result.append(
@@ -244,14 +268,25 @@ private enum InstructionDoctor {
         value.agents.contains(.codex)
           && (try? InstructionLocations.file(for: key, store: store))
             == InstructionLocations.physical(file)
-      } || (try? Data(contentsOf: file)).map(Instructions.isGenerated) == true
+      } || content(file).map(Instructions.isGenerated) == true
     }
+    var unreadable = reportedUnreadable
     func content(_ file: URL) -> Data? {
       var isDirectory: ObjCBool = false
       guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory),
         !isDirectory.boolValue
       else { return nil }
-      return (try? Data(contentsOf: file)) ?? Data()
+      do {
+        return try FileSystem.readUnlessDenied(at: file) ?? Data()
+      } catch {
+        // The chain visits a file once per leaf and once for ownership; report it once.
+        if unreadable.insert(file.resolvingSymlinksInPath().path).inserted {
+          result.append(
+            InstructionDiagnostic(
+              kind: .invalidTarget, message: "Cannot read instructions: \(error)", path: file))
+        }
+        return Data()
+      }
     }
     func blank(_ data: Data) -> Bool {
       String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

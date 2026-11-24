@@ -54,6 +54,63 @@ package struct SourceCache {
     return SourceRevision(revision: revision, version: ref.version)
   }
 
+  /// Captures all advertised refs in an owned mirror. The caller uses a disposable cache.
+  func referenceCatalog(
+    _ source: SourceDeclaration, spending: (Int) throws -> Void = { _ in }
+  ) throws -> SourceCatalog {
+    let mirror = try fetch(source, id: source.identity(environment: store.environment))
+    let output = try git(
+      mirror, ["show-ref", "--head", "--dereference"], operation: .listTags,
+      source: source.location)
+    var references: [String: String] = [:]
+    var tags: [String: String] = [:]
+    for line in output.split(separator: "\n") {
+      try spending(1)
+      let fields = line.split(separator: " ", maxSplits: 1).map(String.init)
+      guard fields.count == 2 else { continue }
+      references[fields[1]] = fields[0]
+    }
+    for name in references.keys.sorted()
+    where name.hasPrefix("refs/tags/") && !name.hasSuffix("^{}") {
+      let commit = references[name + "^{}"] ?? references[name]
+      references[name] = commit
+      tags[String(name.dropFirst(10))] = commit
+    }
+    return SourceCatalog(tags: tags, references: references)
+  }
+
+  /// Resolves an expression against the already frozen mirror, without fetching new evidence.
+  func catalogRevision(_ expression: String, source: SourceDeclaration) throws -> String? {
+    try source.requirement?.validate()
+    return try withExistingMirror(sourceID: source.identity(environment: store.environment)) {
+      mirror, descriptor in
+      do {
+        return try git(
+          mirror,
+          [
+            "--no-optional-locks", "rev-parse", "--quiet", "--verify", "--end-of-options",
+            expression + "^{commit}",
+          ],
+          operation: .resolveRevision(revision: expression), source: source.location,
+          lock: descriptor)
+      } catch let error as GitError where error.exitCode == 1 && error.stderr.isEmpty {
+        return nil
+      }
+    } ?? nil
+  }
+
+  /// Acquires a known object in an owned cache, without enumerating or selecting mutable refs.
+  func acquireCommit(_ object: String, source: SourceDeclaration) throws -> String {
+    guard Self.isObjectID(object) else {
+      throw CoreError.invalidSource("expected an exact Git object")
+    }
+    if let commit = try catalogRevision(object, source: source) { return commit }
+    let mirror = try fetch(source, id: source.identity(environment: store.environment))
+    return try git(
+      mirror, ["rev-parse", "--verify", object + "^{commit}"],
+      operation: .resolveRevision(revision: object), source: source.location)
+  }
+
   /// Subscriptions follow branches even when installations select a tag or version range.
   func watchRevision(_ source: SourceDeclaration, revision: String? = nil) throws -> String {
     let id = try source.identity(environment: store.environment)
@@ -134,6 +191,7 @@ package struct SourceCache {
   }
 
   /// The marker precedes ref preparation or a state change that can release an existing pin.
+  /// An existing marker is synced again; only its creation is a checkpoint.
   func beginWatchReferenceUpdate() throws {
     guard let directory = try store.openDirectoryIfPresent(),
       try directory.info("cache") != nil,
@@ -141,22 +199,22 @@ package struct SourceCache {
     else { return }
     if try directory.info("watch-refs.pending") == nil {
       try directory.write("watch-refs.pending", data: Data())
+      try checkpoint("watch.references.pending")
     } else {
       guard try directory.read("watch-refs.pending").isEmpty else {
         throw CoreError.invalidState("invalid watch ref cleanup marker")
       }
       try directory.syncFile("watch-refs.pending")
     }
-    try checkpoint("watch.references.pending")
   }
 
   /// Run only after journal recovery or successful commit, while holding the scope lock.
   /// The marker survives interruptions until every deletion and its parent are durable.
   func recoverWatchReferences() throws -> Bool {
     guard let directory = try store.openDirectoryIfPresent() else { return false }
-    guard try directory.info("transaction.json") == nil,
-      try directory.info("transaction.new") == nil
-    else { throw CoreError.invalidState("transaction recovery must precede watch ref cleanup") }
+    guard try !TransactionJournal.isPresent(in: directory) else {
+      throw CoreError.invalidState("transaction recovery must precede watch ref cleanup")
+    }
     if try directory.info("watch-refs.pending") != nil,
       try !directory.read("watch-refs.pending").isEmpty
     {
@@ -165,31 +223,15 @@ package struct SourceCache {
     try recoverMirrorLocks(in: directory)
     guard try directory.info("watch-refs.pending") != nil else { return false }
     let watch = try store.readWatch()
-    let resolved = try store.readResolved()
-    var sourceLocations: [String: String] = [:]
-    for id in watch.sources.keys {
-      sourceLocations[key(id) + ".git"] =
-        id.hasPrefix("local:") ? String(id.dropFirst("local:".count)) : id
-    }
-    for (id, source) in resolved.sources where source.kind != .wellKnown {
-      sourceLocations[key(id) + ".git"] = try declaration(sourceID: id, source: source).location
-    }
-    for source in try store.readDeclaration().sources.values where source.kind != .wellKnown {
-      let id = try source.identity(environment: store.environment)
-      sourceLocations[key(id) + ".git"] = source.location
-    }
+    var references = try store.retentionReferences()
+    try references.include(watch: watch)
+    let sourceLocations = Dictionary(
+      uniqueKeysWithValues: references.sourceLocations.map {
+        (key($0.key) + ".git", $0.value)
+      })
     var retained: [String: Set<String>] = [:]
-    func retain(_ source: String, _ revision: String?) {
-      if let revision { retained[key(source) + ".git", default: []].insert(revision) }
-    }
-    for (source, state) in watch.sources {
-      if case .revision(let revision) = state.seen { retain(source, revision) }
-    }
-    for skill in resolved.skills.values { retain(skill.source, skill.revision) }
-    for section in resolved.instructions.sections
-      + resolved.instructions.chatgpt.values.flatMap(\.sections)
-    {
-      retain(section.source, section.revision)
+    for pin in references.git {
+      retained[key(pin.source) + ".git", default: []].insert(pin.revision)
     }
     // Even a manually supplied generation must reach storage before its obsolete pins go away.
     for file in ["agents.watch", "agents.resolved"] where try directory.info(file) != nil {
@@ -200,7 +242,8 @@ package struct SourceCache {
       let cache = try directory.child("cache")
       if try cache.info("mirrors") != nil {
         let mirrors = try cache.child("mirrors")
-        for name in try mirrors.names() where name.hasSuffix(".git") {
+        // Checkpoints are numbered by mirror and by deletion within this reconciliation.
+        for (ordinal, name) in try mirrors.names().filter({ $0.hasSuffix(".git") }).enumerated() {
           try withMirrorLock(at: mirrors.url.appendingPathComponent(name)) { descriptor in
             let mirror = try mirrors.child(name)
             let source = try sourceLocations[name] ?? mirrorSource(mirror.url, lock: descriptor)
@@ -211,6 +254,7 @@ package struct SourceCache {
               mirror.url,
               ["for-each-ref", "--format=%(refname) %(objectname)", "refs/agents-watch/"],
               operation: .listReferences, source: source, lock: descriptor)
+            var deleted = 0
             for line in references.split(separator: "\n") {
               let parts = line.split(separator: " ").map(String.init)
               guard parts.count == 2, parts[0] == "refs/agents-watch/" + parts[1],
@@ -223,7 +267,8 @@ package struct SourceCache {
                 mirror.url, ["update-ref", "--no-deref", "-d", parts[0], parts[1]],
                 operation: .deleteReference, source: source, lock: descriptor
               )
-              try checkpoint("watch.references.deleted")
+              try checkpoint("watch.references.\(ordinal).\(deleted).deleted")
+              deleted += 1
             }
             // A previous attempt may have unlinked the final loose ref or rewritten packed-refs.
             // Flush their parents even when enumeration now finds no obsolete refs.
@@ -231,7 +276,7 @@ package struct SourceCache {
             if try refs.info("agents-watch") != nil { try refs.child("agents-watch").sync() }
             try refs.sync()
             try mirror.sync()
-            try checkpoint("watch.references.synced")
+            try checkpoint("watch.references.\(ordinal).synced")
           }
         }
       }
@@ -248,15 +293,17 @@ package struct SourceCache {
     let cache = try directory.child("cache")
     guard try cache.info("mirrors") != nil else { return }
     let mirrors = try cache.child("mirrors")
-    for name in try mirrors.names() where name.hasSuffix(".git") {
+    for (ordinal, name) in try mirrors.names().filter({ $0.hasSuffix(".git") }).enumerated() {
       try withMirrorLock(at: mirrors.url.appendingPathComponent(name)) { _ in
-        try recoverGitLocks(in: mirrors.child(name), scope: directory)
+        try recoverGitLocks(in: mirrors.child(name), ordinal: ordinal, scope: directory)
       }
     }
   }
 
-  private func recoverGitLocks(in mirror: DirectoryHandle, scope directory: DirectoryHandle) throws
-  {
+  /// Checkpoints are numbered by the mirror's ordinal and the lock's position in traversal.
+  private func recoverGitLocks(
+    in mirror: DirectoryHandle, ordinal: Int, scope directory: DirectoryHandle
+  ) throws {
     var locks: [(DirectoryHandle, String)] = []
     func inspect(_ parent: DirectoryHandle, isMirrorRoot: Bool = false) throws {
       for name in try parent.names() {
@@ -275,8 +322,10 @@ package struct SourceCache {
     try inspect(mirror, isMirrorRoot: true)
     if !locks.isEmpty { try beginWatchReferenceUpdate() }
     guard try directory.info("watch-refs.pending") != nil else { return }
-    for (parent, name) in locks {
-      try parent.remove(name) { try checkpoint("watch.git-lock.\($0)") }
+    for (index, (parent, name)) in locks.enumerated() {
+      try parent.remove(name) {
+        try checkpoint("watch.git-lock.\(ordinal).\(index).\($0.step.rawValue)")
+      }
     }
     // A killed cleanup may have unlinked the last lock before syncing its parent.
     // The pending marker requires these barriers even if no lock remains visible.
@@ -305,11 +354,13 @@ package struct SourceCache {
       if FileManager.default.fileExists(atPath: destination.path) { return destination }
       let mirror = try pinnedMirror(sourceID: sourceID, source: source, revision: revision)
       let transaction = FileTransaction(store: store, checkpoint: checkpoint)
-      try transaction.prepare(destination) { work in
-        try extract(
-          revision: revision, mirror: mirror,
-          source: declaration(sourceID: sourceID, source: source).location, root: work)
-      }
+      try transaction.replace(
+        destination,
+        with: .prepared { work in
+          try extract(
+            revision: revision, mirror: mirror,
+            source: declaration(sourceID: sourceID, source: source).location, root: work)
+        })
       try transaction.commit()
       return destination
     }
@@ -325,7 +376,7 @@ package struct SourceCache {
     if !cacheSource {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(
         "agents-discovery-" + UUID().uuidString)
-      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      try FileSystem.createDirectory(at: root)
       defer { try? FileManager.default.removeItem(at: root) }
       if case .revision(let object) = source.requirement, Self.isObjectID(object),
         let cached = try withExistingMirror(
@@ -356,6 +407,27 @@ package struct SourceCache {
       let cache = SourceCache(store: StateStore(scope: .project, environment: environment))
       return try cache.withResolvedSnapshot(source, body)
     }
+    if case .revision(let object) = source.requirement, Self.isObjectID(object) {
+      let id = try source.identity(environment: store.environment)
+      var mirror = mirrorURL(sourceID: id)
+      // An immutable object may be an annotated tag. Peel it without selecting mutable refs.
+      if (try? git(
+        mirror, ["cat-file", "-e", object + "^{commit}"],
+        operation: .resolveRevision(revision: object), source: source.location)) == nil
+      {
+        mirror = try fetch(source, id: id)
+      }
+      let revision = try git(
+        mirror, ["rev-parse", "--verify", object + "^{commit}"],
+        operation: .resolveRevision(revision: object), source: source.location)
+      let locked = LockedSource(
+        kind: source.kind, url: source.kind == .git ? source.gitURL : nil,
+        requirement: .revision(object), path: source.path)
+      return try withSnapshot(sourceID: id, source: locked, revision: revision) {
+        try body(SourceRevision(revision: revision), $0)
+      }
+    }
+
     let pin = try resolve(source)
     let locked = LockedSource(
       kind: source.kind, url: source.kind == .git ? source.gitURL : nil,
@@ -373,7 +445,7 @@ package struct SourceCache {
     let mirror = try pinnedMirror(sourceID: sourceID, source: source, revision: revision)
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "agents-snapshot-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: root)
     defer { try? FileManager.default.removeItem(at: root) }
     return try body(
       extract(
@@ -411,7 +483,7 @@ package struct SourceCache {
   ) throws -> URL {
     let archive = root.appendingPathComponent("tree.tar")
     let tree = root.appendingPathComponent("tree")
-    try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: tree)
     let arguments = [
       "--no-optional-locks", "archive", "--format=tar", "--output=" + archive.path, revision,
     ]
@@ -435,12 +507,12 @@ package struct SourceCache {
     }
     let url = try artifactURL(digest: digest)
     if FileManager.default.fileExists(atPath: url.path) {
-      guard try Data(contentsOf: url) == data else {
+      guard try FileSystem.read(at: url) == data else {
         throw CoreError.invalidState("cached artifact digest mismatch")
       }
     } else {
       let transaction = FileTransaction(store: store, checkpoint: checkpoint)
-      try transaction.replace(url, content: nil, data: data, expectedHash: digest)
+      try transaction.replace(url, with: .data(data), expectedHash: digest)
       try transaction.commit()
     }
     return url
@@ -459,55 +531,53 @@ package struct SourceCache {
       }
     } else {
       let transaction = FileTransaction(store: store, checkpoint: checkpoint)
-      try transaction.replace(destination, content: directory, expectedHash: hash)
+      try transaction.replace(destination, with: .copy(directory), expectedHash: hash)
       try transaction.commit()
     }
     return destination
   }
 
-  /// Retains pins and any cache tree containing a live edit source.
-  /// The caller holds the scope lock, including during failure cleanup.
-  package func prune(
-    referencedBy lock: ResolvedState, watch: WatchState? = nil,
-    transaction: FileTransaction? = nil
-  ) throws {
-    let watch = try watch ?? store.readWatch()
+  /// Makes exact Git objects durable before the caller's journal can reference the new ledger.
+  /// A failed preparation leaves a cleanup marker; reconciliation keeps the committed closure.
+  package func retain(references: RetentionReferences) throws {
+    for (ordinal, pin) in references.git.sorted(by: {
+      ($0.source, $0.revision) < ($1.source, $1.revision)
+    }).enumerated() {
+      guard let location = references.sourceLocations[pin.source], Self.isObjectID(pin.revision)
+      else {
+        throw CoreError.invalidState("missing exact retention coordinates")
+      }
+      let kind: SourceKind = pin.source.hasPrefix("local:") ? .local : .git
+      let source = LockedSource(
+        kind: kind, url: kind == .git ? location : nil,
+        requirement: .revision(pin.revision))
+      _ = try pinnedMirror(sourceID: pin.source, source: source, revision: pin.revision)
+      let retained = SourceCache(
+        store: store,
+        checkpoint: { point in
+          try checkpoint("retention.\(ordinal)." + point)
+        })
+      try retained.retainWatchRevision(
+        sourceID: pin.source, source: location, revision: pin.revision)
+    }
+  }
+
+  /// The caller stages pruning with its state generation and commits only after validation.
+  package func prune(references: RetentionReferences, transaction: FileTransaction) throws {
     guard let scope = try store.openDirectoryIfPresent(), try scope.info("cache") != nil else {
       return
     }
+    guard try !TransactionJournal.isPresent(in: scope) else {
+      throw CoreError.invalidState("transaction recovery must precede pruning")
+    }
     let cache = try scope.child("cache")
-    let transactionToUse = transaction ?? FileTransaction(store: store)
-    var paths = Set<String>()
-    var digests = Set<String>()
-    for state in watch.sources.values {
-      if case .artifacts(let artifacts) = state.seen {
-        digests.formUnion(artifacts.values.map { String($0.dropFirst(7)) })
-      }
-    }
-    var edits: [URL] = []
-    func retain(source: String, revision: String?, artifact: LockedArtifact?) {
-      if let revision {
-        paths.insert(materializedURL(sourceID: source, revision: revision).standardizedFileURL.path)
-      }
-      if let artifact {
-        digests.insert(String(artifact.digest.dropFirst(7)))
-        for file in artifact.files ?? [] { digests.insert(String(file.digest.dropFirst(7))) }
-      }
-    }
-    for skill in lock.skills.values {
-      retain(source: skill.source, revision: skill.revision, artifact: skill.artifact)
-      if skill.installs.values.contains(.edit), let source = lock.sources[skill.source] {
-        let local = try declaration(sourceID: skill.source, source: source).localURL(
-          environment: store.environment)
-        edits.append(
-          try PathSafety.resolvedChild(base: local, subpath: skill.path ?? ".")
-            .resolvingSymlinksInPath())
-      }
-    }
-    for section in lock.instructions.sections + lock.instructions.chatgpt.values.flatMap(\.sections)
-    {
-      retain(source: section.source, revision: section.revision, artifact: section.artifact)
-    }
+    let transactionToUse = transaction
+    let paths = Set(
+      references.git.map {
+        materializedURL(sourceID: $0.source, revision: $0.revision).standardizedFileURL.path
+      })
+    let digests = Set(references.artifacts.map { String($0.dropFirst(7)) })
+    let edits = references.live
     func edited(_ url: URL) -> Bool {
       edits.contains { PathSafety.isContained($0, in: url) }
     }
@@ -521,10 +591,13 @@ package struct SourceCache {
           let tree = try source.child(pin)
           if !paths.contains(tree.url.path) && !edited(tree.url) { unused.append(pin) }
         }
-        if unused.count == pins.count {
-          try transactionToUse.remove(name, from: materialized)
+        let retainsDescendant = paths.contains {
+          PathSafety.isContained(URL(fileURLWithPath: $0), in: source.url)
+        }
+        if unused.count == pins.count && !retainsDescendant {
+          try transactionToUse.delete(materialized.url.appendingPathComponent(name))
         } else {
-          for pin in unused { try transactionToUse.remove(pin, from: source) }
+          for pin in unused { try transactionToUse.delete(source.url.appendingPathComponent(pin)) }
         }
       }
     }
@@ -538,11 +611,10 @@ package struct SourceCache {
           throw CoreError.unsafePath("unexpected artifact cache entry")
         }
         if !digests.contains(name) && !edited(url) {
-          try transactionToUse.remove(name, from: directory)
+          try transactionToUse.delete(url)
         }
       }
     }
-    if transaction == nil { try transactionToUse.commit() }
   }
 
   package func validatePath(_ url: URL, directory: Bool = true) throws {
@@ -587,8 +659,7 @@ package struct SourceCache {
     let url =
       source.kind == .local ? source.localURL(environment: store.environment).path : source.gitURL
     let mirror = mirrorURL(sourceID: id)
-    try FileManager.default.createDirectory(
-      at: mirror.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileSystem.createDirectory(at: mirror.deletingLastPathComponent())
     if FileManager.default.fileExists(atPath: mirror.path) {
       _ = try git(
         mirror,
@@ -601,7 +672,9 @@ package struct SourceCache {
         Self.gitOptions + ["clone", "--mirror", "--no-local", "--", url, staging.path],
         operation: .clone, source: source.location,
         replacingPaths: [staging, store.cacheDirectory], inheritingLock: lock)
-      try FileManager.default.moveItem(at: staging, to: mirror)
+      try FileSystem.withAccessErrors(at: mirror) {
+        try FileManager.default.moveItem(at: staging, to: mirror)
+      }
     }
     // A remote can change its default branch after the initial clone.
     let head = try ProcessRunner.git(
@@ -682,7 +755,8 @@ package struct SourceCache {
   }
 
   private func mirrorSource(_ mirror: URL, lock: Int32) throws -> String {
-    // Orphaned mirrors outlive their declarations; the clone's origin retains the source location.
+    // Recovery never reads the declaration. A mirror that neither watch state nor the lock
+    // names, including an orphan, is identified by its clone's origin.
     let source: String
     do {
       source = try git(

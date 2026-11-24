@@ -1,9 +1,14 @@
-import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import AgentsSkills
-import Darwin
+import AgentsUpdates
+import CPlatform
 import Foundation
+import StateTestSupport
+import Synchronization
 import Testing
+
+@testable import AgentsCore
 
 @Suite("Read-only skill inspection")
 struct ReadOnlyInspectionTests {
@@ -26,13 +31,24 @@ struct ReadOnlyInspectionTests {
       let skills = try store.readResolved().skills
       if reads == 1 {
         try #require(skills.isEmpty)
-        _ = try fixture.add(mode: .copy)
+        let options = AddOptions(
+          source: fixture.repo.path, alias: "fixture", agents: [.codex], mode: .copy, all: true,
+          environment: fixture.environment)
+        let finished = DispatchSemaphore(value: 0)
+        let writer = Mutex<Result<Void, any Error>?>(nil)
+        Thread.detachNewThread {
+          let outcome = Result { _ = try SkillOperations.add(options) }
+          writer.withLock { $0 = outcome }
+          finished.signal()
+        }
+        finished.wait()
+        try #require(writer.withLock { $0 }).get()
         if bodyThrows { throw CoreError.invalidState("inconsistent inspection") }
       } else {
         let descriptor = open(lock.path, O_RDONLY | O_CLOEXEC)
         try #require(descriptor >= 0)
         defer { close(descriptor) }
-        let acquired = flock(descriptor, LOCK_EX | LOCK_NB)
+        let acquired = platform_flock(descriptor, LOCK_EX | LOCK_NB)
         let lockError = errno
         #expect(acquired == -1)
         #expect(lockError == EWOULDBLOCK)
@@ -69,6 +85,33 @@ struct ReadOnlyInspectionTests {
     try inspectPendingTransaction(scope: .project, initialize: true)
   }
 
+  @Test func instructionDoctorsDiagnosePendingSharedRecoveryWithoutWriting() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let environment = RuntimeEnvironment(
+      projectDirectory: root, homeDirectory: root.appendingPathComponent("home"),
+      environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path])
+    for directory in [environment.homeDirectory, root.appendingPathComponent("old-data")] {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+    try Data("ordinary before".utf8).write(
+      to: root.appendingPathComponent("old-data/AGENTS.md"))
+    let child = try interruptedTransaction(
+      root: root, scope: .project, command: "shared-install", checkpoint: "shared.ready")
+    defer { terminateProcess(child) }
+    try ProcessWait.marker(root.appendingPathComponent("ready"), child: child, root: root)
+    terminateProcess(child)
+    let before = try snapshot(root)
+    let pending = StateStore(scope: .project, environment: environment)
+    for scope in [InstallScope.project, .user] {
+      let report = try InstructionOperations.doctor(scope: scope, environment: environment)
+      #expect(report.diagnostics.map(\.kind) == [.pendingRecovery])
+      #expect(report.diagnostics.first?.path == pending.directory)
+      #expect(report.diagnostics.first?.message == TransactionRecoveryDiagnostic.pendingMessage)
+    }
+    #expect(try snapshot(root) == before)
+  }
+
   private func inspectPendingTransaction(
     scope: InstallScope, initialize: Bool
   ) throws {
@@ -78,7 +121,7 @@ struct ReadOnlyInspectionTests {
       projectDirectory: root, homeDirectory: root.appendingPathComponent("home"),
       environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path])
     let store = StateStore(scope: scope, environment: environment)
-    try store.save(declaration: Declaration(), resolved: ResolvedState())
+    try store.save(declaration: Declaration(), ledger: ResolvedLedger())
     let target = AgentRegistry.installSkillsDirectory(
       for: .codex, scope: scope, environment: environment
     ).appendingPathComponent("target")
@@ -96,20 +139,10 @@ struct ReadOnlyInspectionTests {
       at: instructions.deletingLastPathComponent(), withIntermediateDirectories: true)
     try Data("Original instructions\n".utf8).write(to: instructions)
     let child = try interruptedTransaction(root: root, scope: scope)
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     let marker = root.appendingPathComponent("ready")
-    let deadline = Date().addingTimeInterval(10)
-    while !FileManager.default.fileExists(atPath: marker.path), child.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    try ProcessWait.marker(marker, child: child, root: root)
+    terminateProcess(child)
     #expect(!FileManager.default.fileExists(atPath: instructions.path))
     #expect(try Data(contentsOf: created) == Data("New instructions\n".utf8))
     #expect(try Data(contentsOf: target.appendingPathComponent("SKILL.md")) == Data("new".utf8))
@@ -150,14 +183,11 @@ struct ReadOnlyInspectionTests {
     }
     let store = fixture.store(scope)
     if existingDirectory {
-      try FileManager.default.createDirectory(
-        at: store.directory, withIntermediateDirectories: true)
-      try StateStore.encode(
+      try store.writeDeclaration(
         Declaration(sources: [
           "relative": SourceDeclaration(kind: .local, location: "../source"),
           "remote": SourceDeclaration(kind: .git, location: "file://localhost" + fixture.repo.path),
-        ])
-      ).write(to: store.declarationURL)
+        ]))
     }
     let before = try snapshot(fixture.root)
     let sources =
@@ -217,7 +247,7 @@ struct ReadOnlyInspectionTests {
     try fixture.store().save(
       declaration: Declaration(sources: [
         source: SourceDeclaration(kind: .git, location: "file://localhost" + fixture.repo.path)
-      ]), resolved: ResolvedState())
+      ]), ledger: ResolvedLedger())
     _ = try SkillOperations.add(
       AddOptions(source: source, agents: [.codex], all: true, environment: fixture.environment))
     // A cached immutable pin remains inspectable when upstream no longer provides it.
@@ -251,7 +281,7 @@ struct ReadOnlyInspectionTests {
     try fixture.store().save(
       declaration: Declaration(
         agents: [.codex], sources: ["fixture": source],
-        skills: ["fixture": SkillDeclaration(select: .all)]), resolved: ResolvedState())
+        skills: ["fixture": SkillDeclaration(select: .all)]), ledger: ResolvedLedger())
     _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
     try fixture.skill("demo", body: "Upstream")
     try fixture.commit()
@@ -275,7 +305,7 @@ struct ReadOnlyInspectionTests {
     if existingDirectory {
       try FileManager.default.createDirectory(
         at: store.directory, withIntermediateDirectories: true)
-      try StateStore.encode(Declaration()).write(to: store.declarationURL)
+      try manifestText().write(to: store.declarationURL)
     }
     let before = try snapshot(fixture.root)
     #expect(
@@ -305,9 +335,8 @@ struct ReadOnlyInspectionTests {
         agents: [.codex], sources: ["fixture": source],
         skills: ["fixture": SkillDeclaration(select: .all)],
         instructions: InstructionsDeclaration(sections: ["fixture:rules"])),
-      resolved: ResolvedState())
-    _ = try SkillOperations.updateInstalled(environment: fixture.environment, apply: true)
-    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+      ledger: ResolvedLedger())
+    _ = try UpdateOperations.withPreparedUpdate(environment: fixture.environment) { try $0.apply() }
     let locks = fixture.store().cacheDirectory.appendingPathComponent("locks")
     let files = try FileManager.default.contentsOfDirectory(
       at: locks, includingPropertiesForKeys: nil)
@@ -345,7 +374,7 @@ struct ReadOnlyInspectionTests {
       report.diagnostics.first?.message.contains("next command that changes this scope") == true)
     #expect(try snapshot(root) == before)
 
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
+    let pending = CoreError.recoveryPending(TransactionRecoveryDiagnostic.pendingMessage)
     #expect(throws: pending) {
       try SkillOperations.listManaged(scope: scope, environment: environment)
     }
@@ -415,8 +444,11 @@ struct ReadOnlyInspectionTests {
     return result
   }
 
-  private func interruptedTransaction(root: URL, scope: InstallScope) throws -> Process {
-    var directory = Bundle(for: InspectionTestBundle.self).bundleURL.deletingLastPathComponent()
+  private func interruptedTransaction(
+    root: URL, scope: InstallScope, command: String = "inspection-transaction",
+    checkpoint: String = TransactionCheckpoint.progress(4, .applied).name
+  ) throws -> Process {
+    var directory = Bundle(for: InspectionTestBundle.self).bundleURL
     while !FileManager.default.isExecutableFile(
       atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
     {
@@ -424,7 +456,10 @@ struct ReadOnlyInspectionTests {
     }
     let process = Process()
     process.executableURL = directory.appendingPathComponent("StateTestProcess")
-    process.arguments = [root.path, "inspection-transaction", "replace.4", scope.rawValue]
+    process.arguments = [
+      root.path, command, checkpoint,
+      "--scope", scope.rawValue,
+    ]
     try process.run()
     return process
   }

@@ -1,0 +1,38 @@
+{
+  "upstream": "https://github.com/tree-sitter-grammars/tree-sitter-yaml",
+  "revision": "7708026449bed86239b1cd5bce6e3c34dbca6415",
+  "files": {
+    "parser.c": {
+      "source": "src/parser.c",
+      "sha256": "8a3baaab33fb63cf9a89f97ec61dbb3ab0d4ef69be9f0f229092c79d129617c9"
+    },
+    "scanner.c": {
+      "source": "src/scanner.c",
+      "sha256": "9cd962f7c7541247cfc7ebf661abaa5d9b642d27de16575c87093496557aae59"
+    },
+    "schema.core.c": {
+      "source": "src/schema.core.c",
+      "sha256": "91e56c3f3ae6fad1803b739ce4eb4568a782a9aec710f733db2f3e38d407a4d5"
+    },
+    "tree_sitter/alloc.h": {
+      "source": "src/tree_sitter/alloc.h",
+      "sha256": "b29c1c9fb7cc82f58c84b376df1297d6e2737a1d655fd356db0859e3c29c2fea"
+    },
+    "tree_sitter/array.h": {
+      "source": "src/tree_sitter/array.h",
+      "sha256": "5bdf6ed1a78e3409fd443e085ca967a64c188a5d082aaf7f819bccd53a471c94"
+    },
+    "tree_sitter/parser.h": {
+      "source": "src/tree_sitter/parser.h",
+      "sha256": "180b893c8734778fd32f372dfbc27bd6ad1cd2221f26150b31256ff6716320d2"
+    },
+    "include/yaml.h": {
+      "source": "bindings/swift/TreeSitterYAML/yaml.h",
+      "sha256": "b03b74d6fca5ff3e9339610153ea1772e9f2e1d6189acb918a249de0a3fb6107"
+    },
+    "LICENSE": {
+      "source": "LICENSE",
+      "sha256": "2d181298822a124f6d106118dcc69c8d4d26ac668559be29682c452e712b0947"
+    }
+  }
+}

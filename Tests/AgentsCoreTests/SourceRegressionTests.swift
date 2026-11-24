@@ -1,3 +1,4 @@
+import CPlatform
 import Foundation
 import Testing
 
@@ -5,6 +6,98 @@ import Testing
 
 @Suite("Source regressions")
 struct SourceRegressionTests {
+  @Test func localSnapshotsPreserveAliasedTreesMetadataAndMemoizedIdentity() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let live = root.appendingPathComponent("source")
+    let nested = live.appendingPathComponent("nested")
+    try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+    let file = nested.appendingPathComponent("executable")
+    let bytes = Data(repeating: 0xa5, count: 200_000)
+    try bytes.write(to: file)
+    let link = live.appendingPathComponent("link")
+    try FileManager.default.createSymbolicLink(
+      atPath: link.path, withDestinationPath: "nested/executable")
+    try FileManager.default.createSymbolicLink(
+      atPath: live.appendingPathComponent("dangling").path, withDestinationPath: "nested/missing")
+    for (url, mode): (URL, mode_t) in [
+      (live, 0o750), (nested, 0o751), (file, 0o751), (link, 0o755),
+    ] {
+      try setFixtureMetadata(url, mode: mode, value: Data(url.lastPathComponent.utf8))
+    }
+    let alias = root.appendingPathComponent("alias")
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: live)
+    let store = StateStore(
+      scope: .project,
+      environment: RuntimeEnvironment(projectDirectory: root, homeDirectory: root, environment: [:])
+    )
+    let source = SourceDeclaration(kind: .local, location: alias.path)
+    let session = try SourceResolutionSession(store: store)
+    defer { try? session.close() }
+    let snapshot = try session.localSnapshot(source)
+    #expect(snapshot.liveRoot == alias)
+    #expect(try Data(contentsOf: snapshot.resource("link")) == bytes)
+    #expect(try FileHash.folderHash(snapshot.root) == FileHash.folderHash(live))
+    #expect(try FileHash.executableFlags(snapshot.root) == FileHash.executableFlags(live))
+    for path in [".", "nested", "nested/executable", "link"] {
+      #expect(
+        try fixtureMetadata(snapshot.root.appendingPathComponent(path))
+          == fixtureMetadata(live.appendingPathComponent(path)))
+    }
+    #expect(
+      try FileManager.default.destinationOfSymbolicLink(
+        atPath: snapshot.root.appendingPathComponent("link").path) == "nested/executable")
+    #expect(
+      try FileManager.default.destinationOfSymbolicLink(
+        atPath: snapshot.root.appendingPathComponent("dangling").path) == "nested/missing")
+    let repeated = try SourceResolutionSession.withTemporaryRead(store: store) {
+      try $0.localSnapshot(source).snapshot
+    }
+    #expect(repeated == snapshot.snapshot)
+    try Data("changed".utf8).write(to: file)
+    let memoized = try session.localSnapshot(source)
+    #expect(memoized.snapshot == snapshot.snapshot && memoized.root == snapshot.root)
+    #expect(try Data(contentsOf: memoized.resource("link")) == bytes)
+    let changed = try SourceResolutionSession.withTemporaryRead(store: store) {
+      try $0.localSnapshot(source).snapshot
+    }
+    #expect(changed != snapshot.snapshot)
+    let workspace = snapshot.root.deletingLastPathComponent()
+    try session.close()
+    #expect(!FileManager.default.fileExists(atPath: workspace.path))
+  }
+
+  @Test(arguments: ["unsupported", "escaping-link"])
+  func localSnapshotRefusesUnsafeEntriesAndCleansPartialCopies(_ kind: String) throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let store = StateStore(
+      scope: .project,
+      environment: RuntimeEnvironment(projectDirectory: root, homeDirectory: root, environment: [:])
+    )
+    let live = root.appendingPathComponent("source")
+    try FileManager.default.createDirectory(at: live, withIntermediateDirectories: true)
+    let session = try SourceResolutionSession(store: store)
+    defer { try? session.close() }
+    let first = try session.localSnapshot(SourceDeclaration(kind: .local, location: live.path))
+    let invalid = root.appendingPathComponent("invalid")
+    try FileManager.default.createDirectory(at: invalid, withIntermediateDirectories: true)
+    try Data("copied first".utf8).write(to: invalid.appendingPathComponent("a"))
+    if kind == "unsupported" {
+      try #require(mkfifo(invalid.appendingPathComponent("z").path, 0o600) == 0)
+    } else {
+      try FileManager.default.createSymbolicLink(
+        atPath: invalid.appendingPathComponent("z").path, withDestinationPath: "../source")
+    }
+    #expect(throws: CoreError.self) {
+      try session.localSnapshot(SourceDeclaration(kind: .local, location: invalid.path))
+    }
+    let workspace = first.root.deletingLastPathComponent()
+    try session.close()
+    #expect(!FileManager.default.fileExists(atPath: workspace.path))
+    #expect(FileManager.default.fileExists(atPath: live.path))
+  }
+
   @Test func parsesLocalPathsAndGitLabSubgroupsAndTrees() throws {
     let cwd = URL(fileURLWithPath: "/workspace/project")
     for (input, expected) in [

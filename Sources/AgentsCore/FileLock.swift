@@ -1,12 +1,26 @@
+import CPlatform
 import Foundation
-
-#if canImport(Darwin)
-  import Darwin
-#else
-  import Glibc
-#endif
+import Synchronization
 
 package enum FileLock {
+  /// Contended acquisitions are numbered within the process, so every wait has its own
+  /// checkpoint name. The ordinal only names checkpoints; it never changes locking.
+  private static let contentions = Atomic<Int>(0)
+
+  static func ancestryCheckpoint(_ step: DirectoryHandle.AncestryStep) -> String {
+    "lock.ancestry." + step.name
+  }
+
+  private static func contentionCheckpoint(_ ordinal: Int) -> String {
+    "lock.\(ordinal).contended"
+  }
+
+  package static func isContentionCheckpoint(_ name: String) -> Bool {
+    let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+    return parts.count >= 3 && parts[parts.count - 3] == "lock" && parts.last == "contended"
+      && Int(parts[parts.count - 2]) != nil
+  }
+
   package static func withLock<T>(
     at url: URL, checkpoint: (String) throws -> Void = { _ in }, _ body: () throws -> T
   ) throws -> T {
@@ -18,13 +32,31 @@ package enum FileLock {
   package static func withDescriptor<T>(
     at url: URL, checkpoint: (String) throws -> Void = { _ in }, _ body: (Int32) throws -> T
   ) throws -> T {
-    let parent = try DirectoryHandle(
-      at: url.deletingLastPathComponent(), create: true, checkpoint: checkpoint)
+    let parent = try DirectoryHandle(at: url.deletingLastPathComponent(), create: true) {
+      try checkpoint(ancestryCheckpoint($0))
+    }
+    return try withDescriptor(in: parent, name: url.lastPathComponent, checkpoint: checkpoint, body)
+  }
+
+  /// The caller pins and authorizes the existing parent; no absolute ancestry is created.
+  static func withDescriptor<T>(
+    in parent: DirectoryHandle, name: String, checkpoint: (String) throws -> Void = { _ in },
+    _ body: (Int32) throws -> T
+  ) throws -> T {
+    let url = parent.url.appendingPathComponent(name)
     let descriptor = openat(
-      parent.descriptor, url.lastPathComponent, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
+      parent.descriptor, name, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
       S_IRUSR | S_IWUSR)
     guard descriptor >= 0 else {
-      throw CoreError.invalidState("cannot open writer lock: \(url.path)")
+      throw FileSystem.posixError(
+        errno, at: url, otherwise: .invalidState("cannot open writer lock: \(url.path)"))
+    }
+    do {
+      // O_CREAT can return a writable fd even when the inherited ACL prevents reopening it.
+      try FileSystem.requireAccess(R_OK | W_OK, at: url, parent: parent.descriptor)
+    } catch {
+      close(descriptor)
+      throw error
     }
     return try withDescriptor(descriptor, at: url, checkpoint: checkpoint, body)
   }
@@ -39,9 +71,82 @@ package enum FileLock {
       parent.descriptor, url.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
     if descriptor < 0, errno == ENOENT { return nil }
     guard descriptor >= 0 else {
-      throw CoreError.invalidState("cannot open existing lock: \(url.path)")
+      throw FileSystem.posixError(
+        errno, at: url, otherwise: .invalidState("cannot open existing lock: \(url.path)"))
     }
     return try withDescriptor(descriptor, at: url, checkpoint: { _ in }, body)
+  }
+
+  /// Owns an acquired file description or an absent lock observed through this exact parent.
+  final class CoordinationDescriptor {
+    let descriptor: Int32
+    private let parent: DirectoryHandle
+    private let name: String
+    private var isOpen: Bool
+
+    fileprivate init(_ descriptor: Int32, parent: DirectoryHandle, name: String) {
+      self.descriptor = descriptor
+      self.parent = parent
+      self.name = name
+      isOpen = descriptor >= 0
+    }
+
+    deinit { release() }
+
+    func finish() throws {
+      if descriptor >= 0 {
+        release()
+      } else if try parent.info(name) != nil {
+        throw CoordinationReadmission.required
+      }
+    }
+
+    private func release() {
+      guard isOpen else { return }
+      isOpen = false
+      close(descriptor)
+    }
+  }
+
+  static func acquireCoordinationDescriptor(
+    at url: URL, writable: Bool, checkpoint: (String) throws -> Void
+  ) throws -> CoordinationDescriptor {
+    let parent = try DirectoryHandle(at: url.deletingLastPathComponent())
+    let name = url.lastPathComponent
+    let descriptor = openat(
+      parent.descriptor, name, (writable ? O_RDWR : O_RDONLY) | O_NOFOLLOW | O_CLOEXEC)
+    if descriptor < 0, !writable, errno == ENOENT {
+      return CoordinationDescriptor(-1, parent: parent, name: name)
+    }
+    guard descriptor >= 0 else {
+      if let exhaustion = OpenFileLimitError(errno, at: url) { throw exhaustion }
+      throw CoreError.invalidState("cannot open shared coordination lock")
+    }
+    let acquired = CoordinationDescriptor(descriptor, parent: parent, name: name)
+    let evidence = try FileAccessEvidence.requirePrivate(descriptor: descriptor)
+    guard evidence.identity.kind == S_IFREG else {
+      throw CoreError.invalidState("shared coordination lock is not a regular file")
+    }
+    let mode = writable ? LOCK_EX : LOCK_SH
+    while platform_flock(descriptor, mode | LOCK_NB) != 0 {
+      if errno == EINTR { continue }
+      guard errno == EWOULDBLOCK else {
+        throw CoreError.invalidState("cannot acquire shared coordination lock")
+      }
+      try checkpoint("contended")
+      while platform_flock(descriptor, mode) != 0 {
+        if errno != EINTR {
+          throw CoreError.invalidState("cannot acquire shared coordination lock")
+        }
+      }
+      break
+    }
+    guard try parent.info(name).map(FileObjectIdentity.init) == evidence.identity
+    else {
+      throw CoreError.invalidState("shared coordination lock changed")
+    }
+    try evidence.validate(descriptor: descriptor)
+    return acquired
   }
 
   private static func withDescriptor<T>(
@@ -53,13 +158,14 @@ package enum FileLock {
     guard fstat(descriptor, &info) == 0, info.st_mode & 0o170000 == 0o100000 else {
       throw CoreError.unsafePath("writer lock must be a regular file: \(url.path)")
     }
-    while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+    while platform_flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
       if errno == EINTR { continue }
       guard errno == EWOULDBLOCK else {
         throw CoreError.invalidState("cannot acquire writer lock: \(url.path)")
       }
-      try checkpoint("lock.contended")
-      while flock(descriptor, LOCK_EX) != 0 {
+      try checkpoint(
+        contentionCheckpoint(contentions.wrappingAdd(1, ordering: .relaxed).oldValue))
+      while platform_flock(descriptor, LOCK_EX) != 0 {
         if errno != EINTR {
           throw CoreError.invalidState("cannot acquire writer lock: \(url.path)")
         }

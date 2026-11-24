@@ -40,12 +40,13 @@ revision, path and original-byte hash. A container of a local source declared
 in the same scope cannot hold a target.
 
 A project's own files live in `.agent/instructions/` and are referenced by bare
-name; `alias:name` references a declared source. Own files are read from the
+name; `.section(name:source:)` in `agents.yaml`, or `alias:name` in operation
+arguments, references a declared source. Own files are read from the
 working tree as it is. Their lock records have source `.`, the project-relative
-path and the hash, and no revision. Resolution and restore read only the named
-file, `.agent/instructions/<name>.md`, and so does adding named files, so other
-files in the container affect only listing. Restoring a lock fails with `InstructionError.ownChanged` when an
-own file's hash changed; update reads the current file.
+path and the hash, and no revision. Resolution reads only the named file, `.agent/instructions/<name>.md`, and so does
+adding named files, so other files in the container affect only listing. Locked
+restore publishes the frozen output and preserves the current own source file.
+Update reads the current file; doctor reports changes since the recorded hash.
 
 `add(InstructionAddOptions, beforeApply:)` accepts a source alias or string,
 or `.` for own files, plus an optional alias, requirement, search path, ordered
@@ -142,10 +143,18 @@ source reference. Removal also removes those sections from prompts. Empty
 prompts are removed. Other source declarations and skill records remain
 available to their owners.
 
-Export maps a user target to every locked section from the lock alone. A
-project section's placement needs its `paths`, read from the working tree or
-the cache without fetching; a section whose content is unavailable is listed as
-unplaced.
+Export maps each scope's locked deployments and prompt sections from ledger
+metadata alone. `InstructionMapping.readDependencies` contains `ReadDependency.entry`
+values for declaration, resolved and watch-state leaves, the scope root and state
+directory, scope lock, recovery markers and attempted external admission paths.
+Absent paths and failed admission anchors remain available for missing-lock,
+pending-recovery and unavailable statuses. Permitted scope-root aliases retain
+both logical and physical paths; forbidden state-directory and lock links do not
+introduce their destinations as authority. Entry dependencies observe the named
+path and its ancestors, including creation, replacement and access changes; they
+do not observe unrelated descendants of directory entries. Mapping does not read
+section bodies, append content or deployed target bytes; content inspection
+operations supply their own dependencies.
 
 Planning validates required content before applying. Reports include old and
 new section records, target before/after bytes and recipients, drift, foreign
@@ -163,15 +172,14 @@ The optional throwing `beforeApply` callback runs before replacements so a
 consumer can show differences or cancel. Target bytes are checked again after
 the callback; intervening edits stop the commit. Update also revalidates state
 bytes/presence, target ancestry and all Claude forwarding decision inputs
-before and after retention. `InstructionUpdatePlan` supplies package-visible
-planning, validation, retention and staging to both standalone updates and
-`AgentsUpdates`; the latter commits both kinds together as described in
-[Updates](Updates.md).
+before and after retention. Lifecycle methods are public extensions in
+`AgentsUpdates`, which owns the complete linked ledger and one transaction for
+selected deployments, declaration, resources and pruning. Consumers import that
+product for lifecycle and ChatGPT export; pure text APIs remain here.
+See [Updates](Updates.md) for selection, prepared handles and exact restore.
 
 Mutations hold the scope writer lock and use the durable journal for instruction
-files, forwarding files, declaration, lock and cache pruning. Exact source
-materializations are verified and published through cache transactions before
-the target/state transaction. The journal has fixed project instruction paths,
+files, forwarding files, declaration, ledger, materializations and cache pruning. The journal has fixed project instruction paths,
 nested project `AGENTS.md` and `GEMINI.md` paths, configured user instruction
 roots and new top-level named Markdown files in `.agent/instructions/`.
 Initialization uses the project's state lock and journal without creating a
@@ -199,17 +207,23 @@ generated files, takes over others only with `replace`, and records targets as
 
 ## ChatGPT Prompts
 
-`instructions.chatgpt.<name>` has ordered `sections` and an optional scope-relative
-`append` file. Update locks prompt sections with file targets. Reports list
-prompts whose section content, order, membership or append path changed. A
-revision change with identical section hashes alone does not mark a prompt
-changed. Append files remain live owner content; their independent edits do not
-require a lock update.
+An instructions component's `chatgpt` mapping declares named prompts with ordered
+`sections` and an optional `append` path. Update locks prompt sections with file
+targets. Reports list prompts whose section content, order, membership or append
+path changed. A revision change with identical section hashes alone does not mark
+a prompt changed.
 
-Render verifies locked hashes, renders sections as in targets without the
-notice, and appends the custom file's bytes. It fails without locked sections or
-if an append path escapes the scope through a symlink. It never writes to
-ChatGPT.
+For consumer-authored prompts, append remains current owner content. Its authored
+path is project-relative in project scope and home-relative in user scope. Update
+and installation do not require that export-only file to exist. Export verifies
+locked section hashes, renders them without the notice and reads the current append
+bytes. Missing, unreadable or escaping append content fails export; recorded bytes
+are never a fallback. Append edits do not require a lock update. Export never writes
+to ChatGPT.
+
+The component freeze seam records consumer append coordinates as payload metadata,
+separate from deterministic installation inputs. Producer-owned append content is
+instead read from the selected source snapshot and retained as an exact resource.
 
 ## Diagnostics
 

@@ -1,5 +1,7 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
+import AgentsUpdates
 import Foundation
 import Testing
 
@@ -156,8 +158,10 @@ struct OwnershipAndPlacementTests {
     let fixture = try InstructionFixture()
     try fixture.own("guide")
     try fixture.write(
-      "{\"instructions\": {\"sections\": [], \"chatgpt\": {\"weekly\": {\"sections\": [\"guide\"]}}}}\n",
-      to: fixture.store().declarationURL)
+      """
+      version: 1
+      components: [{"kind": "instructions", "chatgpt": {"weekly": {"sections": [{"name": "guide"}]}}}]
+      """, to: fixture.store().declarationURL)
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     #expect(
       try fixture.store().loadResolved().instructions.chatgpt["weekly"]?.sections.map(\.name)
@@ -210,5 +214,47 @@ struct OwnershipAndPlacementTests {
     let user = InstructionOperations.export(projectRoots: [], environment: fixture.environment)[0]
     #expect(user.unplaced.isEmpty)
     #expect(user.targets.map { $0.sections.map(\.name) } == [["rules"]])
+  }
+}
+
+extension OwnershipAndPlacementTests {
+  @Test func removeBareNameFallsBackOnlyToAUniqueDeclaredSource() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("guide")
+    try fixture.commit()
+    try fixture.add(names: ["guide"])
+    try InstructionOperations.remove(names: ["guide"], environment: fixture.environment)
+    #expect(try fixture.store().loadDeclaration().instructions?.sections == [])
+    #expect(try fixture.store().loadResolved().instructions.sections.isEmpty)
+  }
+
+  @Test func ambiguousFallbackRefusesAndQualifiedReferencesPreserveOtherGuides() throws {
+    let fixture = try InstructionFixture()
+    try fixture.section("guide", heading: "# Shared Guide")
+    try fixture.commit()
+    try fixture.add(names: ["guide"])
+    let store = fixture.store()
+    var declaration = try store.loadDeclaration()
+    declaration.sources["other"] = .init(
+      kind: .local, location: fixture.root.appendingPathComponent("unresolved-other").path)
+    try declaration.updateInstructions { $0?.sections.append("other:guide") }
+    try store.save(declaration: declaration, ledger: store.loadLedger())
+    let before = try fixture.snapshot()
+    var called = false
+    #expect(throws: CoreError.notFound("instruction name is missing or ambiguous: guide")) {
+      try InstructionOperations.remove(names: ["guide"], environment: fixture.environment) { _ in
+        called = true
+      }
+    }
+    #expect(!called)
+    #expect(try fixture.snapshot() == before)
+    try declaration.updateInstructions { $0?.sections.removeAll { $0 == "other:guide" } }
+    declaration.sources["other"] = nil
+    try store.save(declaration: declaration, ledger: store.loadLedger())
+    try fixture.own("guide", heading: "# Project Guide")
+    try fixture.addOwn(names: ["guide"])
+    try InstructionOperations.remove(names: ["rules:guide"], environment: fixture.environment)
+    #expect(try store.loadDeclaration().instructions?.sections == ["guide"])
+    #expect(try fixture.text() == generated(["# Project Guide\n\nOriginal"]))
   }
 }

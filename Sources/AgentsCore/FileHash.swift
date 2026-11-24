@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 
 package enum FileHash {
@@ -7,7 +7,7 @@ package enum FileHash {
   }
 
   package static func sha256Hex(file: URL) throws -> String {
-    try sha256Hex(data: Data(contentsOf: file))
+    try sha256Hex(data: FileSystem.read(at: file))
   }
 
   /// Hashes every tree entry in path order, including hidden files and symlink destinations.
@@ -56,10 +56,14 @@ package enum FileHash {
       }
     }
     try collect(directory, prefix: "")
+    return hashRecords(entries)
+  }
+
+  static func hashRecords(_ entries: [(String, Data)]) -> String {
     var hasher = SHA256()
     // Each field has a fixed-width byte length, so arbitrary payload bytes cannot
     // impersonate paths, entry types or record boundaries.
-    for (path, content) in entries.sorted(by: { $0.0 < $1.0 }) {
+    for (path, content) in entries.sorted(by: { $0.0.utf8.lexicographicallyPrecedes($1.0.utf8) }) {
       for field in [Data(path.utf8), content] {
         var length = UInt64(field.count).bigEndian
         withUnsafeBytes(of: &length) { hasher.update(data: Data($0)) }

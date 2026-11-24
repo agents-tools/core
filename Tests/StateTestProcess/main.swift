@@ -1,23 +1,67 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import AgentsSkills
 import AgentsUpdates
-import Darwin
+import CPlatform
 import Foundation
+import StateTestSupport
+import Synchronization
 
 let arguments = CommandLine.arguments
 let root = URL(fileURLWithPath: arguments[1])
-let scope: InstallScope = arguments.count > 4 && arguments[4] == "user" ? .user : .project
+let scopeIndex = arguments.firstIndex(of: "--scope")
+let scope: InstallScope =
+  scopeIndex.flatMap { InstallScope(rawValue: arguments[$0 + 1]) } ?? .project
+let sharedConfigIndex = arguments.firstIndex(of: "--shared-config")
+let sharedConfig =
+  sharedConfigIndex.map { arguments[$0 + 1] }
+  ?? root.appendingPathComponent("configured-claude").path
 let store = StateStore(
   scope: scope,
   environment: RuntimeEnvironment(
     projectDirectory: root,
     homeDirectory: root.appendingPathComponent("home"),
-    environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("configured-claude").path]))
-func stop(_ step: String, marker: String = "ready") throws {
-  if step == arguments[3] {
-    try Data(step.utf8).write(to: root.appendingPathComponent(marker), options: .atomic)
+    environment: arguments.contains("--native-routes")
+      ? [
+        "CLAUDE_CONFIG_DIR": sharedConfig, "CODEX_HOME": sharedConfig,
+        "OPENCODE_CONFIG_DIR": sharedConfig, "GEMINI_CLI_HOME": sharedConfig,
+      ]
+      : ["CLAUDE_CONFIG_DIR": sharedConfig]))
+if arguments[2] == "open-file-limit" {
+  try openFileLimitProbe(arguments[3], root: root, store: store)
+  exit(EXIT_SUCCESS)
+}
+let checkpointState = Mutex(
+  (requested: arguments.count > 3 ? arguments[3] : "", seen: Set<String>()))
+let traceURL = root.appendingPathComponent(
+  "checkpoint-\(ProcessInfo.processInfo.processIdentifier).log")
+FileManager.default.createFile(atPath: traceURL.path, contents: nil)
+let trace = try FileHandle(forWritingTo: traceURL)
+/// Names must be unique across the whole recorded process: a repeated name would make a kill
+/// point ambiguous, so the recorder fails the run. Each command runs one recorded operation.
+func stop(_ point: String, marker: String = "ready") throws {
+  let (repeated, shouldStop) = checkpointState.withLock { state in
+    (
+      !state.seen.insert(point).inserted,
+      point == state.requested
+        || (state.requested == "scope-contention" && point.hasPrefix("scope.")
+          && FileLock.isContentionCheckpoint(point))
+    )
+  }
+  try trace.write(contentsOf: Data((point + "\n").utf8))
+  if repeated { fatalError("repeated checkpoint: \(point)") }
+  // The last visible journal survives its own removal for the parent's assertions.
+  if let bytes = try? Data(contentsOf: store.directory.appendingPathComponent("transaction.json")) {
+    try bytes.write(to: root.appendingPathComponent("last-journal"))
+  }
+  if shouldStop {
+    try Data(point.utf8).write(to: root.appendingPathComponent(marker), options: .atomic)
     raise(SIGSTOP)
+    // A resumed handshake may select the next stop once, rather than reading on every checkpoint.
+    let next =
+      (try? String(contentsOf: root.appendingPathComponent("stop-at"), encoding: .utf8)) ?? ""
+    checkpointState.withLock { $0.requested = next }
   }
 }
 func signalContention() throws {
@@ -25,7 +69,13 @@ func signalContention() throws {
   defer { try? signal.close() }
   try signal.write(contentsOf: Data("contended\n".utf8))
 }
-if arguments[2] == "git-environment" {
+if arguments[2].hasPrefix("ledger-") {
+  try ledgerProbe(arguments[2], store: store)
+} else if arguments[2].hasPrefix("shared-") {
+  try sharedMaterializationProbe(arguments[2], store: store, checkpoint: { try stop($0) })
+} else if arguments[2].hasPrefix("private-") {
+  try privateMaterializationProbe(arguments[2], store: store, checkpoint: { try stop($0) })
+} else if arguments[2] == "git-environment" {
   let before = ProcessInfo.processInfo.environment
   let cache = SourceCache(store: store)
   let source = SourceDeclaration(kind: .local, location: root.appendingPathComponent("source").path)
@@ -71,7 +121,7 @@ if arguments[2] == "git-environment" {
 } else if arguments[2] == "lock-contender" {
   try FileLock.withLock(
     at: root.appendingPathComponent(arguments[3]),
-    checkpoint: { if $0 == "lock.contended" { try signalContention() } },
+    checkpoint: { if FileLock.isContentionCheckpoint($0) { try signalContention() } },
     { try Data().write(to: root.appendingPathComponent("lock-acquired")) })
 } else if arguments[2] == "closed-streams" {
   let mask = Int(arguments[3])!
@@ -115,9 +165,9 @@ if arguments[2] == "git-environment" {
 } else if ["watch-subscribe", "watch-acknowledge"].contains(arguments[2]) {
   let watch = WatchOperations(
     discoverSkills: { _ in [] },
-    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") }, declarations: .manifest,
     checkpoint: { step in
-      if step == "mirror.lock.contended" {
+      if step.hasPrefix("mirror."), FileLock.isContentionCheckpoint(step) {
         try signalContention()
       }
     })
@@ -134,7 +184,7 @@ if arguments[2] == "git-environment" {
 } else if ["watch-add", "watch-seen", "watch-remove"].contains(arguments[2]) {
   let watch = WatchOperations(
     discoverSkills: { _ in [] },
-    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") },
+    fetchArtifacts: { _ in throw CoreError.unsupported("Git fixture") }, declarations: .manifest,
     checkpoint: { try stop($0) })
   if arguments[2] == "watch-add" {
     try watch.add(
@@ -144,23 +194,88 @@ if arguments[2] == "git-environment" {
   } else {
     try watch.remove("source", environment: store.environment)
   }
+} else if arguments[2] == "skill-add" {
+  _ = try SkillOperations.add(
+    AddOptions(
+      source: root.appendingPathComponent("source").path, agents: [.codex],
+      skillNames: ["demo"], mode: .edit, environment: store.environment),
+    checkpoint: { try stop($0) })
+} else if arguments[2] == "watch-add-artifact" {
+  let bytes = Data("---\nname: demo\ndescription: Fixture skill.\n---\nBody\n".utf8)
+  let digest = "sha256:" + FileHash.sha256Hex(data: bytes)
+  let artifact = WatchArtifact(
+    name: "demo",
+    artifact: LockedArtifact(
+      type: .skillMD, url: "https://watch.example.test/demo/SKILL.md", digest: digest),
+    files: ["SKILL.md": bytes], payloads: [digest: bytes])
+  let watch = WatchOperations(
+    discoverSkills: { _ in [] }, fetchArtifacts: { _ in [artifact] }, declarations: .manifest,
+    checkpoint: { try stop($0) })
+  try watch.add("https://watch.example.test", alias: "site", environment: store.environment)
 } else if arguments[2] == "watch-recover" {
-  try store.withLock(checkpoint: { try stop($0) }, {})
+  do { try store.withLock(checkpoint: { try stop($0) }, {}) } catch CoreError.transactionRecovered {
+  }
+} else if arguments[2] == "publication-recover" {
+  let outcome = TransactionOutcome()
+  let result: String
+  do {
+    try store.withLock(checkpoint: { try stop($0, marker: "recovery-ready") }, outcome: outcome, {})
+    result = "clean"
+  } catch CoreError.transactionRecovered { result = "recovered" } catch {
+    result = "unresolved: \(error)"
+  }
+  try Data(result.utf8).write(to: root.appendingPathComponent("recovery-result"))
+} else if arguments[2] == "publication" {
+  let outcome = TransactionOutcome()
+  var failure = ""
+  do {
+    try store.withLock(outcome: outcome) {
+      let transaction = FileTransaction(store: store, outcome: outcome) {
+        try Data(String(describing: outcome.disposition).utf8).write(
+          to: root.appendingPathComponent("stopped-outcome"))
+        try stop($0)
+      }
+      try transaction.replace(
+        root.appendingPathComponent("GEMINI.md"), with: .data(Data("auxiliary postimage".utf8)))
+      let target =
+        arguments[4] == "crossParentReplace"
+        ? root.appendingPathComponent(".agents/skills/target")
+        : root.appendingPathComponent("AGENTS.md")
+      switch arguments[4] {
+      case "directoryReplace":
+        let source = root.appendingPathComponent("new")
+        try transaction.replace(
+          target, with: .copy(source), expectedHash: "sha256:" + FileHash.folderHash(source))
+      case "directoryDelete": try transaction.delete(target)
+      case "symlinkCreate":
+        try transaction.replace(target, with: .link(root.appendingPathComponent("new")))
+      default: try transaction.replace(target, with: .data(Data("postimage".utf8)))
+      }
+      try transaction.commit()
+    }
+  } catch { failure = String(describing: error) }
+  try Data((String(describing: outcome.disposition) + "\n" + failure).utf8).write(
+    to: root.appendingPathComponent("publication-result"))
 } else if arguments[2] == "recover" {
-  try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
-    _ = try FileTransaction.recover(store: store) { try stop($0, marker: "recovery-ready") }
+  if scope == .user {
+    do {
+      try store.withLock(checkpoint: { try stop($0, marker: "recovery-ready") }, {})
+    } catch CoreError.transactionRecovered {}
+  } else {
+    try FileLock.withLock(at: store.directory.appendingPathComponent(".agents.lock")) {
+      _ = try FileTransaction.recover(store: store) { try stop($0, marker: "recovery-ready") }
+    }
   }
 } else if arguments[2] == "read" {
   try Data().write(to: root.appendingPathComponent("reader-started"))
-  do { _ = try store.loadResolved() } catch CoreError.transactionRecovered {
-    _ = try store.loadResolved()
-  }
+  // The reader waits for the writer lock and reports, rather than replays, pending recovery.
+  do { _ = try store.loadResolved() } catch CoreError.recoveryPending {}
   try Data().write(to: root.appendingPathComponent("reader-finished"))
 } else if arguments[2] == "combined-crash" {
   _ = try UpdateOperations.withPreparedUpdate(
     scope: scope, environment: store.environment,
     checkpoint: { step in
-      if arguments[3] == "between-kinds", step.hasPrefix("replace.") {
+      if arguments[3] == "between-kinds", step.hasPrefix("entry.") && step.hasSuffix(".applied") {
         let journal =
           try JSONSerialization.jsonObject(
             with: Data(contentsOf: store.directory.appendingPathComponent("transaction.json")))
@@ -169,7 +284,7 @@ if arguments[2] == "git-environment" {
         let firstInstruction = entries.firstIndex {
           ($0["path"] as! String).hasPrefix("instructions-")
         }!
-        if step == "replace.\(firstInstruction - 1)" { try stop("between-kinds") }
+        if step == "entry.\(firstInstruction - 1).applied" { try stop("between-kinds") }
       } else {
         try stop(step)
       }
@@ -194,6 +309,12 @@ if arguments[2] == "git-environment" {
   default: _ = try store.loadResolved()
   }
   try Data().write(to: root.appendingPathComponent("contender-finished"))
+} else if arguments[2] == "pause" {
+  try stop("paused")
+} else if arguments[2] == "unstopped-marker" {
+  // The marker exists but the process never stops, as when it is killed before its self-stop.
+  try Data().write(to: root.appendingPathComponent("ready"), options: .atomic)
+  while true { sleep(1) }
 } else if arguments[2] == "create-scope" {
   try FileLock.withLock(
     at: store.directory.appendingPathComponent(".agents.lock"), checkpoint: { try stop($0) },
@@ -201,63 +322,79 @@ if arguments[2] == "git-environment" {
       try Data().write(to: root.appendingPathComponent("lock-acquired"))
     })
 } else {
-  try store.withLock {
+  let createdSkill =
+    arguments[2] == "crash" && scope == .user
+    ? try store.skillInstallationTarget(for: .claudeCode, named: "created") : nil
+  try store.withLock(
+    footprint: createdSkill?.footprint ?? [], installations: createdSkill.map { [$0] } ?? []
+  ) {
     if arguments[2] == "cache-content" || arguments[2] == "cache-git"
       || arguments[2] == "cache-bytes"
     {
       let cache = SourceCache(store: store) { try stop($0) }
-      let lock = try store.readResolved()
-      guard let skill = lock.skills["demo"], let hash = skill.hash else {
-        throw CoreError.invalidState("missing fixture skill")
+      let ledger = try store.readLedger()
+      guard let resource = ledger.resources["resource"],
+        let source = ledger.sources[resource.source]
+      else {
+        throw CoreError.invalidState("missing fixture resource")
       }
-      if arguments[2] == "cache-content", let artifact = skill.artifact {
+      if arguments[2] == "cache-content", let artifact = resource.artifact {
         _ = try cache.materializeArtifact(
-          root.appendingPathComponent("new"), digest: artifact.digest, hash: hash)
-      } else if arguments[2] == "cache-bytes", let artifact = skill.artifact {
+          root.appendingPathComponent("new"), digest: artifact.digest, hash: resource.hash)
+      } else if arguments[2] == "cache-bytes", let artifact = resource.artifact {
         _ = try cache.storeArtifact(
           Data(contentsOf: root.appendingPathComponent("payload")), digest: artifact.digest)
-      } else if let revision = skill.revision, let source = lock.sources[skill.source] {
-        _ = try cache.materialize(sourceID: skill.source, source: source, revision: revision)
+      } else if let location = source.location {
+        let identity = "local:" + (try location.resolve(roots: store.ledgerRoots).path)
+        _ = try cache.materialize(
+          sourceID: identity, source: LockedSource(kind: .local), revision: source.revision)
       } else {
         throw CoreError.invalidState("missing fixture pin")
       }
+
     } else if arguments[2] == "inspection-transaction" {
       let transaction = FileTransaction(store: store) { try stop($0) }
       try transaction.replace(
         AgentRegistry.installSkillsDirectory(
           for: .codex, scope: scope, environment: store.environment
-        ).appendingPathComponent("target"), content: root.appendingPathComponent("new"))
-      try transaction.replace(
-        InstructionLocations.file(for: .codex, scope: scope, environment: store.environment)!,
-        content: nil)
+        ).appendingPathComponent("target"), with: .copy(root.appendingPathComponent("new")))
+      try transaction.delete(
+        InstructionLocations.file(for: .codex, scope: scope, environment: store.environment)!)
       try transaction.replace(
         InstructionLocations.file(for: .geminiCLI, scope: scope, environment: store.environment)!,
-        content: nil, data: Data("New instructions\n".utf8))
+        with: .data(Data("New instructions\n".utf8)))
       try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.cursor])))
+        store.declarationURL, with: .data(manifestText("defaultAgents: [\"cursor\"]\n")))
       try transaction.replace(
-        store.resolvedURL, content: nil, data: StateStore.encode(ResolvedState()))
+        store.resolvedURL,
+        with: .data(try ResolvedLedgerCodec.encode(ResolvedLedger(), limits: .standard)))
       try transaction.commit()
     } else if arguments[2] == "watch-crash" {
-      var declaration = try store.readDeclaration()
+      let baseline = try StatePrecondition(store: store)
+      let previous = try store.readDeclaration(prepared: baseline)
+      var declaration = previous
       declaration.watch = ["source"]
       let watch = WatchState(sources: [
         "local:/source": WatchSourceState(seen: .revision(String(repeating: "b", count: 40)))
       ])
       let transaction = FileTransaction(store: store) { try stop($0) }
-      try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(declaration))
-      try transaction.replace(store.watchURL, content: nil, data: StateStore.encode(watch))
+      try store.stageDeclaration(
+        store.planDeclaration(declaration, replacing: previous, prepared: baseline),
+        in: transaction, prepared: baseline)
+      try transaction.replace(store.watchURL, with: .data(StateStore.encode(watch)))
       try transaction.commit()
     } else if arguments[2] == "writer" {
       for index in 0..<5 {
-        var declaration = try store.readDeclaration()
+        let baseline = try StatePrecondition(store: store)
+        let previous = try store.readDeclaration(prepared: baseline)
+        var declaration = previous
         declaration.sources["\(arguments[3])-\(index)"] = SourceDeclaration(
           kind: .local, location: root.appendingPathComponent("\(arguments[3])-\(index)").path)
         usleep(10_000)
         let transaction = FileTransaction(store: store)
-        try transaction.replace(
-          store.declarationURL, content: nil, data: StateStore.encode(declaration))
+        try store.stageDeclaration(
+          store.planDeclaration(declaration, replacing: previous, prepared: baseline),
+          in: transaction, prepared: baseline)
         try transaction.commit()
       }
     } else {
@@ -268,24 +405,24 @@ if arguments[2] == "git-environment" {
         AgentRegistry.installSkillsDirectory(
           for: .codex, scope: scope, environment: store.environment
         )
-        .appendingPathComponent("target"),
-        content: root.appendingPathComponent("new"))
+        .appendingPathComponent("target"), with: .copy(root.appendingPathComponent("new")))
       try transaction.replace(
-        store.declarationURL, content: nil, data: StateStore.encode(Declaration(agents: [.codex])))
-      try transaction.replace(
-        store.resolvedURL, content: nil,
-        data: StateStore.encode(ResolvedState(sources: ["local:/new": LockedSource(kind: .local)])))
-      try transaction.replace(
-        store.cacheDirectory.appendingPathComponent("artifact-content/pruned"), content: nil)
-      try transaction.replace(
-        AgentRegistry.installSkillsDirectory(
-          for: .claudeCode, scope: scope, environment: store.environment
-        ).appendingPathComponent("created"),
-        content: root.appendingPathComponent("new"),
-        link: true)
+        store.declarationURL, with: .data(manifestText("defaultAgents: [\"codex\"]\n")))
+      var ledger = ResolvedLedger()
+      ledger.sources["local:/new"] = LedgerSource(kind: .local, revision: "live")
+      try transaction.replace(store.resolvedURL, with: .data(StateStore.encode(ledger)))
+      try transaction.delete(store.cacheDirectory.appendingPathComponent("artifact-content/pruned"))
+      if let createdSkill {
+        try transaction.replaceSkill(createdSkill, with: .link(root.appendingPathComponent("new")))
+      } else {
+        try transaction.replace(
+          AgentRegistry.installSkillsDirectory(
+            for: .claudeCode, scope: scope, environment: store.environment
+          ).appendingPathComponent("created"), with: .link(root.appendingPathComponent("new")))
+      }
       try transaction.replace(
         InstructionLocations.file(for: .codex, scope: scope, environment: store.environment)!,
-        content: nil, data: Data("new instructions".utf8))
+        with: .data(Data("new instructions".utf8)))
       try transaction.commit()
     }
   }

@@ -11,6 +11,12 @@ public enum Instructions {
   /// Validates an instructions file: front matter, a body that starts with an ATX heading whose
   /// level every other heading exceeds, and an end outside code and HTML blocks.
   public static func validateSource(_ bytes: Data, id: String) throws -> InstructionSection {
+    try validateSource(bytes, id: id, allowRestrictions: false)
+  }
+
+  static func validateSource(_ bytes: Data, id: String, allowRestrictions: Bool) throws
+    -> InstructionSection
+  {
     guard String(data: bytes, encoding: .utf8) != nil else { throw InstructionError.invalidUTF8 }
     func invalid(_ reason: String) -> InstructionError { .invalidSource(id: id, reason: reason) }
     var text = String(decoding: bytes, as: UTF8.self)
@@ -21,7 +27,8 @@ public enum Instructions {
     }
     let front: InstructionFrontMatter
     do {
-      front = try InstructionFrontMatter.parse(Array(lines[1..<close]))
+      front = try InstructionFrontMatter.parse(
+        Array(lines[1..<close]), allowRestrictions: allowRestrictions)
     } catch let failure as InstructionFrontMatter.Failure {
       throw invalid(failure.reason)
     }
@@ -52,7 +59,8 @@ public enum Instructions {
     }
     return InstructionSection(
       id: id, level: first.level, heading: first.key, description: front.description,
-      paths: front.paths, hash: hash(bytes), content: body.joined(separator: "\n"))
+      paths: front.paths, condition: front.condition, hash: hash(bytes),
+      content: body.joined(separator: "\n"))
   }
 
   /// The longest directory shared by the literal prefixes of `paths`, relative to the project
