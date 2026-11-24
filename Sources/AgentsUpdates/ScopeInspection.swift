@@ -173,7 +173,7 @@ extension UpdateOperations {
             let generation = try ResolvedLedgerCodec.digest([
               ResolvedLedgerCodec.digest(ledger), document?.digest ?? "absent",
             ])
-            let roots = store.ledgerRoots
+            let roots = store.ledgerRoots(recordedIn: ledger)
             func source(_ id: String) throws -> String {
               try ledger.sourceIdentity(id, roots: roots)
             }
@@ -201,14 +201,15 @@ extension UpdateOperations {
                 hash: r.hash,
                 kind: r.kind.rawValue,
                 location: try ArtifactAggregation.resourceDestination(
-                  id, ledger: ledger, store: store),
+                  id, ledger: ledger, store: store, roots: roots),
                 entries: r.entries.map(entry), support: r.support.map(entry))
             }
             let deployments = try ledger.deployments.map { d in
               let url = try d.target.resolve(roots: roots)
               let observed = try ArtifactAggregation.inspectDeployment(
-                d, ledger: ledger, store: store)
-              let exposure = try ArtifactAggregation.nativeExposure(d, ledger: ledger, store: store)
+                d, ledger: ledger, store: store, roots: roots)
+              let exposure = try ArtifactAggregation.nativeExposure(
+                d, ledger: ledger, store: store, roots: roots)
               return DeploymentInspection(
                 identity: d.id, location: url, format: d.route,
                 owners: try d.owners.map {
@@ -228,7 +229,7 @@ extension UpdateOperations {
             }
             let paths =
               try readLocations(
-                declarations: [declaration], ledgers: [ledger], store: store)
+                declarations: [declaration], ledgers: [ledger], store: store, roots: roots)
               + installations.values.map(\.url)
             try baseline.validate()
             return ScopeInspection(
