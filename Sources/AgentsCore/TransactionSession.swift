@@ -102,7 +102,7 @@ final class TransactionSession {
 
   func requireScope() throws {
     try TransactionLockContext.validateHeldScope(journal.scope)
-    for resource in resources { try resource.validate() }
+    try SharedResource.validateAll(resources)
     guard try DirectoryHandle(at: directory.url).identity == journal.scope else {
       throw CoreError.invalidState("transaction scope identity changed")
     }

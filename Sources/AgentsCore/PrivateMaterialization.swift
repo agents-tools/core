@@ -368,7 +368,7 @@ extension StateStore {
       let metadataURL = resource.parent.url.appendingPathComponent(SharedResource.metadataName)
         .appendingPathComponent(resource.identity.directoryName)
       url = (resource.metadata?.url ?? metadataURL).appendingPathComponent("receipt")
-      receiptPath = resource.route.metadata + "/receipt"
+      receiptPath = resource.receiptPath
     } else {
       url = materializationReceiptURL
       receiptPath = "state/" + MaterializationReceipts.fileName

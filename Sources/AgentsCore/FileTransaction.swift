@@ -253,26 +253,23 @@ package final class FileTransaction {
   }
 
   private func queueReceipt() throws {
-    let originals = requests
+    var byReceipt: [String: [(key: String, security: TransactionSecurity)]] = [:]
+    for request in requests {
+      let location = try store.materializationReceiptLocation(for: request.path)
+      byReceipt[location.path, default: []].append((location.key, request.security))
+    }
     for state in receiptStates.values.sorted(by: { $0.path < $1.path }) {
-      let receiptRoute = NativeTargetRoute.metadataRoute(state.path)
-      let shared = receiptRoute != nil
-      let affected = try originals.filter {
-        let route = try TransactionPaths(store: store).coordinationRoute(for: $0.path)
-        let root = try route.map {
-          try TransactionLockContext.current(store).requiredResourceForRoute($0).route.root
-        }
-        let key = try store.materializationReceiptKey(for: $0.path)
-        return root == receiptRoute?.root
-          && ($0.security.isPrivate || state.records.targets[key] != nil)
+      let shared = NativeTargetRoute.metadataRoute(state.path) != nil
+      let affected = (byReceipt[state.path] ?? []).filter {
+        $0.security.isPrivate || state.records.targets[$0.key] != nil
       }
       guard !affected.isEmpty else { continue }
       var sensitiveTargets = Set(state.records.targets.keys)
       for request in affected {
         if request.security.replacement == .privateMaterialization {
-          sensitiveTargets.insert(try store.materializationReceiptKey(for: request.path))
+          sensitiveTargets.insert(request.key)
         } else {
-          sensitiveTargets.remove(try store.materializationReceiptKey(for: request.path))
+          sensitiveTargets.remove(request.key)
         }
       }
       var security = TransactionSecurity()
@@ -446,8 +443,8 @@ package final class FileTransaction {
             return .init(bytes: bytes)
           }
         } else {
-          let key = try store.materializationReceiptKey(for: request.path)
-          let previous = receiptStates.values.compactMap { $0.records.targets[key] }.first
+          let location = try store.materializationReceiptLocation(for: request.path)
+          let previous = receiptStates[location.path]?.records.targets[location.key]
           try session.stage(
             index, source: request.source, expectation: request.expectation,
             privateData: request.privateData, privateTree: request.privateTree,
@@ -555,10 +552,8 @@ package final class FileTransaction {
           preimage: request.evidence.snapshot, parentIdentity: identity, container: container,
           security: security))
     }
-    let sharedRoutes = Set(
-      try entries.compactMap {
-        try paths.coordinationRoute(for: $0.path)
-      })
+    let entryRoutes = try entries.map { try paths.coordinationRoute(for: $0.path) }
+    let sharedRoutes = Set(entryRoutes.compactMap { $0 })
     let admittedResources = try sharedRoutes.map { route in
       guard let context = TransactionLockContext.current(store) else {
         throw CoreError.invalidState("shared transaction requires its held footprint")
@@ -566,14 +561,15 @@ package final class FileTransaction {
       return try context.resource(for: route)
     }.sorted { $0.identity < $1.identity }
     var resources: [SharedResource] = []
-    for resource in admittedResources
-    where !resources.contains(where: { $0.identity == resource.identity }) {
+    var resourceIndices: [SharedResourceIdentity: Int] = [:]
+    for resource in admittedResources where resourceIndices[resource.identity] == nil {
+      resourceIndices[resource.identity] = resources.count
       resources.append(resource)
     }
     for index in entries.indices {
-      if let route = try paths.coordinationRoute(for: entries[index].path) {
+      if let route = entryRoutes[index] {
         let resource = try TransactionLockContext.current(store)!.resource(for: route)
-        entries[index].coordination = resources.firstIndex { $0.identity == resource.identity }
+        entries[index].coordination = resourceIndices[resource.identity]
         entries[index].coordinationRoot = resource.route.root
       }
     }

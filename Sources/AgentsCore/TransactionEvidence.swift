@@ -1,6 +1,6 @@
 import Foundation
 
-struct FileObjectIdentity: Codable, Equatable, Sendable {
+struct FileObjectIdentity: Codable, Hashable, Sendable {
   let device: UInt64
   let inode: UInt64
   let kind: mode_t

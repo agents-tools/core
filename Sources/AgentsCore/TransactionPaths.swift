@@ -320,6 +320,26 @@ package struct SkillInstallationTarget {
   let authority: NativeRootAuthority
   let parentIdentity: FileObjectIdentity?
 
+  /// Coalesces identical parent checks without sharing a successful check across phases.
+  static func distinctAuthorities(_ targets: [Self]) -> [Self] {
+    struct Key: Hashable {
+      let loader: Data
+      let descendants: [Data]
+      let parent: Data
+      let identity: FileObjectIdentity?
+    }
+    var seen: Set<Key> = []
+    return targets.filter { target in
+      seen.insert(
+        Key(
+          loader: Data(target.authority.loader.path.utf8),
+          descendants: target.authority.descendants.map { Data($0.utf8) },
+          parent: Data(target.url.deletingLastPathComponent().path.utf8),
+          identity: target.parentIdentity)
+      ).inserted
+    }
+  }
+
   func validateAuthority() throws {
     let parent = try authority.physicalDirectory()
     guard parent.path.utf8.elementsEqual(url.deletingLastPathComponent().path.utf8),
@@ -349,7 +369,7 @@ extension StateStore {
       ? try DirectoryHandle(at: parent).objectIdentity : nil
     let url = parent.appendingPathComponent(name)
     let path = agent.rawValue + "/" + name
-    let route = try paths.coordinationRoute(for: path)
+    let route = try paths.installationCoordinationRoute(for: agent, target: url)
     return SkillInstallationTarget(
       url: url, footprint: Set(route.map { [$0] } ?? []), path: path, scope: directory,
       agent: agent, name: name, authority: authority, parentIdentity: identity)
@@ -366,6 +386,12 @@ extension TransactionPaths {
     guard parts.count == 2, let agent = AgentID(rawValue: parts[0]) else { return nil }
     _ = try components(path)
     let target = try rootURL(parts[0]).appendingPathComponent(parts[1])
+    return try installationCoordinationRoute(for: agent, target: target)
+  }
+
+  fileprivate func installationCoordinationRoute(for agent: AgentID, target: URL) throws
+    -> NativeTargetRoute?
+  {
     guard let route = try NativeTargetRoute.userRoute(at: target, environment: store.environment)
     else { return nil }
     guard route.isContainer, route.knownReaders.contains(agent) else {
