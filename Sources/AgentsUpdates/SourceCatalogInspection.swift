@@ -366,9 +366,7 @@ package final class CatalogPreparation: @unchecked Sendable, CustomReflectable {
   }
   fileprivate var compositionExpectation: CatalogCompositionExpectation {
     .init(
-      components: choices.flatMap { capture.catalog.choices[$0].graph?.components ?? [] },
-      references: choices.flatMap { capture.catalog.choices[$0].graph?.references ?? [] },
-      liveEdits: options.skillMode == .edit)
+      choices: choices.map { capture.catalog.choices[$0] }, skillMode: options.skillMode)
   }
 
   private func conversion() throws -> (Declaration, SourceImportProposal) {
@@ -450,9 +448,19 @@ private func effects(_ value: SourceCatalog.ImportEffects) -> ImportSelectionEff
 /// Selected producer evidence is checked against the composed graph before it is frozen.
 /// Consumer restrictions, recipients, modes and container filters remain authored composition.
 package struct CatalogCompositionExpectation {
-  let components: [LinkedComponent]
-  let references: [LinkedReference]
-  let liveEdits: Bool
+  private let components: [LinkedComponent]
+  private let references: [LinkedReference]
+  private let liveEditKeys: Set<ComponentKey>
+
+  init(choices: [SourceCatalog.Choice], skillMode: InstallMode?) {
+    components = choices.flatMap { $0.graph?.components ?? [] }
+    references = choices.flatMap { $0.graph?.references ?? [] }
+    liveEditKeys = Set(
+      choices.flatMap { choice -> [ComponentKey] in
+        guard skillMode == .edit, case .skill = choice.unit else { return [] }
+        return choice.graph?.components.map(\.key) ?? []
+      })
+  }
 
   func validate(_ linked: LinkedComponents) throws {
     for reference in references {
@@ -472,6 +480,16 @@ package struct CatalogCompositionExpectation {
     let actual = Dictionary(grouping: linked.components, by: \.key)
     for (key, requirements) in expected {
       let candidates = actual[key] ?? []
+      if liveEditKeys.contains(key) {
+        guard
+          candidates.allSatisfy({
+            if case .skill(_, .edit, _) = $0.payload { return true }
+            return false
+          })
+        else {
+          throw CoreError.invalidState("catalog live edit changed mode; refresh inspection")
+        }
+      }
       guard !candidates.isEmpty,
         try Set(requirements.map(evidence)) == Set(candidates.map(evidence))
       else {
@@ -481,7 +499,7 @@ package struct CatalogCompositionExpectation {
   }
 
   private func evidence(_ component: LinkedComponent) throws -> Data {
-    let editing = liveEdits && component.key.kind == .skills
+    let editing = liveEditKeys.contains(component.key)
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     func snapshot(_ value: SourceSnapshotID) throws -> Data {

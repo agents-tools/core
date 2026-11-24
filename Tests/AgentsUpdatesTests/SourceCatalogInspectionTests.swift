@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 import Testing
 
@@ -421,5 +422,110 @@ extension SourceCatalogInspectionTests {
     #expect(discovery.components.count == 1)
     #expect(discovery.components[0].recipients == [.codex])
     _ = try UpdateOperations.preview(discovery.updateRequest(), environment: f.environment)
+  }
+}
+
+extension SourceCatalogInspectionTests {
+  @Test func directEditDoesNotEraseExportedSkillRevisionEvidence() throws {
+    let f = try UpdateFixture()
+    try f.git(["tag", "1.0.0"])
+    let oldRevision = try f.git(["rev-parse", "HEAD"])
+    try f.write("Unrelated producer change\n", to: f.repo.appendingPathComponent("README.md"))
+    try f.commit()
+    try f.git(["tag", "1.1.0"])
+    let newRevision = try f.git(["rev-parse", "HEAD"])
+    try #require(newRevision != oldRevision)
+
+    let producer = f.root.appendingPathComponent("mixed-producer")
+    try f.write(
+      "---\nname: helper\ndescription: Helper\n---\nUnchanged live skill\n",
+      to: producer.appendingPathComponent("skills/helper/SKILL.md"))
+    try f.write(
+      """
+      version: 1
+      sources: {b: {path: '\(f.repo.path)'}}
+      exports: [empty, review]
+      groups:
+        empty:
+          components: []
+        review:
+          components:
+            - kind: skills
+              source: b
+              select: [demo]
+              agents: [claude-code]
+              mode: copy
+      """, to: producer.appendingPathComponent(".agent/agents.yaml"))
+    #if os(macOS)
+      let platform = DeclarationPlatform.macOS
+    #else
+      let platform = DeclarationPlatform.linux
+    #endif
+    let catalog = try SourceCatalog.inspect(
+      alias: "mixed", source: .init(kind: .local, location: producer.path),
+      store: f.store, platform: platform)
+    let direct = try #require(catalog.choices.first { $0.label == "Skill helper" })
+    let review = try #require(
+      catalog.choices.first {
+        if case .group(let use) = $0.unit { return use.name == "review" }
+        return false
+      })
+    let source = try SourceDeclaration(kind: .local, location: f.repo.path)
+      .identity(environment: f.environment)
+    let expected = try #require(review.graph?.components.first)
+    let expectedResource = try #require(expected.resources.first)
+    try requireCopiedReview(expected, source: source, revision: newRevision)
+
+    let declaration = try catalog.additions(
+      [direct.id, review.id], agents: nil, condition: nil, mode: .edit)
+    let identity = DocumentIdentity(f.store.declarationURL.path)
+    let bytes = try #require(
+      try DeclarationEditPlan.bytes(
+        replacing: Declaration(), with: declaration, in: nil, identity: identity,
+        environment: f.environment))
+    let document = try DeclarationDocument(bytes: bytes, identity: identity)
+    let expectation = CatalogCompositionExpectation(choices: [direct, review], skillMode: .edit)
+
+    for revision in [oldRevision, newRevision] {
+      try ComponentLinker.withLinkedComponents(
+        document: document, store: f.store, platform: platform,
+        directPins: [expected.key: SourceRevision(revision: revision)]
+      ) { linked, _ in
+        let copied = try #require(linked.components.first { $0.key == expected.key })
+        try requireCopiedReview(copied, source: source, revision: revision)
+        let resource = try #require(copied.resources.first)
+        try #require(resource.path == expectedResource.path)
+        try #require(resource.hash == expectedResource.hash)
+        try #require(resource.snapshot == copied.snapshot)
+        let helper = try #require(linked.components.first { $0.key.name == "helper" })
+        guard case .skill(_, .edit, _) = helper.payload else {
+          Issue.record("Expected the direct helper to be linked in edit mode")
+          return
+        }
+        if revision == oldRevision {
+          #expect(
+            throws: CoreError.invalidState(
+              "catalog addition changed dependency; refresh inspection")
+          ) {
+            try expectation.validate(linked)
+          }
+        } else {
+          try expectation.validate(linked)
+        }
+      }
+    }
+  }
+
+  private func requireCopiedReview(_ component: LinkedComponent, source: String, revision: String)
+    throws
+  {
+    guard case .skill(_, .copy, _) = component.payload else {
+      throw CoreError.invalidState("Expected the review skill to be linked in copy mode")
+    }
+    try #require(component.key.name == "demo")
+    try #require(component.key.group == "review")
+    try #require(component.snapshot.source == source)
+    try #require(component.snapshot.revision == revision)
+    try #require(component.origins.contains { $0.dependencies.contains(component.snapshot) })
   }
 }
