@@ -235,6 +235,7 @@ private func runConnection(_ input: MCPConnectionInput, limits: MCPConnectionLim
       let ready = await fixture.waitFor {
         var exited = false
         guard platform_duplex_observe(process.identifier, &exited) == 0, exited,
+          fixture.text("holder-ready") == "ready",
           let child = fixture.text("descendant-pid").flatMap({ Int32($0) }),
           let childState = state(child)
         else { return false }

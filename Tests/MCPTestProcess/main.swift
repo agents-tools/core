@@ -92,22 +92,14 @@ if scenario == "holder" || scenario == "ignore-input" || scenario == "blocked-in
     alarm(10)
     _ = signal(SIGTERM, SIG_IGN)
     var worker: pthread_t = 0
-    let context = UnsafeMutableRawPointer(strdup(root.path))
     let created = pthread_create(
       &worker, nil,
-      { context in
-        guard let context else { return nil }
-        let path = String(cString: context.assumingMemoryBound(to: CChar.self))
-        free(context)
-        try? "ready".write(
-          to: URL(fileURLWithPath: path).appendingPathComponent("holder-ready"),
-          atomically: true, encoding: .utf8)
+      { @Sendable _ in
         while true { _ = sleep(1) }
-      }, context)
-    if created != 0 {
-      free(context)
-      exit(2)
-    }
+      }, nil)
+    if created != 0 { exit(2) }
+    try "ready".write(
+      to: root.appendingPathComponent("holder-ready"), atomically: true, encoding: .utf8)
     pthread_exit(nil)
   }
 #endif
