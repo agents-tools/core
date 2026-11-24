@@ -236,7 +236,10 @@ struct FileSystemErrorTests {
     #expect(throws: git) { try FileSystem.withAccessErrors(at: path) { throw git } }
     let other = CoreError.invalidState("unrelated")
     #expect(throws: other) { try FileSystem.withAccessErrors(at: path) { throw other } }
-    #expect(FileSystem.posixError(ENOSPC, at: path, otherwise: other) == other)
+    #expect(FileSystem.posixError(ENOSPC, at: path, otherwise: other) as? CoreError == other)
+    let exhausted = FileSystem.posixError(ENFILE, at: path, otherwise: other)
+    #expect(exhausted is OpenFileLimitError)
+    #expect(exhausted.localizedDescription == "Too many open files in the system: \(path.path)")
   }
 
   @Test func existingLockRetainsContentIdentityAndMetadata() throws {

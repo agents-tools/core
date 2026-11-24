@@ -115,6 +115,9 @@ extension DirectoryHandle {
     guard let before = try info(name) else { return nil }
     let file = openat(descriptor, name, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
     guard file >= 0 else {
+      if let exhaustion = OpenFileLimitError(errno, at: url.appendingPathComponent(name)) {
+        throw exhaustion
+      }
       throw CoreError.invalidState("cannot open entry for access evidence")
     }
     defer { close(file) }
@@ -133,7 +136,13 @@ extension DirectoryHandle {
     let file = openat(
       descriptor, name, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
       executable ? 0o700 : 0o600)
-    guard file >= 0 else { throw CoreError.invalidState("cannot create private file: \(errno)") }
+    guard file >= 0 else {
+      let code = errno
+      if let exhaustion = OpenFileLimitError(code, at: url.appendingPathComponent(name)) {
+        throw exhaustion
+      }
+      throw CoreError.invalidState("cannot create private file: \(code)")
+    }
     var retained = false
     defer { if !retained { close(file) } }
     var created = stat()
@@ -266,7 +275,10 @@ struct DirectoryAccessEvidence: Codable, Equatable {
 
   static func capture(at url: URL) throws -> Self {
     var descriptor = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-    guard descriptor >= 0 else { throw CoreError.unsafePath("cannot open access ancestry") }
+    guard descriptor >= 0 else {
+      if let exhaustion = OpenFileLimitError(errno, at: url) { throw exhaustion }
+      throw CoreError.unsafePath("cannot open access ancestry")
+    }
     defer { close(descriptor) }
     var evidence = [try FileAccessEvidence.capture(descriptor: descriptor)]
     for (index, name) in url.standardizedFileURL.pathComponents.dropFirst().enumerated() {
@@ -274,7 +286,9 @@ struct DirectoryAccessEvidence: Codable, Equatable {
       let next = openat(
         descriptor, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | (alias ? 0 : O_NOFOLLOW))
       if next < 0 {
-        guard errno == ENOENT else { throw CoreError.unsafePath("cannot open access ancestry") }
+        let code = errno
+        if let exhaustion = OpenFileLimitError(code, at: url) { throw exhaustion }
+        guard code == ENOENT else { throw CoreError.unsafePath("cannot open access ancestry") }
         break
       }
       do {
@@ -310,7 +324,12 @@ extension DirectoryHandle {
   {
     try requireAccessComponent(name)
     let file = openat(descriptor, name, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
-    guard file >= 0 else { throw CoreError.invalidState("cannot open private object") }
+    guard file >= 0 else {
+      if let exhaustion = OpenFileLimitError(errno, at: url.appendingPathComponent(name)) {
+        throw exhaustion
+      }
+      throw CoreError.invalidState("cannot open private object")
+    }
     defer { close(file) }
     let evidence = try FileAccessEvidence.requirePrivate(descriptor: file)
     guard expected == nil || expected == evidence,

@@ -1,6 +1,19 @@
 import CPlatform
 import Foundation
 
+struct OpenFileLimitError: LocalizedError, CustomStringConvertible {
+  let description: String
+  var errorDescription: String? { description }
+
+  init?(_ code: Int32, at url: URL) {
+    switch code {
+    case EMFILE: description = "Too many open files for this process: \(url.path)"
+    case ENFILE: description = "Too many open files in the system: \(url.path)"
+    default: return nil
+    }
+  }
+}
+
 /// Filesystem access diagnostics shared by descriptor and Foundation operations.
 package enum FileSystem {
   static func permissionDenied(at url: URL) -> CoreError {
@@ -8,8 +21,9 @@ package enum FileSystem {
       "permission denied: \(url.path); check the directory's permissions and default ACL")
   }
 
-  static func posixError(_ code: Int32, at url: URL, otherwise error: CoreError) -> CoreError {
-    code == EACCES || code == EPERM ? permissionDenied(at: url) : error
+  static func posixError(_ code: Int32, at url: URL, otherwise error: CoreError) -> any Error {
+    if let exhaustion = OpenFileLimitError(code, at: url) { return exhaustion }
+    return code == EACCES || code == EPERM ? permissionDenied(at: url) : error
   }
 
   static func requireAccess(
