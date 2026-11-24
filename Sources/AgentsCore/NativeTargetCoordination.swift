@@ -765,6 +765,8 @@ final class SharedResource {
     do {
       value = try StateStore.decode(
         metadata.read("reservation", maximumBytes: 16_384), as: SharedReservation.self)
+    } catch let exhaustion as OpenFileLimitError {
+      throw exhaustion
     } catch { throw CoreError.invalidState("invalid shared reservation; owner action required") }
     guard value.version == 1, value.resource == identity, !value.scope.isEmpty,
       !value.owner.isEmpty
@@ -1043,6 +1045,11 @@ final class TransactionLockContext {
   }
 }
 
+private enum SharedCoordinationFrame {
+  case lock(FileLock.CoordinationDescriptor)
+  case missingMetadata(SharedResource)
+}
+
 extension StateStore {
   func requireProjectNativeAuthority(at destination: URL) throws {
     if scope == .project,
@@ -1100,7 +1107,7 @@ extension StateStore {
       path: canonical.root + "/" + canonical.basename, scope: directory)
   }
 
-  /// Acquire the union before the scope lock. Re-admission never replays a delivered callback.
+  /// Acquire the union before the scope lock, rechecking optimistic reads on unwind.
   func withCoordination<T>(
     routes: Set<NativeTargetRoute>, installations: [SkillInstallationTarget] = [], writable: Bool,
     checkpoint: (String) throws -> Void = { _ in },
@@ -1211,6 +1218,8 @@ extension StateStore {
             store: self, route: route, create: writable && !recovering,
             existingRoot: existingRoot, projectRoot: projectRoot,
             onReadLocation: onReadLocation)
+        } catch let exhaustion as OpenFileLimitError {
+          throw exhaustion
         } catch {
           if recovering {
             throw CoreError.invalidState(
@@ -1243,16 +1252,13 @@ extension StateStore {
       context.createdAncestry = createdAncestry
       context.existingProjectRoot = existingRoot
       context.projectRootDirectory = projectRoot
-      func locked(_ index: Int) throws -> T? {
-        if index < context.resources.count {
-          let resource = context.resources[index]
+      var frames: [SharedCoordinationFrame] = []
+      frames.reserveCapacity(context.resources.count)
+      var outcome = Result {
+        for (index, resource) in context.resources.enumerated() {
           guard let metadata = resource.metadata else {
-            // No metadata means no prior registered writer. Recheck after the unlocked read.
-            let result = Result { try locked(index + 1) }
-            let after = try SharedResource(
-              store: self, route: resource.route, create: false, onReadLocation: onReadLocation)
-            guard after.metadata == nil else { return nil }
-            return try result.get()
+            frames.append(.missingMetadata(resource))
+            continue
           }
           let url = metadata.url.appendingPathComponent("lock")
           if writable {
@@ -1261,22 +1267,38 @@ extension StateStore {
             }
             _ = try metadata.requirePrivateAccess("lock")
           }
-          return try FileLock.withCoordinationDescriptor(
+          let lock = try FileLock.acquireCoordinationDescriptor(
             at: url, writable: writable,
-            checkpoint: { try checkpoint("shared.\(index).lock." + $0) },
-            { descriptor in
-              try resource.bindLock(descriptor)
-              try resource.validate()
-              return try locked(index + 1)
-            })
+            checkpoint: { try checkpoint("shared.\(index).lock." + $0) })
+          frames.append(.lock(lock))
+          try resource.bindLock(lock.descriptor)
+          try resource.validate()
         }
         let result = Result { try context.run { try body() } }
-        for absent in absentRoots where try !absent.remainsAbsent() { return nil }
+        for absent in absentRoots where try !absent.remainsAbsent() {
+          throw CoordinationReadmission.required
+        }
         return try result.get()
+      }
+
+      // An outer observation can override a success, failure or requested readmission.
+      while let frame = frames.popLast() {
+        do {
+          switch frame {
+          case .lock(let lock):
+            try lock.finish()
+          case .missingMetadata(let resource):
+            let current = try SharedResource(
+              store: self, route: resource.route, create: false, onReadLocation: onReadLocation)
+            if current.metadata != nil { throw CoordinationReadmission.required }
+          }
+        } catch {
+          outcome = .failure(error)
+        }
       }
       // The scope-lock body checks that the preflight footprint still covers the journal.
       do {
-        if let result = try locked(0) { return result }
+        return try outcome.get()
       } catch CoordinationReadmission.required { continue }
     }
   }
@@ -1296,6 +1318,8 @@ extension StateStore {
       let journal = try FileTransaction.readJournal(bytes)
       try journal.validateCoordination()
       return journal
+    } catch let exhaustion as OpenFileLimitError {
+      throw exhaustion
     } catch {
       // A corrupt journal admits no data callback. The read boundary still takes the
       // scope lock and routes to its pending-recovery diagnostic without writes.

@@ -5,15 +5,33 @@
 #include <stdint.h>
 #include <string.h>
 #include <spawn.h>
+#include <sys/resource.h>
 
 #if defined(__APPLE__)
 #include <copyfile.h>
+#include <sys/sysctl.h>
 #else
 #include <sys/syscall.h>
 #endif
 
 int platform_flock(int descriptor, int operation) {
   return flock(descriptor, operation);
+}
+
+void platform_raise_open_file_limit(void) {
+  struct rlimit limit;
+  if (getrlimit(RLIMIT_NOFILE, &limit) != 0 || limit.rlim_cur >= limit.rlim_max) return;
+  rlim_t ceiling = limit.rlim_max;
+#if defined(__APPLE__)
+  int maximum;
+  size_t size = sizeof(maximum);
+  if (sysctlbyname("kern.maxfilesperproc", &maximum, &size, NULL, 0) != 0 ||
+      size != sizeof(maximum) || maximum <= 0) return;
+  if ((rlim_t)maximum < ceiling) ceiling = (rlim_t)maximum;
+#endif
+  if (ceiling == RLIM_INFINITY || ceiling <= limit.rlim_cur) return;
+  limit.rlim_cur = ceiling;
+  (void)setrlimit(RLIMIT_NOFILE, &limit);
 }
 
 int platform_access(int directory, const char *name, int mode) {

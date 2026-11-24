@@ -24,6 +24,7 @@
 #endif
 
 int platform_flock(int descriptor, int operation);
+void platform_raise_open_file_limit(void);
 int platform_access(int directory, const char *name, int mode);
 const char *platform_entry_name(const struct dirent *entry);
 bool platform_system_alias(const char *name);

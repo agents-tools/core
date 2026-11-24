@@ -28,6 +28,10 @@ let store = StateStore(
         "OPENCODE_CONFIG_DIR": sharedConfig, "GEMINI_CLI_HOME": sharedConfig,
       ]
       : ["CLAUDE_CONFIG_DIR": sharedConfig]))
+if arguments[2] == "open-file-limit" {
+  try openFileLimitProbe(arguments[3], root: root, store: store)
+  exit(EXIT_SUCCESS)
+}
 let checkpointState = Mutex(
   (requested: arguments.count > 3 ? arguments[3] : "", seen: Set<String>()))
 let traceURL = root.appendingPathComponent(

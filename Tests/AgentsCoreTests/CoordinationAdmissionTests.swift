@@ -1,3 +1,4 @@
+import CPlatform
 import Foundation
 import StateTestSupport
 import Testing
@@ -5,6 +6,106 @@ import Testing
 @testable import AgentsCore
 
 @Suite struct CoordinationAdmissionTests {
+  @Test(arguments: [false, true])
+  func partialSharedAcquisitionRechecksAbsenceAndReleasesLocks(_ outerInspectionFails: Bool)
+    throws
+  {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let store = StateStore(
+      scope: .user,
+      environment: RuntimeEnvironment(
+        projectDirectory: root, homeDirectory: root.appendingPathComponent("home"),
+        environment: ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("claude").path]))
+    let routes = try ["a", "b", "c", "d"].map {
+      try NativeTargetRoute.named(.claudeSkillPlugin, scope: .user, name: $0)
+    }
+    let resources = try routes.enumerated().map { index, route in
+      try SharedResource(store: store, route: route, create: index != 1)
+    }
+    let first = try #require(resources[0].metadata)
+    let absent = resources[1].parent.url.appendingPathComponent(SharedResource.metadataName)
+      .appendingPathComponent(resources[1].identity.directoryName)
+    let unlocked = try #require(resources[2].metadata)
+    let last = try #require(resources[3].metadata)
+    _ = try first.createPrivateFile("lock")
+    _ = try last.createPrivateFile("lock")
+    let contender = open(first.url.appendingPathComponent("lock").path, O_RDWR | O_CLOEXEC)
+    try #require(contender >= 0)
+    defer { close(contender) }
+    let blocker = open(last.url.appendingPathComponent("lock").path, O_RDWR | O_CLOEXEC)
+    try #require(blocker >= 0)
+    defer { close(blocker) }
+    try #require(platform_flock(blocker, LOCK_EX | LOCK_NB) == 0)
+
+    var contended = 0
+    var observedAbsentPath = 0
+    var reads = 0
+    let result = Result {
+      try store.withCoordination(
+        routes: Set(routes), writable: false,
+        checkpoint: { point in
+          #expect(point == "shared.3.lock.contended")
+          contended += 1
+          try #require(contended == 1)
+          #expect(platform_flock(contender, LOCK_EX | LOCK_NB) == -1)
+          _ = try unlocked.createPrivateFile("lock")
+          if outerInspectionFails {
+            try FileManager.default.createSymbolicLink(at: absent, withDestinationURL: root)
+          } else {
+            try #require(platform_flock(blocker, LOCK_UN) == 0)
+          }
+          throw CoordinationTestInterruption.checkpoint
+        },
+        onReadLocation: { if $0.path == absent.path { observedAbsentPath += 1 } }
+      ) { () -> Int? in
+        reads += 1
+        return nil
+      }
+    }
+    #expect(contended == 1)
+    if outerInspectionFails {
+      if case .failure(let error) = result,
+        case .unsafePath? = error as? CoreError
+      {
+        #expect(reads == 0)
+      } else {
+        Issue.record("Expected the outer missing metadata check to replace the inner outcome")
+      }
+      #expect(observedAbsentPath == 2)
+    } else {
+      #expect(try result.get() == nil)
+      #expect(reads == 1)
+      #expect(observedAbsentPath == 4)
+    }
+    #expect(platform_flock(contender, LOCK_EX | LOCK_NB) == 0)
+  }
+
+  @Test func missingSharedRootCanSupersedeReadFailure() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let loader = root.appendingPathComponent("claude")
+    try FileManager.default.createDirectory(at: loader, withIntermediateDirectories: false)
+    let store = StateStore(
+      scope: .user,
+      environment: RuntimeEnvironment(
+        projectDirectory: root, homeDirectory: root.appendingPathComponent("home"),
+        environment: ["CLAUDE_CONFIG_DIR": loader.path]))
+    let route = try NativeTargetRoute.named(.claudeSkillPlugin, scope: .user, name: "demo")
+    var reads = 0
+    let value: Int? = try store.withReadLock(footprint: [route]) {
+      reads += 1
+      if reads == 1 {
+        try FileManager.default.createDirectory(
+          at: loader.appendingPathComponent("skills"), withIntermediateDirectories: false)
+        throw CoordinationTestInterruption.body
+      }
+      return nil
+    }
+    #expect(reads == 2)
+    #expect(value == nil)
+  }
+
   @Test func standaloneSelectionAndCanonicalChildUseObservedParent() throws {
     let fixture = try TransactionFixture()
     let store = fixture.store
@@ -107,6 +208,10 @@ import Testing
   }
 }
 
+private enum CoordinationTestInterruption: Error {
+  case checkpoint, body
+}
+
 extension CoordinationAdmissionTests {
   @Test func nativeAndLegacyWritersContendBeforeLegacyCallback() throws {
     let f = try TransactionFixture()
@@ -118,6 +223,7 @@ extension CoordinationAdmissionTests {
       ])
     defer { terminateProcess(holder) }
     try ProcessWait.marker(f.root.appendingPathComponent("ready"), child: holder, root: f.root)
+    try ProcessWait.stopped(holder, root: f.root)
     try FileManager.default.removeItem(at: f.root.appendingPathComponent("ready"))
     let waiter = try stateTestProcess(
       root: f.root,
@@ -127,6 +233,7 @@ extension CoordinationAdmissionTests {
       ])
     defer { terminateProcess(waiter) }
     try ProcessWait.marker(f.root.appendingPathComponent("ready"), child: waiter, root: f.root)
+    try ProcessWait.stopped(waiter, root: f.root)
     #expect(
       !FileManager.default.fileExists(atPath: f.root.appendingPathComponent("legacy-callback").path)
     )

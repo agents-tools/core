@@ -371,8 +371,7 @@ private func runConnection(_ input: MCPConnectionInput, limits: MCPConnectionLim
     limits.frameBytes = 1024
     limits.receivedBytes = 8192
     if mode == "event-flood" { limits.receivedBytes = 128 * 1024 }
-    limits.totalTimeout = 0.12
-    limits.requestTimeout = 1
+    if mode == "pending-body" { limits.totalTimeout = 0.12 }
     let headers = ["Authorization": "fixture-canary"]
     let input: MCPConnectionInput =
       mode.hasPrefix("legacy")

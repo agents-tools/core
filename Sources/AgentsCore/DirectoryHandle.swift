@@ -32,7 +32,10 @@ final class DirectoryHandle {
   ) throws {
     self.url = url.standardizedFileURL
     var current = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-    guard current >= 0 else { throw CoreError.unsafePath("cannot open filesystem root") }
+    guard current >= 0 else {
+      if let exhaustion = OpenFileLimitError(errno, at: self.url) { throw exhaustion }
+      throw CoreError.unsafePath("cannot open filesystem root")
+    }
     defer { if current >= 0 { close(current) } }
     let components = self.url.pathComponents.dropFirst()
     for (index, component) in components.enumerated() {
@@ -114,7 +117,15 @@ final class DirectoryHandle {
   }
 
   func names() throws -> [String] {
-    guard let stream = fdopendir(dup(descriptor)) else {
+    let copy = dup(descriptor)
+    guard copy >= 0 else {
+      if let exhaustion = OpenFileLimitError(errno, at: url) { throw exhaustion }
+      throw CoreError.unsafePath("cannot enumerate \(url.path)")
+    }
+    guard let stream = fdopendir(copy) else {
+      let code = errno
+      close(copy)
+      if let exhaustion = OpenFileLimitError(code, at: url) { throw exhaustion }
       throw CoreError.unsafePath("cannot enumerate \(url.path)")
     }
     defer { closedir(stream) }

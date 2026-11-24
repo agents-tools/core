@@ -77,23 +77,52 @@ package enum FileLock {
     return try withDescriptor(descriptor, at: url, checkpoint: { _ in }, body)
   }
 
-  static func withCoordinationDescriptor<T>(
-    at url: URL, writable: Bool, checkpoint: (String) throws -> Void = { _ in },
-    _ body: (Int32) throws -> T
-  ) throws -> T {
+  /// Owns an acquired file description or an absent lock observed through this exact parent.
+  final class CoordinationDescriptor {
+    let descriptor: Int32
+    private let parent: DirectoryHandle
+    private let name: String
+    private var isOpen: Bool
+
+    fileprivate init(_ descriptor: Int32, parent: DirectoryHandle, name: String) {
+      self.descriptor = descriptor
+      self.parent = parent
+      self.name = name
+      isOpen = descriptor >= 0
+    }
+
+    deinit { release() }
+
+    func finish() throws {
+      if descriptor >= 0 {
+        release()
+      } else if try parent.info(name) != nil {
+        throw CoordinationReadmission.required
+      }
+    }
+
+    private func release() {
+      guard isOpen else { return }
+      isOpen = false
+      close(descriptor)
+    }
+  }
+
+  static func acquireCoordinationDescriptor(
+    at url: URL, writable: Bool, checkpoint: (String) throws -> Void
+  ) throws -> CoordinationDescriptor {
     let parent = try DirectoryHandle(at: url.deletingLastPathComponent())
+    let name = url.lastPathComponent
     let descriptor = openat(
-      parent.descriptor, url.lastPathComponent,
-      (writable ? O_RDWR : O_RDONLY) | O_NOFOLLOW | O_CLOEXEC)
+      parent.descriptor, name, (writable ? O_RDWR : O_RDONLY) | O_NOFOLLOW | O_CLOEXEC)
     if descriptor < 0, !writable, errno == ENOENT {
-      let result = Result { try body(-1) }
-      if try parent.info(url.lastPathComponent) != nil { throw CoordinationReadmission.required }
-      return try result.get()
+      return CoordinationDescriptor(-1, parent: parent, name: name)
     }
     guard descriptor >= 0 else {
+      if let exhaustion = OpenFileLimitError(errno, at: url) { throw exhaustion }
       throw CoreError.invalidState("cannot open shared coordination lock")
     }
-    defer { close(descriptor) }
+    let acquired = CoordinationDescriptor(descriptor, parent: parent, name: name)
     let evidence = try FileAccessEvidence.requirePrivate(descriptor: descriptor)
     guard evidence.identity.kind == S_IFREG else {
       throw CoreError.invalidState("shared coordination lock is not a regular file")
@@ -112,12 +141,12 @@ package enum FileLock {
       }
       break
     }
-    guard try parent.info(url.lastPathComponent).map(FileObjectIdentity.init) == evidence.identity
+    guard try parent.info(name).map(FileObjectIdentity.init) == evidence.identity
     else {
       throw CoreError.invalidState("shared coordination lock changed")
     }
     try evidence.validate(descriptor: descriptor)
-    return try body(descriptor)
+    return acquired
   }
 
   private static func withDescriptor<T>(
