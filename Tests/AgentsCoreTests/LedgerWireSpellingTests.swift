@@ -88,6 +88,38 @@ struct LedgerWireSpellingTests {
     }
   }
 
+  @Test func literalAndEscapedKeysShareDuplicateDetection() throws {
+    try LedgerAdmission.check(Data(#"{"é":1,"":2}"#.utf8), limits: .standard)
+    for object in [
+      #"{ "key": 1, "\u006bey": 2 }"#,
+      #"{ "é": 1, "\u00e9": 2 }"#,
+      "{\"é\":1,\"e\u{301}\":2}",
+    ] {
+      #expect(throws: CoreError.invalidState("duplicate ledger key")) {
+        try LedgerAdmission.check(Data(object.utf8), limits: .standard)
+      }
+    }
+  }
+
+  @Test func keySpellingPreservesWireSizeAndDecodedBudgetSelection() throws {
+    var limits = LedgerLimits.standard
+    limits.keyBytes = 4
+    try LedgerAdmission.check(Data(#"{"é":0}"#.utf8), limits: limits)
+    #expect(throws: CoreError.invalidState("ledger key budget")) {
+      try LedgerAdmission.check(Data(#"{"\u00e9":0}"#.utf8), limits: limits)
+    }
+    limits = .standard
+    limits.entries = 1
+    #expect(throws: CoreError.invalidState("ledger entry budget")) {
+      try LedgerAdmission.check(Data(#"{"\u0065ntries":[1,2]}"#.utf8), limits: limits)
+    }
+    limits.objectBytes = 2
+    #expect(throws: CoreError.invalidState("ledger content byte budget")) {
+      try LedgerAdmission.check(
+        Data(#"{"\u0063ontentObjects":{"data":"YWJj"}}"#.utf8), limits: limits)
+    }
+  }
+
   @Test func invalidEscapedContentCannotBypassAdmission() throws {
     for spelling in [#"Y\nQ=="#, #"YQ\u003dA"#, #"\uD800Q=="#, #"YQ===\u003d"#] {
       let bytes = Data((#"{"contentObjects":{"first":""# + spelling + #""}}"#).utf8)

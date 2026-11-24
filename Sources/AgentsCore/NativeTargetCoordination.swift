@@ -681,7 +681,7 @@ final class SharedResource {
         try resource.validateParent()
         parents[resource.parentValidationKey] = resource.ancestry
       }
-      try resource.validateMetadata()
+      try resource.validateMetadataWithValidatedParent()
     }
   }
 
@@ -716,6 +716,44 @@ final class SharedResource {
       }
       _ = try FileAccessEvidence.requirePrivate(descriptor: current.descriptor)
       try metadataAccess?.validate(descriptor: current.descriptor)
+    }
+  }
+
+  private func validateMetadataWithValidatedParent() throws {
+    guard let metadata else { return }
+    let name = metadata.url.lastPathComponent
+    guard let metadataAccess, let directories = metadataAncestry?.directories,
+      ancestry.directories.count == parent.url.pathComponents.count,
+      directories.count == ancestry.directories.count + 2,
+      directories.dropLast(2).elementsEqual(ancestry.directories),
+      let parentAccess = ancestry.directories.last, parentAccess.identity == identity.parent,
+      let base = try? parent.child(Self.metadataName),
+      let current = try? base.child(name)
+    else {
+      try validateMetadata()
+      return
+    }
+
+    // The pass has checked the physical prefix. Reopen both private entries
+    // for each resource and check the namespace edges using each child's owner.
+    let leafAccess = try current.accessEvidence()
+    let baseAccess = try FileAccessEvidence.requireNonReplaceableDirectory(
+      descriptor: base.descriptor, protectingOwner: leafAccess.owner)
+    let currentParentAccess = try FileAccessEvidence.requireNonReplaceableDirectory(
+      descriptor: parent.descriptor, protectingOwner: baseAccess.owner)
+    let currentLeafAccess = try FileAccessEvidence.requireNonReplaceableDirectory(
+      descriptor: current.descriptor, protectingOwner: geteuid())
+    guard currentParentAccess == parentAccess,
+      baseAccess == directories[directories.count - 2],
+      leafAccess == directories.last, currentLeafAccess == leafAccess,
+      try parent.info(Self.metadataName).map(FileObjectIdentity.init) == baseAccess.identity,
+      try base.info(name).map(FileObjectIdentity.init) == leafAccess.identity
+    else {
+      throw CoreError.invalidState("filesystem access ancestry changed during preparation")
+    }
+    guard try FileAccessEvidence.requirePrivate(descriptor: current.descriptor) == metadataAccess
+    else {
+      throw CoreError.invalidState("filesystem access changed during preparation")
     }
   }
 

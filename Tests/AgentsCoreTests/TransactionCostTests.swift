@@ -7,6 +7,57 @@ import Testing
 
 @Suite("Transaction I/O cost")
 struct TransactionCostTests {
+  enum SharedMetadataDrift: CaseIterable {
+    case siblingReplacement, siblingRemoval, siblingPermissions, baseReplacement
+  }
+
+  @Test(arguments: SharedMetadataDrift.allCases)
+  func sharedMetadataValidationRejectsDriftBetweenPasses(_ drift: SharedMetadataDrift) throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let loader = root.appendingPathComponent("generated-claude")
+    let store = StateStore(
+      scope: .user,
+      environment: RuntimeEnvironment(
+        projectDirectory: root, homeDirectory: root,
+        environment: ["CLAUDE_CONFIG_DIR": loader.path]))
+    let resources = try ["first", "second"].map { name in
+      let route = try NativeTargetRoute.named(.claudeSkillPlugin, scope: .user, name: name)
+      return try SharedResource(store: store, route: route, create: true)
+    }
+    try SharedResource.validateAll(resources)
+    let sibling = try #require(resources[1].metadata).url
+    defer {
+      if drift == .siblingPermissions {
+        try? FileManager.default.setAttributes(
+          [.posixPermissions: 0o700], ofItemAtPath: sibling.path)
+      }
+    }
+    let displaced = root.appendingPathComponent("displaced")
+    switch drift {
+    case .siblingReplacement, .siblingRemoval:
+      try FileManager.default.moveItem(at: sibling, to: displaced)
+      if drift == .siblingReplacement {
+        try FileManager.default.createDirectory(
+          at: sibling, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+      }
+    case .siblingPermissions:
+      try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: sibling.path)
+    case .baseReplacement:
+      let base = sibling.deletingLastPathComponent()
+      try FileManager.default.moveItem(at: base, to: displaced)
+      try FileManager.default.createDirectory(
+        at: base, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+      for resource in resources {
+        let metadata = try #require(resource.metadata)
+        try FileManager.default.moveItem(
+          at: displaced.appendingPathComponent(metadata.url.lastPathComponent), to: metadata.url)
+      }
+    }
+    if drift != .baseReplacement { try SharedResource.validateAll([resources[0]]) }
+    #expect(throws: CoreError.self) { try SharedResource.validateAll(resources) }
+  }
+
   @Test func mixedInstallationBatchKeepsEachTargetUnderItsRegisteredRoot() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
