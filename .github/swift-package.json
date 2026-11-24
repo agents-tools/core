@@ -21,5 +21,8 @@
       "xcode": "26.6"
     }
   ],
-  "timeout_minutes": 75
+  "timeout_minutes": 75,
+  "environment": {
+    "SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH": "1"
+  }
 }
