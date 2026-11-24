@@ -7,6 +7,14 @@ import Testing
 
 @Suite("Opaque native plugin producer identity")
 struct OpaquePluginIdentityTests {
+  private var platform: DeclarationPlatform {
+    #if os(macOS)
+      .macOS
+    #else
+      .linux
+    #endif
+  }
+
   @Test(arguments: [false, true])
   func declaringNamespaceAndSelectedProducerPairThroughColdReplay(_ separateProducer: Bool) throws {
     let fixture = try LinkFixture()
@@ -34,7 +42,7 @@ struct OpaquePluginIdentityTests {
       bytes: Array(JSONSerialization.data(withJSONObject: input, options: [.sortedKeys])),
       identity: .init("consumer/agents.yaml"))
     let (linked, frozen) = try ComponentLinker.withLinkedComponents(
-      document: document, store: fixture.store, platform: .macOS
+      document: document, store: fixture.store, platform: platform
     ) { graph, session in
       let locations = Dictionary(
         (graph.sourceSnapshots + graph.declaringSnapshots).map {
@@ -52,7 +60,7 @@ struct OpaquePluginIdentityTests {
     }
     let lowering = try NativeComponentLowering.lower(
       linked, frozen: frozen,
-      request: .init(surface: .claudeCode, scope: .project), id: "opaque", platform: .macOS)
+      request: .init(surface: .claudeCode, scope: .project), id: "opaque", platform: platform)
     let record = try #require(frozen.ledger.components[lowering.inputs[0]])
     #expect(linked.key.source == linked.declaringSnapshot.source)
     #expect(record.declaringSource == frozen.sources[linked.declaringSnapshot])
@@ -65,7 +73,7 @@ struct OpaquePluginIdentityTests {
     #expect(throws: NativeComponentIssue.self) {
       try NativeComponentLowering.lower(
         linked, frozen: corrupt,
-        request: .init(surface: .claudeCode, scope: .project), id: "invalid", platform: .macOS)
+        request: .init(surface: .claudeCode, scope: .project), id: "invalid", platform: platform)
     }
     var ledger = frozen.ledger
     ledger.lowerings = [lowering]
