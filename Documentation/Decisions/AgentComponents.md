@@ -33,7 +33,7 @@ physical locations; Codex, Cursor, Gemini CLI and OpenCode read the same
   and content hash, and cleanup removes only what the lock proves agents owns.
 - **Agent targeting.** Every component can be limited to agents and platforms.
   A producer declares targeting in front matter or a package manifest; a
-  consumer narrows it in the manifest with `agents` or `.when(...)` and never
+  consumer narrows it in the manifest with `agents` or `condition` and never
   widens it. A component reaches the declared agents that the registry says
   support it. When a shared location exposes a component to agents beyond its
   targeting, agents reports the conflict and the user chooses to share or to
@@ -55,8 +55,8 @@ physical locations; Codex, Cursor, Gemini CLI and OpenCode read the same
   component an agent cannot represent is reported, not dropped or
   approximated.
 - **Distribution.** A source is a Git repository, local directory or index.
-  A repository publishes reusable groups by declaring them in its
-  `Agents.swift`; agents runs no hosted marketplace or registry.
+  A repository publishes reusable groups through the `exports` field in its
+  [YAML manifest](../Reference/Manifest.md).
 
 ## Consequences
 
@@ -88,5 +88,5 @@ physical locations; Codex, Cursor, Gemini CLI and OpenCode read the same
 - Accepted by the repository owner (showxu) on 2026-10-28.
 - Current agent locations and state: [Package](../Architecture/Package.md),
   [State](../Architecture/State.md)
-- Manifest that declares components: [Swift Manifest](SwiftManifest.md)
+- Manifest that declares components: [YAML Manifest](YAMLManifest.md)
 - Configuration application and connection tests: [Configuration Application](ConfigurationApplication.md)

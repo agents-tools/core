@@ -67,8 +67,9 @@ command parsing, terminal output and executable distribution.
   `AgentsCore` for sources, state and transactions, `AgentsManifest` for the
   declaration, and `swift-markdown` for CommonMark structure. Pure text APIs
   remain available separately.
-- **AgentsUpdates**: shared preparation, reporting and one recoverable apply
-  for all declared skills and instructions in a scope.
+- **AgentsUpdates**: previews and applies the declared configuration in one
+  recoverable transaction. It also exposes source import, component inspection
+  and explicit MCP connection tests to CLI and GUI consumers.
 
 ## Quick look
 

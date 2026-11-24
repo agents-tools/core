@@ -6,9 +6,26 @@ publication follows the [release checklist](Documentation/Reference/Release.md).
 
 ## Unreleased
 
+## 0.3.0
+
 ### Added
 
 - Linux support.
+- The `AgentsManifest` library reads and edits YAML declarations, reports field
+  locations and preserves comments and unrelated text during configuration edits.
+- Consumers can inspect and import sources, select exported groups, preview
+  native component changes and apply the reviewed configuration. An explicit
+  MCP connection test supports initialization and tool discovery.
+
+### Changed
+
+- Projects declare configuration in `.agent/agents.yaml` and users in
+  `~/.agents/agents.yaml`. Prepare and verify the declaration in each existing
+  scope before applying it with the updated CLI. See the
+  [manifest reference](Documentation/Reference/Manifest.md).
+- `agents.resolved` uses the version 2 JSON ledger. It records locked resources
+  and ownership of native configuration. Both CLI consumers must use the same
+  ledger format. See [state and recovery](Documentation/Architecture/State.md).
 
 ## 0.2.0 - 2026-10-27
 

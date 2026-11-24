@@ -49,5 +49,5 @@ or enabled the component.
 ## Related Documentation
 
 - [Agent Components and Adapters](AgentComponents.md)
-- [Swift Manifest](SwiftManifest.md)
-- [Agents Manifest Contract](../Archive/AgentsManifest.md)
+- [YAML Manifest](YAMLManifest.md)
+- [Manifest reference](../Reference/Manifest.md)
