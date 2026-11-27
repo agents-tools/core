@@ -704,7 +704,7 @@ private final class RegistryFixture {
     fixture.process.standardError = FileHandle.nullDevice
     try fixture.process.run()
     let clock = ContinuousClock()
-    let deadline = clock.now + .seconds(3)
+    let deadline = clock.now + .seconds(10)
     while fixture.process.isRunning {
       if let value = try? fixture.text("port"), let port = Int(value), (1...65535).contains(port) {
         fixture.port = port
@@ -847,8 +847,14 @@ private final class RegistryFixture {
     """#
 
   private static let server = #"""
-    import http.server, json, pathlib, sys, threading, time, urllib.parse
+    import http.server, json, pathlib, socketserver, sys, threading, time, urllib.parse
     root = pathlib.Path(sys.argv[1])
+
+    class LoopbackServer(http.server.ThreadingHTTPServer):
+        def server_bind(self):
+            # The fixture uses numeric loopback addresses; startup needs no reverse DNS.
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address[:2]
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -894,10 +900,12 @@ private final class RegistryFixture {
             self.end_headers()
             self.wfile.write(body)
 
-    sink = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    main = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    sink = LoopbackServer(("127.0.0.1", 0), Handler)
+    main = LoopbackServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=sink.serve_forever, daemon=True).start()
-    (root / "port").write_text(str(main.server_port))
+    port_file = root / "port.tmp"
+    port_file.write_text(str(main.server_port))
+    port_file.replace(root / "port")
     main.serve_forever()
     """#
 }
