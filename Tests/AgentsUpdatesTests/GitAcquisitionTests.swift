@@ -514,11 +514,13 @@ private final class GitHTTPSFixture {
                 if headers.get("Authorization") != expected:
                     self.send_response(401)
                     self.send_header("WWW-Authenticate", 'Basic realm="Fixture"')
+                    self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
             if parsed.path.startswith("/redirect.git/"):
                 self.send_response(302)
                 self.send_header("Location", self.path.replace("/redirect.git/", "/package.git/"))
+                self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
             length = int(headers.get("Content-Length", "0"))
@@ -536,8 +538,10 @@ private final class GitHTTPSFixture {
                            if name.lower() == b"status"), 200)
             self.send_response(status)
             for name, value in response:
-                if name.lower() != b"status":
+                if name.lower() not in (b"status", b"content-length"):
                     self.send_header(name.decode(), value.decode())
+            # GnuTLS needs a complete HTTP message before the fixture closes the socket.
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
