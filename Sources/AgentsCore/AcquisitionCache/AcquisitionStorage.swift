@@ -431,7 +431,7 @@ extension AcquisitionCache {
             errno, at: entry.url.appendingPathComponent(file),
             otherwise: .invalidState("cannot remove cache file"))
         }
-        reclaimed += info.st_size
+        reclaimed += Int64(info.st_size)
       }
       try entry.sync()
       guard try trash.info(entryName).map(FileObjectIdentity.init) == expected.identities["."]
@@ -458,7 +458,7 @@ extension AcquisitionCache {
       }
       stats[name] = info
       identities[name] = FileObjectIdentity(info)
-      let sum = bytes.addingReportingOverflow(info.st_size)
+      let sum = bytes.addingReportingOverflow(Int64(info.st_size))
       guard !sum.overflow else { throw AcquisitionCacheError.invalidEntry }
       bytes = sum.partialValue
     }

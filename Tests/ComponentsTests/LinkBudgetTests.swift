@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Components
 import Foundation
 import Testing
@@ -32,18 +33,41 @@ struct LinkBudgetTests {
     }
   }
 
+  @Test func oversizedInstructionSectionsFailManifestAdmission() throws {
+    let fixture = try LinkFixture()
+    let sections = Array(repeating: "name: rules", count: 10_000).joined(separator: ",")
+    let expression = "version: 1\ncomponents: [{kind: instructions, sections: [\(sections)]}]\n"
+
+    do {
+      _ = try fixture.document(expression)
+      Issue.record("expected source map limit")
+    } catch let failure as ManifestFailure {
+      #expect(failure.stage == .admission)
+      #expect(failure.diagnostics.first?.code == "manifest.limit")
+      #expect(failure.diagnostics.first?.message == "source map budget")
+    }
+  }
+
   @Test func repeatedContributionsReachLimitAndRejectOverflow() throws {
     let fixture = try LinkFixture()
-    try fixture.instruction("rules", at: fixture.project)
-    func expression(overflow: Bool) -> String {
-      let sections = Array(repeating: "name: rules", count: 10_000).joined(separator: ",")
-      let extra = overflow ? ", {kind: instructions, sections: [{name: rules}]}" : ""
-      return "version: 1\ncomponents: [{kind: instructions, sections: [\(sections)]}\(extra)]\n"
-
+    let source = fixture.root.appendingPathComponent("skills-source")
+    for index in 0..<500 {
+      try fixture.skill("skill-\(index)", at: source)
     }
-    #expect(try fixture.link(expression(overflow: false)).components.count == 10_000)
+    let selection = "{kind: skills, source: p, mode: edit}"
+    let selections = Array(repeating: selection, count: 20)
+    let extra = "{kind: skills, source: p, mode: edit, select: [skill-0]}"
+    func expression(_ selections: [String]) -> String {
+      """
+      version: 1
+      sources: {p: {path: "\(source.path)"}}
+      components: [\(selections.joined(separator: ","))]
+      """
+    }
+
+    #expect(try fixture.link(expression(selections)).components.count == 10_000)
     do {
-      _ = try fixture.link(expression(overflow: true))
+      _ = try fixture.link(expression(selections + [extra]))
       Issue.record("expected occurrence limit")
     } catch LinkError.budget(let name) {
       #expect(name == "contribution occurrences")

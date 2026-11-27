@@ -40,11 +40,10 @@ struct AuthorLockedPackageTests {
     let ledger = try fixture.store.loadLedger()
     #expect(ledger.resources.values.contains { $0.kind == .git })
     #expect(ledger.resources.values.contains { $0.kind == .embedded })
+    let lockedSkill = MarketplaceMemberKey(kind: .skills, name: "getting-started")
     let spec = AuthorPackageSpecification(
       package: .init(name: "mixed", version: "2.0.0"),
-      lockedMembers: [
-        .init(kind: .skills, name: "getting-started"), .init(kind: .instructions, name: "rules"),
-      ])
+      lockedMembers: [lockedSkill, .init(kind: .instructions, name: "rules")])
     try FileManager.default.removeItem(at: catalog)
     let before = try FileHash.folderHash(fixture.root)
     let artifact = try AuthorPackageOperations.preview(spec, environment: fixture.environment)
@@ -62,21 +61,23 @@ struct AuthorLockedPackageTests {
     let installed = try UpdateOperations.inspect(environment: consumer.environment)
     #expect(installed.components.map(\.name) == ["getting-started"])
 
+    let policySpec = AuthorPackageSpecification(package: spec.package, lockedMembers: [lockedSkill])
+    let policyArtifact = try AuthorPackageOperations.preview(
+      policySpec, environment: fixture.environment)
     let policy = fixture.root.appendingPathComponent("org.yaml")
     var denied = fixture.environment
     denied.userOrganizationPolicy = .init(.local(policy))
     try fixture.write("enforcement: block\ndependencies: {deny: ['_local/leaf']}", to: policy)
     do {
-      _ = try AuthorPackageOperations.preview(spec, environment: denied)
+      _ = try AuthorPackageOperations.preview(policySpec, environment: denied)
       Issue.record("Transitive package was not denied.")
     } catch let error as OrganizationPolicyFailure {
-      #expect(
-        error.report.findings.contains { $0.rule == "package-deny" && $0.identity == "_local/leaf" }
-      )
+      let findings = error.report.findings.map { "\($0.rule): \($0.identity)" }
+      #expect(findings.contains("package-deny: _local/leaf"))
     }
     let output = fixture.root.appendingPathComponent("denied.bundle")
     #expect(throws: OrganizationPolicyFailure.self) {
-      try AuthorPackageOperations.write(artifact, to: output, environment: denied)
+      try AuthorPackageOperations.write(policyArtifact, to: output, environment: denied)
     }
     #expect(!FileManager.default.fileExists(atPath: output.path))
   }
