@@ -83,8 +83,9 @@ let package = Package(
       name: "ComponentsTests",
       dependencies: [
         "Components", "AgentsCore", "AgentsManifest", "AgentsSkills", "AgentsInstructions",
-        "StateTestProcess", "StateTestSupport", "MCPTestProcess",
+        "StateTestSupport",
       ], resources: [.copy("Fixtures")]),
+    // SwiftPM builds the process fixtures as executables. Tests launch them by path.
     .executableTarget(
       name: "MCPTestProcess", dependencies: ["CPlatform"], path: "Tests/MCPTestProcess"),
     .target(
@@ -100,7 +101,7 @@ let package = Package(
     .testTarget(
       name: "AgentsCoreTests",
       dependencies: [
-        "AgentsCore", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
+        "AgentsCore", "AgentsManifest", "StateTestSupport", "CPlatform",
       ]),
     .testTarget(
       name: "AgentsInstructionsTests",
@@ -117,21 +118,19 @@ let package = Package(
     .testTarget(
       name: "AgentsManifestTests",
       dependencies: [
-        "AgentsManifest", "AgentsCore", "ManifestTestProcess",
-        "ManifestTestSupport",
+        "AgentsManifest", "AgentsCore", "ManifestTestSupport",
       ]),
     .testTarget(
       name: "AgentsUpdatesTests",
       dependencies: [
-        "AgentsUpdates", "AgentsManifest", "StateTestProcess", "StateTestSupport", "CPlatform",
-        "MCPTestProcess",
+        "AgentsUpdates", "AgentsManifest", "StateTestSupport", "CPlatform",
       ]),
     .testTarget(
       name: "AgentsSkillsTests",
       dependencies: [
         "AgentsSkills", "AgentsCore", "AgentsManifest", "AgentsInstructions", "AgentsUpdates",
         "Yams",
-        "StateTestProcess", "StateTestSupport", "CPlatform",
+        "StateTestSupport", "CPlatform",
       ]),
   ],
   swiftLanguageModes: [.v6]

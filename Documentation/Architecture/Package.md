@@ -25,6 +25,10 @@ AgentsCore → CPlatform, CSQLite, Crypto, Markdown, TOMLSemantics, Yams
 parser/scanner and headers, with upstream license and per-file provenance.
 The runtime is a normal SwiftPM dependency. Consumers never receive parser types.
 
+SwiftPM builds `ManifestTestProcess`, `StateTestProcess` and `MCPTestProcess`
+as standalone fixture executables. Tests locate and launch them from the build
+products directory. Test bundles link the support libraries they import.
+
 ## NativeDocuments
 
 `NativeDocuments` inspects provided JSON, JSONC and TOML bytes and prepares
