@@ -203,10 +203,13 @@ operations supply their own dependencies.
 Planning validates required content before applying. Reports include old and
 new section records, target before/after bytes and recipients, drift, foreign
 targets, a missing-lock status and changed prompt names.
-`InstructionUpdateReport.outputs` provides the complete candidate bytes for
-each local recipient and target, including unchanged files and the assembled
-Claude forwarding file. Recipients that share a file have the same URL and
-bytes. ChatGPT App and Gemini App produce ordered Markdown with no file URL.
+`InstructionUpdateReport.outputs` provides candidate bytes for each local
+recipient and target, including unchanged targets. Update reviews show the
+managed import block for Claude forwarding files. The read-only
+`InstructionOperations.previewOutputs` operation shows the assembled
+forwarding file, including handwritten content. Recipients that share a file
+have the same URL and bytes. ChatGPT App and Gemini App produce ordered
+Markdown with no file URL.
 Their selections and input pins can be saved with the declaration and lock.
 Named prompt exports use their own declaration and append file.
 `InstructionTargetChange.beforeAgents` is nil when the previous lock has no target

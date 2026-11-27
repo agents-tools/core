@@ -133,7 +133,7 @@ enum UpdateReporting {
     before: LockedInstructions, after: LockedInstructions, changes: [AggregatedChange],
     ledger: ResolvedLedger, artifacts: [ReplayedArtifact],
     lockMissing: Bool, included: Bool, store: StateStore, stateChanged: Bool,
-    conflicts: [String]
+    conflicts: [String], includeUnmanagedForwardingContent: Bool = false
   ) throws -> InstructionUpdateReport {
     guard included else {
       return InstructionUpdateReport(
@@ -187,10 +187,13 @@ enum UpdateReporting {
         "Antigravity shares a 20,000-token budget across active global and always-on rules. "
           + "When exceeded, the largest rules may be loaded as file pointers."
       ] : []
-    var outputs = changes.flatMap { change -> [InstructionBuildOutput] in
-      guard !change.native, InstructionLocations.isInstructionFormat(change.deployment.route),
-        let content = change.after
+    var outputs = try changes.flatMap { change -> [InstructionBuildOutput] in
+      guard !change.native, InstructionLocations.isInstructionFormat(change.deployment.route)
       else { return [] }
+      let bytes =
+        includeUnmanagedForwardingContent || change.deployment.ownership != .importBlock
+        ? change.after : try InstructionTargets.ownedImportBytes(change.after)
+      guard let content = bytes else { return [] }
       let key = InstructionLocations.key(for: change.url, store: store)
       return (after.targets[key]?.agents ?? []).map { agent in
         InstructionBuildOutput(

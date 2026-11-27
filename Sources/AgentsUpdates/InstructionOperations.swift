@@ -13,6 +13,7 @@ struct InstructionAddition: Sendable {
 
 extension InstructionOperations {
   /// Compiles the saved instruction outputs under read locks without preparing publication.
+  /// Claude forwarding output includes the assembled destination file.
   public static func previewOutputs(
     scope: InstallScope = .project, environment: RuntimeEnvironment = RuntimeEnvironment()
   ) throws -> CombinedUpdateReport {

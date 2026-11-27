@@ -194,8 +194,8 @@ struct InstructionBuildTests {
     #expect(Set(local.map(\.content)).count == 1)
     #expect(local.allSatisfy { !String(decoding: $0.content, as: UTF8.self).contains("old") })
     let claude = try #require(outputs.first { $0.fileURL?.path == forwarding.path })
-    #expect(String(decoding: claude.content, as: UTF8.self).hasSuffix(original))
-    #expect(String(decoding: claude.content, as: UTF8.self).contains("@AGENTS.md"))
+    let importBlock = Data(ClaudeForwarding.renderBlock(for: .root).utf8)
+    #expect(claude.content == importBlock)
     #expect(!FileManager.default.fileExists(atPath: shared.path))
     #expect(!FileManager.default.fileExists(atPath: fixture.store.declarationURL.path))
     #expect(!FileManager.default.fileExists(atPath: fixture.store.resolvedURL.path))
@@ -207,8 +207,16 @@ struct InstructionBuildTests {
     }
     #expect(applied.report.instructions.outputs == outputs)
     for output in outputs {
-      if let file = output.fileURL { #expect(try fixture.bytes(file) == output.content) }
+      if let file = output.fileURL, file.path != forwarding.path {
+        #expect(try fixture.bytes(file) == output.content)
+      }
     }
+    let assembled = importBlock + Data(("\n" + original).utf8)
+    #expect(try fixture.bytes(forwarding) == assembled)
+    let explicitPreview = try InstructionOperations.previewOutputs(environment: fixture.environment)
+    let forwardingOutput = try #require(
+      explicitPreview.instructions.outputs.first { $0.fileURL?.path == forwarding.path })
+    #expect(forwardingOutput.content == assembled)
     let unchanged = try fixture.preview().instructions
     #expect(!unchanged.hasChanges)
     #expect(unchanged.outputs == outputs)

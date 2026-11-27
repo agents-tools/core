@@ -396,9 +396,11 @@ extension LifecycleCompositionTests {
     let file = fixture.root.appendingPathComponent("CLAUDE.md")
     try fixture.write("# Private sibling sentinel\n", to: file)
     let report = try fixture.preview()
-    #expect(
-      !String(decoding: try JSONEncoder().encode(report), as: UTF8.self).contains(
-        "Private sibling sentinel"))
+    let decoded = try JSONDecoder().decode(
+      CombinedUpdateReport.self, from: JSONEncoder().encode(report))
+    let forwarding = try #require(
+      decoded.instructions.outputs.first { $0.fileURL?.path == file.path })
+    #expect(forwarding.content == Data(ClaudeForwarding.renderBlock(for: .root).utf8))
     _ = try fixture.apply()
     let before = try fixture.bytes(file)
     let fingerprint = try fixture.preview().displayedFingerprint
@@ -410,6 +412,7 @@ extension LifecycleCompositionTests {
       try before.write(to: file)
       #expect(throws: UpdateApplyError.self) { try update.apply() }
     }
+    #expect(try fixture.bytes(file) == before)
   }
 }
 

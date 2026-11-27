@@ -47,7 +47,7 @@ enum InstructionOutputPreview {
         changes: aggregation.changes, ledger: aggregation.ledger, artifacts: artifacts,
         lockMissing: lockMissing, included: true, store: store,
         stateChanged: prior.lowerings.flatMap(\.artifacts) != next.lowerings.flatMap(\.artifacts),
-        conflicts: aggregation.antigravityConflicts)
+        conflicts: aggregation.antigravityConflicts, includeUnmanagedForwardingContent: true)
       let locations =
         try UpdateOperations.readLocations(
           declarations: [], ledgers: [aggregation.ledger], store: store, roots: roots)

@@ -134,7 +134,8 @@ public struct InstructionUpdateReport: Codable, Sendable, Equatable {
   private let buildOutputs: [InstructionBuildOutput]?
   private let advisoryMessages: [String]?
   private let conflictMessages: [String]?
-  /// Complete candidate bytes for each selected recipient and target, including unchanged files.
+  /// Candidate bytes for each selected recipient and target, including unchanged targets.
+  /// Update reviews expose the managed import block for a shared Claude forwarding file.
   public var outputs: [InstructionBuildOutput] { buildOutputs ?? [] }
   /// Informational guidance about applying the selected instructions.
   public var advisories: [String] { advisoryMessages ?? [] }
