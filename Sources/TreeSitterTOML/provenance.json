@@ -1,0 +1,26 @@
+{
+  "upstream": "https://github.com/tree-sitter-grammars/tree-sitter-toml.git",
+  "revision": "64b56832c2cffe41758f28e05c756a3a98d16f41",
+  "files": {
+    "parser.c": {
+      "source": "src/parser.c",
+      "sha256": "1991a2608e6f0214e563fe5f762e8df72954dc69a3dd9a1e22ea8a870e4052c3"
+    },
+    "scanner.c": {
+      "source": "src/scanner.c",
+      "sha256": "b25ff3b5034f40046e9a041d1e9110aa46d081706bbd1b748b480701aa6f5bde"
+    },
+    "tree_sitter/parser.h": {
+      "source": "src/tree_sitter/parser.h",
+      "sha256": "a1f6ef161fbaf48a0e10fca90ef5290a062462b307b3898aa562993853b9f80a"
+    },
+    "include/toml.h": {
+      "source": "bindings/swift/TreeSitterTOML/toml.h",
+      "sha256": "5ad880da451bae8855bd376f9ac267ff10cc44c5fbbdf6ea67cd08ffcc087757"
+    },
+    "LICENSE": {
+      "source": "LICENSE",
+      "sha256": "b727eee929bee836e8102cecf749a795b199f291b58c885bcd81cae727ac5a46"
+    }
+  }
+}

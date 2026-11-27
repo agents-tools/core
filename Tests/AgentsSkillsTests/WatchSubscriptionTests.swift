@@ -1,6 +1,10 @@
 import AgentsCore
+import AgentsInstructions
+import AgentsManifest
 import AgentsSkills
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Watch subscriptions")
@@ -13,11 +17,13 @@ struct WatchSubscriptionTests {
     try writeInstruction("removed", body: "old", fixture: fixture)
     try fixture.commit()
     let initial = try fixture.head()
-    try fixture.store().save(declaration: Declaration(), resolved: ResolvedState())
+    try fixture.store().save(declaration: Declaration(), ledger: ResolvedLedger())
     let watch = SkillOperations.watchOperations()
-    #expect(
-      try watch.add(fixture.repo.path, alias: "upstream", environment: fixture.environment)
-        == .revision(initial))
+    let id = try SourceDeclaration(kind: .local, location: fixture.repo.path).identity(
+      environment: fixture.environment)
+    let added = try watch.add(
+      fixture.repo.path, alias: "upstream", environment: fixture.environment)
+    #expect(added.alias == "upstream" && added.sourceID == id && added.seen == .revision(initial))
     #expect(try fixture.store().loadDeclaration().skills == nil)
     #expect(try fixture.store().loadResolved().skills.isEmpty)
     #expect(!FileManager.default.fileExists(atPath: fixture.target("changed").path))
@@ -57,7 +63,10 @@ struct WatchSubscriptionTests {
     #expect(try stateBytes(fixture) == bytes)
     #expect(try fixture.head() == current)
 
-    try watch.seen("upstream", environment: fixture.environment)
+    let acknowledged = try watch.seen("upstream", environment: fixture.environment)
+    #expect(
+      acknowledged.alias == "upstream" && acknowledged.sourceID == id
+        && acknowledged.seen == .revision(current))
     #expect(try watch.status(environment: fixture.environment).first?.changes.isEmpty == true)
     try fixture.skill("later", body: "later")
     try fixture.commit()
@@ -85,10 +94,12 @@ struct WatchSubscriptionTests {
     let store = fixture.store(scope)
     let lock = try Data(contentsOf: store.resolvedURL)
     let installed = try fixture.body(fixture.target("demo", scope: scope))
-    try watch.add("fixture", scope: scope, environment: fixture.environment)
-    try watch.remove(fixture.repo.path, scope: scope, environment: fixture.environment)
+    let added = try watch.add("fixture", scope: scope, environment: fixture.environment)
+    let removed = try watch.remove(
+      fixture.repo.path, scope: scope, environment: fixture.environment)
+    #expect(removed.alias == "fixture" && removed.sourceID == added.sourceID && removed.seen == nil)
     #expect(try store.loadWatch().sources.isEmpty)
-    #expect(try store.loadDeclaration().watch == [])
+    #expect(try store.loadDeclaration().watch == nil)
     #expect(try store.loadDeclaration().skills?["fixture"] != nil)
     #expect(try Data(contentsOf: store.resolvedURL) == lock)
     #expect(try fixture.body(fixture.target("demo", scope: scope)) == installed)
@@ -105,11 +116,12 @@ struct WatchSubscriptionTests {
         "source": SourceDeclaration(
           kind: .local, location: fixture.repo.path,
           requirement: .exact("1.0.0"))
-      ]), resolved: ResolvedState())
+      ]), ledger: ResolvedLedger())
     try fixture.skill("demo", body: "head")
     try fixture.commit()
     let watch = SkillOperations.watchOperations()
-    #expect(try watch.add("source", environment: fixture.environment) == .revision(fixture.head()))
+    #expect(
+      try watch.add("source", environment: fixture.environment).seen == .revision(fixture.head()))
     try fixture.skill("demo", body: "uncommitted")
     #expect(try watch.status(environment: fixture.environment).first?.changes.isEmpty == true)
     try git(fixture, ["checkout", "-b", "next-default"])
@@ -320,7 +332,7 @@ struct WatchSubscriptionTests {
       { _ = try SkillOperations.remove(skillNames: ["demo"], environment: fixture.environment) },
       {
         try fixture.store().save(
-          declaration: Declaration(), resolved: ResolvedState(), watch: WatchState())
+          declaration: Declaration(), ledger: ResolvedLedger(), watch: WatchState())
       },
     ]
     for mutate in mutations {
@@ -337,24 +349,23 @@ struct WatchSubscriptionTests {
       try watch.add(fixture.repo.path, environment: fixture.environment)
     }
     #expect(!FileManager.default.fileExists(atPath: fixture.store().declarationURL.path))
+    let instructions = fixture.repo.appendingPathComponent("instructions")
+    try FileManager.default.createDirectory(at: instructions, withIntermediateDirectories: true)
+    try Data("---\ndescription: Canonical rules\n---\n# Rules\nCanonical\n".utf8).write(
+      to: instructions.appendingPathComponent("canonical.md"))
     try fixture.commit()
-    let declaration = Declaration(
-      sources: ["rules": SourceDeclaration(kind: .local, location: fixture.repo.path)],
-      instructions: InstructionsDeclaration(sections: ["rules:canonical"]))
-    let lock = ResolvedState(
-      sources: ["local:" + fixture.repo.path: LockedSource(kind: .local)],
-      instructions: LockedInstructions(sections: [
-        LockedSection(
-          name: "canonical", source: "local:" + fixture.repo.path,
-          revision: try fixture.head(), path: "instructions/canonical.md",
-          hash: "sha256:" + String(repeating: "a", count: 64))
-      ]))
-    try fixture.store().save(declaration: declaration, resolved: lock)
+    _ = try InstructionOperations.add(
+      InstructionAddOptions(
+        source: fixture.repo.path, alias: "rules", names: ["canonical"], agents: [.codex],
+        environment: fixture.environment))
+    let declaration = try fixture.store().loadDeclaration()
+    #expect(
+      try fixture.store().loadLedger().components.values.contains { $0.kind == "instructions" })
     let lockBytes = try Data(contentsOf: fixture.store().resolvedURL)
     try watch.add("rules", environment: fixture.environment)
     try watch.seen("rules", environment: fixture.environment)
     try watch.remove("rules", environment: fixture.environment)
-    #expect(try fixture.store().loadDeclaration().instructions == declaration.instructions)
+    #expect(try fixture.store().loadDeclaration().instructions == (try declaration.instructions))
     #expect(try Data(contentsOf: fixture.store().resolvedURL) == lockBytes)
   }
 }

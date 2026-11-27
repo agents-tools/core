@@ -1,6 +1,9 @@
 import AgentsCore
+import AgentsManifest
 import AgentsSkills
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Typed source shorthand")
@@ -19,9 +22,12 @@ struct SourceShorthandTests {
     #expect(
       declaration.sources == [
         "source": SourceDeclaration(
-          kind: .local, location: fixture.repo.path, requirement: .branch("master"))
+          kind: .local, location: fixture.repo.path, requirement: .branch("master"),
+          environment: SourceEnvironment(
+            projectDirectory: fixture.environment.projectDirectory,
+            homeDirectory: fixture.environment.homeDirectory))
       ])
-    #expect(declaration.skills?["source"]?.select == .names(["demo"]))
+    #expect((try declaration.skills)?["source"]?.select == .names(["demo"]))
   }
 
   @Test func sourceListingFiltersToTheSelectedSkill() throws {
@@ -58,7 +64,7 @@ struct SourceShorthandTests {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "A")
     try fixture.commit()
-    try fixture.store().save(declaration: Declaration(), resolved: ResolvedState())
+    try fixture.store().save(declaration: Declaration(), ledger: ResolvedLedger())
     let watch = SkillOperations.watchOperations()
     #expect(throws: CoreError.self) {
       try watch.add(fixture.repo.path + "@skill:demo", environment: fixture.environment)

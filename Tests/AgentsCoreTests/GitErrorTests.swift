@@ -1,4 +1,6 @@
+import AgentsManifest
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -32,6 +34,30 @@ struct GitErrorTests {
         error.description
           == "Git could not \(phrase) https://example.com/source.git.\nfatal: failed")
     }
+  }
+
+  @Test func locationContextPreservesSanitizedGitFailure() {
+    let source = "file://localhost/producer"
+    let mirror = URL(fileURLWithPath: "/temporary/cache/source.git")
+    let command = ["git", "-C", mirror.path, "fetch"]
+    var error = GitError(
+      operation: .fetch, source: source,
+      stderr: "Receiving objects: 100% (1/1), done.\nfatal: cannot read '\(mirror.path)'\n",
+      command: command, exitCode: 128, replacingPaths: [mirror])
+    #expect(error.context.isEmpty)
+    let original = error
+    let span = SourceSpan(
+      document: DocumentIdentity("consumer/agents.yaml"), start: 10, end: 40, line: 3, column: 5)
+    error.context.append(span)
+    #expect(error.operation == original.operation)
+    #expect(error.source == original.source)
+    #expect(error.stderr == original.stderr)
+    #expect(error.command == original.command)
+    #expect(error.exitCode == original.exitCode)
+    #expect(error.context == [span])
+    #expect(error.description == original.description + " at consumer/agents.yaml:3:5")
+    #expect(!error.description.contains(mirror.path))
+    #expect(error.stderr == "fatal: cannot read '\(source)'")
   }
 
   @Test func missingFileRepositoryIdentifiesCloneAndSource() throws {
@@ -144,11 +170,20 @@ struct GitErrorTests {
     try initGitRepo(upstream)
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     let source = SourceDeclaration(kind: .local, location: upstream.path)
-    try store.save(declaration: Declaration(sources: ["source": source]), resolved: ResolvedState())
+    let id = try source.identity(environment: store.environment)
+    // Recovery knows a source location from the lock or watch state, never the declaration.
+    let head = try ProcessRunner.git(
+      ["-C", upstream.path, "rev-parse", "HEAD"], operation: .resolveRevision(revision: "HEAD"),
+      source: upstream.path
+    ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    var ledger = ResolvedLedger()
+    ledger.sources[id] = .init(
+      kind: .local, location: .init(kind: .absolute, path: upstream.path), revision: head)
+    try store.save(declaration: Declaration(sources: ["source": source]), ledger: ledger)
     let cache = SourceCache(store: store)
     _ = try cache.resolve(source)
     try cache.beginWatchReferenceUpdate()
-    let mirror = cache.mirrorURL(sourceID: try source.identity(environment: store.environment))
+    let mirror = cache.mirrorURL(sourceID: id)
     try Data("[invalid\n".utf8).write(to: mirror.appendingPathComponent("config"))
 
     let error = try #require(throws: GitError.self) { try cache.recoverWatchReferences() }

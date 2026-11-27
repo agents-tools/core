@@ -1,3 +1,5 @@
+import AgentsManifest
+import AgentsUpdates
 import Foundation
 import Testing
 
@@ -35,9 +37,16 @@ struct InstalledInventoryTests {
       to: universal.appendingPathComponent("invalid/SKILL.md"))
     let claude = AgentRegistry.installSkillsDirectory(
       for: .claudeCode, scope: scope, environment: environment)
+    try FileManager.default.createDirectory(
+      at: claude.deletingLastPathComponent(), withIntermediateDirectories: true)
     _ = try SkillOperations.initializeSkill(named: "claude-only", directory: claude)
     var expectedCodex = Set(["linked"])
     if scope == .user {
+      for agent in [AgentID.codex, .opencode] {
+        let selected = AgentRegistry.userSkillsDirectory(for: agent, environment: environment)
+        try FileManager.default.createDirectory(
+          at: selected.deletingLastPathComponent(), withIntermediateDirectories: true)
+      }
       _ = try SkillOperations.initializeSkill(
         named: "codex-native",
         directory: AgentRegistry.userSkillsDirectory(for: .codex, environment: environment))
@@ -98,24 +107,31 @@ struct InstalledInventoryTests {
       let file = corruptDeclaration ? store.declarationURL : store.resolvedURL
       let bytes = Data("{corrupt".utf8)
       try bytes.write(to: file)
-      #expect(throws: CoreError.self) { try fixture.add(mode: mode, scope: scope) }
-      #expect(throws: CoreError.self) {
-        try SkillOperations.listManaged(scope: scope, environment: fixture.environment)
+      // Declaration diagnostics come from the manifest front end; a corrupt lock is a state error.
+      func expectFailure(_ body: () throws -> Void) {
+        if corruptDeclaration {
+          #expect(throws: ManifestFailure.self, performing: body)
+        } else {
+          #expect(throws: CoreError.self, performing: body)
+        }
       }
-      #expect(throws: CoreError.self) {
-        try SkillOperations.listInstalled(scope: scope, environment: fixture.environment)
+      expectFailure { _ = try fixture.add(mode: mode, scope: scope) }
+      expectFailure {
+        _ = try SkillOperations.listManaged(scope: scope, environment: fixture.environment)
       }
-      #expect(throws: CoreError.self) {
-        try SkillOperations.removableSkillNames(scope: scope, environment: fixture.environment)
+      expectFailure {
+        _ = try SkillOperations.listInstalled(scope: scope, environment: fixture.environment)
       }
-      #expect(throws: CoreError.self) {
-        try SkillOperations.doctor(scope: scope, environment: fixture.environment)
+      expectFailure {
+        _ = try SkillOperations.removableSkillNames(scope: scope, environment: fixture.environment)
+      }
+      expectFailure {
+        _ = try SkillOperations.doctor(scope: scope, environment: fixture.environment)
       }
       #expect(try Data(contentsOf: file) == bytes)
       #expect(
-        try FileManager.default.contentsOfDirectory(atPath: store.directory.path) == [
-          file.lastPathComponent
-        ])
+        try Set(FileManager.default.contentsOfDirectory(atPath: store.directory.path))
+          == Set([file.lastPathComponent]))
       #expect(!FileManager.default.fileExists(atPath: store.cacheDirectory.path))
       #expect(
         !FileManager.default.fileExists(

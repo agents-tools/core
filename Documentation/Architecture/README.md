@@ -1,12 +1,21 @@
 # Architecture
 
 This directory holds the current truth for `core`, a SwiftPM library package.
-`AgentsCore` owns shared sources, declaration and lock storage, cache, watch subscriptions, and agent locations;
-`AgentsSkills` owns skill discovery and lifecycle operations and depends on
-`AgentsCore` and Yams. `AgentsInstructions` owns instruction lifecycle and text
-transformations. It depends on `AgentsCore` for sources and state, and on
-`swift-markdown` for CommonMark structure. `AgentsUpdates` composes both domains
-above those modules. Tests follow those module boundaries.
+`AgentsManifest` owns YAML admission, scalar resolution, schema validation,
+source maps and lossless edits for the complete typed declaration. It plans
+writes through `StateStore`, whose file I/O stays in core. `AgentsCore` owns
+syntax-independent declaration IR, spans, provenance, shared sources,
+declaration bytes and lock storage, cache, watch subscriptions, and agent
+locations, without knowing the declaration format. `AgentsSkills` owns skill
+discovery and lifecycle operations and depends on `AgentsCore`,
+`AgentsManifest` and Yams. `AgentsInstructions` owns instruction lifecycle and
+text transformations. It depends on `AgentsCore` for sources and state,
+`AgentsManifest` for the declaration, and `swift-markdown` for CommonMark
+structure. `Components` links exact source exports through package readers above those
+modules. `AgentsUpdates` composes the existing skill and instruction lifecycle. Tests
+follow those module boundaries. `NativeDocuments` supplies package-only native
+JSON/JSONC/TOML inspection and ownership-checked byte edits, backed by the
+internal TOML semantic validator and pinned CST grammar.
 
 ## Belongs Here
 
@@ -25,6 +34,7 @@ above those modules. Tests follow those module boundaries.
 ## Current Files
 
 - `Package.md`: library products, module boundaries, and public workflows
+- `NativeDocuments.md`: native byte inspection, ownership evidence and regional edits
 - `State.md`: declaration, resolved state, source cache and installation invariants
 - `Instructions.md`: instruction discovery, targets, lifecycle, prompts and diagnostics
 - `Watch.md`: subscription operations, upstream comparisons and seen-state retention

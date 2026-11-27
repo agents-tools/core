@@ -5,6 +5,15 @@ import Testing
 
 @Suite("File hashes")
 struct FileHashTests {
+  @Test func sha256MatchesStandardVectors() {
+    #expect(
+      FileHash.sha256Hex(data: Data())
+        == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    #expect(
+      FileHash.sha256Hex(data: Data("abc".utf8))
+        == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+  }
+
   @Test func arbitraryBytesCannotImpersonateTreeEntries() throws {
     let root = try temporaryDirectory()
     defer { removeTemporaryDirectory(root) }
@@ -41,6 +50,25 @@ struct FileHashTests {
     try "changed".write(
       to: root.appendingPathComponent("nested/b.txt"), atomically: true, encoding: .utf8)
     #expect(try FileHash.folderHash(root) != first)
+  }
+
+  @Test func streamedTreeUsesTheCanonicalRecordOrder() throws {
+    let root = try temporaryDirectory()
+    defer { removeTemporaryDirectory(root) }
+    let directory = root.appendingPathComponent("rules")
+    let content = Data(repeating: 0x7e, count: 150_000)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    try content.write(to: directory.appendingPathComponent("guide"))
+    try Data("extra".utf8).write(to: root.appendingPathComponent("rules-extra"))
+    try FileManager.default.createSymbolicLink(
+      atPath: root.appendingPathComponent("rules0").path, withDestinationPath: "rules/guide")
+    let expected = FileHash.hashRecords([
+      ("rules0", Data("link\0rules/guide".utf8)),
+      ("rules/guide", Data("file\0".utf8) + content),
+      ("rules-extra", Data("file\0extra".utf8)),
+      ("rules", Data("directory".utf8)),
+    ])
+    #expect(try FileHash.folderHash(root) == expected)
   }
 
   @Test func hashesSymlinkedFolderLikeItsTarget() throws {

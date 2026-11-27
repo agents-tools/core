@@ -19,6 +19,22 @@ func removeTemporaryDirectory(_ directory: URL) {
   }
 }
 
+func makeDirectoriesWritable(_ root: URL) {
+  guard let entries = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
+  else {
+    return
+  }
+  for case let entry as URL in entries {
+    var info = stat()
+    if lstat(entry.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR {
+      _ = chmod(entry.path, (info.st_mode & 0o7777) | S_IRWXU)
+    }
+  }
+}
+
+/// The inspection error while automatic recovery is pending.
+let pendingRecovery = CoreError.recoveryPending(TransactionRecoveryDiagnostic.pendingMessage)
+
 func initGitRepo(_ repo: URL) throws {
   try ProcessRunner.run(
     "/usr/bin/env", arguments: ["git", "init", "--initial-branch=master", repo.path])
@@ -45,7 +61,7 @@ func gitHead(_ repo: URL) throws -> String {
 func stateTestProcess(
   root: URL, arguments: [String], environment: [String: String] = [:]
 ) throws -> Process {
-  var directory = Bundle(for: TransactionTestBundle.self).bundleURL.deletingLastPathComponent()
+  var directory = Bundle(for: TransactionTestBundle.self).bundleURL
   while !FileManager.default.isExecutableFile(
     atPath: directory.appendingPathComponent("StateTestProcess").path), directory.path != "/"
   {

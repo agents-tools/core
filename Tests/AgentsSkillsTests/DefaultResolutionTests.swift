@@ -1,4 +1,7 @@
+import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -51,7 +54,7 @@ struct DefaultResolutionTests {
     let declaration = Declaration(sources: [
       "upstream": SourceDeclaration(kind: .git, location: "file://localhost" + fixture.repo.path)
     ])
-    try fixture.store().save(declaration: declaration, resolved: ResolvedState())
+    try fixture.store().save(declaration: declaration, ledger: ResolvedLedger())
     _ = try SkillOperations.add(
       AddOptions(
         source: "upstream", agents: [.codex], skillNames: ["pinned"],
@@ -65,14 +68,14 @@ struct DefaultResolutionTests {
     #expect(FileManager.default.fileExists(atPath: mirror.path))
     var unqualified = try fixture.store().loadDeclaration()
     unqualified.sources["upstream"]?.requirement = nil
-    try fixture.store().save(declaration: unqualified, resolved: fixture.store().loadResolved())
+    try fixture.store().save(declaration: unqualified, ledger: fixture.store().loadLedger())
 
     func expectDefault(_ name: String, revision: String, version: String?, body: String) throws {
       let cold = RuntimeEnvironment(
         projectDirectory: fixture.root.appendingPathComponent("cold-\(name)"),
         homeDirectory: fixture.environment.homeDirectory, environment: [:])
       let coldStore = StateStore(scope: .project, environment: cold)
-      try coldStore.save(declaration: declaration, resolved: ResolvedState())
+      try coldStore.save(declaration: declaration, ledger: ResolvedLedger())
       #expect(!FileManager.default.fileExists(atPath: coldStore.cacheDirectory.path))
       let warm = try SkillOperations.add(
         AddOptions(

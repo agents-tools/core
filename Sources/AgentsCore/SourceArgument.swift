@@ -10,7 +10,7 @@ package struct SourceArgument: Equatable, Sendable {
   package var name: String?
 
   private static let requirementLabels: Set = [
-    "branch", "revision", "ref", "exact", "from", "minor",
+    "branch", "tag", "revision", "ref", "exact", "from", "minor",
   ]
   private static let labels = requirementLabels.union(["path", "skill"])
 
@@ -47,6 +47,7 @@ package struct SourceArgument: Equatable, Sendable {
         let parsed: SourceRequirement =
           switch label {
           case "branch": .branch(value)
+          case "tag": .revision("refs/tags/" + value)
           // A ref names any branch, tag or commit; Git resolves it like a revision.
           case "revision", "ref": .revision(value)
           case "exact": .exact(value)
@@ -69,21 +70,42 @@ package struct SourceArgument: Equatable, Sendable {
   ) throws -> SourceSelection {
     let requirements = [requirement, explicitRequirement].compactMap { $0 }
     let paths = try [path, explicitPath.map(PathSafety.sanitizeSubpath)].compactMap { $0 }
-    guard requirements.allSatisfy({ $0 == requirements.first }) else {
+    guard requirements.allSatisfy({ $0.declarationEquivalent(to: requirements[0]) }) else {
       throw CoreError.invalidSource("the source selector and option give different requirements")
     }
     guard paths.allSatisfy({ $0 == paths.first }) else {
       throw CoreError.invalidSource("the source selector and option give different paths")
     }
     if let declared = declaration.sources[location] {
-      return SourceSelection(source: declared, requirement: requirements.first, path: paths.first)
+      return SourceSelection(
+        source: declared, requirement: requirements.first?.canonical, path: paths.first)
     }
     let parsed = try SourceParser.parse(
       location, currentDirectory: environment.projectDirectory,
-      homeDirectory: environment.homeDirectory)
+      homeDirectory: environment.homeDirectory, sourceAccess: environment.sourceAccess)
     return SourceSelection(
       source: SourceDeclaration(kind: parsed.type, location: parsed.localPath ?? parsed.url),
-      requirement: requirements.first ?? parsed.requirement, path: paths.first ?? parsed.subpath)
+      requirement: (requirements.first ?? parsed.requirement)?.canonical,
+      path: paths.first ?? parsed.subpath)
+  }
+
+  /// A named alias keeps its identity even when an explicit selector changes its root.
+  /// A repository argument reuses the alias whose normalized discovery root it selects.
+  package func existingAlias(
+    in declaration: Declaration, sourceID: String, path: String?,
+    environment: RuntimeEnvironment, matchUniqueSource: Bool = false
+  ) throws -> String? {
+    if declaration.sources[location] != nil { return location }
+    let root = try PathSafety.sanitizeSubpath(path ?? ".")
+    let matches = try declaration.sourceDeclarations.filter {
+      try $0.source.identity(environment: environment) == sourceID
+    }
+    if let match = try matches.first(where: {
+      try PathSafety.sanitizeSubpath($0.source.path ?? ".") == root
+    }) {
+      return match.name
+    }
+    return matchUniqueSource && matches.count == 1 ? matches.first?.name : nil
   }
 
   private static func selectorStart(in input: String) -> String.Index? {
@@ -109,7 +131,7 @@ package struct SourceSelection: Equatable, Sendable {
   /// `declared` with the command's requirement and path replacing its own.
   package func applied(to declared: SourceDeclaration) -> SourceDeclaration {
     var result = declared
-    if let requirement { result.requirement = requirement }
+    if let requirement { result.requirement = requirement.canonical }
     if let path { result.path = path }
     return result
   }

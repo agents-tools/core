@@ -1,10 +1,42 @@
-import AgentsCore
-import Darwin
+import AgentsManifest
+import CPlatform
 import Foundation
+import StateTestSupport
 import Testing
+
+@testable import AgentsCore
 
 @Suite("Watch state")
 struct WatchStateTests {
+  @Test func existingDeclarationWatchReorderingPreservesBytesAndInode() throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(
+      scope: .project,
+      environment: RuntimeEnvironment(
+        projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:]
+      ))
+    try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+    let text = """
+      version: 1
+      sources: {"web": {"url": "https://example.test/repo.git"}, "git": {"path": "missing"}}
+      watch: ["web", "git"]
+      """
+    let bytes = Data(text.utf8)
+    try bytes.write(to: store.declarationURL)
+    let inode = try #require(
+      FileManager.default.attributesOfItem(atPath: store.declarationURL.path)[.systemFileNumber]
+        as? NSNumber)
+    var declaration = try store.loadDeclaration()
+    #expect(declaration.watch == ["web", "git"])
+    declaration.watch = ["git", "web"]
+    try store.save(declaration: declaration, ledger: ResolvedLedger())
+    #expect(try Data(contentsOf: store.declarationURL) == bytes)
+    #expect(
+      try FileManager.default.attributesOfItem(atPath: store.declarationURL.path)[.systemFileNumber]
+        as? NSNumber == inode)
+  }
+
   @Test(arguments: [InstallScope.project, .user])
   func storesSortedBaselinesAndPreservesWatchWhenSavingOtherState(_ scope: InstallScope) throws {
     let root = try temporaryDirectory()
@@ -24,7 +56,7 @@ struct WatchStateTests {
         "git": SourceDeclaration(kind: .local, location: "/source"),
         "web": SourceDeclaration(kind: .wellKnown, location: "https://example.test"),
       ], watch: ["web", "git"])
-    try store.save(declaration: declaration, resolved: ResolvedState(), watch: watch)
+    try store.save(declaration: declaration, ledger: ResolvedLedger(), watch: watch)
     let bytes = try Data(contentsOf: store.watchURL)
     #expect(try store.loadWatch() == watch)
     #expect(bytes.last == 10)
@@ -33,9 +65,9 @@ struct WatchStateTests {
       try #require(text.range(of: "alpha")).lowerBound
         < #require(text.range(of: "zebra")).lowerBound)
     #expect(!text.contains("timestamp"))
-    try store.save(declaration: declaration, resolved: ResolvedState())
+    try store.save(declaration: declaration, ledger: ResolvedLedger())
     #expect(try Data(contentsOf: store.watchURL) == bytes)
-    try store.save(declaration: declaration, resolved: ResolvedState(), watch: watch)
+    try store.save(declaration: declaration, ledger: ResolvedLedger(), watch: watch)
     #expect(try Data(contentsOf: store.watchURL) == bytes)
     #expect(try store.loadDeclaration().watch == ["git", "web"])
   }
@@ -48,7 +80,7 @@ struct WatchStateTests {
       environment: RuntimeEnvironment(
         projectDirectory: root, homeDirectory: root.appendingPathComponent("home"), environment: [:]
       ))
-    try store.save(declaration: Declaration(), resolved: ResolvedState(), watch: WatchState())
+    try store.save(declaration: Declaration(), ledger: ResolvedLedger(), watch: WatchState())
     let declaration = try Data(contentsOf: store.declarationURL)
     let resolved = try Data(contentsOf: store.resolvedURL)
     let valid = #"{"version":1,"sources":{}}"#
@@ -73,7 +105,7 @@ struct WatchStateTests {
       try data.write(to: store.watchURL)
       #expect(throws: (any Error).self) { try store.loadWatch() }
       #expect(throws: (any Error).self) {
-        try store.save(declaration: Declaration(), resolved: ResolvedState(), watch: WatchState())
+        try store.save(declaration: Declaration(), ledger: ResolvedLedger(), watch: WatchState())
       }
       #expect(try Data(contentsOf: store.watchURL) == data)
       #expect(try Data(contentsOf: store.declarationURL) == declaration)
@@ -93,7 +125,7 @@ struct WatchStateTests {
     try Data("invalid".utf8).write(to: store.watchURL)
     let before = try FileHash.folderHash(root)
     #expect(throws: (any Error).self) {
-      try store.save(declaration: Declaration(), resolved: ResolvedState())
+      try store.save(declaration: Declaration(), ledger: ResolvedLedger())
     }
     #expect(try FileHash.folderHash(root) == before)
   }
@@ -109,7 +141,11 @@ struct WatchStateTests {
     #expect(throws: CoreError.self) { try declaration.validate(environment: environment) }
   }
 
-  @Test(arguments: ["replace.0.renamed", "replace.1.renamed", "journal.committed", "cleanup.0"])
+  @Test(arguments: [
+    TransactionCheckpoint.publication(0, .exchanged).name,
+    TransactionCheckpoint.publication(1, .exchanged).name,
+    TransactionCheckpoint.phase(.committed).name, TransactionCheckpoint.containerRemoved(0).name,
+  ])
   func interruptedWatchAndDeclarationRecoverTogether(_ checkpoint: String) throws {
     let root = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -121,25 +157,17 @@ struct WatchStateTests {
     let declaration = Declaration(sources: [
       "source": SourceDeclaration(kind: .local, location: "/source")
     ])
-    try store.save(declaration: declaration, resolved: ResolvedState(), watch: WatchState())
+    try store.save(declaration: declaration, ledger: ResolvedLedger(), watch: WatchState())
     let lockBytes = try Data(contentsOf: store.resolvedURL)
     let child = try stateTestProcess(root: root, arguments: ["watch-crash", checkpoint])
-    defer {
-      if child.isRunning {
-        kill(child.processIdentifier, SIGKILL)
-        child.waitUntilExit()
-      }
-    }
+    defer { terminateProcess(child) }
     let marker = root.appendingPathComponent("ready")
-    let deadline = Date().addingTimeInterval(10)
-    while !FileManager.default.fileExists(atPath: marker.path), child.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    try #require(FileManager.default.fileExists(atPath: marker.path))
-    kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
-    #expect(throws: CoreError.transactionRecovered(store.directory.path)) { try store.loadWatch() }
-    let committed = checkpoint == "journal.committed" || checkpoint == "cleanup.0"
+    try ProcessWait.marker(marker, child: child, root: root)
+    terminateProcess(child)
+    #expect(throws: CoreError.transactionRecovered(store.directory.path)) { try store.withLock {} }
+    let committed =
+      checkpoint == TransactionCheckpoint.phase(.committed).name
+      || checkpoint == TransactionCheckpoint.containerRemoved(0).name
     #expect(try store.loadDeclaration().watch == (committed ? ["source"] : nil))
     #expect(try store.loadWatch().sources.isEmpty == !committed)
     #expect(try Data(contentsOf: store.resolvedURL) == lockBytes)

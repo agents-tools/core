@@ -70,4 +70,20 @@ public struct WatchStatus: Equatable, Sendable {
   /// Commits reachable from the current head but not from the seen revision; nil for indexes.
   public let commitCount: Int?
   public var changes: [WatchItemChange]
+  /// Durable scope files and local source roots; absent state leaves remain in the footprint.
+  public var readLocations: [URL] { acknowledgment.readLocations }
+  package let acknowledgment: WatchMutationPreview
+}
+
+/// Read-only watch results retain their input locations even when there are no subscriptions.
+public struct WatchInspection: Equatable, Sendable {
+  public let statuses: [WatchStatus]
+  public let readLocations: [URL]
+}
+
+/// A subscription after a watch change. `seen` is the acknowledged baseline, or nil after removal.
+public struct WatchChange: Equatable, Sendable {
+  public let alias: String
+  public let sourceID: String
+  public let seen: WatchSeen?
 }

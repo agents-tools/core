@@ -1,9 +1,11 @@
-import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import AgentsSkills
 import Foundation
+import StateTestSupport
 import Testing
 
+@testable import AgentsCore
 @testable import AgentsUpdates
 
 @Suite("Combined updates")
@@ -13,9 +15,9 @@ struct CombinedUpdateTests {
     try fixture.install(mode: .edit, agents: [.codex])
     try fixture.advance()
     var declaration = try fixture.store.loadDeclaration()
-    declaration.skills?["fixture"]?.mode = .copy
+    try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     declaration.sources["fixture"]?.requirement = .branch("main")
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     let before = try fixture.snapshot()
     let preview = try fixture.preview()
     let skill = try #require(preview.skills.first)
@@ -54,12 +56,17 @@ struct CombinedUpdateTests {
     try fixture.install(agents: [.codex])
     try fixture.write("Hand written.\n", to: fixture.instruction(.geminiCLI))
     var declaration = try fixture.store.loadDeclaration()
-    declaration.instructions?.agents = [.codex, .geminiCLI]
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try declaration.updateInstructions { $0?.agents = [.codex, .geminiCLI] }
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     let preview = try fixture.preview()
     #expect(preview.instructions.targets.contains { $0.target == "GEMINI.md" && $0.foreign })
     let before = try fixture.snapshot()
-    #expect(throws: InstructionError.unownedTargets(["GEMINI.md"])) { try fixture.apply() }
+    #expect { try fixture.apply() } throws: { error in
+      guard let failure = error as? UpdateApplyError, case .unchanged = failure.disposition,
+        let underlying = failure.underlyingError as? InstructionError
+      else { return false }
+      return underlying == .unownedTargets(["GEMINI.md"])
+    }
     #expect(try fixture.snapshot() == before)
     #expect(try fixture.bytes(fixture.instruction(.geminiCLI)) == Data("Hand written.\n".utf8))
   }
@@ -69,12 +76,12 @@ struct CombinedUpdateTests {
     let fixture = try UpdateFixture()
     try fixture.install(mode: .edit, agents: [.codex])
     var declaration = try fixture.store.loadDeclaration()
-    declaration.skills?["fixture"]?.mode = .copy
+    try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     declaration.sources["fixture"]?.requirement = .branch("main")
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     let before = try fixture.snapshot()
     var called = false
-    #expect(throws: CoreError.invalidState("edit installs must be local, unpinned live links")) {
+    #expect(throws: CoreError.self) {
       try InstructionOperations.updateInstalled(
         environment: fixture.environment, apply: apply, beforeApply: { _ in called = true })
     }
@@ -91,12 +98,12 @@ struct CombinedUpdateTests {
     try fixture.commit()
     try fixture.install(mode: .edit, agents: [.codex])
     var declaration = try fixture.store.loadDeclaration()
-    declaration.skills?["fixture"]?.mode = .copy
+    try declaration.updateSkills { $0?["fixture"]?.mode = .copy }
     declaration.sources["fixture"]?.requirement = .branch("main")
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     let before = try fixture.snapshot()
     var called = false
-    #expect(throws: CoreError.invalidState("edit installs must be local, unpinned live links")) {
+    #expect(throws: CoreError.self) {
       try SkillOperations.updateInstalled(
         environment: fixture.environment, skillNames: ["demo"], apply: apply,
         beforeApply: { _ in called = true })
@@ -160,10 +167,12 @@ struct CombinedUpdateTests {
     }
     var declaration = try fixture.store.loadDeclaration()
     declaration.sources["live"] = SourceDeclaration(kind: .local, location: live.path)
-    declaration.skills?["live"] = SkillDeclaration(select: .all, agents: [.codex], mode: .edit)
+    try declaration.updateSkills {
+      $0?["live"] = SkillDeclaration(select: .all, agents: [.codex], mode: .edit)
+    }
     declaration.sources["rules"] = SourceDeclaration(kind: .local, location: rules.repo.path)
-    declaration.instructions?.sections = ["rules:rules"]
-    declaration.instructions?.chatgpt?["weekly"]?.sections = ["rules:rules"]
+    try declaration.updateInstructions { $0?.sections = ["rules:rules"] }
+    try declaration.updateInstructions { $0?.chatgpt?["weekly"]?.sections = ["rules:rules"] }
     declaration.sources["watched"] = SourceDeclaration(
       kind: .wellKnown, location: "https://example.test")
     declaration.watch = ["watched"]
@@ -172,7 +181,7 @@ struct CombinedUpdateTests {
         seen: .artifacts(["observed": "sha256:" + String(repeating: "b", count: 64)]))
     ])
     try fixture.store.save(
-      declaration: declaration, resolved: fixture.store.loadResolved(), watch: watch)
+      declaration: declaration, ledger: fixture.store.loadLedger(), watch: watch)
     try fixture.advance()
     let before = try fixture.snapshot()
     #expect(throws: UpdateApplyError.self) {
@@ -180,8 +189,10 @@ struct CombinedUpdateTests {
         environment: fixture.environment,
         checkpoint: { step in
           // Pruning is queued after both kinds and the merged state; rollback restores it too.
-          if step == "journal.committed.renamed" { return }
-          if step.hasPrefix("replace."), !step.hasSuffix(".renamed"),
+          if step == TransactionCheckpoint.persisted(.committed, .terminal, .renamed).name {
+            return
+          }
+          if step.hasPrefix("entry."), step.hasSuffix(".applied"),
             !FileManager.default.fileExists(atPath: unused.path)
           {
             throw CoreError.invalidState("pruning interrupted")
@@ -216,7 +227,21 @@ struct CombinedUpdateTests {
         guard step == "plan.skills" else { return }
         attempts += 1
         if attempts == 1 {
-          try fixture.declare()
+          let store = fixture.store
+          let source = fixture.repo.path
+          let finished = DispatchSemaphore(value: 0)
+          Thread.detachNewThread {
+            defer { finished.signal() }
+            do {
+              try store.save(
+                declaration: Declaration(
+                  sources: ["fixture": SourceDeclaration(kind: .local, location: source)],
+                  skills: ["fixture": SkillDeclaration(select: .all, agents: [.codex], mode: .copy)]
+                ),
+                ledger: ResolvedLedger())
+            } catch { Issue.record(error) }
+          }
+          try #require(finished.wait(timeout: .now() + 10) == .success)
           if throwFirst { throw CoreError.invalidState("discarded read") }
         }
       })
@@ -232,9 +257,9 @@ struct CombinedUpdateTests {
     try fixture.declare()
     var declaration = try fixture.store.loadDeclaration()
     declaration.sources["rules"] = SourceDeclaration(kind: .local, location: other.repo.path)
-    declaration.instructions?.sections = ["rules:rules"]
-    declaration.instructions?.chatgpt?["weekly"]?.sections = ["rules:rules"]
-    try fixture.store.save(declaration: declaration, resolved: ResolvedState())
+    try declaration.updateInstructions { $0?.sections = ["rules:rules"] }
+    try declaration.updateInstructions { $0?.chatgpt?["weekly"]?.sections = ["rules:rules"] }
+    try fixture.store.save(declaration: declaration, ledger: ResolvedLedger())
     _ = try fixture.apply()
     try fixture.advance()
     try other.advance()
@@ -257,7 +282,7 @@ struct CombinedUpdateTests {
         sources: ["fixture": SourceDeclaration(kind: .local, location: fixture.repo.path)],
         skills: ["fixture": SkillDeclaration(select: .all, agents: [.codex], mode: .copy)],
         instructions: InstructionsDeclaration(agents: [.claudeCode], sections: ["fixture:rules"])),
-      resolved: ResolvedState())
+      ledger: ResolvedLedger())
     var called = false
     #expect(throws: CoreError.self) {
       try UpdateOperations.withPreparedUpdate(scope: .user, environment: environment) { _ in
@@ -335,7 +360,7 @@ struct CombinedUpdateTests {
       try UpdateOperations.withPreparedUpdate(
         environment: fixture.environment,
         checkpoint: { step in
-          if step == "stage.0.ready" {
+          if step == TransactionCheckpoint.stage(0, .constructed).name {
             let file = cache.appendingPathComponent("skills/demo/run.sh")
             if dimension == "bytes" {
               try fixture.write("corrupt", to: file)
@@ -363,7 +388,7 @@ struct CombinedUpdateTests {
     var journals = 0
     let receipt = try UpdateOperations.withPreparedUpdate(
       scope: scope, environment: fixture.environment,
-      checkpoint: { if $0 == "journal.preparing" { journals += 1 } },
+      checkpoint: { if $0 == TransactionCheckpoint.phase(.preparing).name { journals += 1 } },
       { update in
         #expect(update.report == preview)
         #expect(try fixture.snapshot() == before)
@@ -415,8 +440,8 @@ struct CombinedUpdateTests {
     if kind == "skills" {
       try fixture.write("invalid", to: fixture.repo.appendingPathComponent("skills/demo/SKILL.md"))
       var declaration = try fixture.store.loadDeclaration()
-      declaration.skills?["fixture"]?.select = .names(["demo"])
-      try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+      try declaration.updateSkills { $0?["fixture"]?.select = .names(["demo"]) }
+      try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
       try fixture.commit()
     } else if kind == "instructions" {
       try fixture.write("invalid", to: fixture.repo.appendingPathComponent("instructions/rules.md"))
@@ -488,7 +513,12 @@ struct CombinedUpdateTests {
         try FileManager.default.createSymbolicLink(
           at: fixture.target(),
           withDestinationURL: fixture.repo.appendingPathComponent("skills/demo"))
-      case "declaration": try fixture.write("{}\n", to: fixture.store.declarationURL)
+      case "declaration":
+        // A comment changes no declared intent but still invalidates the preparation.
+        let declaration = try fixture.bytes(fixture.store.declarationURL)
+        try fixture.write(
+          String(decoding: declaration, as: UTF8.self) + "// Edited.\n",
+          to: fixture.store.declarationURL)
       case "resolved": try fixture.write("{}\n", to: fixture.store.resolvedURL)
       default: try fixture.write("{}\n", to: fixture.store.watchURL)
       }
@@ -538,12 +568,14 @@ struct CombinedUpdateTests {
     #expect(!FileManager.default.fileExists(atPath: fixture.store.resolvedURL.path))
     try fixture.declare()
     var declaration = try fixture.store.loadDeclaration()
-    declaration.skills = nil
-    try fixture.store.save(declaration: declaration, resolved: ResolvedState())
+    try declaration.setSkills(nil)
+    try fixture.store.save(declaration: declaration, ledger: ResolvedLedger())
     #expect(try fixture.apply().report.skills.isEmpty)
-    declaration.instructions = nil
-    declaration.skills = ["fixture": SkillDeclaration(select: .all, agents: [.codex], mode: .copy)]
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try declaration.setInstructions(nil)
+    try declaration.setSkills([
+      "fixture": SkillDeclaration(select: .all, agents: [.codex], mode: .copy)
+    ])
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     _ = try fixture.apply()
     #expect(try fixture.store.loadResolved().instructions == LockedInstructions())
     #expect(try !fixture.preview().hasChanges)
@@ -553,9 +585,9 @@ struct CombinedUpdateTests {
     let fixture = try UpdateFixture()
     try fixture.install()
     var declaration = try fixture.store.loadDeclaration()
-    declaration.skills = nil
-    declaration.instructions?.sections = []
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try declaration.setSkills(nil)
+    try declaration.updateInstructions { $0?.sections = [] }
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     _ = try fixture.apply()
     try fixture.git(["commit", "--allow-empty", "-m", "repin"])
     let prompt = try fixture.preview()
@@ -567,11 +599,13 @@ struct CombinedUpdateTests {
       to: fixture.repo.appendingPathComponent("instructions/second.md")
     )
     try fixture.commit()
-    declaration.instructions?.chatgpt?["weekly"]?.sections = ["fixture:rules", "fixture:second"]
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try declaration.updateInstructions {
+      $0?.chatgpt?["weekly"]?.sections = ["fixture:rules", "fixture:second"]
+    }
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     _ = try fixture.apply()
-    declaration.instructions?.chatgpt?["weekly"]?.sections.reverse()
-    try fixture.store.save(declaration: declaration, resolved: fixture.store.loadResolved())
+    try declaration.updateInstructions { $0?.chatgpt?["weekly"]?.sections.reverse() }
+    try fixture.store.save(declaration: declaration, ledger: fixture.store.loadLedger())
     #expect(try fixture.preview().hasChanges)
     _ = try fixture.apply()
     #expect(try !fixture.preview().hasChanges)

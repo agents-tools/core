@@ -40,12 +40,13 @@ revision, path and original-byte hash. A container of a local source declared
 in the same scope cannot hold a target.
 
 A project's own files live in `.agent/instructions/` and are referenced by bare
-name; `alias:name` references a declared source. Own files are read from the
+name; `.section(name:source:)` in `agents.yaml`, or `alias:name` in operation
+arguments, references a declared source. Own files are read from the
 working tree as it is. Their lock records have source `.`, the project-relative
-path and the hash, and no revision. Resolution and restore read only the named
-file, `.agent/instructions/<name>.md`, and so does adding named files, so other
-files in the container affect only listing. Restoring a lock fails with `InstructionError.ownChanged` when an
-own file's hash changed; update reads the current file.
+path and the hash, and no revision. Resolution reads only the named file, `.agent/instructions/<name>.md`, and so does
+adding named files, so other files in the container affect only listing. Locked
+restore publishes the frozen output and preserves the current own source file.
+Update reads the current file; doctor reports changes since the recorded hash.
 
 `add(InstructionAddOptions, beforeApply:)` accepts a source alias or string,
 or `.` for own files, plus an optional alias, requirement, search path, ordered
@@ -69,8 +70,9 @@ remain shared across kinds.
 | Cursor | No file | `AGENTS.md` |
 | OpenCode | `$XDG_CONFIG_HOME/opencode/AGENTS.md`, default `~/.config/opencode/AGENTS.md` | `AGENTS.md` |
 | Gemini CLI | `~/.gemini/GEMINI.md` | `GEMINI.md` |
+| Antigravity | `~/.gemini/config/rules/<rule>.md` | `.agents/rules/<rule>.md` |
 
-Every target is generated in full by `Instructions.render`: the notice line
+The combined Markdown targets are generated in full by `Instructions.render`: the notice line
 `Instructions.notice`, a blank line, and the sections in declared order
 separated by one blank line, ending with a newline. Rendering rejects two
 sections whose first headings share level and whitespace-collapsed text, and
@@ -81,7 +83,7 @@ In project scope, sections are grouped by `directory`: each group renders into
 the `AGENTS.md`, or `GEMINI.md`, of that directory, which must already exist.
 No component of a nested target's directory may be a symbolic link or `.git`,
 or hold another repository or worktree.
-User scope renders all sections into each recipient's file. Project keys are
+Combined user targets render all sections selected for that recipient. Project keys are
 relative to the project root, and a nested key names `AGENTS.md` or `GEMINI.md`
 in a directory outside any `.git` and the top-level `.agent`; user keys are `~/`-relative to the
 supplied home, and configured user locations outside home use absolute keys.
@@ -90,7 +92,7 @@ runtime environment; lock contents cannot authorize arbitrary writes.
 Configured user containers may resolve through symlinks. Journal validation
 opens project descendants without following links.
 
-A file is owned when `Instructions.isOwned` finds it blank or finds the notice
+A combined Markdown file is owned when `Instructions.isOwned` finds it blank or finds the notice
 on its first line; a lock entry alone does not make a file owned. A planned
 write over an existing file that is not owned marks the change `foreign`; add,
 update apply, combined apply, remove and install stop with
@@ -119,6 +121,45 @@ Ancestor files are reported and never modified. Claude Code reads a nested
 directory, unless that directory's Claude file imports it; nested Claude files
 are not modified, and doctor reports one that hides a generated target.
 
+## Antigravity Rules
+
+Select `antigravity` in the instruction component's recipients. A section's
+`condition.agents` can narrow that selection. Each source-qualified section gets
+one deterministic Markdown filename under project `.agents/rules/` or user
+`~/.gemini/config/rules/`. Project `paths` become `trigger: glob` with a
+comma-separated `globs` string. Patterns with commas or outer whitespace cannot
+be represented by this list. Unscoped project sections and user sections use
+`trigger: always_on`.
+
+The lock records the source revision, selected resource bytes and hashes, and
+the rendered hash. Equivalent selections of the same unit share one rule.
+Incompatible selections for the same leaf stop preview. Restore renders the
+same bytes from the lock, and handwritten sibling files stay in place.
+
+`@[label](relative/path)` inlines UTF-8 text from the section's source
+snapshot. Nested includes resolve from the including file, and any included
+frontmatter is stripped. The same locked inputs supply restore. Unsafe,
+unresolved or cyclic includes and unresolved local Markdown links stop
+planning. Literal mentions and native path-only `@filename` references stay
+in the generated Markdown for Antigravity to interpret. The 24,000 UTF-8 byte limit counts the
+complete rendered file including frontmatter. Preview and apply reports expose
+the shared 20,000-token budget for active global and always-on rules through
+`InstructionUpdateReport.advisories`. [Antigravity Rules](https://antigravity.google/docs/rules)
+
+Recipient selection controls which files Core generates. Antigravity also
+loads workspace `AGENTS.md` and `GEMINI.md`, and user files such as
+`~/.gemini/GEMINI.md`. A section selected for both a shared Markdown target and
+an Antigravity rule can therefore load through both paths.
+[Antigravity customization discovery](https://antigravity.google/docs/customization-discovery)
+
+In user scope, a temporary Memex rule with the `memex-` prefix and the source unit's filename
+can migrate when its standalone marker names the selected source path and
+revision and its full bytes equal the pinned rendering. Preview reports both file changes. Any mismatch or unmanaged
+collision appears in `InstructionUpdateReport.conflicts` and blocks apply.
+Apply revalidates both file generations and uses one transaction for the new
+rule, the old rule's removal and the lock. Doctor checks managed rules for
+missing content, drift and lost ownership markers.
+
 ## Operations and Mutation Contract
 
 | Consumer operation | Behavior |
@@ -135,21 +176,39 @@ are not modified, and doctor reports one that hides a generated target.
 | `doctor(projectRoots:environment:codexConfiguration:)` | Audit explicit project roots without writing |
 | `export(projectRoots:environment:)` | Map the user scope's and each root's locked targets to their sections without writing |
 
-An `agents` argument sets the complete instruction recipient list. A name to
+An `agents` argument to update sets the default local recipients for
+sections without an explicit recipient list.
+Adding a section adds only its missing local recipients. Existing source-qualified
+sections keep their app recipients and conditions, and sibling sections keep
+their own recipients. A name to
 remove that equals a declared reference, such as an own file's bare name or
 `alias:name`, selects that reference; another bare name must match exactly one
 source reference. Removal also removes those sections from prompts. Empty
 prompts are removed. Other source declarations and skill records remain
 available to their owners.
 
-Export maps a user target to every locked section from the lock alone. A
-project section's placement needs its `paths`, read from the working tree or
-the cache without fetching; a section whose content is unavailable is listed as
-unplaced.
+Export maps each scope's locked deployments and prompt sections from ledger
+metadata alone. `InstructionMapping.readDependencies` contains `ReadDependency.entry`
+values for declaration, resolved and watch-state leaves, the scope root and state
+directory, scope lock, recovery markers and attempted external admission paths.
+Absent paths and failed admission anchors remain available for missing-lock,
+pending-recovery and unavailable statuses. Permitted scope-root aliases retain
+both logical and physical paths; forbidden state-directory and lock links do not
+introduce their destinations as authority. Entry dependencies observe the named
+path and its ancestors, including creation, replacement and access changes; they
+do not observe unrelated descendants of directory entries. Mapping does not read
+section bodies, append content or deployed target bytes; content inspection
+operations supply their own dependencies.
 
 Planning validates required content before applying. Reports include old and
 new section records, target before/after bytes and recipients, drift, foreign
 targets, a missing-lock status and changed prompt names.
+`InstructionUpdateReport.outputs` provides the complete candidate bytes for
+each local recipient and target, including unchanged files and the assembled
+Claude forwarding file. Recipients that share a file have the same URL and
+bytes. ChatGPT App and Gemini App produce ordered Markdown with no file URL.
+Their selections and input pins can be saved with the declaration and lock.
+Named prompt exports use their own declaration and append file.
 `InstructionTargetChange.beforeAgents` is nil when the previous lock has no target
 entry; `afterAgents` is empty when the target is no longer managed. Both recipient
 arrays are sorted by agent raw value. `agentsChanged` compares those recipients,
@@ -163,17 +222,17 @@ The optional throwing `beforeApply` callback runs before replacements so a
 consumer can show differences or cancel. Target bytes are checked again after
 the callback; intervening edits stop the commit. Update also revalidates state
 bytes/presence, target ancestry and all Claude forwarding decision inputs
-before and after retention. `InstructionUpdatePlan` supplies package-visible
-planning, validation, retention and staging to both standalone updates and
-`AgentsUpdates`; the latter commits both kinds together as described in
-[Updates](Updates.md).
+before and after retention. Lifecycle methods are public extensions in
+`AgentsUpdates`, which owns the complete linked ledger and one transaction for
+selected deployments, declaration, resources and pruning. Consumers import that
+product for lifecycle and ChatGPT export; pure text APIs remain here.
+See [Updates](Updates.md) for selection, prepared handles and exact restore.
 
 Mutations hold the scope writer lock and use the durable journal for instruction
-files, forwarding files, declaration, lock and cache pruning. Exact source
-materializations are verified and published through cache transactions before
-the target/state transaction. The journal has fixed project instruction paths,
+files, forwarding files, declaration, ledger, materializations and cache pruning. The journal has fixed project instruction paths,
 nested project `AGENTS.md` and `GEMINI.md` paths, configured user instruction
-roots and new top-level named Markdown files in `.agent/instructions/`.
+roots, the registered Antigravity rule leaves and new top-level named Markdown
+files in `.agent/instructions/`.
 Initialization uses the project's state lock and journal without creating a
 declaration or resolved file.
 
@@ -199,17 +258,23 @@ generated files, takes over others only with `replace`, and records targets as
 
 ## ChatGPT Prompts
 
-`instructions.chatgpt.<name>` has ordered `sections` and an optional scope-relative
-`append` file. Update locks prompt sections with file targets. Reports list
-prompts whose section content, order, membership or append path changed. A
-revision change with identical section hashes alone does not mark a prompt
-changed. Append files remain live owner content; their independent edits do not
-require a lock update.
+An instructions component's `chatgpt` mapping declares named prompts with ordered
+`sections` and an optional `append` path. Update locks prompt sections with file
+targets. Reports list prompts whose section content, order, membership or append
+path changed. A revision change with identical section hashes alone does not mark
+a prompt changed.
 
-Render verifies locked hashes, renders sections as in targets without the
-notice, and appends the custom file's bytes. It fails without locked sections or
-if an append path escapes the scope through a symlink. It never writes to
-ChatGPT.
+For consumer-authored prompts, append remains current owner content. Its authored
+path is project-relative in project scope and home-relative in user scope. Update
+and installation do not require that export-only file to exist. Export verifies
+locked section hashes, renders them without the notice and reads the current append
+bytes. Missing, unreadable or escaping append content fails export; recorded bytes
+are never a fallback. Append edits do not require a lock update. Export never writes
+to ChatGPT.
+
+The component freeze seam records consumer append coordinates as payload metadata,
+separate from deterministic installation inputs. Producer-owned append content is
+instead read from the selected source snapshot and retained as an exact resource.
 
 ## Diagnostics
 

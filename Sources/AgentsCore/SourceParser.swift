@@ -24,7 +24,8 @@ public enum SourceParser {
   public static func parse(
     _ rawInput: String,
     currentDirectory: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-    homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    homeDirectory: URL = RuntimeEnvironment(sourceAccess: .init()).homeDirectory,
+    sourceAccess: SourceAccessConfiguration? = nil
   ) throws -> ParsedSource {
     let input = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !input.isEmpty, !input.contains("\0") else {
@@ -52,7 +53,7 @@ public enum SourceParser {
       || input.range(of: #"^[^/@]+@[^/:]+:.+$"#, options: .regularExpression) != nil
     {
       _ = try SourceDeclaration(kind: .git, location: input).identity(
-        environment: RuntimeEnvironment())
+        environment: RuntimeEnvironment(sourceAccess: .init()))
       return ParsedSource(type: .git, url: input)
     }
     if !input.contains("://") {
@@ -67,16 +68,30 @@ public enum SourceParser {
       let hostQualified = parts[0].contains(".") || parts[0].contains(":")
       let url = hostQualified ? "https://" + input : "https://github.com/" + input
       _ = try SourceDeclaration(kind: .git, location: url).identity(
-        environment: RuntimeEnvironment())
+        environment: RuntimeEnvironment(sourceAccess: .init()))
       return ParsedSource(type: .git, url: url)
     }
     guard let url = URL(string: input), ["http", "https"].contains(url.scheme), let host = url.host
     else { throw CoreError.invalidSource("unsupported source URL") }
+    let access = sourceAccess ?? RuntimeEnvironment(homeDirectory: homeDirectory).sourceAccess
+    try access.requireCurrentSettings()
+    let authority = URLComponents(url: url, resolvingAgainstBaseURL: false).flatMap {
+      try? SourceAuthority($0, defaultPort: url.scheme == "https" ? 443 : 80)
+    }
+    let provider = authority.flatMap { access.provider(for: $0, scheme: url.scheme!) }
     let parts = url.path.split(separator: "/").map(String.init)
-    if let marker = parts.firstIndex(of: "tree"), marker + 1 < parts.count,
-      host.lowercased() == "github.com" || (marker > 0 && parts[marker - 1] == "-")
-    {
-      let end = host.lowercased() == "github.com" ? marker : marker - 1
+    let treeMarker: Int?
+    switch provider {
+    case .github:
+      treeMarker = parts.count > 3 && parts[2] == "tree" ? 2 : nil
+    case .gitlab:
+      treeMarker = parts.indices.dropFirst(3).first {
+        $0 + 1 < parts.count && parts[$0 - 1] == "-" && parts[$0] == "tree"
+      }
+    case nil: treeMarker = nil
+    }
+    if let marker = treeMarker {
+      let end = provider == .github ? marker : marker - 1
       let repository = parts[..<end].joined(separator: "/")
       var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
       components.path = "/" + repository
@@ -86,8 +101,10 @@ public enum SourceParser {
         subpath: path.isEmpty ? nil : try PathSafety.sanitizeSubpath(path))
     }
     let kind: SourceKind =
-      ["github.com", "gitlab.com", "huggingface.co", "raw.githubusercontent.com"].contains(
-        host.lowercased()) || url.path.hasSuffix(".git")
+      provider != nil
+        || ["huggingface.co", "raw.githubusercontent.com"].contains(
+          host.lowercased())
+        || url.path.hasSuffix(".git")
       ? .git : .wellKnown
     return ParsedSource(type: kind, url: input)
   }
@@ -96,6 +113,6 @@ public enum SourceParser {
     try SourceDeclaration(
       kind: source.type,
       location: source.localPath ?? source.url
-    ).identity(environment: RuntimeEnvironment())
+    ).identity(environment: RuntimeEnvironment(sourceAccess: .init()))
   }
 }

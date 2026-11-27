@@ -1,6 +1,10 @@
-import AgentsCore
+import AgentsManifest
 import Foundation
+import StateTestSupport
+import Synchronization
 import Testing
+
+@testable import AgentsCore
 
 @Suite("State inspection concurrency")
 struct StateInspectionTests {
@@ -20,10 +24,24 @@ struct StateInspectionTests {
     let result = try store.withReadLock(
       onPendingRecovery: {
         diagnostics += 1
-        #expect(throws: CoreError.transactionRecovered(store.directory.path)) {
-          try store.save(declaration: Declaration(agents: [.cursor]), resolved: ResolvedState())
+        let finished = DispatchSemaphore(value: 0)
+        let writer = Mutex<(recovery: Result<Void, any Error>, save: Result<Void, any Error>)?>(nil)
+        Thread.detachNewThread {
+          let recovery = Result {
+            try store.save(declaration: Declaration(agents: [.cursor]), resolved: ResolvedState())
+          }
+          let save = Result {
+            try store.save(declaration: Declaration(agents: [.cursor]), resolved: ResolvedState())
+          }
+          writer.withLock { $0 = (recovery, save) }
+          finished.signal()
         }
-        try store.save(declaration: Declaration(agents: [.cursor]), resolved: ResolvedState())
+        finished.wait()
+        let outcome = try #require(writer.withLock { $0 })
+        #expect(throws: CoreError.transactionRecovered(store.directory.path)) {
+          try outcome.recovery.get()
+        }
+        try outcome.save.get()
         if callbackThrows { throw CoreError.invalidState("pending inspection") }
         return "pending"
       },
@@ -81,14 +99,14 @@ struct StateInspectionTests {
         atPath: fixture.store.directory.appendingPathComponent(".agents.lock").path))
     var reads = 0
     var interruptedState: String?
-    let pending = CoreError.invalidState("transaction recovery is required before inspection")
 
-    #expect(throws: pending) {
+    #expect(throws: pendingRecovery) {
       try fixture.store.withReadLock {
         reads += 1
         let child = try stateTestProcess(
-          root: fixture.root, arguments: ["watch-add", "replace.1.renamed"])
-        try fixture.kill(child, at: "replace.1.renamed")
+          root: fixture.root,
+          arguments: ["watch-add", TransactionCheckpoint.publication(1, .created).name])
+        try fixture.kill(child, at: TransactionCheckpoint.publication(1, .created).name)
         let declaration = try fixture.store.readDeclaration()
         let watch = try fixture.store.readWatch()
         try #require(declaration.watch == ["source"])

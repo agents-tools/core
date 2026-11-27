@@ -1,4 +1,5 @@
 import AgentsCore
+import AgentsManifest
 import Foundation
 
 extension SkillOperations {
@@ -20,6 +21,14 @@ extension SkillOperations {
       },
       fetchArtifacts: { location in
         try WellKnownProvider(fetch: fetch).fetchAllSkills(from: location).map {
+          WatchArtifact(
+            name: $0.installName, artifact: $0.artifact, files: $0.files, payloads: $0.payloads)
+        }
+      },
+      declarations: .manifest,
+      sourcePolicy: { try SourcePolicySnapshot(store: $0).effective },
+      fetchGuardedArtifacts: { location, policy in
+        try WellKnownProvider(sourcePolicy: policy).fetchAllSkills(from: location).map {
           WatchArtifact(
             name: $0.installName, artifact: $0.artifact, files: $0.files, payloads: $0.payloads)
         }

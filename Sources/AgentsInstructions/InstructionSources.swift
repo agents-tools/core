@@ -21,12 +21,6 @@ final class InstructionSources {
     cache = SourceCache(store: store)
   }
 
-  func lockedSource(_ source: SourceDeclaration) -> LockedSource {
-    LockedSource(
-      kind: source.kind, url: source.kind == .git ? source.gitURL : nil,
-      requirement: source.requirement, path: source.path)
-  }
-
   func discover(_ source: SourceDeclaration, cacheSource: Bool = true) throws -> [InstructionUnit] {
     let id = try source.identity(environment: store.environment)
     if let units = discovered[id] { return units }
@@ -49,7 +43,8 @@ final class InstructionSources {
       for container in Self.containers {
         let directory = root.appendingPathComponent(container)
         for (name, file) in try Self.files(in: directory, tree: tree) {
-          let section = try Instructions.validateSource(Data(contentsOf: file), id: id + ":" + name)
+          let section = try Instructions.validateSource(
+            FileSystem.read(at: file), id: id + ":" + name)
           units.append(
             InstructionUnit(
               record: LockedSection(
@@ -77,7 +72,7 @@ final class InstructionSources {
     let directory = project.appendingPathComponent(Self.ownContainer)
     let units = try Self.unique(
       Self.files(in: directory, tree: project).map { name, file in
-        let section = try Instructions.validateSource(Data(contentsOf: file), id: name)
+        let section = try Instructions.validateSource(FileSystem.read(at: file), id: name)
         return InstructionUnit(
           record: LockedSection(
             name: name, source: Self.own,
@@ -100,87 +95,52 @@ final class InstructionSources {
     guard Declaration.isInstructionName(name), FileManager.default.fileExists(atPath: file.path)
     else { throw CoreError.notFound("own instructions file: \(name)") }
     try Self.requireNoLinks(file, below: project)
-    let section = try Instructions.validateSource(Data(contentsOf: file), id: name)
+    let section = try Instructions.validateSource(FileSystem.read(at: file), id: name)
     return InstructionUnit(
       record: LockedSection(name: name, source: Self.own, path: path, hash: section.hash),
       section: section)
   }
 
-  func resolve(
-    references: [String], declaration: Declaration, lock: inout ResolvedState
-  ) throws -> [InstructionUnit] {
-    try references.map { reference in
-      guard let (alias, name) = Self.split(reference) else {
-        return try own(named: reference)
-      }
-      guard let source = declaration.sources[alias] else {
-        throw CoreError.invalidState("invalid instruction reference: \(reference)")
-      }
-      guard let unit = try discover(source).first(where: { $0.record.name == name }) else {
-        throw CoreError.notFound("instruction section: \(reference)")
-      }
-      lock.sources[unit.record.source] = lockedSource(source)
-      return unit
-    }
-  }
-
-  func restore(
-    _ records: [LockedSection], sources: [String: LockedSource], cachedOnly: Bool = false
-  ) throws
-    -> [InstructionUnit]
-  {
-    try records.map { record in
-      if record.source == Self.own {
-        guard let unit = try? own(named: record.name), unit.record.path == record.path,
-          unit.record.hash == record.hash
-        else { throw InstructionError.ownChanged(name: record.name) }
-        return unit
-      }
-      guard let source = sources[record.source], let revision = record.revision,
-        source.kind != .wellKnown
-      else { throw CoreError.invalidState("instruction section requires a locked Git revision") }
-      let key = record.source + "\n" + revision + "\n" + record.path
-      let section: InstructionSection
-      if let existing = restored[key] {
-        section = existing
-      } else {
-        let materialized = cache.materializedURL(sourceID: record.source, revision: revision)
+  /// Reads only the source entries owned by the target, using the ledger and existing cache.
+  func restoreLockedSections(
+    _ owners: [String], in ledger: ResolvedLedger, roots: [String: URL]
+  ) throws -> [InstructionSection] {
+    var seenResources = Set<String>()
+    return try owners.compactMap { owner in
+      guard let component = ledger.components[owner], let id = component.resources.first,
+        let resource = ledger.resources[id]
+      else { throw CoreError.invalidState("missing locked instruction input") }
+      guard seenResources.insert(id).inserted else { return nil }
+      if let section = restored[id] { return section }
+      let bytes: Data
+      if resource.kind == .git {
+        var sourceID = resource.source
+        while let container = ledger.sources[sourceID]?.container { sourceID = container }
+        guard let source = ledger.sources[sourceID] else {
+          throw CoreError.invalidState("missing locked instruction source")
+        }
+        let sourceIdentity = try ledger.sourceIdentity(sourceID, roots: roots)
+        let materialized = cache.materializedURL(
+          sourceID: sourceIdentity, revision: source.revision)
         try cache.validatePath(materialized)
-        func read(_ root: URL) throws -> InstructionSection {
-          let file = try PathSafety.resolvedChild(base: root, subpath: record.path)
-          try Self.contained(file, in: root)
-          return try Instructions.validateSource(Data(contentsOf: file), id: Self.identity(record))
-        }
-        if FileManager.default.fileExists(atPath: materialized.path) {
-          section = try read(materialized)
-        } else {
-          guard !cachedOnly else {
-            throw CoreError.notFound("locked instruction cache: \(record.name)")
-          }
-          section = try cache.withSnapshot(
-            sourceID: record.source, source: source, revision: revision, read)
-        }
-        restored[key] = section
+        let file = try PathSafety.resolvedChild(base: materialized, subpath: resource.path)
+        try Self.contained(file, in: materialized)
+        bytes = try FileSystem.read(at: file)
+      } else {
+        guard
+          let object = resource.entries.first(where: { $0.path == "." && $0.kind == .file })?
+            .object,
+          let content = ledger.contentObjects[object]
+        else { throw CoreError.invalidState("missing locked instruction content") }
+        bytes = content
       }
-      guard section.hash == record.hash else {
-        throw CoreError.invalidState("locked instruction digest mismatch: \(record.name)")
-      }
-      return InstructionUnit(record: record, section: section)
-    }
-  }
-
-  func retain(_ lock: ResolvedState) throws {
-    let records = lock.instructions.sections + lock.instructions.chatgpt.values.flatMap(\.sections)
-    for record in records where record.source != Self.own {
-      guard let source = lock.sources[record.source], let revision = record.revision else {
-        throw CoreError.invalidState("missing instruction pin")
-      }
-      let root = try cache.materialize(sourceID: record.source, source: source, revision: revision)
-      let file = try PathSafety.resolvedChild(base: root, subpath: record.path)
-      try Self.contained(file, in: root)
-      guard Instructions.hash(try Data(contentsOf: file)) == record.hash else {
-        throw CoreError.invalidState("cached instruction digest mismatch: \(record.name)")
-      }
+      let section = try Instructions.validateSource(
+        bytes, id: resource.path, allowRestrictions: true)
+      guard section.hash == resource.hash,
+        section.hash == (component.payload.object?["sourceHash"]?.text ?? resource.hash)
+      else { throw CoreError.invalidState("locked instruction digest mismatch: " + resource.path) }
+      restored[id] = section
+      return section
     }
   }
 
@@ -200,7 +160,7 @@ final class InstructionSources {
   }
 
   /// Rejects a symbolic link at `url` or at any directory between `tree` and it.
-  private static func requireNoLinks(_ url: URL, below tree: URL) throws {
+  static func requireNoLinks(_ url: URL, below tree: URL) throws {
     var cursor = tree
     for component in PathSafety.relativePath(url.path, to: tree.path).split(separator: "/") {
       cursor.appendPathComponent(String(component))
@@ -214,7 +174,7 @@ final class InstructionSources {
 
   /// The `.md` files below a container, by name, except the target names `AGENTS.md` and
   /// `GEMINI.md`, which a project may generate there. Symbolic links and invalid names are errors.
-  private static func files(in directory: URL, tree: URL) throws -> [(String, URL)] {
+  static func files(in directory: URL, tree: URL) throws -> [(String, URL)] {
     guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
     try contained(directory, in: tree)
     try requireNoLinks(directory, below: tree)

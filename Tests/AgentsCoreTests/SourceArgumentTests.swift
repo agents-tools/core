@@ -7,7 +7,7 @@ import Testing
 struct SourceArgumentTests {
   private let environment = RuntimeEnvironment(
     projectDirectory: URL(fileURLWithPath: "/project"),
-    homeDirectory: URL(fileURLWithPath: "/home/test"), environment: [:])
+    homeDirectory: URL(fileURLWithPath: "/home/test"), environment: [:], sourceAccess: .init())
 
   @Test(
     arguments: zip(

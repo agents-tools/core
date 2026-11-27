@@ -1,8 +1,10 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
 import AgentsSkills
 import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 final class UpdateFixture {
@@ -76,7 +78,7 @@ final class UpdateFixture {
         instructions: InstructionsDeclaration(
           agents: agents, sections: ["fixture:rules"],
           chatgpt: ["weekly": PromptDeclaration(sections: ["fixture:rules"])])),
-      resolved: ResolvedState())
+      ledger: ResolvedLedger())
   }
 
   func install(mode: InstallMode = .copy, agents: [AgentID] = [.codex, .claudeCode]) throws {
@@ -113,7 +115,7 @@ final class UpdateFixture {
   func snapshot() throws -> [String: Data] {
     let files =
       [store.declarationURL, store.resolvedURL, store.watchURL]
-      + AgentID.allCases.map { target($0).appendingPathComponent("SKILL.md") }
+      + AgentRegistry.skillAgents.map { target($0).appendingPathComponent("SKILL.md") }
       + AgentID.allCases.compactMap {
         InstructionLocations.file(for: $0, scope: store.scope, environment: environment)
       }
