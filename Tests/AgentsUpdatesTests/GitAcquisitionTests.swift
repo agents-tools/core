@@ -280,7 +280,7 @@ struct GitAcquisitionTests {
       ])
       let archive = try Data(contentsOf: zip)
       try PackageSourceHTTP.$fixture.withValue(
-        { request, _ in
+        .init { request, _ in
           #expect(
             request.url?.absoluteString
               == "https://archive-fixture.invalid/base/org/private/archive/refs/heads/main.zip")

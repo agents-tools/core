@@ -69,7 +69,7 @@ struct SourceAccessTests {
 
     let requests = Mutex([String]())
     try PackageSourceHTTP.$fixture.withValue(
-      { request, maximum in
+      .init { request, maximum in
         #expect(request.url == endpoint)
         #expect(maximum == nil)
         let header = request.value(forHTTPHeaderField: "Authorization") ?? ""
@@ -178,7 +178,7 @@ struct SourceAccessTests {
     }
 
     try PackageSourceHTTP.$fixture.withValue(
-      { _, _ in
+      .init { _, _ in
         Issue.record("denied route ran a request")
         throw SourceAccessError.requestFailed
       },
@@ -226,7 +226,7 @@ struct SourceAccessTests {
         }
       ])
     try PackageSourceHTTP.$fixture.withValue(
-      { request, _ in
+      .init { request, _ in
         #expect(
           request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-mirror-route-secret"
         )
@@ -263,7 +263,7 @@ struct SourceAccessTests {
     let bytes = fixture.zip()
     let calls = Mutex(0)
     try PackageSourceHTTP.$fixture.withValue(
-      { request, _ in
+      .init { request, _ in
         #expect(request.url?.path.hasSuffix("refs/tags/v1.2.3.zip") == true)
         calls.withLock { $0 += 1 }
         return .init(status: 200, body: bytes)
@@ -292,7 +292,7 @@ struct SourceAccessTests {
     let requests = Mutex(0)
     let bytes = fixture.zip()
     try PackageSourceHTTP.$fixture.withValue(
-      { request, _ in
+      .init { request, _ in
         #expect(request.url?.path == "/base/org/repo/archive/refs/tags/release/v1.zip")
         requests.withLock { $0 += 1 }
         return .init(status: 200, body: bytes)
@@ -323,7 +323,7 @@ struct SourceAccessTests {
     let damage = mode == .link ? retained.appendingPathComponent("tree") : deployed
     try FileManager.default.removeItem(at: damage)
     try PackageSourceHTTP.$fixture.withValue(
-      { _, _ in
+      .init { _, _ in
         Issue.record("offline replay ran an HTTP request")
         throw SourceAccessError.requestFailed
       },
@@ -351,7 +351,7 @@ struct SourceAccessTests {
         try VerifiedVCSArchive(original).treeDigest
           != VerifiedVCSArchive(fixture.zip(executable: false)).treeDigest)
       try PackageSourceHTTP.$fixture.withValue(
-        { _, _ in .init(status: 200, body: original) },
+        .init { _, _ in .init(status: 200, body: original) },
         operation: {
           try fixture.install(.link)
         })
@@ -361,7 +361,7 @@ struct SourceAccessTests {
       let sealed = try Data(contentsOf: representation)
       try FileManager.default.removeItem(at: representation)
       try PackageSourceHTTP.$fixture.withValue(
-        { _, _ in .init(status: 200, body: recompressed) },
+        .init { _, _ in .init(status: 200, body: recompressed) },
         operation: {
           if strict {
             #expect(throws: SourceAccessError.archiveChanged) {
@@ -406,7 +406,7 @@ struct SourceAccessTests {
       agents: [.codex], sources: ["fixture": fixture.source],
       instructions: .init(agents: [.codex], sections: ["fixture:guidance"]))
     try PackageSourceHTTP.$fixture.withValue(
-      { _, _ in .init(status: 200, body: archive) },
+      .init { _, _ in .init(status: 200, body: archive) },
       operation: {
         try UpdateOperations.withPreparedUpdate(
           .init(operation: .declaration(declaration)), environment: fixture.environment
@@ -425,7 +425,7 @@ struct SourceAccessTests {
     defer { fixture.remove() }
     let bytes = fixture.zip()
     try PackageSourceHTTP.$fixture.withValue(
-      { _, _ in .init(status: 200, body: bytes) },
+      .init { _, _ in .init(status: 200, body: bytes) },
       operation: {
         try fixture.install(.link)
       })
@@ -461,7 +461,7 @@ struct SourceAccessTests {
       #expect(!FileManager.default.fileExists(atPath: fixture.store.resolvedURL.path))
       #expect(!FileManager.default.fileExists(atPath: fixture.skill.path))
       try PackageSourceHTTP.$fixture.withValue(
-        { _, _ in .init(status: 200, body: bytes) },
+        .init { _, _ in .init(status: 200, body: bytes) },
         operation: {
           try fixture.install(.link)
         })
@@ -479,7 +479,7 @@ struct SourceAccessTests {
     #expect(try cache.apply(cache.preview(.clean)).isComplete)
     try FileManager.default.removeItem(at: fixture.skill.deletingLastPathComponent())
     try PackageSourceHTTP.$fixture.withValue(
-      { _, _ in
+      .init { _, _ in
         Issue.record("offline crash recovery made a request")
         throw SourceAccessError.requestFailed
       },
@@ -497,7 +497,7 @@ struct SourceAccessTests {
       at: destinationParent, withIntermediateDirectories: true)
     let bytes = fixture.zip()
     PackageSourceHTTP.$fixture.withValue(
-      { _, _ in .init(status: 200, body: bytes) },
+      .init { _, _ in .init(status: 200, body: bytes) },
       operation: {
         #expect(throws: UpdateApplyError.self) {
           try UpdateOperations.withPreparedUpdate(
@@ -727,7 +727,7 @@ extension SourceAccessTests {
     let bytes = fixture.zip()
     let requests = Mutex(0)
     try PackageSourceHTTP.$fixture.withValue(
-      { request, _ in
+      .init { request, _ in
         requests.withLock { $0 += 1 }
         #expect(
           request.url?.absoluteString
@@ -831,7 +831,7 @@ extension SourceAccessTests {
     let bytes = fixture.zip()
     let requests = Mutex(0)
     try PackageSourceHTTP.$fixture.withValue(
-      { _, _ in
+      .init { _, _ in
         requests.withLock { $0 += 1 }
         return .init(status: 200, body: bytes)
       },

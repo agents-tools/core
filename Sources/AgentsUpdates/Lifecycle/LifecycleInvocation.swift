@@ -125,7 +125,7 @@ struct LifecycleInvocation: Sendable {
   private func handoff<Value>(
     _ captured: CapturedLifecycleAction, _ start: (DirectoryHandle) throws -> Value
   ) throws -> Value {
-    LifecycleOperations.checkpoint?(.beforeHandoff)
+    LifecycleOperations.checkpoint?.notify(.beforeHandoff)
     if Task.isCancelled { throw Withheld(reason: .cancelled) }
     do {
       try context.store.withReadLock {}
@@ -187,7 +187,7 @@ struct LifecycleInvocation: Sendable {
       do { try policy.snapshot?.validate() } catch { throw Withheld(reason: .policyUnavailable) }
       if Task.isCancelled { throw Withheld(reason: .cancelled) }
       let launched = try start(directory)
-      LifecycleOperations.checkpoint?(.handedOff)
+      LifecycleOperations.checkpoint?.notify(.handedOff)
       return launched
     }
 
@@ -310,7 +310,7 @@ extension LifecycleOperations {
     onDispatch: (@Sendable (LifecycleActionSummary) -> Void)? = nil
   ) async -> LifecycleSubmission<[LifecycleActionResult]> {
     await review.confirmation.submit {
-      checkpoint?(.confirmationClaimed)
+      checkpoint?.notify(.confirmationClaimed)
       let client = LifecycleHTTPClient()
       let session = client.session()
       defer { session.invalidateAndCancel() }
@@ -360,7 +360,7 @@ extension UpdateOperations {
     onDispatch: (@Sendable (LifecycleActionSummary) -> Void)? = nil
   ) async -> LifecycleSubmission<LifecycleInvocationResult<Value>> {
     await review.confirmation.submit {
-      LifecycleOperations.checkpoint?(.confirmationClaimed)
+      LifecycleOperations.checkpoint?.notify(.confirmationClaimed)
       let plan = review.plan
       let client = LifecycleHTTPClient()
       let session = client.session()

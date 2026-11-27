@@ -4,7 +4,11 @@ import Foundation
 /// Publication uses atomic exchange or exclusive rename on each destination volume.
 /// The private journal records intent before every publication and survives process exit.
 enum BackupRestoreTransaction {
-  @TaskLocal static var checkpoint: (@Sendable (String) throws -> Void)?
+  struct Checkpoint: Sendable {
+    let run: @Sendable (String) throws -> Void
+  }
+
+  @TaskLocal static var checkpoint: Checkpoint?
 
   private struct Leaf: Codable {
     let path: String
@@ -172,7 +176,7 @@ enum BackupRestoreTransaction {
       try validate(plan)
       journal.phase = .publishing
       try persist(journal, in: journalRoot, name: name)
-      try checkpoint?("publishing")
+      try checkpoint?.run("publishing")
       for (index, group) in groups.enumerated() {
         let unit = journal.units[index]
         let parent = try unit.openParent()
@@ -202,15 +206,15 @@ enum BackupRestoreTransaction {
           }
         }
         _ = try unit.openParent()
-        try checkpoint?("published")
+        try checkpoint?.run("published")
       }
       journal.phase = .committed
       try persist(journal, in: journalRoot, name: name)
-      try checkpoint?("committed")
+      try checkpoint?.run("committed")
     } catch {
       let original = error
       do {
-        try checkpoint?("recovering")
+        try checkpoint?.run("recovering")
         try recover(in: journalRoot, named: name, client: plan.client)
       } catch {
         throw ClientBackupError.storageFailure(

@@ -55,7 +55,13 @@ extension LifecycleOperations {
     case handedOff
   }
 
-  @TaskLocal static var checkpoint: (@Sendable (Checkpoint) -> Void)?
+  struct CheckpointObserver: Sendable {
+    let notify: @Sendable (Checkpoint) -> Void
+
+    init(_ notify: @escaping @Sendable (Checkpoint) -> Void) { self.notify = notify }
+  }
+
+  @TaskLocal static var checkpoint: CheckpointObserver?
   @TaskLocal package static var transactionCheckpointForTesting:
     (@Sendable (String) throws -> Void)?
 
@@ -86,7 +92,7 @@ extension LifecycleOperations {
     _ review: LifecycleEnableReview
   ) async -> LifecycleSubmission<Result<LifecycleTrustRecord, any Error>> {
     await review.confirmation.submit {
-      checkpoint?(.confirmationClaimed)
+      checkpoint?.notify(.confirmationClaimed)
       return Result { try review.context.publishEnable(review.enablement) }
     }
   }
@@ -130,14 +136,14 @@ extension LifecycleOperations {
     _ review: LifecycleDeclarationReview, enable: Bool = false
   ) async -> LifecycleSubmission<Result<LifecycleSaveResult, any Error>> {
     await review.confirmation.submit {
-      checkpoint?(.confirmationClaimed)
+      checkpoint?.notify(.confirmationClaimed)
       return Result {
         let proposed = enable ? review.enablement : nil
         if enable && proposed == nil {
           throw CoreError.invalidState("Enablement requires a reviewed project declaration.")
         }
         try review.context.publishDeclaration(review)
-        checkpoint?(.declarationSaved)
+        checkpoint?.notify(.declarationSaved)
         guard let proposed else { return .saved }
         do {
           return .savedAndEnabled(try review.context.publishEnable(proposed))
@@ -282,7 +288,7 @@ extension LifecycleContext {
       guard expectedRevision == nil || revision == expectedRevision, revision < UInt64.max else {
         throw CoreError.invalidState("The project's lifecycle trust revision changed.")
       }
-      LifecycleOperations.checkpoint?(.beforeReceiptPublication)
+      LifecycleOperations.checkpoint?.notify(.beforeReceiptPublication)
       try validate()
       try Task.checkCancellation()
       let record = LifecycleTrustRecord(project: project, revision: revision + 1, digest: digest)
@@ -294,7 +300,7 @@ extension LifecycleContext {
       try directory.replacePrivateLifecycleFile(LifecycleReceipts.file, bytes: bytes)
       return record
     }
-    LifecycleOperations.checkpoint?(.receiptPublished)
+    LifecycleOperations.checkpoint?.notify(.receiptPublished)
     return record
   }
 

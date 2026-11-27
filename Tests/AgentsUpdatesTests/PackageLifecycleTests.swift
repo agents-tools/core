@@ -141,9 +141,11 @@ struct PackageLifecycleTests {
       #expect(!fixture.exists(fixture.counter))
       let barrier = LifecycleBarrier()
       let running = Task {
-        await LifecycleOperations.$checkpoint.withValue({ step in
-          if step == .confirmationClaimed { barrier.pause() }
-        }) {
+        await LifecycleOperations.$checkpoint.withValue(
+          .init { step in
+            if step == .confirmationClaimed { barrier.pause() }
+          }
+        ) {
           await UpdateOperations.perform(review)
         }
       }
@@ -243,9 +245,11 @@ struct PackageLifecycleTests {
         try LifecycleFixture.subtree(), environment: fixture.environment)
       let barrier = LifecycleBarrier()
       let task = Task {
-        await LifecycleOperations.$checkpoint.withValue({ step in
-          if step == .declarationSaved { barrier.pause() }
-        }) {
+        await LifecycleOperations.$checkpoint.withValue(
+          .init { step in
+            if step == .declarationSaved { barrier.pause() }
+          }
+        ) {
           await LifecycleOperations.save(staged, enable: true)
         }
       }
@@ -426,9 +430,11 @@ struct PackageLifecycleTests {
       let review = LifecycleOperations.simulate(.preInstall, environment: fixture.environment)
       let handoff = LifecycleBarrier()
       let running = Task {
-        await LifecycleOperations.$checkpoint.withValue({ point in
-          if point == .handedOff { handoff.pause() }
-        }) {
+        await LifecycleOperations.$checkpoint.withValue(
+          .init { point in
+            if point == .handedOff { handoff.pause() }
+          }
+        ) {
           await LifecycleOperations.executeTest(review)
         }
       }
@@ -437,9 +443,11 @@ struct PackageLifecycleTests {
       let published = DispatchSemaphore(value: 0)
       let returned = DispatchSemaphore(value: 0)
       let revoking = Task {
-        try LifecycleOperations.$checkpoint.withValue({ point in
-          if point == .receiptPublished { published.signal() }
-        }) {
+        try LifecycleOperations.$checkpoint.withValue(
+          .init { point in
+            if point == .receiptPublished { published.signal() }
+          }
+        ) {
           defer { returned.signal() }
           return try LifecycleOperations.revoke(grant.project, environment: fixture.environment)
         }

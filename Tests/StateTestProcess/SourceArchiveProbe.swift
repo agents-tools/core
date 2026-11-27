@@ -23,7 +23,7 @@ func sourceArchiveProbe(
     ],
     skills: ["fixture": .init(select: .names(["demo"]), mode: .link)])
   try PackageSourceHTTP.$fixture.withValue(
-    { _, _ in .init(status: 200, body: bytes) },
+    .init { _, _ in .init(status: 200, body: bytes) },
     operation: {
       try UpdateOperations.withPreparedUpdate(
         .init(operation: .declaration(declaration)), environment: environment,

@@ -343,7 +343,7 @@ import Testing
       if step == "published" { throw PublicationFailure.injected }
     }
     #expect(throws: PublicationFailure.self) {
-      try BackupRestoreTransaction.$checkpoint.withValue(fault) {
+      try BackupRestoreTransaction.$checkpoint.withValue(.init(run: fault)) {
         try ClientBackups.restore(plan)
       }
     }
@@ -374,7 +374,7 @@ import Testing
       if step == "published" || step == "recovering" { throw PublicationFailure.injected }
     }
     #expect(throws: ClientBackupError.self) {
-      try BackupRestoreTransaction.$checkpoint.withValue(fault) {
+      try BackupRestoreTransaction.$checkpoint.withValue(.init(run: fault)) {
         try ClientBackups.restore(preview)
       }
     }
@@ -535,7 +535,7 @@ import Testing
       }
     }
     #expect(throws: PublicationFailure.self) {
-      try BackupRestoreTransaction.$checkpoint.withValue(rollback) {
+      try BackupRestoreTransaction.$checkpoint.withValue(.init(run: rollback)) {
         try ClientBackups.restore(preview)
       }
     }

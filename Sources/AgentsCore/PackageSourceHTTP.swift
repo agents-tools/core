@@ -17,14 +17,22 @@ package enum PackageSourceHTTP {
     }
   }
 
+  package struct Fixture: Sendable {
+    let respond: @Sendable (URLRequest, Int?) throws -> Response
+
+    package init(_ respond: @escaping @Sendable (URLRequest, Int?) throws -> Response) {
+      self.respond = respond
+    }
+  }
+
   // Tests supply a local transport without modifying URLSession or OS trust.
-  @TaskLocal package static var fixture: (@Sendable (URLRequest, Int?) throws -> Response)?
+  @TaskLocal package static var fixture: Fixture?
 
   static func read(_ request: URLRequest, maximumBytes: Int?) throws -> Response {
     guard let url = request.url else { throw SourceAccessError.requestFailed }
     _ = try SourceURL.https(url)
     if let fixture {
-      let response = try fixture(request, maximumBytes)
+      let response = try fixture.respond(request, maximumBytes)
       if let maximumBytes, response.body.count > maximumBytes {
         throw SourceAccessError.requestFailed
       }
