@@ -314,6 +314,7 @@ struct ProducerPatchTests {
     let bundle = try BundleOperations.inspect(archive)
     let member = try #require(bundle.components.first)
     #expect(member.sources.contains { $0.kind == .git && $0.revision == base })
+    #expect(member.sources.contains { $0.policyOrigin == .missing })
 
     let consumer = try UpdateFixture()
     let imported = try BundleOperations.previewImport(
@@ -335,7 +336,8 @@ struct ProducerPatchTests {
     try consumer.write("edited\n", to: copy.appendingPathComponent("run.sh"))
     let report = try UpdateOperations.previewProducerPatches(environment: consumer.environment)
     #expect(report.patches.isEmpty)
-    #expect(report.skipped.contains { $0.path == copy && $0.reason == .missingPathAttribution })
+    let copyReasons = report.skipped.filter { $0.path == copy }.map(\.reason)
+    #expect(copyReasons == [.missingPathAttribution])
     #expect(
       report.skipped.contains { $0.path == consumer.target() && $0.reason == .linkedDeployment })
   }

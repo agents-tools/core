@@ -83,9 +83,10 @@ final class ProducerPatchLineage {
     }
     if members[id] != nil { return nil }
     if let claims = source.bundleSources {
-      let origins = Set(claims.filter { !Self.localClaim($0) }.map(\.policyOrigin))
+      let origins = Set(
+        claims.lazy.filter { !Self.localClaim($0) }.map(\.policyOrigin).filter { $0 != .missing })
       if origins.count > 1 { return .ambiguousProducer }
-      if let origin = origins.first, origin != .missing { return .missingPathAttribution }
+      if !origins.isEmpty { return .missingPathAttribution }
     }
     return source.kind == .wellKnown ? .missingPathAttribution : .missingProducerIdentity
   }
