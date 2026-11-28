@@ -1,11 +1,6 @@
 import AgentsCore
+import CPlatform
 import Foundation
-
-#if canImport(Darwin)
-  import Darwin
-#else
-  import Glibc
-#endif
 
 /// Valid only on the preparing thread, inside `withPreparedUpdate`. Any apply attempt consumes it.
 /// Render `report` directly; re-entering scope operations while this handle is active can deadlock.
@@ -24,7 +19,7 @@ public final class PreparedUpdate {
     self.outcome = outcome
   }
 
-  public func apply() throws -> UpdateApplyResult {
+  public func apply(ifUnchangedFrom fingerprint: String? = nil) throws -> UpdateApplyResult {
     let pending = try gate.withLock {
       guard active, !attempted, let plan else {
         throw CoreError.invalidState("prepared update is inactive, consumed or on another thread")
@@ -36,6 +31,9 @@ public final class PreparedUpdate {
       return plan
     }
     do {
+      if let fingerprint, fingerprint != report.displayedFingerprint {
+        throw CoreError.invalidState("displayed update candidate changed; refresh the report")
+      }
       return try pending.apply(outcome: outcome)
     } catch {
       pending.recover(outcome: outcome)

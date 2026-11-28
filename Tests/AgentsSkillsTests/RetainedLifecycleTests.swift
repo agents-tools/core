@@ -1,3 +1,5 @@
+import AgentsManifest
+import AgentsUpdates
 import Foundation
 import Testing
 
@@ -58,8 +60,9 @@ struct RetainedLifecycleTests {
       named: "internal", directory: fixture.repo.appendingPathComponent("skills"))
     try Data("---\nname: internal\ndescription: Internal\nmetadata:\n  internal: true\n---".utf8)
       .write(to: internalDirectory.appendingPathComponent("SKILL.md"))
-    _ = try SkillOperations.initializeSkill(
-      named: "deep", directory: fixture.repo.appendingPathComponent("skills/level/level"))
+    let deepDirectory = fixture.repo.appendingPathComponent("skills/level/level")
+    try FileManager.default.createDirectory(at: deepDirectory, withIntermediateDirectories: true)
+    _ = try SkillOperations.initializeSkill(named: "deep", directory: deepDirectory)
     for value in ["", "false", "TRUE", "yes", "true", "1"] {
       var environment = fixture.environment
       environment.environment["INSTALL_INTERNAL_SKILLS"] = value
@@ -149,30 +152,35 @@ struct RetainedLifecycleTests {
     if configureClaude { environment.environment["CLAUDE_CONFIG_DIR"] = claudeRoot.path }
     _ = try SkillOperations.add(
       AddOptions(
-        source: fixture.repo.path, agents: AgentID.allCases, scope: .user, environment: environment)
+        source: fixture.repo.path, agents: AgentRegistry.skillAgents, scope: .user,
+        environment: environment)
     )
     let shared = fixture.target("demo", scope: .user)
     let claude = claudeRoot.appendingPathComponent("skills/demo")
+    let antigravity = environment.homeDirectory.appendingPathComponent(".gemini/config/skills/demo")
     #expect(try fixture.body(shared).contains("A"))
     #expect(try fixture.body(claude).contains("A"))
+    #expect(try fixture.body(antigravity).contains("A"))
     #expect(
       !(try FileManager.default.destinationOfSymbolicLink(atPath: shared.path)).hasPrefix("/"))
     let bytes = try Data(contentsOf: fixture.store(.user).resolvedURL)
-    for target in [shared, claude] { try FileManager.default.removeItem(at: target) }
+    for target in [shared, claude, antigravity] { try FileManager.default.removeItem(at: target) }
     _ = try SkillOperations.installResolvedReport(scope: .user, environment: environment)
     #expect(try Data(contentsOf: fixture.store(.user).resolvedURL) == bytes)
     #expect(try fixture.body(shared).contains("A"))
     #expect(try fixture.body(claude).contains("A"))
+    #expect(try fixture.body(antigravity).contains("A"))
     _ = try SkillOperations.remove(
       skillNames: ["demo"], scope: .user, agents: [.codex], environment: environment)
     #expect(FileManager.default.fileExists(atPath: shared.path))
-    #expect(try fixture.store(.user).loadResolved().skills["demo"]?.installs.count == 4)
+    #expect(try fixture.store(.user).loadResolved().skills["demo"]?.installs.count == 5)
     _ = try SkillOperations.remove(
       skillNames: ["demo"], scope: .user, agents: [.claudeCode], environment: environment)
     #expect(!FileManager.default.fileExists(atPath: claude.path))
     #expect(FileManager.default.fileExists(atPath: shared.path))
     _ = try SkillOperations.remove(skillNames: ["demo"], scope: .user, environment: environment)
     #expect(!FileManager.default.fileExists(atPath: shared.path))
+    #expect(!FileManager.default.fileExists(atPath: antigravity.path))
     #expect(try fixture.store(.user).loadResolved().skills.isEmpty)
     let materialized = fixture.store(.user).cacheDirectory.appendingPathComponent("materialized")
     #expect(try FileManager.default.contentsOfDirectory(atPath: materialized.path).isEmpty)

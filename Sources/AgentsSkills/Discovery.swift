@@ -20,9 +20,13 @@ public struct Skill: Codable, Equatable, Sendable {
   }
 }
 
+package typealias SkillMemberSelection = @Sendable (_ name: String?, _ directory: String) -> Bool
+
 struct DiscoveryOptions: Sendable {
   var includeInternal: Bool
   var fullDepth: Bool
+  var strict = false
+  var selecting: SkillMemberSelection?
 
   init(includeInternal: Bool = false, fullDepth: Bool = false) {
     self.includeInternal = includeInternal
@@ -35,19 +39,42 @@ enum Discovery {
     "node_modules", ".git", "dist", "build", "__pycache__", "__pypackages__",
   ])
 
-  static func parseSkill(at skillFile: URL, includeInternal: Bool = false) throws -> Skill? {
-    let content = try String(contentsOf: skillFile, encoding: .utf8)
+  static func parseSkill(at skillFile: URL, includeInternal: Bool = false, strict: Bool = false)
+    throws -> Skill?
+  {
+    let content = try FileSystem.withAccessErrors(at: skillFile) {
+      try String(contentsOf: skillFile, encoding: .utf8)
+    }
+    return try parseSkill(content, at: skillFile, includeInternal: includeInternal, strict: strict)
+  }
+
+  static func parseSkill(
+    _ content: String, at skillFile: URL, includeInternal: Bool, strict: Bool,
+    selecting: SkillMemberSelection? = nil, diagnosticPath: String? = nil
+  ) throws -> Skill? {
+    let directory = skillFile.deletingLastPathComponent()
+    let path = diagnosticPath ?? skillFile.lastPathComponent
     let data: [String: Any]
     do {
       data = try parseFrontmatter(content)
     } catch {
+      if strict, selecting?(nil, directory.lastPathComponent) ?? true {
+        throw CoreError.invalidSource("\(path): malformed front matter: \(error)")
+      }
       return nil
     }
-    guard let name = data["name"] as? String,
+    let name = (data["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    let validate =
+      strict
+      && (selecting?(name.map(TextSanitizer.sanitizeMetadata), directory.lastPathComponent) ?? true)
+    if validate {
+      _ = try producerCondition(data, file: skillFile, content: content, diagnosticPath: path)
+    }
+    guard let name,
       let description = data["description"] as? String,
-      !name.isEmpty,
       !description.isEmpty
     else {
+      if validate { throw CoreError.invalidSource("\(path) requires name and description") }
       return nil
     }
 
@@ -58,7 +85,6 @@ enum Discovery {
       return nil
     }
 
-    let directory = skillFile.deletingLastPathComponent()
     return Skill(
       name: TextSanitizer.sanitizeMetadata(name),
       description: TextSanitizer.sanitizeMetadata(description),
@@ -72,7 +98,7 @@ enum Discovery {
   ) throws -> [Skill] {
     let searchRoot =
       try subpath.map { try PathSafety.resolvedChild(base: base, subpath: $0) } ?? base
-    let pluginGroups = pluginGroupings(base: searchRoot)
+    let pluginGroups = try pluginGroupings(base: searchRoot)
     let projectInstalledSkillNames = projectInstalledAgentSkillNames(base: searchRoot)
     var skills: [Skill] = []
     var seen = Set<String>()
@@ -81,8 +107,23 @@ enum Discovery {
     func addSkillDirectory(_ directory: URL) throws -> Bool {
       let skillFile = directory.appendingPathComponent("SKILL.md")
       guard FileManager.default.fileExists(atPath: skillFile.path) else { return false }
-      guard var skill = try parseSkill(at: skillFile, includeInternal: options.includeInternal)
-      else { return false }
+      let parsed: Skill?
+      if options.strict {
+        let path = PathSafety.relativePath(skillFile.path, to: base.path)
+        let bytes = try FileSystem.read(at: skillFile)
+        guard let content = String(data: bytes, encoding: .utf8) else {
+          if options.selecting?(nil, directory.lastPathComponent) ?? true {
+            throw CoreError.invalidSource("\(path) must be UTF-8")
+          }
+          return false
+        }
+        parsed = try parseSkill(
+          content, at: skillFile, includeInternal: options.includeInternal, strict: true,
+          selecting: options.selecting, diagnosticPath: path)
+      } else {
+        parsed = try parseSkill(at: skillFile, includeInternal: options.includeInternal)
+      }
+      guard var skill = parsed else { return false }
       let key = skill.name.lowercased()
       guard !seen.contains(key) else { return true }
       if isProjectInstalledAgentSkill(directory, base: searchRoot),
@@ -112,7 +153,7 @@ enum Discovery {
       searchRoot.appendingPathComponent(".codex/skills"),
       searchRoot.appendingPathComponent(".opencode/skills"),
     ]
-    priorityDirectories.append(contentsOf: pluginSkillSearchDirectories(base: searchRoot))
+    priorityDirectories.append(contentsOf: try pluginSkillSearchDirectories(base: searchRoot))
 
     for directory in priorityDirectories {
       let candidates =
@@ -143,7 +184,28 @@ enum Discovery {
     }
   }
 
-  private static func parseFrontmatter(_ raw: String) throws -> [String: Any] {
+  static func producerCondition(
+    _ data: [String: Any], file: URL, content: String, diagnosticPath: String? = nil
+  ) throws -> DeclarationCondition {
+    var result = DeclarationCondition()
+    let lines = content.components(separatedBy: "\n")
+    for key in ["agents", "platforms", "scopes"] {
+      guard let raw = data[key] else { continue }
+      let line = (lines.firstIndex { $0.hasPrefix(key + ":") } ?? 0) + 1
+      do {
+        guard let values = raw as? [String] else {
+          throw CoreError.invalidSource("producer '\(key)' must be a string list")
+        }
+        result = result.intersecting(try .restrictions([key: values]))
+      } catch {
+        throw CoreError.invalidSource(
+          "\(diagnosticPath ?? file.lastPathComponent):\(line): \(error)")
+      }
+    }
+    return result
+  }
+
+  static func parseFrontmatter(_ raw: String) throws -> [String: Any] {
     guard raw.hasPrefix("---") else { return [:] }
     let pattern = #"^---\r?\n([\s\S]*?)\r?\n---\r?\n?"#
     guard let regex = try? NSRegularExpression(pattern: pattern),
@@ -239,12 +301,12 @@ enum Discovery {
     (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
   }
 
-  private static func pluginSkillSearchDirectories(base: URL) -> [URL] {
+  private static func pluginSkillSearchDirectories(base: URL) throws -> [URL] {
     var directories: [URL] = []
     let decoder = JSONDecoder()
 
     let marketplaceURL = base.appendingPathComponent(".claude-plugin/marketplace.json")
-    if let data = try? Data(contentsOf: marketplaceURL),
+    if let data = try FileSystem.readUnlessDenied(at: marketplaceURL),
       let manifest = try? decoder.decode(MarketplaceManifest.self, from: data)
     {
       let root = manifest.metadata?.pluginRoot
@@ -269,7 +331,7 @@ enum Discovery {
     }
 
     let pluginURL = base.appendingPathComponent(".claude-plugin/plugin.json")
-    if let data = try? Data(contentsOf: pluginURL),
+    if let data = try FileSystem.readUnlessDenied(at: pluginURL),
       let manifest = try? decoder.decode(PluginManifest.self, from: data)
     {
       for skill in manifest.skills ?? [] where skill.hasPrefix("./") {
@@ -285,12 +347,12 @@ enum Discovery {
     return directories
   }
 
-  private static func pluginGroupings(base: URL) -> [String: String] {
+  private static func pluginGroupings(base: URL) throws -> [String: String] {
     var groups: [String: String] = [:]
     let decoder = JSONDecoder()
 
     let marketplaceURL = base.appendingPathComponent(".claude-plugin/marketplace.json")
-    if let data = try? Data(contentsOf: marketplaceURL),
+    if let data = try FileSystem.readUnlessDenied(at: marketplaceURL),
       let manifest = try? decoder.decode(MarketplaceManifest.self, from: data)
     {
       let root = manifest.metadata?.pluginRoot
@@ -314,7 +376,7 @@ enum Discovery {
     }
 
     let pluginURL = base.appendingPathComponent(".claude-plugin/plugin.json")
-    if let data = try? Data(contentsOf: pluginURL),
+    if let data = try FileSystem.readUnlessDenied(at: pluginURL),
       let manifest = try? decoder.decode(PluginManifest.self, from: data),
       let name = manifest.name
     {

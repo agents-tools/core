@@ -1,7 +1,47 @@
 import Foundation
 
-/// Fixed agent instruction destinations shared by lifecycle planning and journal validation.
+/// Registered agent instruction destinations shared by lifecycle planning and journal validation.
 package enum InstructionLocations {
+  package static let antigravityRoot = "instructions-antigravity"
+  package static let antigravityFormat = "agents/antigravity-rule@1"
+
+  package static let antigravityProjectRoot = "instructions-antigravity-project"
+
+  package static func ruleRoot(in scope: InstallScope) -> String {
+    scope == .project ? antigravityProjectRoot : antigravityRoot
+  }
+
+  static func antigravityAuthority(
+    _ environment: RuntimeEnvironment, scope: InstallScope
+  ) -> NativeRootAuthority {
+    switch scope {
+    case .project: .init(loader: environment.projectDirectory, descendants: [".agents", "rules"])
+    case .user:
+      .init(loader: environment.homeDirectory, descendants: [".gemini", "config", "rules"])
+    }
+  }
+
+  package static func isAntigravityLeaf(_ name: String, legacy: Bool = false) -> Bool {
+    let pattern =
+      legacy
+      ? #"^memex-[a-z0-9][a-z0-9_-]{0,159}\.md\z"# : #"^agents-[a-z0-9_-]{1,60}-[a-f0-9]{64}\.md\z"#
+    return name.range(of: pattern, options: .regularExpression) != nil
+  }
+
+  package static func antigravityLeaf(_ name: String, store: StateStore, legacy: Bool = false)
+    throws -> URL
+  {
+    guard !legacy || store.scope == .user, isAntigravityLeaf(name, legacy: legacy) else {
+      throw CoreError.unsafePath("unregistered Antigravity rule: \(name)")
+    }
+    return try antigravityAuthority(store.environment, scope: store.scope).physicalDirectory()
+      .appendingPathComponent(name)
+  }
+
+  package static func isInstructionFormat(_ format: String) -> Bool {
+    ["agents/instructions@1", "agents/claude-import@1", antigravityFormat].contains(format)
+  }
+
   package static let projectPaths = [
     "AGENTS.md", "GEMINI.md", "CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md",
   ]
@@ -23,11 +63,11 @@ package enum InstructionLocations {
   package static func file(
     for agent: AgentID, scope: InstallScope, environment: RuntimeEnvironment
   ) -> URL? {
+    guard agent != .antigravity, agent.supportsInstructions(in: scope) else { return nil }
     if scope == .project {
       return environment.projectDirectory.appendingPathComponent(
         agent == .geminiCLI ? "GEMINI.md" : "AGENTS.md")
     }
-    guard agent != .cursor else { return nil }
     let directory = AgentRegistry.userSkillsDirectory(for: agent, environment: environment)
       .deletingLastPathComponent()
     let name = agent == .claudeCode ? "CLAUDE.md" : agent == .geminiCLI ? "GEMINI.md" : "AGENTS.md"
@@ -51,6 +91,15 @@ package enum InstructionLocations {
   }
 
   package static func file(for key: String, store: StateStore) throws -> URL {
+    let ruleRoot = antigravityAuthority(store.environment, scope: store.scope)
+    let name = (key as NSString).lastPathComponent
+    if isAntigravityLeaf(name),
+      key
+        == self.key(
+          for: try ruleRoot.plannedPhysicalDirectory.appendingPathComponent(name), store: store)
+    {
+      return try antigravityLeaf(name, store: store)
+    }
     let file: URL
     if key.hasPrefix("/") {
       guard store.scope == .user else { throw CoreError.unsafePath("absolute project target") }
@@ -80,5 +129,27 @@ package enum InstructionLocations {
       throw CoreError.unsafePath("unregistered instruction target: \(key)")
     }
     return file.standardizedFileURL
+  }
+}
+
+extension InstructionLocations {
+  package static func clientFiles(
+    for agent: AgentID, scope: InstallScope, environment: RuntimeEnvironment
+  ) -> [(String, URL)] {
+    if agent == .antigravity {
+      return [
+        ("instructions.rules", antigravityAuthority(environment, scope: scope).logicalDirectory)
+      ]
+    }
+    var result =
+      file(for: agent, scope: scope, environment: environment).map {
+        [("instructions.fixed", $0)]
+      } ?? []
+    if agent == .claudeCode && scope == .project {
+      result += projectPaths.filter { $0.contains("CLAUDE") }.map {
+        ("instructions." + $0, environment.projectDirectory.appendingPathComponent($0))
+      }
+    }
+    return result
   }
 }

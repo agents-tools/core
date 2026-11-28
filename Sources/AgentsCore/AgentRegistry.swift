@@ -6,6 +6,7 @@ public enum AgentID: String, Codable, CaseIterable, Sendable {
   case cursor
   case geminiCLI = "gemini-cli"
   case opencode
+  case antigravity
 
   public var displayName: String {
     switch self {
@@ -19,7 +20,15 @@ public enum AgentID: String, Codable, CaseIterable, Sendable {
       return "Gemini CLI"
     case .opencode:
       return "OpenCode"
+    case .antigravity:
+      return "Antigravity"
     }
+  }
+
+  public var supportsSkills: Bool { true }
+
+  public func supportsInstructions(in scope: InstallScope) -> Bool {
+    scope == .project || self != .cursor
   }
 
   public static func parse(_ raw: String) throws -> AgentID {
@@ -54,13 +63,35 @@ public enum InstallMode: String, Codable, Sendable {
 
 public struct RuntimeEnvironment: Sendable {
   public var projectDirectory: URL
-  public var homeDirectory: URL
-  public var environment: [String: String]
+  public var homeDirectory: URL {
+    didSet { if sourceAccess.usesUserSettings { reloadSourceAccessSettings() } }
+  }
+  public var environment: [String: String] {
+    didSet { if sourceAccess.usesUserSettings { reloadSourceAccessSettings() } }
+  }
+  /// A trusted caller may select a shared local policy, independently of project declarations.
+  public var organizationSourcePolicyURL: URL?
+  public var userOrganizationPolicy: OrganizationPolicySelection?
+  public var projectOrganizationPolicy: OrganizationPolicySelection?
+  /// An explicit cache root supplied by the trusted host, typically for an isolated fixture.
+  public var acquisitionCacheRoot: URL?
+  /// Hosts the caller has selected for credentialed Git, matched case-insensitively.
+  public var credentialedGitHosts: Set<String>
+  /// Additional deployment or backup roots owned by the caller.
+  public var protectedAcquisitionPaths: [URL]
+  /// Trusted source access captured at construction or explicit reload.
+  /// Use resolvedSourceAccess() to check whether a captured user profile is still valid.
+  public var sourceAccess: SourceAccessConfiguration
 
   public init(
     projectDirectory: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
     homeDirectory: URL? = nil,
-    environment: [String: String] = ProcessInfo.processInfo.environment
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    organizationSourcePolicyURL: URL? = nil,
+    userOrganizationPolicy: OrganizationPolicySelection? = nil,
+    projectOrganizationPolicy: OrganizationPolicySelection? = nil,
+    acquisitionCacheRoot: URL? = nil, credentialedGitHosts: Set<String> = [],
+    protectedAcquisitionPaths: [URL] = [], sourceAccess: SourceAccessConfiguration? = nil
   ) {
     self.projectDirectory = projectDirectory.standardizedFileURL
     let resolvedHome =
@@ -69,10 +100,30 @@ public struct RuntimeEnvironment: Sendable {
       ?? FileManager.default.homeDirectoryForCurrentUser
     self.homeDirectory = resolvedHome.standardizedFileURL
     self.environment = environment
+    self.acquisitionCacheRoot = acquisitionCacheRoot
+    self.credentialedGitHosts = credentialedGitHosts
+    self.protectedAcquisitionPaths = protectedAcquisitionPaths
+    self.sourceAccess =
+      sourceAccess ?? .loadUserSettings(home: self.homeDirectory, environment: environment)
+    self.userOrganizationPolicy =
+      userOrganizationPolicy
+      ?? environment["AGENTS_USER_ORGANIZATION_POLICY"].map(
+        OrganizationPolicySelection.init(location:))
+    self.projectOrganizationPolicy =
+      projectOrganizationPolicy
+      ?? environment["AGENTS_PROJECT_ORGANIZATION_POLICY"].map(
+        OrganizationPolicySelection.init(location:))
+    self.organizationSourcePolicyURL =
+      organizationSourcePolicyURL
+      ?? environment["AGENTS_ORGANIZATION_SOURCE_POLICY"].map {
+        URL(fileURLWithPath: $0, relativeTo: resolvedHome)
+      }
   }
 }
 
 package enum AgentRegistry {
+  package static var skillAgents: [AgentID] { AgentID.allCases.filter(\.supportsSkills) }
+
   package static func canonicalSkillsDirectory(
     scope: InstallScope, environment: RuntimeEnvironment
   ) -> URL {
@@ -94,7 +145,8 @@ package enum AgentRegistry {
       return projectSkillsDirectory(for: agent, environment: environment).standardizedFileURL.path
         == canonical
     case .user:
-      return usesUniversalProjectSkillsDirectory(for: agent, environment: environment)
+      return agent != .antigravity
+        && usesUniversalProjectSkillsDirectory(for: agent, environment: environment)
     }
   }
 
@@ -113,7 +165,7 @@ package enum AgentRegistry {
     switch agent {
     case .claudeCode:
       return environment.projectDirectory.appendingPathComponent(".claude/skills")
-    case .codex, .cursor, .geminiCLI, .opencode:
+    case .codex, .cursor, .geminiCLI, .opencode, .antigravity:
       return environment.projectDirectory.appendingPathComponent(".agents/skills")
     }
   }
@@ -144,6 +196,8 @@ package enum AgentRegistry {
         environment.environment["XDG_CONFIG_HOME"].flatMap { $0.isEmpty ? nil : $0 }
         ?? environment.homeDirectory.appendingPathComponent(".config").path
       return URL(fileURLWithPath: configHome).appendingPathComponent("opencode/skills")
+    case .antigravity:
+      return environment.homeDirectory.appendingPathComponent(".gemini/config/skills")
     }
   }
 
@@ -158,18 +212,21 @@ package enum AgentRegistry {
       ]
     case .claudeCode:
       return [userSkillsDirectory(for: agent, environment: environment)]
+    case .antigravity:
+      return [userSkillsDirectory(for: agent, environment: environment)]
     }
   }
 
   package static func projectScanDirectories(
     for agent: AgentID, environment: RuntimeEnvironment
   ) -> [URL] {
+    guard agent.supportsSkills else { return [] }
     let primary = projectSkillsDirectory(for: agent, environment: environment)
     let additional: [URL]
     switch agent {
     case .geminiCLI:
       additional = [environment.projectDirectory.appendingPathComponent(".gemini/skills")]
-    case .codex, .claudeCode, .cursor, .opencode:
+    case .codex, .claudeCode, .cursor, .opencode, .antigravity:
       additional = []
     }
     return uniqueDirectories([primary] + additional)
@@ -199,4 +256,70 @@ package enum AgentRegistry {
       .standardizedFileURL.path
   }
 
+}
+
+extension AgentRegistry {
+  package struct ClientCommand: Sendable {
+    package let name: String
+    package let role: String
+  }
+
+  package static func clientCommands(for agent: AgentID) -> [ClientCommand] {
+    switch agent {
+    case .codex: [.init(name: "codex", role: "agentCLI")]
+    case .claudeCode: [.init(name: "claude", role: "agentCLI")]
+    case .geminiCLI: [.init(name: "gemini", role: "agentCLI")]
+    case .antigravity: [.init(name: "agy", role: "agentCLI")]
+    case .opencode: [.init(name: "opencode", role: "agentCLI")]
+    case .cursor:
+      [
+        .init(name: "cursor", role: "editorLauncher"),
+        .init(name: "cursor-agent", role: "agentCLI"),
+      ]
+    }
+  }
+
+  // Registered editor bundle identity; the agent CLI has independent metadata.
+  package static func clientBundleIdentifier(for agent: AgentID) -> String? {
+    agent == .cursor ? "com.todesktop.230313mzl4w4u92" : nil
+  }
+
+  package static func clientSkillLocations(
+    for agent: AgentID, scope: InstallScope, environment: RuntimeEnvironment
+  ) -> [(String, URL)] {
+    guard agent.supportsSkills else { return [] }
+    let scans =
+      scope == .user
+      ? nativeUserScanDirectories(for: agent, environment: environment)
+      : projectScanDirectories(for: agent, environment: environment)
+    return [
+      ("skills.install", installSkillsDirectory(for: agent, scope: scope, environment: environment))
+    ]
+      + scans.enumerated().map { ("skills.scan.\($0.offset)", $0.element) }
+  }
+}
+
+extension AgentRegistry {
+  /// Only the bundled editor launcher carries this bundle metadata association.
+  package static func clientBundle(for command: String, resolvedExecutable: URL) -> URL? {
+    guard command == "cursor",
+      resolvedExecutable.path.hasSuffix("/Contents/Resources/app/bin/cursor")
+    else { return nil }
+    var bundle = resolvedExecutable
+    for _ in 0..<5 { bundle.deleteLastPathComponent() }
+    return bundle
+  }
+}
+
+extension RuntimeEnvironment {
+  /// Checks the captured user settings generation without changing the selected configuration.
+  public func resolvedSourceAccess() throws -> SourceAccessConfiguration {
+    try sourceAccess.requireCurrentSettings()
+    return sourceAccess
+  }
+
+  /// Select the current operator profile for subsequent operations.
+  public mutating func reloadSourceAccessSettings() {
+    sourceAccess = .loadUserSettings(home: homeDirectory, environment: environment)
+  }
 }

@@ -1,6 +1,10 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
+import AgentsSkills
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Instruction lifecycle safety")
@@ -10,10 +14,16 @@ struct InstructionLifecycleSafetyTests {
     try fixture.section("rules")
     try fixture.commit()
     try fixture.add(agents: [.codex, .geminiCLI])
-    let original = try fixture.store().loadResolved()
+    let original = try fixture.store().loadLedger()
     var lock = original
-    lock.instructions.sections[0].revision = String(repeating: "a", count: 40)
-    try fixture.store().save(declaration: fixture.store().loadDeclaration(), resolved: lock)
+    let unavailable = String(repeating: "a", count: 40)
+    for id in lock.sources.keys where lock.sources[id]!.revision != "live" {
+      lock.sources[id]!.revision = unavailable
+    }
+    for id in lock.components.keys where lock.components[id]!.revision != nil {
+      lock.components[id]!.revision = unavailable
+    }
+    try fixture.store().save(declaration: fixture.store().loadDeclaration(), ledger: lock)
     try fixture.write("Custom target.\n", to: fixture.project.appendingPathComponent("AGENTS.md"))
     let before = try fixture.snapshot(fixture.project, excludingCache: true)
     #expect(throws: (any Error).self) {
@@ -21,8 +31,10 @@ struct InstructionLifecycleSafetyTests {
     }
     #expect(try fixture.snapshot(fixture.project, excludingCache: true) == before)
     lock = original
-    lock.instructions.sections[0].hash = "sha256:" + String(repeating: "a", count: 64)
-    try fixture.store().save(declaration: fixture.store().loadDeclaration(), resolved: lock)
+    for id in lock.resources.keys {
+      lock.resources[id]!.hash = "sha256:" + String(repeating: "a", count: 64)
+    }
+    try fixture.store().save(declaration: fixture.store().loadDeclaration(), ledger: lock)
     #expect(throws: (any Error).self) {
       try InstructionOperations.installResolvedReport(environment: fixture.environment)
     }
@@ -69,20 +81,23 @@ struct InstructionLifecycleSafetyTests {
     try fixture.section("two")
     try fixture.commit()
     try fixture.add(names: ["one"])
-    var declaration = try fixture.store().loadDeclaration()
-    var lock = try fixture.store().loadResolved()
+    try fixture.write(
+      "---\nname: example\ndescription: Example\n---\nExample\n",
+      to: fixture.repo.appendingPathComponent("skills/example/SKILL.md"))
+    try fixture.commit()
+    _ = try SkillOperations.add(
+      AddOptions(
+        source: "rules", agents: [.claudeCode], skillNames: ["example"],
+        environment: fixture.environment))
+    let declaration = try fixture.store().loadDeclaration()
+    let lock = try fixture.store().loadResolved()
     let previous = lock.instructions.sections[0]
-    declaration.skills = ["rules": SkillDeclaration(select: .names([]))]
-    lock.skills["example"] = LockedSkill(
-      source: previous.source, revision: previous.revision,
-      path: "skills/example", hash: previous.hash, installs: ["codex": .copy])
-    try fixture.store().save(declaration: declaration, resolved: lock)
     try fixture.section("one", body: "Changed")
     try fixture.commit()
     try fixture.add(names: ["two"])
     #expect(try fixture.store().loadResolved().instructions.sections[0] == previous)
     #expect(try fixture.store().loadResolved().skills == lock.skills)
-    #expect(try fixture.store().loadDeclaration().skills == declaration.skills)
+    #expect(try fixture.store().loadDeclaration().skills == (try declaration.skills))
     #expect(try !fixture.text().contains("Changed"))
   }
 
@@ -158,24 +173,54 @@ struct InstructionLifecycleSafetyTests {
     #expect(try String(contentsOf: outside, encoding: .utf8) == "Owner content.\n")
   }
 
-  @Test func promptAppendCannotEscapeScopeThroughSymlinks() throws {
+  @Test(arguments: [InstallScope.project, .user])
+  func localPromptAppendUsesCurrentScopedContentOnlyAtExport(_ scope: InstallScope) throws {
     let fixture = try InstructionFixture()
     try fixture.section("rules")
     try fixture.commit()
-    try fixture.add()
-    var declaration = try fixture.store().loadDeclaration()
-    declaration.instructions?.chatgpt = [
-      "prompt": PromptDeclaration(sections: ["rules:rules"], append: "custom.md")
-    ]
-    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
-    _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
+    try fixture.add(scope: scope, agents: [.codex])
+    let store = fixture.store(scope)
+    var declaration = try store.loadDeclaration()
+    try declaration.updateInstructions {
+      $0?.chatgpt = [
+        "prompt": PromptDeclaration(sections: ["rules:rules"], append: "custom.md")
+      ]
+    }
+    try store.save(declaration: declaration, ledger: store.loadLedger())
+    _ = try InstructionOperations.updateInstalled(
+      scope: scope, environment: fixture.environment, apply: true)
+    let lock = try Data(contentsOf: store.resolvedURL)
+    #expect(throws: (any Error).self) {
+      try InstructionOperations.renderChatGPT(
+        prompt: "prompt", scope: scope, environment: fixture.environment)
+    }
+    let root = scope == .project ? fixture.project : fixture.home
+    let other = scope == .project ? fixture.home : fixture.project
+    let append = root.appendingPathComponent("custom.md")
+    try fixture.write("Wrong scope.\n", to: other.appendingPathComponent("custom.md"))
+    try fixture.write("First custom text.\n", to: append)
+    let first = try InstructionOperations.renderChatGPT(
+      prompt: "prompt", scope: scope, environment: fixture.environment)
+    #expect(String(decoding: first, as: UTF8.self).hasSuffix("First custom text.\n"))
+    try fixture.write("Current custom text.\n", to: append)
+    try fixture.section("rules", body: "Changed upstream")
+    let current = try InstructionOperations.renderChatGPT(
+      prompt: "prompt", scope: scope, environment: fixture.environment)
+    let text = String(decoding: current, as: UTF8.self)
+    #expect(text.contains("Original") && text.hasSuffix("Current custom text.\n"))
+    #expect(!text.contains("Changed upstream") && !text.contains("Wrong scope"))
+    #expect(try Data(contentsOf: store.resolvedURL) == lock)
+    try FileManager.default.removeItem(at: append)
     let outside = fixture.root.appendingPathComponent("outside.md")
     try fixture.write("Owner content.\n", to: outside)
-    try FileManager.default.createSymbolicLink(
-      at: fixture.project.appendingPathComponent("custom.md"), withDestinationURL: outside)
+    try FileManager.default.createSymbolicLink(at: append, withDestinationURL: outside)
     #expect(throws: (any Error).self) {
-      try InstructionOperations.renderChatGPT(prompt: "prompt", environment: fixture.environment)
+      try InstructionOperations.renderChatGPT(
+        prompt: "prompt", scope: scope, environment: fixture.environment)
     }
+    _ = try InstructionOperations.installResolvedReport(
+      scope: scope, environment: fixture.environment)
+    #expect(try Data(contentsOf: store.resolvedURL) == lock)
   }
 
   @Test func sourceInstructionsDirectoryCannotBeATarget() throws {

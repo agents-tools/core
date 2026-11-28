@@ -11,7 +11,8 @@ This directory indexes repository-native documentation for `core`.
 - `Migrations/`: transition and cutover records
 - `Archive/`: retired or superseded material kept for record
 - `Reference/`: supporting reference material and examples, including
-  [presentation reproduction](Reference/Presentation.md)
+  [presentation reproduction](Reference/Presentation.md) and
+  [user source access settings](Reference/UserSourceAccess.md)
 
 The [README logos](../.github/assets/logo/) are generated from the `core` entry
 in [the organization DESIGN][design]. The committed

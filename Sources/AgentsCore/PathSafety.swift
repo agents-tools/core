@@ -38,6 +38,26 @@ public enum PathSafety {
     return target
   }
 
+  /// A managed link may name the authored location or the physical location emitted at
+  /// installation. Relative destinations are interpreted from the link's physical parent.
+  package static func matchesSymbolicLink(at link: URL, destination: URL) -> Bool {
+    guard let spelling = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)
+    else { return false }
+    let parent = link.deletingLastPathComponent().resolvingSymlinksInPath()
+    let observed = URL(fileURLWithPath: spelling, relativeTo: parent).standardizedFileURL.path
+    let authored = destination.standardizedFileURL.path
+    let physical = destination.resolvingSymlinksInPath().path
+    guard
+      observed.utf8.elementsEqual(authored.utf8)
+        || observed.utf8.elementsEqual(physical.utf8)
+    else { return false }
+    // Normalizing ".." in the spelling alone can hide an intermediate directory link.
+    if let expected = realPath(destination.path) {
+      return realPath(link.path).map { $0.utf8.elementsEqual(expected.utf8) } ?? false
+    }
+    return realPath(link.path) == nil
+  }
+
   /// Whether the symbolic link at `link` stays inside the real directory `root` wherever that
   /// tree is placed. Its destination is resolved from the link's directory as the kernel does,
   /// byte by byte and following links inside `root`. An absolute destination, a step above `root`
@@ -120,5 +140,26 @@ public enum PathSafety {
     let down = pathComponents.dropFirst(index)
     let components = up + down
     return components.isEmpty ? "." : components.joined(separator: "/")
+  }
+}
+
+extension PathSafety {
+  /// Resolve the configured loader boundary's existing prefix; missing suffixes carry no identity.
+  static func resolvedDirectoryBoundary(_ directory: URL) throws -> URL {
+    var prefix = directory.standardizedFileURL
+    var suffix: [String] = []
+    while true {
+      if let physical = realPath(prefix.path) {
+        return suffix.reduce(URL(fileURLWithPath: physical).resolvingSymlinksInPath()) {
+          $0.appendingPathComponent($1)
+        }
+      }
+      var info = stat()
+      guard lstat(prefix.path, &info) != 0, errno == ENOENT, prefix.path != "/" else {
+        throw CoreError.unsafePath("cannot resolve registered loader boundary")
+      }
+      suffix.insert(prefix.lastPathComponent, at: 0)
+      prefix.deleteLastPathComponent()
+    }
   }
 }

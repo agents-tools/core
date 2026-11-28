@@ -1,3 +1,4 @@
+import AgentsCore
 import Foundation
 
 public struct InstructionSection: Sendable, Equatable {
@@ -10,17 +11,18 @@ public struct InstructionSection: Sendable, Equatable {
   public let description: String
   /// Project-relative glob patterns that scope the section, in source order.
   public let paths: [String]
+  package let condition: DeclarationCondition
   /// SHA-256 of the original source bytes, including their line endings and any byte order mark.
   public let hash: String
   /// The body as written into targets: no front matter, LF endings, no leading or trailing
   /// blank lines, and the `paths` line after the first heading.
-  let content: String
+  package let content: String
 
   /// The project-relative directory whose `AGENTS.md` receives the section; empty for the root.
   public var directory: String { Instructions.directory(for: paths) }
 }
 
-public enum InstructionDrift: Sendable, Equatable {
+public enum InstructionDrift: Codable, Sendable, Equatable {
   case clean
   case drifted
   case missing
@@ -59,6 +61,7 @@ public enum InstructionError: Error, Sendable, Equatable, CustomStringConvertibl
   case invalidLockedBlock
   case invalidLinks([InstructionLinkProblem])
   case unownedTargets([String])
+  case antigravityConflicts([String])
   case ownChanged(name: String)
   case emptyPrompt
 
@@ -87,6 +90,8 @@ public enum InstructionError: Error, Sendable, Equatable, CustomStringConvertibl
     case .unownedTargets(let targets):
       return
         "Files that agents did not generate are in the way: \(targets.joined(separator: ", "))."
+    case .antigravityConflicts(let messages):
+      return messages.joined(separator: "\n")
     case .ownChanged(let name):
       return "Own instructions file '\(name)' changed since the lock."
     case .emptyPrompt:

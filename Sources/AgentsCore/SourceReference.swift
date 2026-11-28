@@ -23,26 +23,7 @@ struct SourceReference {
         return
       default: break
       }
-      guard let lower = SemanticVersion(requirement.value) else {
-        throw CoreError.invalidSource("invalid semantic version")
-      }
-      let candidates: [(String, SemanticVersion)]
-      if requirement.kind == "exact" {
-        candidates = tags.filter { $0.1.description == lower.description }
-      } else {
-        let upper: SemanticVersion
-        switch requirement {
-        case .upToNextMajor: upper = SemanticVersion(major: lower.major + 1, minor: 0, patch: 0)
-        case .upToNextMinor:
-          upper = SemanticVersion(major: lower.major, minor: lower.minor + 1, patch: 0)
-        default:
-          guard let bound = requirement.upperBound, let parsed = SemanticVersion(bound) else {
-            throw CoreError.invalidSource("missing version upper bound")
-          }
-          upper = parsed
-        }
-        candidates = tags.filter { $0.1.isInRange(from: lower, to: upper) }
-      }
+      let candidates = tags.filter { requirement.matches(version: $0.1) }
       guard let selected = candidates.last else {
         throw CoreError.notFound("no tag matches source requirement")
       }

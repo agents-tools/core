@@ -43,6 +43,16 @@ public struct AddOutcome: Sendable {
   public var availableSkills: [Skill]
   /// Empty when inspection or multiple unselected skills require a CLI choice.
   public var installed: [InstallResult]
+
+  package init(
+    source: SourceDeclaration, sourceID: String, availableSkills: [Skill],
+    installed: [InstallResult]
+  ) {
+    self.source = source
+    self.sourceID = sourceID
+    self.availableSkills = availableSkills
+    self.installed = installed
+  }
 }
 
 public struct InstallResult: Codable, Equatable, Sendable {
@@ -51,10 +61,23 @@ public struct InstallResult: Codable, Equatable, Sendable {
   public var scope: InstallScope
   public var mode: InstallMode
   public var path: String
+
+  package init(skill: String, agent: AgentID, scope: InstallScope, mode: InstallMode, path: String)
+  {
+    self.skill = skill
+    self.agent = agent
+    self.scope = scope
+    self.mode = mode
+    self.path = path
+  }
 }
 
 public struct ResolvedInstallReport: Sendable {
   public var installed: [InstallResult]
+
+  package init(installed: [InstallResult]) {
+    self.installed = installed
+  }
 }
 
 public enum InstalledSkillStatus: String, Codable, Sendable {
@@ -88,6 +111,12 @@ public struct SkillFileChange: Codable, Equatable, Sendable {
   public var path: String
   public var before: SkillFileEntry?
   public var after: SkillFileEntry?
+
+  package init(path: String, before: SkillFileEntry?, after: SkillFileEntry?) {
+    self.path = path
+    self.before = before
+    self.after = after
+  }
 }
 
 /// Membership recorded by the lock, independent of filesystem presence.
@@ -101,6 +130,13 @@ public struct SkillMembershipChange: Codable, Equatable, Sendable {
   public let path: String
   public let before: SkillMembership
   public let after: SkillMembership
+
+  package init(agent: AgentID, path: String, before: SkillMembership, after: SkillMembership) {
+    self.agent = agent
+    self.path = path
+    self.before = before
+    self.after = after
+  }
 }
 
 public struct UpdateResult: Codable, Equatable, Sendable {
@@ -117,6 +153,27 @@ public struct UpdateResult: Codable, Equatable, Sendable {
   public var membership: [SkillMembershipChange]
   public var changes: [SkillFileChange]
   public var installed: [InstallResult]
+
+  package init(
+    skill: String, sourceIdentity: String, changed: Bool, oldRevision: String?,
+    newRevision: String?, oldVersion: String?, newVersion: String?, oldHash: String?,
+    newHash: String?, lockMissing: Bool, membership: [SkillMembershipChange],
+    changes: [SkillFileChange], installed: [InstallResult]
+  ) {
+    self.skill = skill
+    self.sourceIdentity = sourceIdentity
+    self.changed = changed
+    self.oldRevision = oldRevision
+    self.newRevision = newRevision
+    self.oldVersion = oldVersion
+    self.newVersion = newVersion
+    self.oldHash = oldHash
+    self.newHash = newHash
+    self.lockMissing = lockMissing
+    self.membership = membership
+    self.changes = changes
+    self.installed = installed
+  }
 }
 
 public enum DoctorCheckStatus: String, Codable, Sendable { case ok, warning, error }

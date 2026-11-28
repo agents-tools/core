@@ -1,0 +1,219 @@
+import AgentsCore
+
+/// The finite constraints compiled from the bundled declaration schema. No caller supplies rules.
+indirect enum YAMLRule: Sendable {
+  case string, native
+  case integer(minimum: Int, maximum: Int? = nil)
+  case integerConstant(Int)
+  case constant(String)
+  case enumeration([String])
+  case named(String)
+  case array(YAMLRule, maximum: Int?)
+  case dictionary(YAMLRule, maximum: Int?)
+  case object([String: YAMLRule], required: [String], maximum: Int?)
+  case oneOf([YAMLRule])
+}
+
+final class YAMLValidation {
+  let source: SourceText
+  private(set) var work = 0
+  private(set) var strings = 0
+  private var nodes = 0
+
+  init(source: SourceText) { self.source = source }
+
+  func validate(_ node: YAMLNode) throws {
+    try inspect(node, depth: 1)
+    if let lifecycle = node.pairs?.first(where: { $0.key.text == "lifecycle" })?.value {
+      try validateLifecycle(lifecycle)
+    }
+    try check(node, ManifestSchema.root)
+  }
+
+  private func validateLifecycle(_ node: YAMLNode) throws {
+    let projection = YAMLProjection(source: source)
+    let declaration = LifecycleDeclaration(
+      try projection.plain(node, at: "/lifecycle", lifecycle: true))
+    let issues = declaration.issues.map { issue in
+      let action = [issue.event, issue.index.map(String.init)].compactMap { $0 }
+      let pointer = (["", "lifecycle"] + action.map(pointerEscape)).joined(separator: "/")
+      let location = projection.locations[pointer] ?? node
+      let label = (["lifecycle"] + action + (issue.field.isEmpty ? [] : [issue.field]))
+        .joined(separator: "/")
+      var diagnostic = ManifestDiagnostic(
+        code: "manifest.lifecycle", message: label + ": " + issue.message,
+        span: source.span(location.range))
+      diagnostic.lifecycleIssue = issue
+      return diagnostic
+    }
+    if !issues.isEmpty { throw ManifestFailure(issues) }
+  }
+
+  private func spend(_ node: YAMLNode) throws {
+    work += 1
+    guard work <= ManifestLimits.Domain.steps else {
+      throw source.failure("manifest.limit", "schema work limit", node.range.lowerBound)
+    }
+  }
+
+  private func inspect(_ node: YAMLNode, depth: Int) throws {
+    nodes += 1
+    guard nodes <= ManifestLimits.Values.nodes, depth <= ManifestLimits.Values.depth else {
+      throw source.failure(
+        "manifest.limit", "decoded value node/depth limit", node.range.lowerBound)
+    }
+    switch node.data {
+    case .scalar(let text, _, _): strings += text.utf8.count
+    case .sequence(let items):
+      guard items.count <= ManifestLimits.Values.entries else {
+        throw source.failure("manifest.limit", "container entry limit", node.range.lowerBound)
+      }
+      for item in items { try inspect(item, depth: depth + 1) }
+    case .mapping(let pairs):
+      guard pairs.count <= ManifestLimits.Values.entries else {
+        throw source.failure("manifest.limit", "container entry limit", node.range.lowerBound)
+      }
+      for pair in pairs {
+        try inspect(pair.key, depth: depth + 1)
+        try inspect(pair.value, depth: depth + 1)
+      }
+    }
+    guard strings <= ManifestLimits.Values.stringBytes else {
+      throw source.failure("manifest.limit", "decoded string byte limit", node.range.lowerBound)
+    }
+  }
+
+  func check(_ node: YAMLNode, _ rule: YAMLRule) throws {
+    try spend(node)
+    func fail(_ message: String) -> ManifestFailure {
+      source.failure("manifest.schema", message, node.range.lowerBound, end: node.range.upperBound)
+    }
+    func string() throws -> String {
+      guard case .scalar(let text, let quoted, let tag) = node.data,
+        !tag, quoted || YAMLScalar.classify(text) == .string
+      else { throw fail("expected a string") }
+      return text
+    }
+    switch rule {
+    case .named(let name): try check(node, ManifestSchema.definitions[name]!)
+    case .string: _ = try string()
+    case .constant(let expected):
+      guard try string() == expected else { throw fail("expected \(expected)") }
+    case .enumeration(let values):
+      guard try values.contains(string()) else {
+        throw fail("expected one of \(values.joined(separator: ", "))")
+      }
+    case .integer, .integerConstant:
+      guard case .scalar(let text, let quoted, let tag) = node.data,
+        !quoted, !tag, YAMLScalar.classify(text) == .integer, let integer = YAMLScalar.integer(text)
+      else { throw fail("expected a representable plain integer") }
+      switch rule {
+      case .integerConstant(let expected):
+        guard integer == expected else { throw fail("expected integer \(expected)") }
+      case .integer(let minimum, let maximum):
+        guard integer >= minimum else { throw fail("integer is below its minimum") }
+        if let maximum, integer > maximum { throw fail("integer exceeds its maximum") }
+      default: break
+      }
+    case .array(let item, let maximum):
+      guard let items = node.items else { throw fail("expected a sequence") }
+      if let maximum, items.count > maximum { throw fail("sequence exceeds maxItems: \(maximum)") }
+      for node in items { try check(node, item) }
+    case .dictionary(let value, let maximum):
+      guard let pairs = node.pairs else { throw fail("expected a mapping") }
+      if let maximum, pairs.count > maximum {
+        throw fail("mapping exceeds maxProperties: \(maximum)")
+      }
+      for pair in pairs { try check(pair.value, value) }
+    case .object(let fields, let required, let maximum):
+      guard let pairs = node.pairs else { throw fail("expected a mapping") }
+      if let maximum, pairs.count > maximum {
+        throw fail("mapping exceeds maxProperties: \(maximum)")
+      }
+      let present = Set(pairs.map { $0.key.text! })
+      for name in required where !present.contains(name) { throw fail("missing field: \(name)") }
+      for pair in pairs {
+        let name = pair.key.text!
+        guard let rule = fields[name] else {
+          throw source.failure(
+            "manifest.schema", "unknown field: \(name)", pair.key.range.lowerBound)
+        }
+        try check(pair.value, rule)
+      }
+    case .oneOf(let choices):
+      // Disjoint literal discriminators permit one traversal of component/transport subtrees.
+      // Other unions must count all matching branches to enforce oneOf.
+      if let kind = node.pairs?.first(where: { $0.key.text == "kind" })?.value.text {
+        var discriminated: [String: YAMLRule] = [:]
+        var disjoint = true
+        for candidate in choices {
+          let resolved: YAMLRule
+          if case .named(let name) = candidate {
+            resolved = ManifestSchema.definitions[name]!
+          } else {
+            resolved = candidate
+          }
+          guard case .object(let fields, let required, _) = resolved,
+            required.contains("kind"), let discriminator = fields["kind"]
+          else {
+            disjoint = false
+            break
+          }
+          let values: [String]
+          switch discriminator {
+          case .constant(let value): values = [value]
+          case .enumeration(let options): values = options
+          default:
+            disjoint = false
+            values = []
+          }
+          for value in values {
+            if discriminated.updateValue(candidate, forKey: value) != nil { disjoint = false }
+          }
+        }
+        if disjoint, let candidate = discriminated[kind] {
+          try check(node, candidate)
+          return
+        }
+      }
+      var matches = 0
+      var firstFailure: ManifestFailure?
+      for choice in choices {
+        do {
+          try check(node, choice)
+          matches += 1
+        } catch let failure as ManifestFailure {
+          if failure.diagnostics.first?.code == "manifest.limit" { throw failure }
+          firstFailure = firstFailure ?? failure
+        }
+      }
+      guard matches == 1 else {
+        if matches == 0, let firstFailure { throw firstFailure }
+        throw fail("ambiguous field shape")
+      }
+    case .native:
+      switch node.data {
+      case .scalar(let text, let quoted, let tag):
+        if tag {
+          guard YAMLScalar.decimal(text, explicit: true) != nil else {
+            throw fail("!!float requires exact finite JSON-number text")
+          }
+        } else if !quoted {
+          switch YAMLScalar.classify(text) {
+          case .integer:
+            guard YAMLScalar.integer(text) != nil else {
+              throw fail("integer overflow; use !!float for a decimal value")
+            }
+          case .decimal:
+            guard YAMLScalar.decimal(text, explicit: false) != nil else {
+              throw fail("expected a finite decimal")
+            }
+          default: break
+          }
+        }
+      case .sequence(let items): for item in items { try check(item, .native) }
+      case .mapping(let pairs): for pair in pairs { try check(pair.value, .native) }
+      }
+    }
+  }
+}

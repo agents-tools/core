@@ -131,26 +131,20 @@ extension WellKnownSourceTests {
   }
 
   @Test func fetchesDigestVerifiedZipArchives() throws {
-    let archiveRoot = try temporaryDirectory()
-    defer { removeTemporaryDirectory(archiveRoot) }
-    try """
-    ---
-    name: zip-skill
-    description: Zip skill.
-    ---
-    # Zip
-    """.write(to: archiveRoot.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
-    try FileManager.default.createDirectory(
-      at: archiveRoot.appendingPathComponent("references"), withIntermediateDirectories: true)
-    try "Zip Reference".write(
-      to: archiveRoot.appendingPathComponent("references/README.md"), atomically: true,
-      encoding: .utf8)
-    let outputRoot = try temporaryDirectory()
-    defer { removeTemporaryDirectory(outputRoot) }
-    let archive = outputRoot.appendingPathComponent("skill.zip")
-    try ProcessRunner.run(
-      "/usr/bin/env", arguments: ["zip", "-qr", archive.path, "."], workingDirectory: archiveRoot)
-    let archiveData = try Data(contentsOf: archive)
+    let skill = Data(
+      """
+      ---
+      name: zip-skill
+      description: Zip skill.
+      ---
+      # Zip
+      """.utf8)
+    let reference = Data("Zip Reference".utf8)
+    let archiveData = zipArchive(entries: [
+      ("SKILL.md", skill, 0o100644),
+      ("references/", Data(), 0o040755),
+      ("references/README.md", reference, 0o100644),
+    ])
     let digest = "sha256:" + FileHash.sha256Hex(data: archiveData)
 
     let responses: [String: Data] = [
@@ -180,8 +174,8 @@ extension WellKnownSourceTests {
 
     let skills = try provider.fetchAllSkills(from: "https://example.com")
     #expect(skills.count == 1)
-    #expect(skills[0].files["SKILL.md"] != nil)
-    #expect(skills[0].files["references/README.md"] == Data("Zip Reference".utf8))
+    #expect(skills[0].files["SKILL.md"] == skill)
+    #expect(skills[0].files["references/README.md"] == reference)
   }
 
   @Test func rejectsSymlinkEntriesInWellKnownArchives() throws {

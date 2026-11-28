@@ -1,5 +1,9 @@
 import AgentsCore
+import AgentsInstructions
+import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsSkills
@@ -147,15 +151,40 @@ struct SkillLifecycleTests {
   }
 
   @Test(arguments: [InstallMode.link, .copy])
-  func rejectsNonGitPinnedSources(_ mode: InstallMode) throws {
+  func nonGitSourcesFreezeResourcesAndRejectGitRequirements(_ mode: InstallMode) throws {
     let fixture = try SkillFixture()
-    try fixture.skill("demo", body: "live")
-    #expect(throws: (any Error).self) { try fixture.add(mode: mode) }
+    try fixture.skill("demo", body: "Local snapshot")
+    let script = fixture.repo.appendingPathComponent("skills/demo/run.sh")
+    try Data("#!/bin/sh\nexit 0\n".utf8).write(to: script)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    #expect(throws: (any Error).self) {
+      try SkillOperations.add(
+        AddOptions(
+          source: fixture.repo.path, agents: [.codex], mode: mode,
+          sourceRequirement: .branch("master"), environment: fixture.environment))
+    }
     #expect(!FileManager.default.fileExists(atPath: fixture.store().resolvedURL.path))
+    _ = try fixture.add(mode: mode)
+    let store = fixture.store()
+    let ledger = try store.loadLedger()
+    #expect(ledger.resources.values.contains { $0.kind == .embedded })
+    let bytes = try Data(contentsOf: store.resolvedURL)
+    try FileManager.default.removeItem(at: fixture.repo)
+    try FileManager.default.removeItem(at: fixture.target("demo"))
+    try FileManager.default.removeItem(at: store.cacheDirectory)
+    _ = try SkillOperations.installResolvedReport(environment: fixture.environment)
+    #expect(try fixture.body(fixture.target("demo")).contains("Local snapshot"))
+    let flags = try FileHash.executableFlags(fixture.target("demo"))
+    #expect(flags["run.sh"] == true)
+    #expect(try Data(contentsOf: store.resolvedURL) == bytes)
   }
 
-  @Test(arguments: ["agents.json", "agents.resolved"], ["add", "update", "install", "remove"])
-  func corruptStateStopsEveryMutation(_ filename: String, _ operation: String) throws {
+  @Test(
+    arguments: [StateStore.declarationFileName, StateStore.resolvedFileName],
+    ["add", "update", "install", "remove"])
+  func corruptStateStopsDeclarationEditsAndInvalidLedgerStopsRestore(
+    _ filename: String, _ operation: String
+  ) throws {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "A")
     try fixture.commit()
@@ -163,6 +192,11 @@ struct SkillLifecycleTests {
     let corrupt = fixture.store().directory.appendingPathComponent(filename)
     try Data("{broken".utf8).write(to: corrupt)
     let before = try fixture.stateAndTargetBytes()
+    if filename == StateStore.declarationFileName && operation == "install" {
+      _ = try SkillOperations.installResolvedReport(environment: fixture.environment)
+      #expect(try fixture.stateAndTargetBytes() == before)
+      return
+    }
     #expect(throws: (any Error).self) {
       switch operation {
       case "add": _ = try fixture.add()
@@ -194,24 +228,28 @@ struct SkillLifecycleTests {
   @Test func skillMutationsPreserveInstructionAndWatchDeclarations() throws {
     let fixture = try SkillFixture()
     try fixture.skill("demo", body: "A")
+    let instructions = fixture.repo.appendingPathComponent("instructions")
+    try FileManager.default.createDirectory(at: instructions, withIntermediateDirectories: true)
+    try Data("---\ndescription: Rules\n---\n# Rules\nFrozen rules\n".utf8).write(
+      to: instructions.appendingPathComponent("rules.md"))
     try fixture.commit()
     _ = try fixture.add()
+    _ = try InstructionOperations.add(
+      InstructionAddOptions(
+        source: "fixture", names: ["rules"], agents: [.codex], environment: fixture.environment))
     var declaration = try fixture.store().loadDeclaration()
-    declaration.instructions = InstructionsDeclaration(
-      sections: ["fixture:rules"],
-      chatgpt: ["prompt": PromptDeclaration(sections: ["fixture:rules"])])
+    try declaration.updateInstructions {
+      $0?.chatgpt = ["prompt": PromptDeclaration(sections: ["fixture:rules"])]
+    }
     declaration.watch = ["fixture"]
-    var lock = try fixture.store().loadResolved()
-    let skill = try #require(lock.skills["demo"])
-    lock.instructions = LockedInstructions(sections: [
-      LockedSection(
-        name: "rules", source: skill.source, revision: skill.revision,
-        path: "instructions/rules.md", hash: skill.hash!)
-    ])
-    try fixture.store().save(declaration: declaration, resolved: lock)
+    try fixture.store().save(declaration: declaration, ledger: fixture.store().loadLedger())
+    _ = try UpdateOperations.withPreparedUpdate(environment: fixture.environment) { try $0.apply() }
+    let lock = try fixture.store().loadResolved()
+    let ledger = try fixture.store().loadLedger()
+    #expect(ledger.version == 2)
     try SkillOperations.remove(skillNames: ["demo"], environment: fixture.environment)
     #expect(try fixture.store().loadResolved().instructions == lock.instructions)
-    #expect(try fixture.store().loadDeclaration().instructions == declaration.instructions)
+    #expect(try fixture.store().loadDeclaration().instructions == (try declaration.instructions))
     #expect(try fixture.store().loadDeclaration().watch == ["fixture"])
   }
 

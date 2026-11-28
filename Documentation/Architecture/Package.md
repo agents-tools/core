@@ -2,45 +2,91 @@
 
 ## Purpose and Consumers
 
-`core` supplies skill and instruction management and instruction text
-transformations. Both `agents` in `agents-tools/cli` and `skill` in
-`skill-cli/cli` consume this package. Consumers own command trees, argument
-parsing, terminal presentation, and executable distribution. The package uses
-Swift 6.3, Swift 6 language mode, and a macOS 15 minimum deployment platform.
+`core` supplies symbolic agent declarations, source linking, skill and instruction
+management, resolved state and recoverable application. Both `agents-tools/cli`
+and `skill-cli/cli` consume its public products. Consumers own command parsing,
+terminal/UI presentation and executable distribution.
 
-## Products and Dependencies
+## Target Boundaries
 
 ```text
-AgentsUpdates ──> AgentsCore, AgentsSkills, AgentsInstructions
-
-AgentsSkills ──> AgentsCore
-      │
-      └───────> Yams
-
-AgentsInstructions ──> AgentsCore
-         │
-         └───────> Markdown (swift-markdown) ──> cmark-gfm
-
-StateTestProcess ──> AgentsCore, AgentsSkills, AgentsInstructions, AgentsUpdates
-AgentsCoreTests ──> AgentsCore, StateTestProcess
-AgentsSkillsTests ──> AgentsSkills, AgentsCore, Yams, StateTestProcess
-AgentsInstructionsTests ──> AgentsInstructions
-AgentsUpdatesTests ──> AgentsUpdates, StateTestProcess
+AgentsManifest → AgentsCore, TreeSitterYAML, TreeSitter, Yams
+AgentsSkills → AgentsCore, AgentsManifest, Yams
+AgentsInstructions → AgentsCore, AgentsManifest, Markdown
+Components → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, NativeDocuments, MCP
+AgentsUpdates → AgentsCore, AgentsManifest, AgentsSkills, AgentsInstructions, Components, NativeDocuments
+NativeDocuments → AgentsCore, TOMLSemantics, TreeSitterTOML, TreeSitter
+TOMLSemantics → Foundation
+TreeSitterTOML → (vendored C grammar)
+AgentsCore → CPlatform, CSQLite, Crypto, Markdown, TOMLSemantics, Yams
 ```
 
-`AgentsCore`, `AgentsSkills`, `AgentsInstructions` and `AgentsUpdates` are library products with
-matching targets under `Sources/` and test targets under `Tests/`. Shared
-implementation uses `package` access; consumers receive the
-workflow APIs and the state and result models they need. `Package.swift` owns
-this dependency graph.
+`TreeSitterYAML` is an internal C target containing the pinned, unmodified YAML
+parser/scanner and headers, with upstream license and per-file provenance.
+The runtime is a normal SwiftPM dependency. Consumers never receive parser types.
+
+SwiftPM builds `ManifestTestProcess`, `StateTestProcess` and `MCPTestProcess`
+as standalone fixture executables. Tests locate and launch them from the build
+products directory. Test bundles link the support libraries they import.
+
+## NativeDocuments
+
+`NativeDocuments` inspects provided JSON, JSONC and TOML bytes and prepares
+ownership-checked regional changes. It preserves no-op bytes, unmanaged content,
+comments and exact native semantics, and reparses each complete candidate.
+`TOMLSemantics` owns bounded standard TOML validation; `TreeSitterTOML` supplies
+pinned concrete locations through the existing Tree-sitter runtime dependency.
+These targets are package-only, with no library product or filesystem provider.
+See [native documents](NativeDocuments.md) for typed regions, observations,
+creation evidence, read-only syntax and cumulative operation budgets.
+
+## AgentsManifest
+
+The frontend reads `.agent/agents.yaml` or the user scope’s `agents.yaml` and
+produces complete syntax-independent IR and typed declarations. Admission checks
+UTF-8 and unsupported raw line separators before parsing. Tree-sitter supplies
+concrete byte ranges under an enforced parser work policy; bounded CST admission
+precedes public Yams ordered-node composition. The source schema owns field
+shapes and generates finite runtime constraints and reference help. Core scalar
+resolution preserves string values, integer kind and exact decimal payloads.
+
+`DeclarationDocument` is an immutable validated snapshot with digest-scoped
+occurrence handles. `ManifestEdit` carries Core domain values. Its editor changes
+owned ranges, preserves unrelated bytes/comments, refreshes source maps and checks
+full expected IR. Public changes are domain-valid, including no-op preparations.
+`DeclarationEditPlan` privately composes bounded drafts for complete domain changes
+and validates final IR, domain and declaring environments before returning bytes.
+
+`ManifestDump` exposes schema version 2, format `yaml`, manifest version 1, typed
+IR records and semantic indexed source locations. Parsing, projection, dump and
+edit preparation do not resolve sources, read resources or execute programs.
+
+`StateStore` extensions supply declaration reads, loading and edit planning;
+`DeclarationAccess.manifest` connects watch operations. All state I/O, evidence,
+locks and publication remain in Core. See [state](State.md) and the
+[manifest reference](../Reference/Manifest.md).
+
+`ManifestTestProcess` and `ManifestTestSupport` own isolated parser/editing probes
+and their resource reports. Package tests cover the complete YAML/domain contract
+and the existing state, linking, lifecycle and recovery guarantees.
 
 ## AgentsCore
 
+`SourceAccessSettingsEditor` validates and publishes the operator's
+[user source access settings](../Reference/UserSourceAccess.md). The settings
+document uses Yams and belongs to the runtime home independently of the
+manifest and its project scope.
+
+- `ClientBackups` captures local Codex, Claude Code and Gemini CLI sessions and
+  configuration in private SQLite packages. The Core restore preview binds
+  the package, explicitly mapped projects, and the observed destination files
+  to one publication plan. Native session indexes and supported Codex SQLite
+  schemas merge into live client storage through a separate restore journal.
 - `SourceParser` and `ParsedSource` parse local paths, Git URLs and HTTP indexes.
   `SourceDeclaration` owns normalized source identity and discovery roots.
 - `SourceArgument` splits a source argument into its location and typed
   selectors, such as `owner/repo@branch:main@path:skills@skill:pdf`. Labels are
-  `branch`, `revision`, `ref` (a revision), `exact`, `from` (next major),
+  `branch`, `tag` (a literal tag), `revision`, `ref` (a revision), `exact`, `from` (next major),
   `minor` (next minor), `path` and `skill`; each kind appears at most once.
   Selectors start at the first `@` followed by a label and `:`, so SSH locations
   keep their `@`, and values are percent-decoded. A selection resolves the
@@ -51,32 +97,49 @@ this dependency graph.
 - `SourceRequirement` expresses branch, revision, exact version, next-major,
   next-minor and half-open version ranges. Semantic-version comparison governs
   Git tag selection, including prerelease bounds.
-- `Declaration` and `ResolvedState` define intent and resolved version 1 state,
-  including the complete instruction section, prompt and physical-target models.
-- `StateStore` owns scope paths, validation, deterministic encoding and state
-  persistence. `FileLock` serializes state access; `FileTransaction` durably
-  journals replacements across installations, state and cache. Mutating state
-  access recovers interrupted transactions before proceeding, as described in
-  [State and cache](State.md).
+- `DeclarationIR`, `DeclarationRecord` and `DeclarationValue` hold syntax-independent
+  manifest intent; `SourceSpan`, `SourceProvenance` and `DeclarationSourceMap`
+  carry document coordinates and origins without syntax or source access.
+- `Declaration` holds complete typed symbolic manifest intent: ordered component
+  and group occurrences, conditions, native values, symbolic group references and
+  source declaration directories. It has no serialized form. `ResolvedLedger` owns version 2 resolved state. `ResolvedState` is the derived
+  skill/instruction inventory view, including sections, prompts and physical targets.
+- `StateStore` owns scope paths, validation, deterministic lock and watch
+  encoding and state persistence. It holds declaration bytes, their evidence,
+  the absent-declaration rule and publication without knowing the declaration
+  format. `FileLock` serializes state access; `FileTransaction` durably
+  journals replacements across installations, state and cache. `FileSnapshot`,
+  `FileObjectIdentity` and `DirectoryWriteLease` own content, physical-object
+  and temporary directory-write evidence, including directory descendants and
+  permission bits. Within the transaction protocol only `DirectoryHandle` calls
+  `CPlatform`; it owns verified deletion, durable synchronization,
+  inode-checked directory permission updates and typed cross-directory rename
+  results. Mutating state access recovers interrupted transactions before
+  proceeding, as described in [State and cache](State.md).
 - `SourceCache` owns bare Git mirrors, requirement resolution, exact snapshots,
-  digest-addressed downloads and pruning across skill, instruction and watch pins.
-  `SourceResolutionSession` shares disposable exact snapshots between domain
-  planners during one update. `StatePrecondition` and `PathIdentity` validate
-  the rendered generation before application. `TransactionOutcome` follows
-  its owning journal through commit and recovery.
-  `ProcessRunner` executes subprocesses.
+  digest-addressed downloads and pruning across skill, instruction and watch
+  pins. `SourceResolutionSession` shares disposable exact snapshots between
+  domain planners during one update. `StatePrecondition`, `TargetPrecondition`
+  and `PathIdentity` validate the rendered generation before application.
+  `TransactionOutcome` follows its owning journal through commit and recovery.
+  `ProcessRunner` executes synchronous subprocesses. `OwnedDuplexProcess` is a
+  separate package-only, nonblocking pipe/process-group owner for bidirectional
+  connection tests.
 - `WatchOperations` owns source subscriptions, seen baselines, branch tracking
   and file comparisons. `WatchState` defines version 1 of `agents.watch`.
   Skill discovery and artifact loading are injected by `AgentsSkills` through
-  `SkillOperations.watchOperations()`. See [Watch](Watch.md) for the public API.
+  `SkillOperations.watchOperations()`, and declaration access by
+  `AgentsManifest`. See [Watch](Watch.md) for the public API.
 - `AgentRegistry` owns agent skill locations. `RuntimeEnvironment` supplies the
   project root, home directory and environment. Universal agent skill locations
   can be shared, so recipients sharing one directory must agree on install mode.
 - `FileHash` hashes tree entries, hidden files and symlink destinations;
   `PathSafety` checks paths and creates filesystem skill identities.
 
-Core has no dependency on skill discovery, frontmatter, Yams or Markdown.
-`AgentsInstructions` owns instruction text transformations and lifecycle.
+Core has no dependency on manifest syntax, skill discovery, frontmatter, Yams or
+Markdown.
+`AgentsInstructions` owns instruction text transformations, inventory and diagnostics.
+`AgentsUpdates` owns its deployment lifecycle.
 `InstructionLocations` supplies fixed target locations to lifecycle and journal
 validation.
 
@@ -107,6 +170,17 @@ status; both are for debugging only. Consumers must not classify failures by
 inspecting arguments, exit codes, or diagnostic text. Non-Git process failures
 continue to use `CoreError.commandFailed`; process launch errors retain their
 underlying platform error.
+
+`OwnedDuplexProcess` takes explicit argv, cwd, environment and PATH. Its CPlatform
+spawn closes nonstandard child descriptors and creates a separate process group;
+it never inherits transaction locks. The owner closes stdin, waits a finite grace,
+signals TERM/KILL while the unreaped leader reserves its identity, and confirms
+reap with nonblocking waits. It refuses auto-reaping SIGCHLD configurations and
+reports ownership loss or unconfirmed cleanup. Darwin inspects only the reserved
+group, under a finite byte bound, to distinguish a zombie-only group before
+signalling. It does not operate on unrelated processes or promise ownership of
+children that detach into another session/group. `ProcessRunner` owns synchronous
+Git/one-shot execution; transaction publication owns filesystem state.
 
 ## AgentsSkills
 
@@ -142,7 +216,7 @@ means the before membership is unrecorded, not that files were absent.
 equal hashes do not suppress mode-only changes.
 
 The optional `beforeApply` callback runs before any replacement, and a thrown
-error cancels the operation. The extracted `SkillUpdatePlan` validates state
+error cancels the operation. The shared Updates plan validates state
 and target preconditions around content retention, including execute flags.
 Prepared, cached and staged skill content must agree in bytes and mode.
 A CLI auditing several projects calls `doctor` with an explicit environment
@@ -249,7 +323,158 @@ The probe is never emitted. Malformed managed markers still produce errors.
 declaration and lock updates, and deletion decisions using the lock's `created`
 flag. The `Instructions` and `ClaudeForwarding` text APIs perform no I/O.
 
+## Components
+
+`Components` is an internal target. Its package-only `ComponentLinker` reads a
+complete symbolic declaration and explicitly exported producer groups into an
+ordered, exact source graph. Root components precede uses; groups follow the
+same depth-first order. Producer defaults and frontmatter restrictions determine
+recipients together with nested reference and component conditions. Instructions
+retain repeated occurrences; identical named hooks and policies coalesce while
+retaining their origins. Logical conflicts are checked before artifact lowering.
+
+Core owns frozen Git candidate evidence, exact snapshots, source containment and
+the scoped temporary-read session. Export constraints share one version variable
+per normalized source; discovery roots remain distinct namespaces. Direct skill
+and section pins are independent. Exact annotated Git objects are peeled to commits
+before conjunction, candidate selection and snapshot identity. Acquiring a known
+object does not enumerate mutable refs or refresh the frozen reference mirror.
+The session reuses existing exact cached objects only under existing locks; other mirrors, refs, locks and content remain
+temporary. The caller consumes borrowed resources within the linking closure;
+cleanup runs on success, error and cooperative cancellation. The synchronous Git
+runner completes owned in-flight work before cancellation returns.
+
+An exact view retains the original actual-local source environment independently
+of its borrowed content and live-edit eligibility. Local producer aliases resolve
+from that source's actual discovery root and home, even with a Git requirement.
+Remote-contained local declarations inherit their immutable parent snapshot and
+remain subject to lexical and real symlink containment.
+
+`SkillSnapshotReader` and `InstructionSnapshotReader` consume already selected
+views without independently resolving or retaining sources. Actual local edit
+skills preserve their live paths. Skill keys, exclusions and overrides use canonical
+semantic names while resource paths and display names retain their source spelling.
+An all-selection includes members from their effective override views, admits live-only
+members only when that view is selected, and omits missing effective-view members;
+named selections still require their members. Named own-instruction reads validate only
+the selected path and its ancestors, while full enumeration remains strict.
+Remote-contained local sources inherit the producer snapshot. Existing skill-index
+formats supply skill artifacts, and do not define an export-package format. Indexed
+members have independent artifact-digest pins. A scoped link can retain an admitted
+ledger alongside its direct pins: protected members borrow their exact resource trees
+and content objects, while selected members download only their requested artifacts.
+The recorded index transport and artifact digest must both match; a missing closure
+fails rather than refreshing that member. Nested artifact files and executable flags
+are materialized only inside the source session's disposable workspace.
+
+The linked result records relative resource evidence, source requirements,
+reference and contribution occurrences, provenance and exact dependency pins.
+Its protected projection compares other domains' payloads, resource hashes,
+recipients and pins; source sharing alone does not imply a changed projection.
+Producer-owned children report `notEditableHere` with producer and reference
+coordinates. The ledger freeze seam captures complete durable inputs within the source session.
+Versioned replay produces verified artifacts and owned-region intentions; its
+compatibility renderer table contains only existing formats. Test process formats
+are supplied explicitly and are absent from production registration. These
+package seams do not publish state.
+Updates consumes the full linked graph and paired ledger freeze for deployment.
+
+Root package resources use the project directory in project scope and the
+user-state directory in user scope. Explicit sources retain their declaring
+environment. Root user instructions require named sources, while imported
+producer groups retain their own sections. Consumer-owned prompt append references
+are metadata anchored to the project or, for root user declarations, runtime home.
+Linking and freezing do not open these export-only inputs. Public export reads their
+current bytes with lexical and real containment checks; missing or unreadable content
+fails export without a frozen-byte fallback. Producer-owned append content remains
+anchored to the selected immutable source and is a frozen replay resource. Installation
+replay reads only its recorded resources and does not open consumer append references.
+
+`ReadDependency` in AgentsCore distinguishes entry/access interests from recursive
+subtree interests. `MCPConnectionSnapshot.readDependencies` and the Codable
+`MCPConnectionDescription.readDependencies` expose logical and resolved entry
+paths for live resources. Live directories retain live content semantics and
+revalidate their identity before binding and start. Captured resources expose no
+borrowed or staging paths. Managed selections additionally preserve the existing
+ledger/source read footprint as subtree dependencies; an independent subtree
+interest remains recursive when it overlaps a live entry. These monitoring fields
+do not change CLI reports, which use their existing report types and binding list.
+
+The package-only `MCPConnectionRunner` performs one explicit connection test on
+already-bound ephemeral values. Only Components links the exact official MCP SDK;
+SDK models do not enter public APIs. The SDK Client owns automatic initialization
+and typed tools/list requests. A bounded receive admission gate validates the
+negotiated version before initialized is sent, and discovery runs only when the
+server declares tools. There are no business tool, resource, prompt, sampling or
+elicitation handlers; SDK logging is no-op.
+
+The selected transport is stdio, Streamable HTTP, or legacy SSE. Stdio frames
+nonblocking owned pipes and discards counted stderr. HTTP uses one ephemeral
+Foundation/FoundationNetworking data-delegate session with incremental JSON/SSE
+admission, owned session/version headers and bounded SSE resumption without POST
+replay. Legacy SSE waits for its same-origin endpoint event before posting. No
+cookie/cache/credential store or OAuth flow is used; redirects and legacy
+endpoints cannot transfer headers to another origin or downgrade transport.
+
+A monotonic total deadline includes preparation and all requests; a request
+budget cannot extend it. Input, frame, cumulative input/output, stderr, queued
+payload, discovery pages/tools/text and redirect/resume bounds are finite and
+validated before I/O. Overflow is a structured failure or incomplete discovery,
+not a successful dropped message. Cancellation and every terminal path abort I/O,
+disconnect Client and join the owned work. Finite process/URLSession cleanup
+budgets are additional to the protocol deadline. Unconfirmed cleanup prevents
+complete success. Internal outcomes contain bounded private text values for the
+caller to redact; they have no automatic serialized representation.
+
+`MCPTestProcess` and the owned loopback HTTP fixture exercise real wire, process,
+origin, deadline and resource-cleanup behavior in ComponentsTests. They do not
+use external services or execute configured third-party clients.
+
+Components' package-only `SourceCatalog` enumerates one explicit source and discovery
+root using temporary snapshot acquisition, existing skill/instruction readers,
+producer export linking and native import adapters. Inspection-bound IDs identify
+representable units; exported groups keep symbolic uses and complete producer-owned
+closures. Native registration and component expansion are explicit choices, including
+empty containers. Opaque registration requires the exact container name from adapter
+metadata; unresolved requirements remain visible and cannot be selected. Member
+units carry typed kind selections and byte-exact sibling exclusions. Importer
+keys retain the adapter's complete family effects, fixed contributions, requirements
+and separate producer selection claims. Captured content and paths remain source-
+relative; borrowed extraction URLs never escape. Empty selection yields no addition.
+Destination-bound composition, pin protection and publication remain in AgentsUpdates;
+the package catalog does not create update requests.
+
 ## AgentsUpdates
+
+`MCPRegistry` reads MCP Registry v0.1 pages and exact server versions. Request
+credentials stay in the registry's in-memory HTTP transport. Each returned choice
+captures a portable configuration. Selection admits explicit recipients through
+the same native transport and binding rules used by lowering, then captures a
+finite addition to the inspected destination. Ordinary preparation publishes the
+declaration and native configuration through the scope transaction.
+See [MCP registry](../Reference/MCPRegistry.md) for the API and supported choices.
+
+`MarketplaceOperations` publishes immutable release directories and static
+indexes, browses local, Git and HTTPS catalogs, and verifies selected bundle
+bytes. Hosted resolutions retain verified archives and their request provenance
+in the graph lock for offline replay. Bundle
+import owns the archive format and staged sources. Updates binds the
+importer's producer aliases to the selected coordinate and records the
+package pin alongside the frozen graph in the scope transaction. See the
+[marketplace reference](../Reference/Marketplace.md).
+
+`UpdateOperations.inspectSource` exposes inspection-bound source choices, linked
+closures, adapter key effects, fixed contributions and typed missing inputs.
+`SourceCatalogInspection.select` composes a finite addition through the captured
+scope destination. Empty selection returns nil without acquiring a source or
+creating a request. Exported groups remain symbolic; plugin member selections
+compose into one components declaration per container, and native registration
+remains indivisible. Adapter selections rerun the owning converter with its real
+keys and retain independent raw-resource admission. Source evidence is revalidated
+at selection and preparation, including original documents behind inline imported
+intent. Public inspection values contain no borrowed extraction URLs or runtime
+environment/private freshness observations. The ordinary request retains exact
+protected pins and destination identity through preview, reprepare and apply.
 
 `UpdateOperations.preview` plans all declared skills, instruction targets and
 prompts under one shared scope lock. `withPreparedUpdate` holds one writer
@@ -258,12 +483,15 @@ lock through preparation and the synchronous consumer closure. Its
 retained or reused handles fail before I/O after closure exit. Reports cannot
 be reconstructed into applicable plans.
 
-Package-visible `SkillUpdatePlan` and `InstructionUpdatePlan` own discovery,
-reports, preconditions, retention and staging for their domains. Standalone
-updates use those same plans and preserve the other domain. Neither domain
-depends on the other or on `AgentsUpdates`. The composition target merges
-owned records and commits both kinds, changed state and cache pruning in one
-`FileTransaction`; the skill-only consumer need not link Markdown.
+`UpdatePlan` owns complete declaration linking, paired freeze, locked replay,
+artifact aggregation, the v2 ledger and the one publication transaction. Domain
+lifecycle methods are public extensions in Updates, so their consumers add an
+`AgentsUpdates` dependency and import. The domain modules keep discovery,
+frontmatter, rendering, inventory and diagnostic helpers. Restricted requests
+protect the recorded other-domain semantics and independent direct pins.
+Preview uses temporary acquisition; prepared callbacks remain inside both source
+and replay resource closures. Shared native files are aggregated once per physical
+destination, and reports expose selected owned changes only.
 
 See [combined updates](Updates.md) for callback restrictions, state-only
 changes, cancellation, failure dispositions and recovery.
@@ -272,8 +500,11 @@ changes, cancellation, failure dispositions and recovery.
 
 Core tests cover source identities, declarations, lock validation, deterministic
 state, transactions, concurrency, requirements, mirrors, snapshots, hashes and
-agent paths. Skill tests cover discovery, artifact formats and the full declared
-lifecycle, including public consumer calls and failed-operation preservation.
+agent paths. Transaction fault tests interrupt every publication and recovery
+stage, including concurrent creation of an absent destination and external
+replacement of existing targets and recovery paths. Skill tests cover
+discovery, artifact formats and the full declared lifecycle, including public
+consumer calls and failed-operation preservation.
 Fixtures create isolated homes and explicit Git initial branches and remove
 their temporary roots. Instruction tests cover the instructions file format,
 generation, link checks, Claude forwarding and ChatGPT rendering through public

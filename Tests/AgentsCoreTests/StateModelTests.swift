@@ -1,4 +1,6 @@
+import AgentsManifest
 import Foundation
+import StateTestSupport
 import Testing
 
 @testable import AgentsCore
@@ -91,15 +93,20 @@ struct StateModelTests {
           "CLAUDE.md": LockedTarget(
             agents: [.claudeCode], import: "AGENTS.md", blockHash: digest, created: false),
         ]))
-    try store.save(declaration: declaration, resolved: lock)
+    try store.save(declaration: declaration, ledger: ledgerFixture(lock))
     let first = try Data(contentsOf: store.resolvedURL)
     let firstDeclaration = try Data(contentsOf: store.declarationURL)
-    try store.save(declaration: declaration, resolved: lock)
+    try store.save(declaration: declaration, ledger: ledgerFixture(lock))
     #expect(try Data(contentsOf: store.resolvedURL) == first)
     #expect(try Data(contentsOf: store.declarationURL) == firstDeclaration)
-    #expect(try store.loadDeclaration() == declaration)
+    // The document spells the Git location as a URL; the projection keeps its meaning.
+    #expect(
+      ManifestProjection.equivalent(
+        try store.loadDeclaration(), declaration, environment: environment))
     #expect(try store.loadResolved() == lock)
-    #expect(String(decoding: first, as: UTF8.self).contains("\"from\": \"1.0.0\""))
+    #expect(
+      try store.loadLedger().sourceUses.contains { $0.requirement == .upToNextMajor(from: "1.0.0") }
+    )
   }
 
   @Test func rejectsCorruptionWithoutReplacingFiles() throws {
@@ -141,23 +148,10 @@ struct StateModelTests {
       StateStore(scope: .user, environment: environment).resolvedURL.path
         == "/home/test/.agents/agents.resolved")
   }
-
-  @Test(arguments: [
-    #"{"git":"github.com/a/b","local":"/a"}"#,
-    #"{"git":"github.com/a/b","from":"1.0.0","exact":"2.0.0"}"#, #"{"local":"/a","to":"2.0.0"}"#,
-  ])
-  func rejectsAmbiguousSources(_ json: String) {
-    #expect(throws: (any Error).self) {
-      try JSONDecoder().decode(SourceDeclaration.self, from: Data(json.utf8))
-    }
-  }
 }
 
 extension StateModelTests {
   @Test(arguments: [
-    #"{"sources":{"same":{"local":"/a"},"same":{"local":"/b"}}}"#,
-    #"{"sources":{"same":{"local":"/a"},"sa\u006de":{"local":"/b"}}}"#,
-    #"{"sources":{},"skills":{"demo":{"select":"all"},"demo":{"select":[]}}}"#,
     #"{"version":1,"sources":{},"skills":{"demo":{},"demo":{}},"instructions":{"sections":[],"chatgpt":{},"targets":{}}}"#,
     #"{"version":1,"sources":{},"skills":{"demo":{"source":"local:/a","installs":{"codex":"link","codex":"copy"}}},"instructions":{"sections":[],"chatgpt":{},"targets":{}}}"#,
   ])
@@ -166,32 +160,104 @@ extension StateModelTests {
     defer { removeTemporaryDirectory(root) }
     let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
     try store.save(declaration: Declaration(), resolved: ResolvedState())
-    let url = json.contains("version") ? store.resolvedURL : store.declarationURL
-    try Data(json.utf8).write(to: url)
+    try Data(json.utf8).write(to: store.resolvedURL)
     let beforeDeclaration = try Data(contentsOf: store.declarationURL)
     let beforeLock = try Data(contentsOf: store.resolvedURL)
-    #expect(throws: CoreError.self) {
-      if url == store.resolvedURL {
-        _ = try store.loadResolved()
-      } else {
-        _ = try store.loadDeclaration()
-      }
-    }
+    #expect(throws: CoreError.self) { _ = try store.loadResolved() }
     #expect(throws: CoreError.self) {
       try store.save(declaration: Declaration(), resolved: ResolvedState())
     }
     #expect(try Data(contentsOf: store.declarationURL) == beforeDeclaration)
     #expect(try Data(contentsOf: store.resolvedURL) == beforeLock)
   }
+}
 
-  @Test func rejectsUnknownFieldsInsteadOfDiscardingIntent() throws {
-    let root = try temporaryDirectory()
-    defer { removeTemporaryDirectory(root) }
-    let store = StateStore(scope: .project, environment: RuntimeEnvironment(projectDirectory: root))
-    try store.save(declaration: Declaration(), resolved: ResolvedState())
-    let bytes = Data(#"{"sources":{},"unexpected":{"intent":true}}"#.utf8)
-    try bytes.write(to: store.declarationURL)
-    #expect(throws: CoreError.self) { try store.loadDeclaration() }
-    #expect(try Data(contentsOf: store.declarationURL) == bytes)
+private func ledgerFixture(_ model: ResolvedState) throws -> ResolvedLedger {
+  var ledger = ResolvedLedger()
+  func source(_ identity: String, revision: String?, version: String?) -> String {
+    let record = model.sources[identity]!
+    let id = identity + ":" + (revision ?? "live") + ":" + (version ?? "")
+    ledger.sources[id] = LedgerSource(
+      kind: record.kind, transport: record.url,
+      location: record.kind == .local
+        ? .init(kind: .absolute, path: String(identity.dropFirst(6))) : nil,
+      revision: revision ?? "live", version: version)
+    ledger.sourceUses.append(
+      .init(source: id, root: record.path ?? ".", requirement: record.requirement))
+    return id
   }
+  func occurrence(_ id: String, source: String) {
+    ledger.occurrences.append(
+      .init(
+        declaringSource: source, manifestPath: ".agent/agents.yaml", id: ledger.occurrences.count,
+        component: id, dependencies: [source], condition: .init(DeclarationCondition()),
+        recipients: ledger.components[id]!.recipients, consumerEditable: true))
+  }
+  for (name, skill) in model.skills {
+    let sid = source(skill.source, revision: skill.revision, version: skill.version)
+    let rid = "skill:" + name
+    ledger.resources[rid] = .init(
+      kind: .git, source: sid, path: skill.path!, hash: skill.hash!,
+      entries: [.init(path: ".", kind: .directory, executable: false)])
+    ledger.components[rid] = .init(
+      declaringSource: sid, source: sid, root: ".", kind: "skills", name: name,
+      revision: skill.revision, version: skill.version,
+      payload: .init(object: ["mode": .init(skill.installs.values.first!.rawValue)]),
+      conditions: [], recipients: skill.installs.keys.compactMap(AgentID.init(rawValue:)),
+      chatGPT: false, resources: [rid])
+    occurrence(rid, source: sid)
+  }
+  var sectionOwners: [String] = []
+  func section(_ record: LockedSection, prompt: String? = nil, append: String? = nil) {
+    let sid = source(record.source, revision: record.revision, version: record.version)
+    let id = "section:" + String(ledger.components.count)
+    let rid = id + ":resource"
+    ledger.resources[rid] = .init(
+      kind: .git, source: sid, path: record.path, hash: record.hash,
+      entries: [.init(path: ".", kind: .file, executable: false, byteCount: 0)])
+    var payload = ["name": LedgerValue(record.name), "sourceHash": .init(record.hash)]
+    payload["prompt"] = prompt.map { .init($0) }
+    var resources = [rid]
+    if let append {
+      let aid = id + ":append"
+      ledger.resources[aid] = .init(
+        kind: .git, source: sid, path: append, hash: record.hash,
+        entries: [.init(path: ".", kind: .file, executable: false, byteCount: 0)])
+      resources.append(aid)
+    }
+    ledger.components[id] = .init(
+      declaringSource: sid, source: sid, root: ".", kind: "instructions", name: record.name,
+      revision: record.revision, version: record.version, payload: .init(object: payload),
+      conditions: [],
+      recipients: prompt == nil ? [.codex, .claudeCode] : [], chatGPT: prompt != nil,
+      resources: resources)
+    occurrence(id, source: sid)
+    if prompt == nil { sectionOwners.append(id) }
+  }
+  for item in model.instructions.sections { section(item) }
+  for (name, prompt) in model.instructions.chatgpt {
+    for item in prompt.sections { section(item, prompt: name, append: prompt.append) }
+  }
+  #if os(macOS)
+    let platform = "macos"
+  #else
+    let platform = "linux"
+  #endif
+  for (path, target) in model.instructions.targets {
+    let id = "target:" + path
+    let route = target.import == nil ? "agents/instructions@1" : "agents/claude-import@1"
+    ledger.deployments.append(
+      .init(
+        id: id, target: .init(kind: .registered, root: "project", path: path), route: route,
+        owners: sectionOwners,
+        recipients: target.agents, ownership: target.import == nil ? .generated : .importBlock,
+        expectedHash: target.blockHash,
+        created: target.created, importReference: target.import, headingOffset: target.headingOffset
+      ))
+    ledger.lowerings.append(
+      .init(
+        id: id, format: route, inputs: sectionOwners, resources: [], deployments: [id],
+        layout: .init(), platform: platform, artifacts: []))
+  }
+  return ledger
 }

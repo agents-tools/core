@@ -47,14 +47,25 @@ public struct InstructionAddOutcome: Sendable {
   public let available: [InstructionUnit]
   /// Nil means source inspection or a multi-unit source awaiting a selection.
   public let result: InstructionUpdateReport?
+
+  package init(sourceID: String, available: [InstructionUnit], result: InstructionUpdateReport?) {
+    self.sourceID = sourceID
+    self.available = available
+    self.result = result
+  }
 }
 
-public struct InstructionSectionChange: Sendable, Equatable {
+public struct InstructionSectionChange: Codable, Sendable, Equatable {
   public let before: LockedSection?
   public let after: LockedSection?
+
+  package init(before: LockedSection?, after: LockedSection?) {
+    self.before = before
+    self.after = after
+  }
 }
 
-public struct InstructionTargetChange: Sendable, Equatable {
+public struct InstructionTargetChange: Codable, Sendable, Equatable {
   /// The lock's physical target key; user paths outside home are absolute.
   public let target: String
   public let url: URL
@@ -77,9 +88,42 @@ public struct InstructionTargetChange: Sendable, Equatable {
   /// A missing previous entry (`beforeAgents == nil`) differs from any planned list.
   /// Use `InstructionUpdateReport.hasChanges` to detect any update in the report.
   public var agentsChanged: Bool { beforeAgents != afterAgents }
+
+  package init(
+    target: String, url: URL, before: Data?, after: Data?, beforeAgents: [AgentID]?,
+    afterAgents: [AgentID], drift: InstructionDrift?, foreign: Bool
+  ) {
+    self.target = target
+    self.url = url
+    self.before = before
+    self.after = after
+    self.beforeAgents = beforeAgents
+    self.afterAgents = afterAgents
+    self.drift = drift
+    self.foreign = foreign
+  }
 }
 
-public struct InstructionUpdateReport: Sendable, Equatable {
+public struct InstructionBuildOutput: Codable, Sendable, Equatable, Identifiable {
+  public let id: String
+  public let recipient: InstructionRecipient
+  public let displayName: String
+  /// The local target URL. Copyable app products have no file URL.
+  public let fileURL: URL?
+  public let content: Data
+
+  package init(
+    id: String, recipient: InstructionRecipient, displayName: String, fileURL: URL?, content: Data
+  ) {
+    self.id = id
+    self.recipient = recipient
+    self.displayName = displayName
+    self.fileURL = fileURL
+    self.content = content
+  }
+}
+
+public struct InstructionUpdateReport: Codable, Sendable, Equatable {
   public let sections: [InstructionSectionChange]
   /// Every affected target, including unchanged files recorded again after loss of a lock.
   public let targets: [InstructionTargetChange]
@@ -87,10 +131,43 @@ public struct InstructionUpdateReport: Sendable, Equatable {
   public let changedPrompts: [String]
   public let lockMissing: Bool
 
+  private let buildOutputs: [InstructionBuildOutput]?
+  private let advisoryMessages: [String]?
+  private let conflictMessages: [String]?
+  /// Candidate bytes for each selected recipient and target, including unchanged targets.
+  /// Update reviews expose the managed import block for a shared Claude forwarding file.
+  public var outputs: [InstructionBuildOutput] { buildOutputs ?? [] }
+  /// Informational guidance about applying the selected instructions.
+  public var advisories: [String] { advisoryMessages ?? [] }
+  /// Conflicts that block publication and must be resolved before applying.
+  public var conflicts: [String] { conflictMessages ?? [] }
+
+  private enum CodingKeys: String, CodingKey {
+    case sections, targets, changedPrompts, lockMissing, hasChanges
+    case buildOutputs = "outputs"
+    case advisoryMessages = "advisories"
+    case conflictMessages = "conflicts"
+  }
+
   /// Whether applying changes the declaration, locked state (including section order and pins,
   /// target recipients, and prompts), target bytes, or reconstructs a missing lock with targets.
   /// Consumers should use this property to detect updates, including changes with identical bytes.
   public let hasChanges: Bool
+
+  package init(
+    sections: [InstructionSectionChange], targets: [InstructionTargetChange],
+    changedPrompts: [String], lockMissing: Bool, hasChanges: Bool,
+    outputs: [InstructionBuildOutput] = [], advisories: [String] = [], conflicts: [String] = []
+  ) {
+    self.sections = sections
+    self.targets = targets
+    self.changedPrompts = changedPrompts
+    self.lockMissing = lockMissing
+    self.hasChanges = hasChanges
+    buildOutputs = outputs.isEmpty ? nil : outputs
+    advisoryMessages = advisories.isEmpty ? nil : advisories
+    conflictMessages = conflicts.isEmpty ? nil : conflicts
+  }
 }
 
 public struct InstructionDiagnostic: Sendable, Equatable {
@@ -112,7 +189,7 @@ public struct InstructionDiagnostic: Sendable, Equatable {
     case sourceResolutionFailed
     case invalidConfiguration
     case stateUnavailable
-    case pendingRecovery
+    case pendingRecovery, unresolvedTransaction
   }
 
   public let kind: Kind

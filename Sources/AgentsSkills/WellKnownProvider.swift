@@ -2,24 +2,31 @@ import AgentsCore
 import Foundation
 import Yams
 
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
+
 struct WellKnownRemoteSkill: Equatable, Sendable {
   var installName: String
   var description: String
   var sourceURL: URL
   var digest: String?
   var files: [String: Data]
+  var executableFlags: [String: Bool]
   var artifact: LockedArtifact
   var payloads: [String: Data]
 
   init(
     installName: String, description: String, sourceURL: URL, digest: String? = nil,
-    files: [String: Data], artifact: LockedArtifact? = nil, payloads: [String: Data] = [:]
+    files: [String: Data], artifact: LockedArtifact? = nil, payloads: [String: Data] = [:],
+    executableFlags: [String: Bool] = [:]
   ) {
     self.installName = installName
     self.description = description
     self.sourceURL = sourceURL
     self.digest = digest
     self.files = files
+    self.executableFlags = executableFlags
     self.artifact =
       artifact
       ?? LockedArtifact(type: .skillMD, url: sourceURL.absoluteString, digest: digest ?? "")
@@ -33,11 +40,45 @@ struct WellKnownProvider: Sendable {
   private static let maxArchiveUnpackedBytes = 50 * 1024 * 1024
 
   var fetch: @Sendable (URL) throws -> Data
+  private let sourceAccess: SourceAccessConfiguration
+  private let sourcePolicy: EffectiveSourcePolicy
+  private let requireOrigin: (@Sendable (SourceOrigin) throws -> Void)?
 
   init(
+    sourcePolicy: EffectiveSourcePolicy = .init(),
+    sourceAccess: SourceAccessConfiguration = .init(),
     fetch: @escaping @Sendable (URL) throws -> Data = { url in try Data(contentsOf: url) }
   ) {
     self.fetch = fetch
+    self.sourcePolicy = sourcePolicy
+    self.sourceAccess = sourceAccess
+    requireOrigin = nil
+  }
+
+  static func guarded(
+    sourcePolicy: EffectiveSourcePolicy, sourceAccess: SourceAccessConfiguration,
+    requireOrigin: @escaping @Sendable (SourceOrigin) throws -> Void
+  ) -> Self {
+    Self(
+      guardedSourcePolicy: sourcePolicy, sourceAccess: sourceAccess, requireOrigin: requireOrigin)
+  }
+
+  private init(
+    guardedSourcePolicy: EffectiveSourcePolicy, sourceAccess: SourceAccessConfiguration,
+    requireOrigin: @escaping @Sendable (SourceOrigin) throws -> Void
+  ) {
+    fetch = { url in try Data(contentsOf: url) }
+    sourcePolicy = guardedSourcePolicy
+    self.sourceAccess = sourceAccess
+    self.requireOrigin = requireOrigin
+  }
+
+  private func read(_ url: URL) throws -> Data {
+    try sourceAccess.requireDirectHTTP(url, policy: sourcePolicy)
+    if sourcePolicy.isConfigured || requireOrigin != nil {
+      return try PolicyHTTPRead.fetch(url, policy: sourcePolicy, requireOrigin: requireOrigin)
+    }
+    return try fetch(url)
   }
 
   func indexURLCandidates(for rawURL: String) throws -> [(
@@ -80,7 +121,15 @@ struct WellKnownProvider: Sendable {
     for candidate in try indexURLCandidates(for: rawURL) {
       let index: WellKnownIndex
       do {
-        index = try JSONDecoder().decode(WellKnownIndex.self, from: fetch(candidate.index))
+        index = try JSONDecoder().decode(WellKnownIndex.self, from: read(candidate.index))
+      } catch let error as OrganizationPolicyFailure {
+        throw error
+      } catch let error as SourcePolicyFailure {
+        throw error
+      } catch is UnrecordedSourceRedirect {
+        throw UnrecordedSourceRedirect()
+      } catch is CancellationError {
+        throw CancellationError()
       } catch {
         lastError = error
         continue
@@ -99,7 +148,7 @@ struct WellKnownProvider: Sendable {
     guard let url = URL(string: rawURL), url.path.lowercased().hasSuffix("skill.md") else {
       return nil
     }
-    let data = try fetch(url)
+    let data = try read(url)
     let text = String(data: data, encoding: .utf8) ?? ""
     let metadata = try parseFrontmatter(text)
     let fallbackName = url.deletingLastPathComponent().lastPathComponent
@@ -134,7 +183,7 @@ struct WellKnownProvider: Sendable {
               .appendingPathComponent(wellKnownPath)
               .appendingPathComponent(entry.name)
               .appendingPathComponent(safe)
-            let data = try fetch(fileURL)
+            let data = try read(fileURL)
             files[safe] = data
             let digest = "sha256:" + FileHash.sha256Hex(data: data)
             records.append(ArtifactFile(url: fileURL.absoluteString, path: safe, digest: digest))
@@ -159,14 +208,18 @@ struct WellKnownProvider: Sendable {
           guard let artifactURL = URL(string: entry.url, relativeTo: indexURL)?.absoluteURL else {
             throw CoreError.invalidSource("invalid artifact URL: \(entry.url)")
           }
-          let data = try fetch(artifactURL)
+          let data = try read(artifactURL)
           try verifyDigest(data: data, expected: entry.digest)
           let files: [String: Data]
+          let executableFlags: [String: Bool]
           switch entry.type {
           case "skill-md":
             files = ["SKILL.md": data]
+            executableFlags = [:]
           case "archive":
-            files = try unpackArchive(data, artifactURL: artifactURL)
+            let unpacked = try unpackArchive(data, artifactURL: artifactURL)
+            files = unpacked.files
+            executableFlags = unpacked.executableFlags
           default:
             throw CoreError.invalidSource("unsupported well-known artifact type: \(entry.type)")
           }
@@ -179,7 +232,7 @@ struct WellKnownProvider: Sendable {
             artifact: LockedArtifact(
               type: entry.type == "archive" ? .archive : .skillMD, url: artifactURL.absoluteString,
               digest: entry.digest),
-            payloads: [entry.digest: data]
+            payloads: [entry.digest: data], executableFlags: executableFlags
           )
         }
     }
@@ -191,10 +244,13 @@ struct WellKnownProvider: Sendable {
     try artifact.validate()
     var payloads: [String: Data] = [:]
     func download(_ url: String, digest: String) throws -> Data {
+      guard let destination = URL(string: url) else { throw SourceAccessError.invalidRepository }
+      try sourceAccess.requireDirectHTTP(destination, policy: sourcePolicy)
+      try cache.store.environment.sourceAccess.requireDirectHTTP(destination)
       let cached = try cache.artifactURL(digest: digest)
       let data =
         FileManager.default.fileExists(atPath: cached.path)
-        ? try Data(contentsOf: cached) : try fetch(URL(string: url)!)
+        ? try FileSystem.read(at: cached) : try read(destination)
       try verifyDigest(data: data, expected: digest)
       payloads[digest] = data
       return data
@@ -205,7 +261,7 @@ struct WellKnownProvider: Sendable {
       return (["SKILL.md": data], payloads)
     case .archive:
       let data = try download(artifact.url, digest: artifact.digest)
-      return (try unpackArchive(data, artifactURL: URL(string: artifact.url)!), payloads)
+      return (try unpackArchive(data, artifactURL: URL(string: artifact.url)!).files, payloads)
     case .files:
       let records = artifact.files ?? []
       guard try LockedArtifact.filesDigest(records) == artifact.digest else {
@@ -246,7 +302,9 @@ struct WellKnownProvider: Sendable {
     )
   }
 
-  private func unpackArchive(_ data: Data, artifactURL: URL) throws -> [String: Data] {
+  private func unpackArchive(_ data: Data, artifactURL: URL) throws -> (
+    files: [String: Data], executableFlags: [String: Bool]
+  ) {
     let lowerPath = artifactURL.path.lowercased()
     if lowerPath.hasSuffix(".zip") || data.starts(with: [0x50, 0x4b]) {
       return try unpackZip(data)
@@ -254,13 +312,15 @@ struct WellKnownProvider: Sendable {
     return try unpackTarGz(data)
   }
 
-  private func unpackTarGz(_ data: Data) throws -> [String: Data] {
+  private func unpackTarGz(_ data: Data) throws -> (
+    files: [String: Data], executableFlags: [String: Bool]
+  ) {
     let tempRoot = FileManager.default.temporaryDirectory
       .appendingPathComponent("agents-artifact-" + UUID().uuidString)
     let archive = tempRoot.appendingPathComponent("artifact.tar.gz")
     let extract = tempRoot.appendingPathComponent("extract")
-    try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)
-    try data.write(to: archive)
+    try FileSystem.createDirectory(at: extract)
+    try FileSystem.write(data, to: archive)
     defer {
       try? FileManager.default.removeItem(at: tempRoot)
     }
@@ -294,13 +354,15 @@ struct WellKnownProvider: Sendable {
     return try collectExtractedFiles(from: extract)
   }
 
-  private func unpackZip(_ data: Data) throws -> [String: Data] {
+  private func unpackZip(_ data: Data) throws -> (
+    files: [String: Data], executableFlags: [String: Bool]
+  ) {
     let tempRoot = FileManager.default.temporaryDirectory
       .appendingPathComponent("agents-artifact-" + UUID().uuidString)
     let archive = tempRoot.appendingPathComponent("artifact.zip")
     let extract = tempRoot.appendingPathComponent("extract")
-    try FileManager.default.createDirectory(at: extract, withIntermediateDirectories: true)
-    try data.write(to: archive)
+    try FileSystem.createDirectory(at: extract)
+    try FileSystem.write(data, to: archive)
     defer {
       try? FileManager.default.removeItem(at: tempRoot)
     }
@@ -334,7 +396,9 @@ struct WellKnownProvider: Sendable {
     return try collectExtractedFiles(from: extract)
   }
 
-  private func collectExtractedFiles(from extract: URL) throws -> [String: Data] {
+  private func collectExtractedFiles(from extract: URL) throws -> (
+    files: [String: Data], executableFlags: [String: Bool]
+  ) {
     guard
       let enumerator = FileManager.default.enumerator(
         at: extract,
@@ -342,7 +406,7 @@ struct WellKnownProvider: Sendable {
         options: [.skipsPackageDescendants]
       )
     else {
-      return [:]
+      return ([:], [:])
     }
 
     var totalBytes = 0
@@ -364,7 +428,7 @@ struct WellKnownProvider: Sendable {
     guard files.keys.contains(where: { $0.lowercased() == "skill.md" }) else {
       throw CoreError.invalidSource("well-known archive has no SKILL.md")
     }
-    return files
+    return (files, try FileHash.executableFlags(extract))
   }
 }
 

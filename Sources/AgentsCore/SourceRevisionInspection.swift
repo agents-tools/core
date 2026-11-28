@@ -1,9 +1,13 @@
 import Foundation
 
 extension SourceCache {
-  /// Resolves selection intent without fetching, creating a cache or refreshing an index.
-  /// Full object IDs must resolve to commits through cached objects or advertised refs.
+  /// Resolves selection intent without committing acquisition state. Direct Git inspects
+  /// cached objects and advertised refs. Archive routes verify one exact archive request.
   package func inspectRevision(_ source: SourceDeclaration) throws -> SourceRevision {
+    let route = try route(source)
+    if case .archive = route {
+      return try withResolvedSnapshot(source, cacheSource: false) { pin, _ in pin }
+    }
     let id = try source.identity(environment: store.environment)
     try source.requirement?.validate()
     guard source.kind != .wellKnown else {
@@ -34,9 +38,11 @@ extension SourceCache {
     {
       return SourceRevision(revision: commit)
     }
+    let managed = try ManagedSourceGit.select(route, environment: store.environment)
+    let options = managed == nil ? try recordedGitOptions(source.gitURL) : []
     let output = try ProcessRunner.git(
-      ["--no-optional-locks", "ls-remote", "--", source.gitURL],
-      operation: .listRemoteReferences, source: source.location
+      options + ["--no-optional-locks", "ls-remote", "--", source.gitURL],
+      operation: .listRemoteReferences, source: source.location, managed: managed
     ).stdout
     var refs: [String: String] = [:]
     for line in output.split(separator: "\n") {
@@ -71,7 +77,7 @@ extension SourceCache {
     throw CoreError.notFound("source reference cannot be resolved without fetching: \(ref.name)")
   }
 
-  static func isObjectID(_ value: String) -> Bool {
+  package static func isObjectID(_ value: String) -> Bool {
     value.range(of: #"^[0-9a-f]{40}([0-9a-f]{24})?$"#, options: .regularExpression) != nil
   }
 }

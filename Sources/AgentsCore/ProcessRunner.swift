@@ -1,10 +1,5 @@
+import CPlatform
 import Foundation
-
-#if canImport(Darwin)
-  import Darwin
-#else
-  import Glibc
-#endif
 
 package struct ProcessOutput: Equatable, Sendable {
   package var stdout: String
@@ -13,6 +8,24 @@ package struct ProcessOutput: Equatable, Sendable {
 }
 
 package enum ProcessRunner {
+  /// Runs Git plumbing with literal arguments and without inherited Git overrides.
+  package static func isolatedGit(
+    _ arguments: [String], in directory: URL, inheritingLock descriptor: Int32? = nil
+  ) throws -> ProcessOutput {
+    let environment = [
+      "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
+      "LC_ALL": "C", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_ATTR_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1",
+      "GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "", "GIT_TERMINAL_PROMPT": "0",
+      "GIT_CEILING_DIRECTORIES": directory.deletingLastPathComponent().path,
+    ]
+    return try execute(
+      "/usr/bin/env",
+      arguments: [
+        "git", "-c", "core.attributesFile=/dev/null", "-c", "core.hooksPath=/dev/null",
+      ] + arguments, workingDirectory: directory, environment: environment, lock: descriptor)
+  }
+
   @discardableResult
   package static func run(
     _ executable: String, arguments: [String], workingDirectory: URL? = nil,
@@ -31,11 +44,18 @@ package enum ProcessRunner {
   @discardableResult
   package static func git(
     _ arguments: [String], operation: GitError.Operation, source: String,
-    replacingPaths paths: [URL] = [], inheritingLock descriptor: Int32? = nil
+    replacingPaths paths: [URL] = [], inheritingLock descriptor: Int32? = nil,
+    offline: Bool = false, managed: ManagedSourceGit? = nil, managedMirror: URL? = nil
   ) throws -> ProcessOutput {
+    if let managed { return try managed.command(arguments, lock: descriptor, in: managedMirror) }
     var environment = ProcessInfo.processInfo.environment
     environment["GIT_TERMINAL_PROMPT"] = "0"
     environment["GCM_INTERACTIVE"] = "never"
+    if offline {
+      environment["GIT_NO_LAZY_FETCH"] = "1"
+      environment["GIT_ALLOW_PROTOCOL"] = ""
+      environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    }
     let arguments = ["git"] + arguments
     let output = try execute(
       "/usr/bin/env", arguments: arguments, workingDirectory: nil,
@@ -48,7 +68,71 @@ package enum ProcessRunner {
     return output
   }
 
-  private static func execute(
+  /// Runs the system Git from a clean workspace with an allowlisted child environment.
+  static func isolatedGit(
+    _ arguments: [String], in workspace: URL, operation: GitError.Operation, source: String,
+    network: Bool = false, certificateAuthority: URL? = nil
+  ) throws -> String {
+    let executable = "/usr/bin/git"
+    let environment = isolatedGitEnvironment(in: workspace, network: network)
+    var options = isolatedGitOptions
+    if let certificateAuthority {
+      options += ["-c", "http.sslCAInfo=" + certificateAuthority.path]
+    }
+    let args = options + arguments
+    let output = try execute(
+      executable, arguments: args, workingDirectory: workspace, environment: environment, lock: nil)
+    guard output.exitCode == 0 else {
+      throw GitError(
+        operation: operation, source: source, stderr: output.stderr,
+        command: [executable] + args, exitCode: output.exitCode, replacingPaths: [workspace])
+    }
+    return output.stdout.trimmingCharacters(in: .newlines)
+  }
+
+  static func isolatedGitEnvironment(in workspace: URL, network: Bool) -> [String: String] {
+    [
+      "PATH": "/usr/bin:/bin",
+      "HOME": workspace.path,
+      "XDG_CONFIG_HOME": workspace.path,
+      "CURL_HOME": workspace.path,
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_CONFIG_GLOBAL": "/dev/null",
+      "GIT_TERMINAL_PROMPT": "0",
+      "GIT_NO_REPLACE_OBJECTS": "1",
+      "GIT_NO_LAZY_FETCH": "1",
+      "GIT_ALLOW_PROTOCOL": network ? "https" : "",
+      "LC_ALL": "C",
+    ]
+  }
+
+  static let isolatedGitOptions = [
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "credential.helper=",
+    "-c", "http.extraHeader=",
+    "-c", "http.proxy=",
+    "-c", "http.followRedirects=false",
+    "-c", "http.sslVerify=true",
+    "-c", "http.lowSpeedLimit=1",
+    "-c", "http.lowSpeedTime=30",
+    "-c", "fetch.fsckObjects=true",
+    "-c", "transfer.fsckObjects=true",
+    "-c", "gc.auto=0",
+    "-c", "maintenance.auto=false",
+    "-c", "core.fsync=objects,reference,pack-metadata",
+    "-c", "core.fsyncMethod=fsync",
+  ]
+
+  static func unpackGitArchive(_ archive: URL, into directory: URL) throws {
+    let output = try execute(
+      "/usr/bin/tar", arguments: ["-xf", archive.path, "-C", directory.path],
+      workingDirectory: directory, environment: ["PATH": "/usr/bin:/bin"], lock: nil)
+    guard output.exitCode == 0 else {
+      throw CoreError.invalidSource("could not extract Git archive")
+    }
+  }
+
+  static func execute(
     _ executable: String, arguments: [String], workingDirectory: URL?,
     environment: [String: String], lock: Int32?
   ) throws -> ProcessOutput {
@@ -106,21 +190,6 @@ package enum ProcessRunner {
     // Capture stdin before pipes can reuse a closed standard descriptor. A lock
     // occupying stdin is internal state, not input for the child.
     let inputIsOpen = lock != STDIN_FILENO && fcntl(STDIN_FILENO, F_GETFD) >= 0
-    var actions: posix_spawn_file_actions_t?
-    try check(posix_spawn_file_actions_init(&actions))
-    defer { posix_spawn_file_actions_destroy(&actions) }
-    var attributes: posix_spawnattr_t?
-    try check(posix_spawnattr_init(&attributes))
-    defer { posix_spawnattr_destroy(&attributes) }
-    try check(posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)))
-    if inputIsOpen {
-      try check(posix_spawn_file_actions_addinherit_np(&actions, STDIN_FILENO))
-    } else {
-      try check(posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0))
-    }
-    if let workingDirectory {
-      try check(posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path))
-    }
     let stdout = Pipe()
     let stderr = Pipe()
     defer {
@@ -143,10 +212,17 @@ package enum ProcessRunner {
       defer { close(output) }
       let error = try duplicate(stderr.fileHandleForWriting.fileDescriptor)
       defer { close(error) }
-      try check(posix_spawn_file_actions_addinherit_np(&actions, inheritedLock))
-      try check(posix_spawn_file_actions_adddup2(&actions, output, STDOUT_FILENO))
-      try check(posix_spawn_file_actions_adddup2(&actions, error, STDERR_FILENO))
-      try check(posix_spawn(&pid, executable, &actions, &attributes, argv, environment))
+      func launch(_ directory: UnsafePointer<CChar>?) throws {
+        try check(
+          platform_spawn(
+            &pid, executable, argv, environment, directory, inheritedLock, inputIsOpen, output,
+            error))
+      }
+      if let workingDirectory {
+        try workingDirectory.path.withCString { try launch($0) }
+      } else {
+        try launch(nil)
+      }
     }()
     stdout.fileHandleForWriting.closeFile()
     stderr.fileHandleForWriting.closeFile()

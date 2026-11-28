@@ -1,6 +1,9 @@
 import AgentsCore
 import AgentsInstructions
+import AgentsManifest
+import AgentsUpdates
 import Foundation
+import StateTestSupport
 import Testing
 
 @Suite("Instruction lifecycle")
@@ -62,8 +65,8 @@ struct InstructionLifecycleTests {
     try fixture.add(names: ["one", "two"], scope: .user, agents: [.cursor])
     let store = fixture.store(.user)
     var declaration = try store.loadDeclaration()
-    declaration.instructions?.sections.reverse()
-    try store.save(declaration: declaration, resolved: store.loadResolved())
+    try declaration.updateInstructions { $0?.sections.reverse() }
+    try store.save(declaration: declaration, ledger: store.loadLedger())
     let report = try InstructionOperations.updateInstalled(
       scope: .user, environment: fixture.environment)
     #expect(report.sections.isEmpty && report.targets.isEmpty && report.changedPrompts.isEmpty)
@@ -86,7 +89,7 @@ struct InstructionLifecycleTests {
         sources: ["rules": SourceDeclaration(kind: .local, location: fixture.repo.path)],
         instructions: InstructionsDeclaration(
           chatgpt: ["daily": PromptDeclaration(sections: ["rules:rules"])])),
-      resolved: ResolvedState())
+      ledger: ResolvedLedger())
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     let original = try InstructionOperations.renderChatGPT(
       prompt: "daily", environment: fixture.environment)
@@ -192,9 +195,12 @@ struct InstructionLifecycleTests {
       "CLAUDE_CONFIG_DIR": fixture.home.appendingPathComponent("claude-config").path,
       "XDG_CONFIG_HOME": config.path,
     ]
-    try fixture.add(scope: .user, agents: AgentID.allCases, environment: runtime)
+    try fixture.add(
+      scope: .user, agents: AgentID.allCases.filter { $0.supportsInstructions(in: .user) },
+      environment: runtime)
     let lock = try fixture.store(.user, environment: runtime).loadResolved()
-    #expect(lock.instructions.targets.count == 3)
+    #expect(lock.instructions.targets.count == 4)
+    #expect(lock.instructions.targets.values.contains { $0.agents == [.antigravity] })
     let common = try #require(
       lock.instructions.targets[config.appendingPathComponent("opencode/AGENTS.md").path])
     #expect(Set(common.agents) == [.codex, .opencode])
@@ -213,13 +219,16 @@ struct InstructionLifecycleTests {
     try fixture.commit()
     try fixture.add(agents: [.codex, .geminiCLI])
     var declaration = try fixture.store().loadDeclaration()
-    declaration.instructions?.chatgpt = [
-      "daily": PromptDeclaration(sections: ["rules:one", "rules:two"], append: ".agent/custom.md"),
-      "stable": PromptDeclaration(sections: ["rules:two"]),
-    ]
+    try declaration.updateInstructions {
+      $0?.chatgpt = [
+        "daily": PromptDeclaration(
+          sections: ["rules:one", "rules:two"], append: ".agent/custom.md"),
+        "stable": PromptDeclaration(sections: ["rules:two"]),
+      ]
+    }
     try fixture.write(
       "Custom prompt.\r\n", to: fixture.project.appendingPathComponent(".agent/custom.md"))
-    try fixture.store().save(declaration: declaration, resolved: fixture.store().loadResolved())
+    try fixture.store().save(declaration: declaration, ledger: fixture.store().loadLedger())
     _ = try InstructionOperations.updateInstalled(environment: fixture.environment, apply: true)
     let old = try fixture.snapshot(fixture.project, excludingCache: true)
     try fixture.section("one", body: "Changed")
@@ -340,11 +349,11 @@ struct InstructionLifecycleTests {
       try InstructionOperations.doctor(environment: fixture.environment).diagnostics.contains {
         $0.kind == .uncommittedSource
       })
-    #expect(throws: (any Error).self) {
+    #expect(
       try InstructionOperations.list(
         source: SourceDeclaration(kind: .local, location: fixture.home.path),
-        environment: fixture.environment)
-    }
+        environment: fixture.environment
+      ).isEmpty)
   }
 
   @Test func discoveryRejectsInvalidNamesSymbolicLinksAndDuplicates() throws {

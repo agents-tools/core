@@ -2,15 +2,18 @@ import AgentsCore
 import Foundation
 
 enum InstructionSourceDiagnostics {
-  static func inspect(store: StateStore, declaration: Declaration, lock: ResolvedState)
+  static func inspect(
+    store: StateStore, declaration: Declaration, lock: ResolvedState,
+    sourcePolicy: EffectiveSourcePolicy, bundledSources: Set<String>
+  )
     -> [InstructionDiagnostic]
   {
     var diagnostics: [InstructionDiagnostic] = []
-    let cache = SourceCache(store: store)
+    let cache = SourceCache(store: store, sourcePolicy: sourcePolicy)
     let sections = lock.instructions.sections + lock.instructions.chatgpt.values.flatMap(\.sections)
     for (id, source) in lock.sources.sorted(by: { $0.key < $1.key }) {
       let pins = sections.filter { $0.source == id }
-      guard !pins.isEmpty else { continue }
+      guard !pins.isEmpty, !bundledSources.contains(id) else { continue }
       let root =
         source.kind == .local ? URL(fileURLWithPath: String(id.dropFirst("local:".count))) : nil
       do {
